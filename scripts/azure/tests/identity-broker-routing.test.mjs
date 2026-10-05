@@ -71,6 +71,9 @@ function transport({ native = snapshot(), namespace, failWait = false } = {}) {
   const dependencies = {
     execAz: args => {
       azureCalls.push(args);
+      if (args[0] === 'account') return ok(JSON.stringify({
+        id: config.subscriptionId, tenantId: config.tenantId, state: 'Enabled',
+      }));
       return args[0] === 'ad'
         ? ok(JSON.stringify({ id: applicationObjectId, appId: clientId, publicClient: { redirectUris: ['http://localhost'] } }))
         : ok();
@@ -120,6 +123,59 @@ test('issuer and native signin callback come from the programmed exact managed H
   assert.equal(receipt.runtimeVerified, false);
   assert.equal(receipt.routingConfigured, true);
   assert.deepEqual(receipt.addresses, ['203.0.113.10']);
+});
+
+test('omitted native policy namespace binds only to the independently verified route parent', () => {
+  const native = snapshot();
+  delete native.backendPolicy.status.ancestors[0].ancestorRef.namespace;
+  native.backendPolicy.status.ancestors.unshift({
+    controllerName: 'istio.io/mesh-controller',
+    ancestorRef: { name: 'identity-broker', group: '', kind: 'Service', sectionName: 'https' },
+    conditions: conditions('Accepted', 'ResolvedRefs'),
+  });
+  assert.equal(deriveIdentityRouting(native).hostname, hostname);
+  for (const mutate of [
+    value => { value.backendPolicy.status.ancestors[1].ancestorRef.namespace = p0; },
+    value => { value.backendPolicy.status.ancestors[1].ancestorRef.name = 'foreign'; },
+    value => { value.backendPolicy.status.ancestors[1].ancestorRef.sectionName = 'foreign'; },
+    value => { value.backendPolicy.status.ancestors[1].controllerName = 'foreign'; },
+    value => { value.backendPolicy.status.ancestors[1].conditions[0].observedGeneration = 0; },
+    value => { value.route.status.parents[0].parentRef.namespace = p0; },
+    value => { value.gateway.metadata.namespace = p0; value.gateway.status.conditions[1].status = 'False'; },
+    value => { value.backendPolicy.status.ancestors.push(structuredClone(value.backendPolicy.status.ancestors[1])); },
+  ]) {
+    const changed = structuredClone(native);
+    mutate(changed);
+    assert.throws(() => deriveIdentityRouting(changed));
+  }
+});
+
+test('routing waits for policy current-generation evidence before final strict derivation', () => {
+  const native = snapshot();
+  native.backendPolicy.metadata.generation = 2;
+  const fixture = transport({ native });
+  const original = fixture.dependencies.execKubectl;
+  fixture.dependencies.execKubectl = (args, options) => {
+    if (args.includes('wait') && args.includes('backendtlspolicy/identity-broker') &&
+        args.some(value => value.includes('observedGeneration'))) {
+      for (const condition of native.backendPolicy.status.ancestors[0].conditions) {
+        condition.observedGeneration = 2;
+      }
+    }
+    return original(args, options);
+  };
+  assert.equal(bootstrapIdentityRouting(config, fixture.dependencies).routingConfigured, true);
+  assert.equal(fixture.calls.filter(call => call.args.includes('backendtlspolicy/identity-broker') &&
+    call.args.some(value => value.includes('observedGeneration'))).length, 2);
+
+  const blocked = transport();
+  const previous = blocked.dependencies.execKubectl;
+  blocked.dependencies.execKubectl = (args, options) =>
+    args.includes('backendtlspolicy/identity-broker') && args.some(value => value.includes('observedGeneration'))
+      ? { status: 1, stdout: '', stderr: 'Native policy current-generation convergence timed out' }
+      : previous(args, options);
+  assert.throws(() => bootstrapIdentityRouting(config, blocked.dependencies),
+    /Native policy current-generation convergence timed out/);
 });
 
 test('missing, stale, unprogrammed, cross-target, or unsafe native evidence never derives a public issuer', () => {
@@ -326,6 +382,7 @@ test('callback registration refuses absent confirmation, changed account/app, an
 test('guarded bootstrap uses normal user kubeconfig, managed certificates in both namespaces, and no app mutation', () => {
   const { calls, azureCalls, dependencies } = transport();
   const receipt = bootstrapIdentityRouting(config, dependencies);
+  assert.ok(azureCalls.filter(args => args[0] === 'ad').every(args => !args.includes('--subscription')));
   assert.equal(receipt.runtimeVerified, false);
   assert.equal(receipt.publicCallbackPlan.action, 'append');
   assert.deepEqual(receipt.runtimeConfigInputs, {
@@ -340,13 +397,28 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
   assert.ok(applies.some(text => text.includes(`k8s:io.kubernetes.pod.namespace: ${gatewayNamespace}`)));
   assert.ok(applies.some(text => text.includes(`hostname: ${hostname}`)));
   assert.ok(azureCalls.some(args => args[0] === 'ad' && args[2] === 'show' &&
-    args[args.indexOf('--subscription') + 1] === config.subscriptionId));
+    args[args.indexOf('--id') + 1] === config.upstreamClientId && !args.includes('--subscription')));
   assert.ok(azureCalls.every(args => !args.includes('--admin') && !args.includes('update')));
   const kubeconfig = calls[0].args[1];
   assert.ok(calls.every(call => call.args[1] === kubeconfig));
   assert.equal(existsSync(dirname(kubeconfig)), false);
 });
 
+test('routing validates the selected account before subscription-free directory reads or Kubernetes changes', () => {
+  for (const selected of [
+    { id: applicationObjectId, tenantId: config.tenantId, state: 'Enabled' },
+    { id: config.subscriptionId, tenantId: applicationObjectId, state: 'Enabled' },
+    { id: config.subscriptionId, tenantId: config.tenantId, state: 'Disabled' },
+  ]) {
+    const native = transport();
+    const original = native.dependencies.execAz;
+    native.dependencies.execAz = args => args[0] === 'account'
+      ? ok(JSON.stringify(selected)) : original(args);
+    assert.throws(() => bootstrapIdentityRouting(config, native.dependencies), /selected account\/tenant changed/);
+    assert.equal(native.calls.length, 0);
+    assert.equal(native.azureCalls.length, 0);
+  }
+});
 test('bootstrap refuses an existing namespace policy change or unowned route and cleans temporary kubeconfig on failure', () => {
   const invalidNamespace = { metadata: { name: gatewayNamespace, labels: {
     'agentweaver.io/environment': 'v1-p0', 'agentweaver.io/managed-by': 'kustomize',

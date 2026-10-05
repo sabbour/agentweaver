@@ -8,7 +8,7 @@ namespace Agentweaver.FoundationProbe.Tests;
 public sealed class ProbeContractTests
 {
     [Fact]
-    public void AcceptsExactDedicatedDeploymentOutputsAndSourceBinding()
+    public void AcceptsImageSourceAndAKSDeploymentWithOriginalFoundationBinding()
     {
         var target = ProbeFixtures.Target();
         ProbeTargetValidator.Validate(target, ProbeFixtures.Source);
@@ -18,6 +18,8 @@ public sealed class ProbeContractTests
         Assert.Equal(target.FoundationResources.KeyVaultId, pins[0].ResourceId);
         Assert.Equal(target.FoundationResources.BlobContainerId, pins[1].ResourceId);
         Assert.Equal(target.FoundationResources.AppInsightsResourceId, pins[2].ResourceId);
+        Assert.NotEqual(target.SourceSha, target.Infrastructure.SourceSha);
+        Assert.NotEqual(target.Infrastructure.SourceSha, target.Infrastructure.Foundation.SourceSha);
     }
 
     [Fact]
@@ -44,6 +46,15 @@ public sealed class ProbeContractTests
         var missing = JsonNode.Parse(valid)!.AsObject();
         missing.Remove("aksOidcIssuerUrl");
         Assert.Equal("target_invalid", Assert.Throws<ProbeException>(() => { _ = Read(missing.ToJsonString()); }).Code);
+
+        var legacy = JsonNode.Parse(valid)!.AsObject();
+        legacy.Remove("infrastructure");
+        Assert.Equal("target_invalid", Assert.Throws<ProbeException>(() => { _ = Read(legacy.ToJsonString()); }).Code);
+
+        var unknownProvenance = JsonNode.Parse(valid)!.AsObject();
+        unknownProvenance["infrastructure"]!["deploymentScope"] = "arbitrary";
+        Assert.Equal("target_invalid", Assert.Throws<ProbeException>(
+            () => { _ = Read(unknownProvenance.ToJsonString()); }).Code);
 
         var unknown = JsonNode.Parse(valid)!.AsObject();
         unknown["callerDigest"] = "sha256:caller-claim";
@@ -75,6 +86,56 @@ public sealed class ProbeContractTests
             () => ProbeTargetValidator.Validate(target with
             {
                 Runtime = target.Runtime with { KeyVaultSecretVersion = "latest" },
+            }, ProbeFixtures.Source)).Code);
+    }
+
+    [Fact]
+    public void RejectsMalformedOrInconsistentNativeDeploymentProvenance()
+    {
+        var target = ProbeFixtures.Target();
+        Assert.Equal("deployment_provenance_missing", Assert.Throws<ProbeException>(
+            () => ProbeTargetValidator.Validate(target with
+            {
+                Infrastructure = target.Infrastructure with { SourceTree = "not-a-tree" },
+            }, ProbeFixtures.Source)).Code);
+        Assert.Equal("deployment_provenance_missing", Assert.Throws<ProbeException>(
+            () => ProbeTargetValidator.Validate(target with
+            {
+                Infrastructure = target.Infrastructure with { SourceHash = new string('F', 64) },
+            }, ProbeFixtures.Source)).Code);
+        Assert.Equal("target_mismatch", Assert.Throws<ProbeException>(
+            () => ProbeTargetValidator.Validate(target with
+            {
+                Infrastructure = target.Infrastructure with { Scope = "name-only" },
+            }, ProbeFixtures.Source)).Code);
+        Assert.Equal("target_mismatch", Assert.Throws<ProbeException>(
+            () => ProbeTargetValidator.Validate(target with
+            {
+                DeploymentName = "aw-v1-p0-9b7da6e64dfd",
+            }, ProbeFixtures.Source)).Code);
+        Assert.Equal("target_mismatch", Assert.Throws<ProbeException>(
+            () => ProbeTargetValidator.Validate(target with
+            {
+                DeploymentId = target.Infrastructure.Foundation.DeploymentId,
+            }, ProbeFixtures.Source)).Code);
+        Assert.Equal("target_mismatch", Assert.Throws<ProbeException>(
+            () => ProbeTargetValidator.Validate(target with
+            {
+                Infrastructure = target.Infrastructure with
+                {
+                    Foundation = target.Infrastructure.Foundation with { Scope = "aks-only" },
+                },
+            }, ProbeFixtures.Source)).Code);
+        Assert.Equal("target_mismatch", Assert.Throws<ProbeException>(
+            () => ProbeTargetValidator.Validate(target with
+            {
+                Infrastructure = target.Infrastructure with
+                {
+                    Foundation = target.Infrastructure.Foundation with
+                    {
+                        DeploymentName = "aw-v1-p0-aks-f989c5c3457a",
+                    },
+                },
             }, ProbeFixtures.Source)).Code);
     }
 

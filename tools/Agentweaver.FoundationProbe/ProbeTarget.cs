@@ -16,6 +16,7 @@ internal sealed record ProbeTarget
     public required string ResourceGroupId { get; init; }
     public required string DeploymentName { get; init; }
     public required string DeploymentId { get; init; }
+    public required ProbeInfrastructure Infrastructure { get; init; }
     public required string AksOidcIssuerUrl { get; init; }
     public required ProbeIdentity FoundationProbeIdentity { get; init; }
     public required ProbeResources FoundationResources { get; init; }
@@ -87,6 +88,27 @@ internal sealed record ProbeRuntime
     public required string KeyVaultSecretVersion { get; init; }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record ProbeInfrastructure
+{
+    public required string Scope { get; init; }
+    public required string SourceSha { get; init; }
+    public required string SourceTree { get; init; }
+    public required string SourceHash { get; init; }
+    public required ProbeFoundationDeployment Foundation { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record ProbeFoundationDeployment
+{
+    public required string Scope { get; init; }
+    public required string SourceSha { get; init; }
+    public required string SourceTree { get; init; }
+    public required string SourceHash { get; init; }
+    public required string DeploymentName { get; init; }
+    public required string DeploymentId { get; init; }
+}
+
 internal sealed record ProbeSource(string Sha, string Tree, string InfrastructureHash)
 {
     private static readonly System.Text.RegularExpressions.Regex FullSha =
@@ -139,12 +161,34 @@ internal static class ProbeTargetValidator
             target.SourceHash != source.InfrastructureHash)
             throw new ProbeException("source_mismatch");
 
+        var infrastructure = target.Infrastructure;
+        var foundation = infrastructure?.Foundation;
+        if (infrastructure is null || foundation is null ||
+            !ProbeSource.IsFullSha(infrastructure.SourceSha) || !ProbeSource.IsFullSha(infrastructure.SourceTree) ||
+            infrastructure.SourceHash is null ||
+            !System.Text.RegularExpressions.Regex.IsMatch(infrastructure.SourceHash, "^[0-9a-f]{64}$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant) ||
+            !ProbeSource.IsFullSha(foundation.SourceSha) || !ProbeSource.IsFullSha(foundation.SourceTree) ||
+            foundation.SourceHash is null ||
+            !System.Text.RegularExpressions.Regex.IsMatch(foundation.SourceHash, "^[0-9a-f]{64}$",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant))
+            throw new ProbeException("deployment_provenance_missing");
+
         if (!ValidGuid(target.SubscriptionId) || !ValidGuid(target.TenantId) ||
             target.ResourceGroup != ExpectedResourceGroup ||
             !Equal(target.ResourceGroupId, $"/subscriptions/{target.SubscriptionId}/resourceGroups/{ExpectedResourceGroup}") ||
-            target.DeploymentName != $"{ExpectedResourceGroup}-{target.SourceSha[..12]}" ||
+            infrastructure.Scope is not ("infrastructure-only" or "aks-only") ||
+            foundation.Scope != "infrastructure-only" ||
+            target.DeploymentName != $"{ExpectedResourceGroup}{(infrastructure.Scope == "aks-only" ? "-aks" : "")}-{infrastructure.SourceSha[..12]}" ||
             !Equal(target.DeploymentId,
-                $"{target.ResourceGroupId}/providers/Microsoft.Resources/deployments/{target.DeploymentName}"))
+                $"{target.ResourceGroupId}/providers/Microsoft.Resources/deployments/{target.DeploymentName}") ||
+            foundation.DeploymentName != $"{ExpectedResourceGroup}-{foundation.SourceSha[..12]}" ||
+            !Equal(foundation.DeploymentId,
+                $"{target.ResourceGroupId}/providers/Microsoft.Resources/deployments/{foundation.DeploymentName}") ||
+            infrastructure.Scope == "infrastructure-only" &&
+            (infrastructure.SourceSha != foundation.SourceSha || infrastructure.SourceTree != foundation.SourceTree ||
+             infrastructure.SourceHash != foundation.SourceHash || target.DeploymentName != foundation.DeploymentName ||
+             !Equal(target.DeploymentId, foundation.DeploymentId)))
             throw new ProbeException("target_mismatch");
 
         var storageName = $"{ExpectedResourceGroup.Replace("-", "", StringComparison.Ordinal)}blob";

@@ -14,6 +14,20 @@ const identity = deploymentOutputs.foundationProbeIdentity.value;
 const resources = deploymentOutputs.foundationResources.value;
 const deploymentName = deploymentFixture.deploymentName;
 const deploymentId = `${deploymentFixture.groupId}/providers/Microsoft.Resources/deployments/${deploymentName}`;
+const infrastructure = {
+  scope: source.scope,
+  sourceSha: source.sha,
+  sourceTree: source.sourceTree,
+  sourceHash: source.sourceHash,
+  foundation: {
+    scope: 'infrastructure-only',
+    sourceSha: source.sha,
+    sourceTree: source.sourceTree,
+    sourceHash: source.sourceHash,
+    deploymentName,
+    deploymentId,
+  },
+};
 export const target = {
   sourceSha: source.sha,
   sourceTree: source.sourceTree,
@@ -24,6 +38,7 @@ export const target = {
   resourceGroupId: deploymentFixture.groupId,
   deploymentName,
   deploymentId,
+  infrastructure: structuredClone(infrastructure),
   aksOidcIssuerUrl: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',
   foundationProbeIdentity: structuredClone(identity),
   foundationResources: structuredClone(resources),
@@ -43,6 +58,11 @@ export const deployment = {
   resourceGroupId: target.resourceGroupId,
   deploymentName,
   deploymentId,
+  scope: source.scope,
+  sourceSha: source.sha,
+  sourceTree: source.sourceTree,
+  sourceHash: source.sourceHash,
+  foundation: structuredClone(infrastructure.foundation),
   aksOidcIssuerUrl: target.aksOidcIssuerUrl,
   foundationProbeIdentity: structuredClone(identity),
   resources: structuredClone(resources),
@@ -58,6 +78,7 @@ const deploymentBinding = {
   aksOidcIssuerUrl: target.aksOidcIssuerUrl,
   identity: structuredClone(identity),
   resources: structuredClone(resources),
+  infrastructure: structuredClone(infrastructure),
 };
 
 const providerPins = [
@@ -353,7 +374,7 @@ export function makeRuntimeFixture() {
     return { status: 0, stdout: typeof output === 'string' ? output : JSON.stringify(output), stderr: '' };
   };
   const verifyImage = (reference, options) => {
-    assertImageVerifierInput(reference, options);
+    assertImageVerifierInput(reference, options, state.imageReference);
     return {
       receiptPath: options.readReceiptPath,
       receipt: verifyPublishedImageReceipt(state.localImageReceipt, reference, state.inspectedImage),
@@ -365,7 +386,7 @@ export function makeRuntimeFixture() {
     execKubectl,
     verifyImage,
     options: {
-      source: state.source,
+      imageSource: state.source,
       deployment: state.deployment,
       observedCluster: state.observedCluster,
       kubeContext: state.kubeContext,
@@ -376,8 +397,8 @@ export function makeRuntimeFixture() {
   };
 }
 
-function assertImageVerifierInput(reference, options) {
-  if (reference !== imageReference || options.readReceiptPath !== 'artifacts/images/foundation-probe.json') {
+function assertImageVerifierInput(reference, options, expectedReference = imageReference) {
+  if (reference !== expectedReference || options.readReceiptPath !== 'artifacts/images/foundation-probe.json') {
     throw new Error('Unexpected registry verifier input.');
   }
 }

@@ -70,7 +70,7 @@ from both health endpoints at the observed Gateway IP.
 
 ## Required operator inputs
 
-The manifests reference, but do not create, these objects:
+The ordinary base references, but does not create, these objects:
 
 | Reference | Required contents |
 | --- | --- |
@@ -80,6 +80,25 @@ The manifests reference, but do not create, these objects:
 | `identity-broker-tls` Secret | Approved `tls.crt` and `tls.key` for Kestrel HTTPS. No certificate is created here. |
 | `identity-broker-key-ring` PVC | Durable writable storage mounted for the protected ASP.NET data-protection key ring. The host runs one replica with a recreate strategy. |
 | `identity-broker-migration-config` ConfigMap | `ConnectionStrings__IdentityBrokerMigration` and the separate migration workload-identity tenant, client, and absolute projected-token-file settings. |
+
+The guarded installer has separate default-off options for initial application
+state and a run-owned public acceptance-client configuration.
+`--bootstrap-identity-broker-state` creates only missing signing material and
+the 1 GiB, ReadWriteOnce key-ring PVC.
+It preserves existing material and rejects an orphaned key ring without its
+original signing Secret.
+The certificate protects tokens and stored keys, not public HTTPS.
+The native managed TLS Secret remains separate.
+
+`--bootstrap-identity-broker-runtime` creates the explicit nonsecret ConfigMap
+and missing runtime objects from this base. Existing objects must match.
+The client ID includes the supplied acceptance-run UUID.
+The redirect is an explicit HTTP loopback callback with a port.
+This option creates no upstream application or credential.
+The route-derived issuer remains configuration-only until actual health and
+public routing observations pass.
+See the [installer guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md)
+for the required inputs and retained-state boundaries.
 
 The external OIDC client secret is optional. When omitted, the Broker uses
 authorization-code flow with PKCE as a public OIDC client. When a confidential

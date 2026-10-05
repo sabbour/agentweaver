@@ -20,7 +20,7 @@
           "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9.-]*$" },
           "kind": { "enum": ["contract", "library", "service"] },
           "version": { "$ref": "#/$defs/version" },
-          "project": { "type": "string", "pattern": "^(packages|services)/[A-Za-z0-9./-]+\\.csproj$" },
+          "project": { "type": "string", "pattern": "^(?:(packages|services)/[A-Za-z0-9./-]+\\.csproj|tools/Agentweaver\\.FoundationProbe/Agentweaver\\.FoundationProbe\\.csproj)$" },
           "imageDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
         },
         "allOf": [

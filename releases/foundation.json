@@ -56,9 +56,45 @@
       "kind": "service",
       "version": "0.0.0",
       "project": "services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj"
+    },
+    {
+      "id": "Agentweaver.FoundationProbe",
+      "kind": "service",
+      "version": "0.0.1",
+      "project": "tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj"
     }
   ],
   "compatibility": [
+    {
+      "consumer": "Agentweaver.FoundationProbe",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.FoundationProbe",
+      "dependency": "Agentweaver.Providers",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.FoundationProbe",
+      "dependency": "Agentweaver.Persistence.Postgres",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.FoundationProbe",
+      "dependency": "Agentweaver.Secrets.AzureKeyVault",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.FoundationProbe",
+      "dependency": "Agentweaver.ObjectStore.AzureBlob",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.FoundationProbe",
+      "dependency": "Agentweaver.Telemetry.AzureMonitor",
+      "versions": ["0.0.0"]
+    },
     {
       "consumer": "Agentweaver.Providers",
       "dependency": "Agentweaver.Abstractions",

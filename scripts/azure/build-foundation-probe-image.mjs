@@ -96,11 +96,10 @@ export function verifyPublishedImageReceipt(receipt, imageReference, inspect) {
   };
 }
 
-export function buildFoundationProbeImage({
+export function resolveProbeImageSource({
   repoRoot = root,
   run = runProcess,
   readFile = readFileSync,
-  writeReceipt = writeFileSync,
 } = {}) {
   const dirty = run('git', ['status', '--porcelain', '--untracked-files=normal'], repoRoot);
   if (dirty.trim()) throw new Error('The image receipt requires a clean Git working tree.');
@@ -123,7 +122,16 @@ export function buildFoundationProbeImage({
     hash.update(file).update('\0').update(content).update('\0');
   }
   const sourceHash = hash.digest('hex');
+  return { sourceSha, sourceTree, sourceHash };
+}
 
+export function buildFoundationProbeImage({
+  repoRoot = root,
+  run = runProcess,
+  readFile = readFileSync,
+  writeReceipt = writeFileSync,
+} = {}) {
+  const { sourceSha, sourceTree, sourceHash } = resolveProbeImageSource({ repoRoot, run, readFile });
   const imageReference = `agentweaver-foundation-probe:source-${sourceSha}`;
   run('docker', [
     'build',

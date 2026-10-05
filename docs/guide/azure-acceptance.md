@@ -34,7 +34,9 @@ the approved operator's Entra object ID explicitly. The deployment creates or
 reuses a permanent Azure Kubernetes Service RBAC Cluster Admin assignment at
 the exact AKS resource scope; it does not grant broader Azure scope or remove
 that assignment. Its scoped receipt is not a full-foundation receipt and
-cannot be used by the Foundation Probe acceptance collector.
+requires a separate verified full-foundation resource receipt for Probe acceptance.
+The Probe image source and the native infrastructure source remain separate.
+Neither receipt can substitute for the other.
 
 The AKS API uses managed Entra authentication and Azure RBAC, with local
 accounts disabled. PostgreSQL, Key Vault, Blob, VNet/private endpoints, and
@@ -66,6 +68,12 @@ remain available as supplemental evidence collection. The verifier observes
 the Job, pod, image, workload identity, native receipt, and correlated
 Azure Monitor records; it does not run the Identity broker grant-redemption
 smoke test. This extended collector is not an additional P0 shipping gate.
+The verifier compares the image with its exact build source.
+It compares native deployment receipts with their own source, input hash,
+resource IDs, and deployment scope.
+An AKS-only receipt never becomes a full-foundation receipt.
+Probe version `0.0.1` requires this explicit separation in its target and
+native receipt. The old `0.0` image remains unchanged.
 Legacy tag-count, inherited NRMS policy-origin, provider-generated resource
 inventory, and historical receipt audits are not required acceptance steps.
 

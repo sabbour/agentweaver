@@ -3,6 +3,8 @@ kind: CiliumNetworkPolicy
 metadata:
   name: identity-broker-egress
   namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: identity-broker
 spec:
   endpointSelector:
     matchLabels:

@@ -140,12 +140,92 @@ After the Broker starts with the approved issuer and required runtime inputs,
 Both requests use ordinary DNS, trusted HTTPS, and the Gateway's observed IP.
 No insecure TLS, DNS override, or redirect following is permitted.
 Failure prevents a successful installer receipt.
-The installer does not create the Broker's runtime ConfigMap, signing Secret,
-key-ring PVC, OAuth registrations, or runtime Deployment.
+The routing option does not create the Broker's runtime ConfigMap, signing
+Secret, key-ring PVC, OAuth registrations, or runtime Deployment.
 Its receipt supplies `runtimeConfigInputs.IdentityBroker__Issuer` and
 `runtimeConfigInputs.IdentityBroker__ExternalProvider__ClientId` for the approved
 runtime ConfigMap. These inputs do not include a client secret.
 The receipt explicitly reports `runtimeConfigMutationExecuted: false`.
+
+### Initial Broker state and acceptance configuration
+
+The separate `--bootstrap-identity-broker-state` option creates initial
+`identity-broker-signing` material and the retained `identity-broker-key-ring`
+PVC only when absent. It requires the .NET 10 SDK on the installer host.
+The installer generates an RSA-3072 application certificate and a random PFX
+password. This certificate signs tokens and protects the durable key ring.
+It is not the public HTTPS certificate.
+Private material passes from process memory to Kubernetes stdin.
+It never appears in arguments, files, logs, or receipts.
+
+Existing signing material and storage remain unchanged.
+An incomplete Secret blocks installation without replacement.
+A PVC without its original signing Secret requires recovery of that Secret.
+The PVC remains application state, not a disposable acceptance fixture.
+An existing compatible Secret with no PVC permits creation of the missing PVC.
+This operation never rotates credentials or deletes state.
+
+The default-off `--align-existing-identity-broker-hostname` option changes only
+hostname fields on the existing owned P0 Gateway, HTTPRoute, and BackendTLSPolicy.
+The hostname comes from the available native DefaultDomainCertificate.
+UID and resource-version tests prevent overwriting a concurrent change.
+Certificate references, namespaces, route attachment, backend ports, policies,
+and permissions remain unchanged.
+An unprogrammed Gateway remains `routingBlocked: true`.
+This option does not authorize a namespace-policy change.
+
+The separate `--bootstrap-identity-broker-runtime` option requires these
+explicit inputs:
+
+| Input | Purpose |
+| --- | --- |
+| `--identity-upstream-client-id` | Existing public Entra application with the exact native callback already registered. |
+| `--identity-broker-image` | Approved immutable Broker image in GHCR. |
+| `--identity-acceptance-run-id` | UUID that names the run-owned public client. |
+| `--identity-acceptance-redirect-uri` | Explicit `http://127.0.0.1:<port>/callback` or IPv6 loopback callback. |
+
+The installer derives the runtime identity and federation from native Azure
+resources. It creates an immutable nonsecret ConfigMap for the explicit public
+acceptance client. Its scopes match the admitted Broker test contract.
+It creates missing ServiceAccount, Service, egress policy, and Deployment
+objects from existing source manifests. Existing objects must match the
+source configuration and remain unchanged.
+It creates no Entra application, client secret, or permission grant.
+
+The runtime issuer comes from the independently observed owned route spec.
+This is intended configuration even when the Gateway is not programmed.
+The receipt reports `configurationOnly: true` and `runtimeVerified: false`.
+Public DNS, trusted TLS, health, and user authorization require separate
+actual observations. The existing public readiness checks remain unchanged.
+
+### Foundation Probe installation inputs
+
+Directory application reads use `az ad app show --id <exact-client-id>`.
+This command does not accept `--subscription`.
+Routing verifies the selected native account and tenant before this read.
+ARM and Kubernetes operations retain their explicit target bindings.
+
+The default-off `--bootstrap-foundation-probe-inputs` option verifies the
+existing Probe identity and exact federation record. It creates a missing
+ServiceAccount from the admitted manifest.
+It reads the existing Application Insights component through the Azure
+management API and creates the missing `foundation-probe-monitor` Secret.
+The service-owned connection string stays in process memory and Kubernetes
+stdin. Receipts contain only resource metadata.
+An existing different Secret or ServiceAccount blocks replacement.
+This option does not create a vault writer role, resolve a latest secret
+version, bootstrap PostgreSQL, or claim that a Probe Job succeeded.
+
+The separate default-off `--bootstrap-foundation-probe-postgres` option creates
+the Probe fixture in the existing `agentweaver` database.
+It verifies the exact native Probe principal before opening the existing
+run-owned PostgreSQL transport.
+The operator uses Entra authentication through loopback with `VerifyFull`.
+The Probe runtime role has access only to its `foundation_probe` fixture.
+It has no schema creation rights or access to `identity_broker`.
+Partial state or a different principal blocks the operation.
+The receipt reports fixture setup, not a successful Probe run.
+Temporary transport resources are removed by exact name and ownership.
 
 The AKS `azureKeyvaultSecretsProvider` addon is enabled. Secret rotation uses
 `enableSecretRotation: 'true'` and `rotationPollInterval: '2m'`. Both values
@@ -286,9 +366,9 @@ transport cleanup is reported and is not converted into a successful receipt.
 
 ## Acceptance
 
-`verify-acceptance.mjs` accepts the full-foundation source/target arguments,
+`verify-acceptance.mjs` accepts the selected infrastructure source/target arguments,
 including the operator object ID, plus `--expected-sha` and `--deployment-name`.
-It always checks the exact source-bound full-foundation deployment, target
+It checks the exact source-bound deployment, target
 ownership, observed AKS security settings, and exact workload-identity
 federation configuration. It rejects an AKS-only deployment receipt. These
 configuration checks do not prove that a Job ran or exchanged a token.

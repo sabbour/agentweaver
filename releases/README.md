@@ -9,6 +9,23 @@ It pins eight independently versioned .NET foundation NuGet packages:
 The current package baseline for all eight is `0.0.0`.
 `Agentweaver.Identity.Broker` uses service baseline `0.0.0`; it is not one
 of the NuGet packages.
+`Agentweaver.FoundationProbe` has a separate image component at `0.0.1`.
+The manifest uses the `service` artifact kind for its executable container.
+The Probe remains acceptance-only, not a product service.
+Its exact `tools/Agentweaver.FoundationProbe` project path is the sole tools
+exception. Other tools paths remain invalid.
+This patch separates image provenance from native infrastructure deployment
+provenance. The new target and receipt require explicit deployment bindings.
+SDK container preparation derives the Probe image SHA, Git tree, and
+infrastructure-input hash from the same clean tracked source as its Docker build.
+Both build paths embed those values; an `unbound` image cannot satisfy acceptance.
+The image repository remains `agentweaver-foundation-probe`, not the component
+ID's dotted lowercase form.
+Use `--foundation-probe-only` with both preparation and publication to select
+only this image. This option cannot combine with `--packages-only`.
+Selection does not change the full manifest hash or permit artifact substitution.
+It does not rebuild or publish the Broker image or eight NuGet packages.
+The existing `0.0` image and eight NuGet baselines remain unchanged.
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.

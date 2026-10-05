@@ -6,7 +6,7 @@ import { writeFileSync, existsSync } from 'node:fs';
 import { checkAksNetworkSecurity, checkBlobRoundtrip, checkDeployedSha, checkKeyVaultSecretVersion, checkMonitorTrace,
   checkServiceDigests, checkWorkloadIdentity, runAcceptance } from '../verify-acceptance.mjs';
 import { fixture, source, fakeAzure, ids, deploymentOutputs, observedCluster } from './fixtures/target.mjs';
-import { makeRuntimeFixture, completedAt as probeCompletedAt } from './fixtures/foundation-probe-runtime.mjs';
+import { localImageReceipt, makeRuntimeFixture, completedAt as probeCompletedAt } from './fixtures/foundation-probe-runtime.mjs';
 import { postDeploymentAzure } from './fixtures/post-deployment.mjs';
 
 test('AKS network preflight reads the exact observed cluster and reports enabled security configuration', () => {
@@ -134,7 +134,167 @@ test('acceptance rejects an AKS-only source-bound deployment receipt as a full-f
     create: { status: 0, stdout: JSON.stringify(valid) },
   }));
   assert.equal(result.status, 'blocked');
-  assert.match(result.reason, /AKS-only deployment receipt is not a full-foundation receipt/);
+  assert.match(result.reason, /not a full-foundation receipt for acceptance/);
+});
+
+test('acceptance binds the actual AKS-only receipt and original full-foundation resources independently', () => {
+  const aksSource = {
+    sha: '9b7da6e64dfd733b69917b7e783c4107a5bf17dc',
+    sourceTree: '26122cb2d9fddc50a7aa7647e1de7719a8d43cb3',
+    sourceHash: '993178aa83383d3ec32367c31db7211b43114e8d5ae3e757b37711b93637f1b2',
+    scope: 'aks-only',
+  };
+  const foundationSource = {
+    sha: 'f989c5c3457af84e2a0ffbbb7ab82f5ea07901ac',
+    sourceTree: '20d54d53867e091a62ed25b52681c53e49b0de05',
+    sourceHash: aksSource.sourceHash,
+    scope: 'infrastructure-only',
+    appRoutingDnsZoneResourceIds: [],
+  };
+  const aksName = `aw-v1-p0-aks-${aksSource.sha.slice(0, 12)}`;
+  const foundationName = `aw-v1-p0-${foundationSource.sha.slice(0, 12)}`;
+  const issuer = 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/new-cluster/';
+  const oldFoundationIssuer = 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/old-cluster/';
+  const aksClusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks`;
+  const makeReceipts = ({ selected = {}, foundation = {} } = {}) => ({
+    [aksName]: {
+      id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${aksName}`,
+      properties: { provisioningState: 'Succeeded', outputs: {
+        sourceSha: { value: aksSource.sha },
+        sourceTree: { value: aksSource.sourceTree },
+        sourceHash: { value: aksSource.sourceHash },
+        clusterName: { value: 'aw-v1-p0-aks' },
+        clusterId: { value: aksClusterId },
+        operatorRoleAssignmentId: {
+          value: `${aksClusterId}/providers/Microsoft.Authorization/roleAssignments/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`,
+        },
+        oidcIssuerUrl: { value: issuer },
+        ...selected,
+      } },
+    },
+    [foundationName]: {
+      id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${foundationName}`,
+      properties: { provisioningState: 'Succeeded', outputs: {
+        ...structuredClone(deploymentOutputs),
+        sourceSha: { value: foundationSource.sha },
+        sourceTree: { value: foundationSource.sourceTree },
+        sourceHash: { value: foundationSource.sourceHash },
+        aksOidcIssuerUrl: { value: oldFoundationIssuer },
+        ...foundation,
+      } },
+    },
+  });
+  const run = (receipts, callLog = []) => (args, options = {}) => {
+    callLog.push(args);
+    if (args[0] !== 'deployment') return { status: 1, stdout: '', stderr: 'unexpected command' };
+    const name = args[args.indexOf('--name') + 1];
+    const response = receipts[name];
+    if (!response) return { status: 1, stdout: '', stderr: 'DeploymentNotFound' };
+    return { status: 0, stdout: JSON.stringify(response), stderr: '' };
+  };
+  const config = {
+    ...fixture,
+    scope: 'aks-only',
+    deploymentName: aksName,
+    expectedSha: aksSource.sha,
+    sourceTree: aksSource.sourceTree,
+    sourceHash: aksSource.sourceHash,
+    foundationSource,
+  };
+  const calls = [];
+  const result = checkDeployedSha(config, run(makeReceipts(), calls));
+  assert.equal(result.status, 'passed');
+  assert.equal(result.evidence.scope, 'aks-only');
+  assert.equal(result.evidence.sourceSha, aksSource.sha);
+  assert.equal(result.evidence.foundation.sourceSha, foundationSource.sha);
+  assert.equal(result.evidence.resources.clusterId, aksClusterId);
+  assert.notEqual(oldFoundationIssuer, issuer);
+  assert.equal(result.evidence.aksOidcIssuerUrl, issuer);
+  assert.deepEqual(calls.map(args => args[args.indexOf('--name') + 1]), [aksName, foundationName]);
+
+  for (const change of [
+    { selected: { sourceSha: { value: 'a'.repeat(40) } } },
+    { selected: { sourceTree: { value: 'b'.repeat(40) } } },
+    { selected: { sourceHash: { value: 'c'.repeat(64) } } },
+    { selected: { clusterId: { value: `${aksClusterId}-other` } } },
+    { selected: { clusterName: { value: 'other-cluster' } } },
+    { selected: { oidcIssuerUrl: { value: 'http://wrong.example/' } } },
+    { foundation: { sourceSha: { value: 'a'.repeat(40) } } },
+    { foundation: { sourceTree: { value: 'b'.repeat(40) } } },
+    { foundation: { sourceHash: { value: 'c'.repeat(64) } } },
+    { foundation: { foundationProbeIdentity: undefined } },
+    { foundation: { foundationResources: { value: {
+      ...deploymentOutputs.foundationResources.value, vaultUri: 'https://shared.vault.azure.net/',
+    } } } },
+  ]) assert.equal(checkDeployedSha(config, run(makeReceipts(change))).status, 'blocked');
+
+  assert.equal(checkDeployedSha({ ...config, scope: 'name-only' }, run(makeReceipts())).status, 'blocked');
+  assert.equal(checkDeployedSha({
+    ...config,
+    deploymentName: `aw-v1-p0-${aksSource.sha.slice(0, 12)}`,
+  }, run(makeReceipts())).status, 'blocked');
+  assert.equal(checkDeployedSha({ ...config, foundationSource: undefined }, run(makeReceipts())).status, 'blocked');
+
+  const runAksAcceptance = (receipts, {
+    observedIssuer = issuer,
+    federationIssuer = issuer,
+    cluster = observedCluster,
+  } = {}) => {
+    const fallback = fakeAzure({
+      ...postDeploymentAzure,
+      issuerResult: { status: 0, stdout: observedIssuer, stderr: '' },
+      federationResult: { status: 0, stdout: JSON.stringify({
+        issuer: federationIssuer,
+        subject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
+        audiences: ['api://AzureADTokenExchange'],
+      }), stderr: '' },
+      clusterResult: { status: 0, stdout: JSON.stringify(cluster), stderr: '' },
+    });
+    const execAz = (args, options = {}) => {
+      if (args[0] === 'deployment' && args[1] === 'group' && args.includes('--name')) {
+        const receipt = receipts[args[args.indexOf('--name') + 1]];
+        return receipt
+          ? { status: 0, stdout: JSON.stringify(receipt), stderr: '' }
+          : { status: 1, stdout: '', stderr: 'DeploymentNotFound' };
+      }
+      return fallback(args, options);
+    };
+    return runAcceptance({
+      ...fixture,
+      expectedSha: aksSource.sha,
+      deploymentName: aksName,
+      foundationExpectedSha: foundationSource.sha,
+      collectRuntimeEvidence: false,
+    }, {
+      sourceResolver: request => request.expectedSha === foundationSource.sha
+        ? { ...source, ...foundationSource }
+        : { ...source, ...aksSource,
+          template: 'infra/bicep/aks-redeploy.bicep',
+          parametersFile: 'infra/bicep/parameters/p0-integration.approved.json' },
+      execAz,
+    });
+  };
+
+  const replacementCluster = runAksAcceptance(makeReceipts());
+  assert.equal(replacementCluster.checks.find(check => check.name === 'deployed-sha').status, 'passed');
+  assert.equal(replacementCluster.checks.find(check => check.name === 'aks-observed-network-security').status, 'passed');
+  assert.equal(replacementCluster.checks.find(check => check.name === 'workload-identity-oidc').status, 'passed');
+  assert.equal(replacementCluster.checks.find(check => check.name === 'workload-identity-oidc').evidence.issuerUrl, issuer);
+
+  const wrongReceiptIssuer = runAksAcceptance(makeReceipts({
+    selected: { oidcIssuerUrl: { value: 'https://wrong.example/' } },
+  }));
+  assert.equal(wrongReceiptIssuer.checks.find(check => check.name === 'workload-identity-oidc').status, 'blocked');
+  const wrongFederationIssuer = runAksAcceptance(makeReceipts(), { federationIssuer: 'https://wrong.example/' });
+  assert.equal(wrongFederationIssuer.checks.find(check => check.name === 'workload-identity-oidc').status, 'blocked');
+  const wrongObservedIssuer = runAksAcceptance(makeReceipts(), {
+    observedIssuer: 'https://wrong.example/', federationIssuer: 'https://wrong.example/',
+  });
+  assert.equal(wrongObservedIssuer.checks.find(check => check.name === 'workload-identity-oidc').status, 'blocked');
+  const wrongCluster = runAksAcceptance(makeReceipts(), {
+    cluster: { ...observedCluster, id: `${aksClusterId}-other` },
+  });
+  assert.equal(wrongCluster.checks.find(check => check.name === 'aks-observed-network-security').status, 'blocked');
 });
 
 test('issuer and exact subject/issuer/audience configuration never imply verified token exchange', () => {
@@ -408,6 +568,7 @@ test('only independently collected complete runtime evidence can pass deployed a
         monitorResult: { status: 0, stdout: JSON.stringify([monitorRow]), stderr: '' } }, calls),
       execKubectl: runtime.execKubectl,
       verifyImage: runtime.verifyImage,
+      readImageReceipt: () => localImageReceipt,
       now: () => Date.parse('2026-10-03T12:02:00.000Z'),
     });
     return { report, calls };
@@ -432,6 +593,66 @@ test('only independently collected complete runtime evidence can pass deployed a
   assert.equal(stale.report.checks.find(check => check.name === 'foundation-probe-receipt').status, 'blocked');
   assert.equal(stale.report.checks.find(check => check.name === 'monitor-trace').status, 'blocked');
   assert.equal(stale.calls.some(args => args.includes('--analytics-query')), false);
+});
+
+test('acceptance resolves image SHA, tree and hash from its receipt independently of deployed infrastructure', () => {
+  const imageSource = {
+    sha: 'a7e4fb318cd7339cbb32ef44b8685eb919b7df01',
+    sourceTree: 'd8c15d05f0511c1f28f2acae0d90281c65d1ec5d',
+    sourceHash: '993178aa83383d3ec32367c31db7211b43114e8d5ae3e757b37711b93637f1b2',
+    scope: 'infrastructure-only',
+  };
+  const receipt = {
+    ...localImageReceipt,
+    sourceSha: imageSource.sha,
+    sourceTree: imageSource.sourceTree,
+    sourceHash: imageSource.sourceHash,
+  };
+  const resolve = ({ expectedSha }) => expectedSha === source.sha ? source : imageSource;
+  const runtime = makeRuntimeFixture();
+  const report = runAcceptance({
+    ...fixture,
+    collectRuntimeEvidence: true,
+    kubeContext: runtime.options.kubeContext,
+    imageReference: runtime.options.imageReference,
+    imageReceiptPath: runtime.options.imageReceiptPath,
+  }, {
+    sourceResolver: resolve,
+    readImageReceipt: () => receipt,
+    execAz: fakeAzure(postDeploymentAzure),
+    execKubectl: runtime.execKubectl,
+    verifyImage: runtime.verifyImage,
+  });
+  assert.equal(report.candidate.sourceSha, source.sha);
+  assert.equal(report.candidate.imageSourceSha, imageSource.sha);
+  assert.equal(report.checks.find(check => check.name === 'foundation-probe-target').status, 'blocked');
+  assert.equal(runtime.calls.some(({ args }) => args[0] === 'logs'), false);
+
+  for (const mutation of [
+    { sourceSha: 'f'.repeat(40) },
+    { sourceTree: 'e'.repeat(40) },
+    { sourceHash: 'd'.repeat(64) },
+    { schemaVersion: 2 },
+    { unreviewedField: true },
+  ]) {
+    const badRuntime = makeRuntimeFixture();
+    const bad = runAcceptance({
+      ...fixture,
+      collectRuntimeEvidence: true,
+      kubeContext: badRuntime.options.kubeContext,
+      imageReference: badRuntime.options.imageReference,
+      imageReceiptPath: badRuntime.options.imageReceiptPath,
+    }, {
+      sourceResolver: resolve,
+      readImageReceipt: () => ({ ...receipt, ...mutation }),
+      execAz: fakeAzure(postDeploymentAzure),
+      execKubectl: badRuntime.execKubectl,
+      verifyImage: badRuntime.verifyImage,
+    });
+    assert.equal(bad.candidate.imageSourceSha, undefined);
+    assert.equal(bad.checks.find(check => check.name === 'foundation-probe-image-source').status, 'blocked');
+    assert.equal(badRuntime.calls.length, 0);
+  }
 });
 
 test('CLI rejects mutation and caller-asserted runtime proof options before any target command', () => {

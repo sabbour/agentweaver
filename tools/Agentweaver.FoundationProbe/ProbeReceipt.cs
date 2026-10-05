@@ -23,7 +23,8 @@ internal sealed record ProbeDeploymentBinding(
     string DeploymentId,
     string AksOidcIssuerUrl,
     ProbeIdentity Identity,
-    ProbeResources Resources);
+    ProbeResources Resources,
+    ProbeInfrastructure Infrastructure);
 
 internal sealed record ProbeIdentityEvidence(string Issuer, string Subject, string Audience);
 

@@ -100,6 +100,71 @@ test('packages-only preparation leaves service images out while retaining the fu
   assert.equal(provenance.manifestSha256, createHash('sha256').update(JSON.stringify(manifest)).digest('hex'));
 });
 
+test('Probe SDK image preparation embeds independently derived image source metadata in build and publish', t => {
+  const dir = initRepo(t);
+  const project = 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj';
+  mkdirSync(path.dirname(path.join(dir, project)), { recursive: true });
+  writeFileSync(path.join(dir, project), `<Project><PropertyGroup><Version>0.0.1</Version>
+    <ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:10.0@sha256:${'a'.repeat(64)}</ContainerBaseImage>
+    </PropertyGroup></Project>`);
+  writeFileSync(path.join(dir, 'tools', 'Agentweaver.FoundationProbe', 'packages.lock.json'),
+    '{"version":1,"dependencies":{}}');
+  mkdirSync(path.join(dir, 'infra', 'bicep'), { recursive: true });
+  const infrastructure = "targetScope = 'resourceGroup'\n";
+  writeFileSync(path.join(dir, 'infra', 'bicep', 'main.bicep'), infrastructure);
+  git(dir, 'add', '.');
+  git(dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'Probe');
+  const sourceSha = git(dir, 'rev-parse', 'HEAD');
+  const sourceTree = git(dir, 'rev-parse', 'HEAD^{tree}');
+  const sourceHash = createHash('sha256').update('infra/bicep/main.bicep').update('\0')
+    .update(infrastructure).update('\0').digest('hex');
+  const calls = [];
+  const outDir = path.join(dir, 'artifacts', 'release', 'probe');
+  const result = packComponents({
+    ...manifestBase(),
+    components: [...manifestBase().components,
+      { id: 'Agentweaver.FoundationProbe', kind: 'service', version: '0.0.1', project }],
+  }, {
+    root: dir, outDir, foundationProbeOnly: true, dotnet(args) {
+      calls.push(args);
+      if (args[0] === 'publish') {
+        const output = args.find(value => value.startsWith('-p:ContainerArchiveOutputPath=')).split('=').slice(1).join('=');
+        writeFileSync(output, 'source-bound Probe image');
+      }
+    },
+  });
+  assert.equal(result.sourceSha, sourceSha);
+  assert.deepEqual(result.components.map(component => component.id), ['Agentweaver.FoundationProbe']);
+  assert.equal(result.artifacts[0].repository, 'agentweaver-foundation-probe');
+  assert.ok(calls.find(args => args[0] === 'publish').includes('-p:ContainerRepository=agentweaver-foundation-probe'));
+  for (const args of calls.filter(args => ['build', 'publish'].includes(args[0]))) {
+    assert.ok(args.includes(`-p:ProbeSourceSha=${sourceSha}`));
+    assert.ok(args.includes(`-p:ProbeSourceTree=${sourceTree}`));
+    assert.ok(args.includes(`-p:ProbeInfrastructureHash=${sourceHash}`));
+    assert.ok(!args.some(value => value.includes('unbound')));
+  }
+  assert.deepEqual(calls.map(args => args[0]), ['restore', 'build', 'publish']);
+});
+
+test('actual Probe SDK evaluation binds accepted provenance labels and explicit numeric image user', () => {
+  const sourceSha = 'a'.repeat(40);
+  const sourceTree = 'b'.repeat(40);
+  const sourceHash = 'c'.repeat(64);
+  const evaluated = JSON.parse(execFileSync(process.env.DOTNET_HOST_PATH || 'dotnet', [
+    'msbuild', path.resolve('tools', 'Agentweaver.FoundationProbe', 'Agentweaver.FoundationProbe.csproj'),
+    '-nologo', '-p:EnableSdkContainerSupport=true', '-t:ComputeContainerConfig',
+    `-p:ProbeSourceSha=${sourceSha}`, `-p:ProbeSourceTree=${sourceTree}`,
+    `-p:ProbeInfrastructureHash=${sourceHash}`, '-getProperty:ContainerUser', '-getItem:ContainerLabel,ContainerAppCommand',
+  ], { encoding: 'utf8' }));
+  assert.equal(evaluated.Properties.ContainerUser, '10001:10001');
+  const labels = Object.fromEntries(evaluated.Items.ContainerLabel.map(item => [item.Identity, item.Value]));
+  assert.equal(labels['org.opencontainers.image.revision'], sourceSha);
+  assert.equal(labels['io.agentweaver.source-tree'], sourceTree);
+  assert.equal(labels['io.agentweaver.infrastructure-source-hash'], sourceHash);
+  assert.deepEqual(evaluated.Items.ContainerAppCommand.map(item => item.Identity),
+    ['dotnet', 'Agentweaver.FoundationProbe.dll']);
+});
+
 test('never writes provenance.json when the working tree is dirty before packing', (t) => {
   const dir = initRepo(t);
   writeFileSync(path.join(dir, 'uncommitted.txt'), 'x');

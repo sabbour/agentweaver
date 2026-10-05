@@ -5,6 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateFile } from './validate.mjs';
+import { componentImageRepository } from './pack.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (message) => { throw new Error(`manual publication: ${message}`); };
@@ -39,8 +40,10 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   root = process.cwd(), confirmed = false, env = process.env, run = command,
   writeFileSync: writeReceipt = writeFileSync,
   packagesOnly = false,
+  foundationProbeOnly = false,
 } = {}) {
   if (!confirmed || !/^[a-f0-9]{40}$/.test(sourceSha ?? '')) fail('explicit confirmation and exact source SHA are required');
+  if (packagesOnly && foundationProbeOnly) fail('package-only and Foundation Probe-only publication are mutually exclusive');
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   if (git('rev-parse', 'HEAD') !== sourceSha || git('status', '--porcelain')) fail('publication requires a clean exact source HEAD');
   const manifest = validateFile(path.resolve(root, manifestPath), { root });
@@ -52,16 +55,19 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const provenance = JSON.parse(readFileSync(path.join(directory, 'provenance.json'), 'utf8'));
   if (provenance.schemaVersion !== 1 || provenance.sourceSha !== sourceSha ||
       provenance.manifestSha256 !== hash(JSON.stringify(manifest))) fail('provenance does not match exact source composition');
-  const components = packagesOnly
+  const components = foundationProbeOnly
+    ? manifest.components.filter(component => component.id === 'Agentweaver.FoundationProbe' && component.kind === 'service')
+    : packagesOnly
     ? manifest.components.filter((component) => component.kind !== 'service')
     : manifest.components;
+  if (components.length === 0) fail('the selected composition has no components to publish');
   if (!Array.isArray(provenance.components) || provenance.components.length !== components.length ||
       provenance.components.some((record, index) => {
         const component = components[index];
         return !component || record?.id !== component.id || record?.kind !== component.kind ||
           record?.version !== component.version || record?.project !== component.project;
       })) {
-    fail(`provenance component selection does not match the ${packagesOnly ? 'package-only' : 'full'} manifest selection`);
+    fail(`provenance component selection does not match the ${foundationProbeOnly ? 'Foundation Probe-only' : packagesOnly ? 'package-only' : 'full'} manifest selection`);
   }
   if (!Array.isArray(provenance.artifacts) || provenance.artifacts.length !== components.length) {
     fail('missing or unexpected artifact provenance');
@@ -97,7 +103,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const imageRepositories = new Map();
   for (const { component, artifact } of selected) {
     if (artifact.kind !== 'image') continue;
-    const repositoryPath = [registry.repositoryPath, component.id.toLowerCase()].filter(Boolean).join('/');
+    const repositoryPath = [registry.repositoryPath, componentImageRepository(component.id)].filter(Boolean).join('/');
     if (repositoryPath.length > 255) fail(`image repository path for ${component.id} exceeds 255 characters`);
     imageRepositories.set(component.id, `${registry.host}/${repositoryPath}`);
   }
@@ -148,7 +154,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
         run('dotnet', ['nuget', 'push', file, '--source', env.RELEASE_NUGET_SOURCE, '--api-key', env.RELEASE_NUGET_API_KEY]);
         receipt.published.push({ id: component.id, version: component.version, kind: 'package', feed: env.RELEASE_NUGET_SOURCE, sha256: artifact.sha256 });
       } else {
-        const local = `${component.id.toLowerCase()}:${component.version}`;
+        const local = `${componentImageRepository(component.id)}:${component.version}`;
         const remote = `${imageRepositories.get(component.id)}:${component.version}`;
         run('docker', ['load', '--input', file]);
         run('docker', ['tag', local, remote]);
@@ -191,6 +197,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     publishArtifacts(manifest, output, sourceSha, {
       confirmed: args.includes('--confirm-publication'),
       packagesOnly: args.includes('--packages-only'),
+      foundationProbeOnly: args.includes('--foundation-probe-only'),
     });
     console.log('Manual artifact publication completed; see publication.json. No platform release or deployment was performed.');
   } catch (error) {

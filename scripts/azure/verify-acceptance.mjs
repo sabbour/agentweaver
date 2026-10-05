@@ -15,6 +15,22 @@ const configured = (name, evidence) => ({ name, scope: 'configuration', status: 
 const integrationBlocked = (name, reason, evidence) => ({ name, scope: 'integration', status: 'blocked', reason, evidence });
 const integrationPassed = (name, evidence) => ({ name, scope: 'integration', status: 'passed', evidence });
 
+function validIssuer(value) {
+  if (typeof value !== 'string') return false;
+  try {
+    const issuer = new URL(value);
+    return issuer.protocol === 'https:' && issuer.port === '' && !issuer.username && !issuer.password &&
+      !issuer.search && !issuer.hash && issuer.pathname.endsWith('/');
+  } catch {
+    return false;
+  }
+}
+
+function hasExactKeys(value, keys) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
+}
+
 export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscriptionId }, execAz) {
   const name = 'aks-observed-network-security';
   const expectedClusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}` +
@@ -86,33 +102,113 @@ export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscription
 }
 
 export function checkDeployedSha({
-  resourceGroup, subscriptionId, deploymentName, expectedSha, sourceTree, sourceHash,
+  resourceGroup, subscriptionId, deploymentName, expectedSha, sourceTree, sourceHash, scope = 'infrastructure-only',
+  foundationSource,
   appRoutingDnsZoneResourceIds = [],
 }, execAz) {
   const name = 'deployed-sha';
   if (!isFullSha(expectedSha) || !isFullSha(sourceTree) || !/^[0-9a-f]{64}$/.test(sourceHash ?? '') ||
-      deploymentName !== `${resourceGroup}-${expectedSha.slice(0, 12)}`) {
-    return blocked(name, 'Exact source SHA, Git tree, input hash and SHA-derived deployment name are required.');
+      !['infrastructure-only', 'aks-only'].includes(scope) ||
+      deploymentName !== `${resourceGroup}${scope === 'aks-only' ? '-aks' : ''}-${expectedSha.slice(0, 12)}`) {
+    return blocked(name, 'Exact source SHA, Git tree, input hash, scope and scope-derived deployment name are required.');
   }
-  const result = execAz(['deployment', 'group', 'show', '--resource-group', resourceGroup,
-    '--name', deploymentName, '-o', 'json'], { check: false });
   try {
-    const deployment = JSON.parse(result.stdout);
-    const outputs = deployment.properties?.outputs;
-    const deploymentId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Resources/deployments/${deploymentName}`;
-    if (result.status !== 0 || deployment.properties?.provisioningState !== 'Succeeded' ||
-        deployment.id?.toLowerCase() !== deploymentId.toLowerCase() ||
-        outputs?.sourceSha?.value !== expectedSha || outputs?.sourceTree?.value !== sourceTree ||
-        outputs?.sourceHash?.value !== sourceHash) {
-      return blocked(name, 'No successful deployment with matching Bicep source outputs.');
+    const deploymentIdFor = deployment => `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}` +
+      `/providers/Microsoft.Resources/deployments/${deployment}`;
+    const readDeployment = deploymentName => {
+      const result = execAz(['deployment', 'group', 'show', '--resource-group', resourceGroup,
+        '--name', deploymentName, '-o', 'json'], { check: false });
+      const deployment = JSON.parse(result.stdout);
+      if (result.status !== 0 || deployment.properties?.provisioningState !== 'Succeeded' ||
+          deployment.id?.toLowerCase() !== deploymentIdFor(deploymentName).toLowerCase()) {
+        throw new Error(`Deployment ${deploymentName} is missing, unsuccessful or scoped to another target.`);
+      }
+      return { deployment, outputs: deployment.properties?.outputs };
+    };
+    const matchesSource = (outputs, source) =>
+      outputs?.sourceSha?.value === source.sha && outputs?.sourceTree?.value === source.sourceTree &&
+      outputs?.sourceHash?.value === source.sourceHash;
+    const selected = readDeployment(deploymentName);
+    if (!matchesSource(selected.outputs, { sha: expectedSha, sourceTree, sourceHash })) {
+      return blocked(name, 'Selected deployment does not contain the exact resolved Bicep source outputs.');
     }
-    if (outputs?.clusterName?.value && !outputs?.foundationProbeIdentity?.value &&
-        !outputs?.foundationResources?.value) {
-      return blocked(name, 'The AKS-only deployment receipt is not a full-foundation receipt for acceptance.');
+
+    let foundation;
+    let foundationOutputs;
+    let selectedIssuer;
+    if (scope === 'infrastructure-only') {
+      if (!selected.outputs?.foundationProbeIdentity?.value ||
+          !selected.outputs?.foundationResources?.value) {
+        return blocked(name, 'The selected deployment is not a full-foundation receipt for acceptance.');
+      }
+      foundation = {
+        scope,
+        sourceSha: expectedSha,
+        sourceTree,
+        sourceHash,
+        deploymentName,
+        deploymentId: selected.deployment.id,
+      };
+      foundationOutputs = selected.outputs;
+      selectedIssuer = selected.outputs?.aksOidcIssuerUrl?.value;
+    } else {
+      if (!foundationSource || foundationSource.scope !== 'infrastructure-only' ||
+          !isFullSha(foundationSource.sha) || !isFullSha(foundationSource.sourceTree) ||
+          !/^[0-9a-f]{64}$/.test(foundationSource.sourceHash ?? '')) {
+        return blocked(name, 'AKS-only acceptance requires the exact resolved original full-foundation source receipt.');
+      }
+      const expectedClusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}` +
+        `/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`;
+      selectedIssuer = selected.outputs?.oidcIssuerUrl?.value;
+      const assignmentId = selected.outputs?.operatorRoleAssignmentId?.value;
+      const assignmentPrefix = `${expectedClusterId}/providers/Microsoft.Authorization/roleAssignments/`;
+      if (selected.outputs?.clusterName?.value !== `${resourceGroup}-aks` ||
+          selected.outputs?.clusterId?.value?.toLowerCase() !== expectedClusterId.toLowerCase() ||
+          typeof selectedIssuer !== 'string' || !validIssuer(selectedIssuer) ||
+          typeof assignmentId !== 'string' || !assignmentId.toLowerCase().startsWith(assignmentPrefix.toLowerCase()) ||
+          !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(assignmentId.slice(assignmentPrefix.length))) {
+        return blocked(name, 'AKS-only deployment outputs do not bind the exact cluster, issuer and operator assignment.');
+      }
+      const foundationDeploymentName = `${resourceGroup}-${foundationSource.sha.slice(0, 12)}`;
+      const full = readDeployment(foundationDeploymentName);
+      if (!matchesSource(full.outputs, foundationSource)) {
+        return blocked(name, 'Original full-foundation deployment does not contain its exact resolved Bicep source outputs.');
+      }
+      foundation = {
+        scope: foundationSource.scope,
+        sourceSha: foundationSource.sha,
+        sourceTree: foundationSource.sourceTree,
+        sourceHash: foundationSource.sourceHash,
+        deploymentName: foundationDeploymentName,
+        deploymentId: full.deployment.id,
+      };
+      foundationOutputs = full.outputs;
     }
-    return configured(name, { deployedSha: expectedSha, sourceTree, sourceHash, deploymentId: deployment.id,
-      scope: 'infrastructure-only', servicesDeployed: false,
-      ...readFoundationOutputs(outputs, { resourceGroup, subscriptionId, appRoutingDnsZoneResourceIds }) });
+    const foundationResources = readFoundationOutputs(foundationOutputs, {
+      resourceGroup,
+      subscriptionId,
+      appRoutingDnsZoneResourceIds: scope === 'aks-only'
+        ? foundationSource.appRoutingDnsZoneResourceIds
+        : appRoutingDnsZoneResourceIds,
+    });
+    if (foundationResources.resources.clusterId.toLowerCase() !==
+        `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`.toLowerCase()) {
+      return blocked(name, 'Foundation resources do not identify the exact AKS cluster selected by the deployment.');
+    }
+    if (!validIssuer(selectedIssuer)) {
+      return blocked(name, 'Selected deployment has no valid HTTPS AKS OIDC issuer output.');
+    }
+    return configured(name, {
+      sourceSha: expectedSha,
+      sourceTree,
+      sourceHash,
+      scope,
+      deploymentName,
+      deploymentId: selected.deployment.id,
+      foundation,
+      aksOidcIssuerUrl: selectedIssuer,
+      ...foundationResources,
+    });
   } catch (error) {
     return blocked(name, `Deployment evidence is missing, malformed or mismatched: ${error.message}`);
   }
@@ -282,10 +378,31 @@ export function checkMonitorTrace({
   }
 }
 
+function resolveImageSource(config, receiptPath, sourceResolver, readImageReceipt) {
+  const receipt = readImageReceipt(receiptPath);
+  if (receipt?.kind !== 'foundation-probe-image' || receipt.schemaVersion !== 1 ||
+      !isFullSha(receipt.sourceSha) || !isFullSha(receipt.sourceTree) ||
+      !/^[0-9a-f]{64}$/.test(receipt.sourceHash ?? '') ||
+      !hasExactKeys(receipt, ['kind', 'schemaVersion', 'sourceSha', 'sourceTree', 'sourceHash', 'image']) ||
+      !(hasExactKeys(receipt.image, ['localReference', 'localConfigDigest', 'configUser', 'repositoryDigests']) ||
+        hasExactKeys(receipt.image, [
+          'localReference', 'localConfigDigest', 'configUser', 'repositoryDigests', 'publishedReference',
+        ]))) {
+    throw new Error('The Foundation Probe image receipt has no strict SHA, Git tree and infrastructure hash.');
+  }
+  const source = sourceResolver({ ...config, expectedSha: receipt.sourceSha });
+  if (source.sha !== receipt.sourceSha || source.sourceTree !== receipt.sourceTree ||
+      source.sourceHash !== receipt.sourceHash) {
+    throw new Error('Foundation Probe image receipt differs from the exact reviewed Git source.');
+  }
+  return { sha: source.sha, sourceTree: source.sourceTree, sourceHash: source.sourceHash };
+}
+
 export function runAcceptance(config, {
   execAz = runAz,
   execKubectl = (args, options) => run('kubectl', args, options),
   sourceResolver = resolveSource,
+  readImageReceipt = path => JSON.parse(readFileSync(path, 'utf8')),
   verifyImage,
   now = Date.now,
   uuid = randomUUID,
@@ -293,6 +410,9 @@ export function runAcceptance(config, {
   const checks = [];
   let candidate;
   let source;
+  let foundationSource;
+  let imageSource;
+  let imageSourceError;
   let boundAz;
   let deploymentEvidence;
   let aksEvidence;
@@ -302,6 +422,32 @@ export function runAcceptance(config, {
     candidate = { verifierSha: source.verifierSha ?? source.sha, sourceSha: source.sha,
       sourceTree: source.sourceTree, sourceHash: source.sourceHash, scope: source.scope };
     if (config.expectedSha !== source.sha) throw new Error('Expected deployment SHA differs from reviewed HEAD.');
+    if (source.scope === 'aks-only') {
+      if (!isFullSha(config.foundationExpectedSha)) {
+        throw new Error('AKS-only acceptance requires --foundation-expected-sha for the original full-foundation source.');
+      }
+      foundationSource = sourceResolver({
+        ...config,
+        template: 'infra/bicep/main.bicep',
+        parametersFile: config.foundationParametersFile ?? 'infra/bicep/parameters/p0-integration.approved.json',
+        expectedSha: config.foundationExpectedSha,
+      });
+      if (foundationSource.scope !== 'infrastructure-only' ||
+          foundationSource.sha !== config.foundationExpectedSha) {
+        throw new Error('Original full-foundation source did not resolve to the exact infrastructure-only commit.');
+      }
+      candidate.foundationSourceSha = foundationSource.sha;
+    }
+    if (config.collectRuntimeEvidence === true) {
+      try {
+        const imageReceiptPath = config.imageReceiptPath ??
+          resolve(process.cwd(), 'artifacts', 'images', 'foundation-probe.json');
+        imageSource = resolveImageSource(config, imageReceiptPath, sourceResolver, readImageReceipt);
+        candidate.imageSourceSha = imageSource.sha;
+      } catch (error) {
+        imageSourceError = error;
+      }
+    }
     const target = guardAzureTarget({ ...config, ...source }, execAz);
     boundAz = target.execAz;
     const { group } = target;
@@ -320,8 +466,14 @@ export function runAcceptance(config, {
       }
     };
     check('target-inventory', () => configured('target-inventory', target.inventoryEvidence));
-    const deploymentCheck = check('deployed-sha', () => checkDeployedSha({ ...config, sourceTree: source.sourceTree,
-      sourceHash: source.sourceHash, appRoutingDnsZoneResourceIds: source.appRoutingDnsZoneResourceIds }, boundAz));
+    const deploymentCheck = check('deployed-sha', () => checkDeployedSha({
+      ...config,
+      scope: source.scope,
+      sourceTree: source.sourceTree,
+      sourceHash: source.sourceHash,
+      foundationSource,
+      appRoutingDnsZoneResourceIds: source.appRoutingDnsZoneResourceIds,
+    }, boundAz));
     deploymentEvidence = deploymentCheck.status === 'passed' ? deploymentCheck.evidence : undefined;
     const clusterName = `${config.resourceGroup}-aks`;
     const accountName = `${config.resourceGroup.replaceAll('-', '')}blob`.slice(0, 24);
@@ -330,11 +482,17 @@ export function runAcceptance(config, {
       blocked('aks-observed-network-security',
         'The successful source-bound deployment receipt must name the exact AKS resource before preflight.'));
     aksEvidence = networkCheck.status === 'passed' ? networkCheck.evidence : undefined;
-    const federationCheck = check('workload-identity-oidc', () => checkWorkloadIdentity({ ...config, clusterName, identityChecks: [{
-      identityName: `${config.resourceGroup}-id-foundation-probe`,
-      federatedCredentialName: 'foundation-probe-workload-identity',
-      expectedSubject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
-    }] }, boundAz));
+    const federationCheck = check('workload-identity-oidc', () => {
+      const federation = checkWorkloadIdentity({ ...config, clusterName, identityChecks: [{
+        identityName: `${config.resourceGroup}-id-foundation-probe`,
+        federatedCredentialName: 'foundation-probe-workload-identity',
+        expectedSubject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
+      }] }, boundAz);
+      return federation.status === 'passed' &&
+          federation.evidence.issuerUrl !== deploymentEvidence?.aksOidcIssuerUrl
+        ? blocked('workload-identity-oidc', 'Observed AKS issuer differs from the exact selected deployment output.')
+        : federation;
+    });
     identityEvidence = federationCheck.status === 'passed' ? federationCheck.evidence : undefined;
     if (config.collectRuntimeEvidence !== true) {
       check('key-vault-secret-version', () => checkKeyVaultSecretVersion(config));
@@ -361,12 +519,20 @@ export function runAcceptance(config, {
       resourceGroupId: `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}`,
       deploymentName: config.deploymentName,
       deploymentId: deploymentEvidence.deploymentId,
-      aksOidcIssuerUrl: identityEvidence.issuerUrl,
+      scope: deploymentEvidence.scope,
+      sourceSha: deploymentEvidence.sourceSha,
+      sourceTree: deploymentEvidence.sourceTree,
+      sourceHash: deploymentEvidence.sourceHash,
+      foundation: deploymentEvidence.foundation,
+      aksOidcIssuerUrl: deploymentEvidence.aksOidcIssuerUrl,
       foundationProbeIdentity: deploymentEvidence.foundationProbeIdentity,
       resources: deploymentEvidence.resources,
     };
+    if (imageSourceError) {
+      checks.push(blocked('foundation-probe-image-source', imageSourceError.message));
+    }
     const runtime = collectFoundationProbeEvidence({
-      source,
+      imageSource,
       deployment,
       observedCluster: aksEvidence,
       kubeContext: config.kubeContext,
@@ -375,7 +541,7 @@ export function runAcceptance(config, {
       repoRoot: config.repoRoot ?? process.cwd(),
     }, { execKubectl, verifyImage, now });
     checks.push(...runtime.checks);
-    if (runtime.probeReceipt) {
+    if (runtime.probeReceipt && imageSource) {
       const workspaceId = deploymentEvidence.resources.monitorWorkspaceId;
       if (!/^[0-9a-f-]{36}$/i.test(workspaceId ?? '') ||
           (config.workspaceId && config.workspaceId !== workspaceId)) {
@@ -386,8 +552,8 @@ export function runAcceptance(config, {
           workspaceId,
           query: config.query,
           runId: runtime.probeReceipt.nonce,
-          expectedSha: source.sha,
-          sourceTree: source.sourceTree,
+          expectedSha: imageSource.sha,
+          sourceTree: imageSource.sourceTree,
           traceId: runtime.probeReceipt.telemetry.traceId,
           spanId: runtime.probeReceipt.telemetry.spanId,
           startedAt: runtime.probeReceipt.telemetry.startedAt,
@@ -448,11 +614,13 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const options = { ...cliOptions };
     delete options.execute;
     const { values } = parseArgs({ options: { ...options, 'expected-sha': { type: 'string' },
+      'foundation-expected-sha': { type: 'string' },
       'deployment-name': { type: 'string' },
       'workspace-id': { type: 'string' }, 'collect-runtime-evidence': { type: 'boolean', default: false },
       'kube-context': { type: 'string' }, 'image-reference': { type: 'string' },
       'image-receipt': { type: 'string' } } });
     const report = runAcceptance({ ...cliConfig(values), expectedSha: values['expected-sha'],
+      foundationExpectedSha: values['foundation-expected-sha'],
       deploymentName: values['deployment-name'],
       workspaceId: values['workspace-id'],
       collectRuntimeEvidence: values['collect-runtime-evidence'], kubeContext: values['kube-context'],

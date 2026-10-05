@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Foundation Probe acceptance evidence",
-  "alt": "The optional read-only Foundation Probe verifier observes a completed Job through the public AKS API, checks the source-bound registry manifest against the Job image, pod image, and pulled imageID, validates the native receipt, and queries Azure Monitor for correlated evidence. This supplemental verifier is not the P0 shipping smoke-test gate.",
+  "alt": "The optional read-only Foundation Probe verifier validates image build provenance separately from native infrastructure deployment provenance and scope. It observes a completed Job, checks its image and native receipt, and queries correlated Azure Monitor evidence. It is not the P0 shipping smoke-test gate.",
   "autonumber": true,
   "participants": [
     {
@@ -57,7 +57,7 @@
         "verifier",
         "aks"
       ],
-      "label": "The verifier is read-only. A probe receipt alone does not prove Job ownership, image pull, or process exit."
+      "label": "Read-only: validate image source separately from native infrastructure source and scope. A receipt alone does not prove a running workload."
     },
     {
       "type": "message",
@@ -119,7 +119,7 @@
       "type": "message",
       "from": "verifier",
       "to": "verifier",
-      "label": "Validate one bounded native receipt against source, deployment, identity and target",
+      "label": "Validate image source, native deployment source/scope, foundation resources, identity and target",
       "line": "solid",
       "arrow": "filled"
     },

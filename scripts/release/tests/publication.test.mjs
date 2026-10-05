@@ -7,7 +7,7 @@ import test from 'node:test';
 import { packComponentsFromFile } from '../pack.mjs';
 import { publishArtifacts } from '../publish.mjs';
 
-function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageXml } = {}) {
+function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageXml, foundationProbe = false } = {}) {
   const parent = path.resolve('artifacts', 'release-tests');
   mkdirSync(parent, { recursive: true });
   const root = mkdtempSync(path.join(parent, 'publication-'));
@@ -15,16 +15,24 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   const components = [{ id: 'Pkg', kind: 'library', version: '0.1.0', project: 'packages/Pkg/Pkg.csproj' }];
   if (service) components.push({ id: 'Svc', kind: 'service', version: '0.1.0', project: 'services/Svc/Svc.csproj' });
+  if (foundationProbe) components.push({
+    id: 'Agentweaver.FoundationProbe', kind: 'service', version: '0.0.1',
+    project: 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj',
+  });
   const manifest = { schemaVersion: 1, stage: 'draft', components, compatibility: [] };
   mkdirSync(path.join(root, 'releases'));
   writeFileSync(path.join(root, 'releases', 'foundation.json'), JSON.stringify(manifest));
   for (const component of components) {
     const directory = path.dirname(path.join(root, component.project));
     mkdirSync(directory, { recursive: true });
-    writeFileSync(path.join(root, component.project), `<Project><PropertyGroup><Version>0.1.0</Version>${
+    writeFileSync(path.join(root, component.project), `<Project><PropertyGroup><Version>${component.version}</Version>${
       component.kind === 'service' ? baseImageXml ?? (pinnedBase ? `<ContainerBaseImage>mcr.microsoft.com/dotnet/runtime@sha256:${'a'.repeat(64)}</ContainerBaseImage>` : '') : ''
     }</PropertyGroup></Project>`);
     if (lock) writeFileSync(path.join(directory, 'packages.lock.json'), '{"version":1,"dependencies":{}}');
+  }
+  if (foundationProbe) {
+    mkdirSync(path.join(root, 'infra', 'bicep'), { recursive: true });
+    writeFileSync(path.join(root, 'infra', 'bicep', 'main.bicep'), "targetScope = 'resourceGroup'\n");
   }
   writeFileSync(path.join(root, '.gitignore'), 'artifacts/\n');
   git('init', '-q');
@@ -204,6 +212,37 @@ test('packages-only publication rejects a full composition pack before any exter
   f.prepare();
   assert.throws(() => f.publish({ packagesOnly: true }),
     /provenance component selection does not match the package-only manifest selection/);
+  assert.deepEqual(f.remoteCalls, []);
+  assert.deepEqual(f.externalCalls, []);
+});
+
+test('Probe-only preparation and publication preserve the existing hyphenated image and exclude other components', t => {
+  const f = fixture(t, { foundationProbe: true });
+  const prepared = f.prepare({ foundationProbeOnly: true });
+  assert.deepEqual(prepared.components.map(component => component.id), ['Agentweaver.FoundationProbe']);
+  assert.equal(prepared.artifacts[0].repository, 'agentweaver-foundation-probe');
+  assert.deepEqual(f.calls.map(args => args[0]), ['restore', 'build', 'publish']);
+  assert.ok(f.calls.every(args => !args[1].endsWith('Svc.csproj') && !args[1].endsWith('Pkg.csproj')));
+  const env = { ...f.env, RELEASE_REGISTRY: 'ghcr.io/sabbour' };
+  delete env.RELEASE_NUGET_SOURCE;
+  delete env.RELEASE_NUGET_API_KEY;
+  const receipt = f.publish({ foundationProbeOnly: true, env });
+  assert.deepEqual(receipt.planned.map(record => record.destination),
+    ['ghcr.io/sabbour/agentweaver-foundation-probe:0.0.1']);
+  assert.deepEqual(receipt.published.map(record => record.id), ['Agentweaver.FoundationProbe']);
+  assert.equal(receipt.published[0].image, `ghcr.io/sabbour/agentweaver-foundation-probe@sha256:${'b'.repeat(64)}`);
+  assert.ok(!f.externalCalls.some(call => call.bin === 'dotnet'));
+  assert.deepEqual(f.externalCalls.find(call => call.bin === 'docker' && call.args[0] === 'tag').args,
+    ['tag', 'agentweaver-foundation-probe:0.0.1', 'ghcr.io/sabbour/agentweaver-foundation-probe:0.0.1']);
+  assert.ok(!JSON.stringify(receipt).includes('agentweaver.foundationprobe'));
+});
+
+test('Probe-only publication refuses a full preparation and contradictory selectors before any external effects', t => {
+  const f = fixture(t, { foundationProbe: true });
+  assert.throws(() => f.prepare({ foundationProbeOnly: true, packagesOnly: true }), /mutually exclusive/);
+  f.prepare();
+  assert.throws(() => f.publish({ foundationProbeOnly: true }), /Foundation Probe-only manifest selection/);
+  assert.throws(() => f.publish({ foundationProbeOnly: true, packagesOnly: true }), /mutually exclusive/);
   assert.deepEqual(f.remoteCalls, []);
   assert.deepEqual(f.externalCalls, []);
 });

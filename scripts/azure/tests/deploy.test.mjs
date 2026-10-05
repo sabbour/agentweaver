@@ -38,6 +38,120 @@ test('identity PostgreSQL bootstrap is a separate default-off deployment option'
   assert.equal(cliConfig({ 'bootstrap-identity-postgres': true }).bootstrapIdentityPostgres, true);
 });
 
+test('Probe PostgreSQL bootstrap is independently default-off and never runs in a plan', async () => {
+  assert.equal(cliOptions['bootstrap-foundation-probe-postgres'].default, false);
+  assert.equal(cliConfig({}).bootstrapFoundationProbePostgres, false);
+  assert.equal(cliConfig({ 'bootstrap-foundation-probe-postgres': true }).bootstrapFoundationProbePostgres, true);
+  const result = await deploy({ ...fixture, bootstrapFoundationProbePostgres: true }, {
+    sourceResolver: () => source, execAz() { throw new Error('plan cloud call'); },
+    initializeIdentityPostgres() { throw new Error('plan PostgreSQL mutation'); },
+  });
+  assert.equal(result.bootstrapFoundationProbePostgres, true);
+});
+
+test('Probe PostgreSQL bootstrap uses its exact native identity after namespace setup', async () => {
+  const steps = [];
+  const identity = deploymentOutputs.foundationProbeIdentity.value;
+  const result = await deploy({ ...fixture, execute: true, bootstrapFoundationProbePostgres: true }, {
+    sourceResolver: () => source,
+    execAz: fakeAzure({
+      identities: {
+        'aw-v1-p0-id-foundation-probe': {
+          status: 0, stderr: '',
+          stdout: JSON.stringify({ id: identity.resourceId, principalId: identity.principalObjectId }),
+        },
+      },
+    }),
+    bootstrapNamespace() { steps.push('namespace'); },
+    initializeIdentityPostgres(config) {
+      steps.push('probe-postgres');
+      assert.equal(config.foundationProbePrincipalObjectId, identity.principalObjectId);
+      assert.equal(config.runtimePrincipalObjectId, deploymentOutputs.identityBrokerRuntimeIdentity.value.principalObjectId);
+      assert.equal(config.migrationPrincipalObjectId, deploymentOutputs.identityBrokerMigrationIdentity.value.principalObjectId);
+      assert.equal(config.postgresHost, deploymentOutputs.foundationResources.value.postgresHost);
+      assert.equal(config.adminUsername, source.postgresEntraAdminPrincipalName);
+      return { database: 'agentweaver', schema: 'foundation_probe' };
+    },
+  });
+  assert.deepEqual(steps, ['namespace', 'probe-postgres']);
+  assert.deepEqual(result.receipt.foundationProbePostgresBootstrap,
+    { database: 'agentweaver', schema: 'foundation_probe' });
+  assert.equal(result.receipt.identityPostgresBootstrap, undefined);
+});
+
+test('Probe PostgreSQL bootstrap refuses a different native identity without opening transport', async () => {
+  await assert.rejects(deploy({ ...fixture, execute: true, bootstrapFoundationProbePostgres: true }, {
+    sourceResolver: () => source,
+    execAz: fakeAzure({
+      identities: {
+        'aw-v1-p0-id-foundation-probe': {
+          status: 0, stderr: '',
+          stdout: JSON.stringify({
+            id: deploymentOutputs.identityBrokerRuntimeIdentity.value.resourceId,
+            principalId: deploymentOutputs.foundationProbeIdentity.value.principalObjectId,
+          }),
+        },
+      },
+    }),
+    bootstrapNamespace() {},
+    initializeIdentityPostgres() { throw new Error('unexpected transport'); },
+  }), /exact existing approved Probe principal/);
+});
+
+test('initial Broker state is default-off, non-mutating in plan, and separately wired after namespace', async () => {
+  assert.equal(cliOptions['bootstrap-identity-broker-state'].default, false);
+  assert.equal(cliConfig({}).bootstrapIdentityBrokerState, false);
+  assert.equal(cliConfig({ 'bootstrap-identity-broker-state': true }).bootstrapIdentityBrokerState, true);
+  const plan = await deploy({ ...fixture, bootstrapIdentityBrokerState: true }, {
+    sourceResolver: () => source, execAz() { throw new Error('cloud call'); },
+    initializeIdentityBrokerState() { throw new Error('dry-run state mutation'); },
+  });
+  assert.equal(plan.bootstrapIdentityBrokerState, true);
+  const steps = [];
+  const result = await deploy({ ...fixture, execute: true, bootstrapIdentityBrokerState: true }, {
+    sourceResolver: () => source, execAz: fakeAzure(),
+    bootstrapNamespace() { steps.push('namespace'); },
+    initializeIdentityBrokerState(config) {
+      steps.push('state');
+      assert.equal(config.subscriptionId, ids.subscriptionId);
+      return { runtimeVerified: false };
+    },
+  });
+  assert.deepEqual(steps, ['namespace', 'state']);
+  assert.equal(result.receipt.identityBrokerState.runtimeVerified, false);
+});
+
+test('runtime and Probe inputs are separately default-off and plans never invoke their installers', async () => {
+    assert.equal(cliOptions['bootstrap-identity-broker-runtime'].default, false);
+    assert.equal(cliOptions['bootstrap-foundation-probe-inputs'].default, false);
+    assert.equal(cliOptions['align-existing-identity-broker-hostname'].default, false);
+    const runtime = {
+      bootstrapIdentityBrokerRuntime: true, bootstrapFoundationProbeInputs: true,
+      alignExistingIdentityBrokerHostname: true,
+      upstreamClientId: ids.subscriptionId, acceptanceRunId: ids.subscriptionId,
+      acceptanceRedirectUri: 'http://127.0.0.1:18641/callback',
+      brokerImage: 'ghcr.io/sabbour/agentweaver.identity.broker@sha256:' + 'a'.repeat(64),
+    };
+    const result = await deploy({ ...fixture, ...runtime }, {
+      sourceResolver: () => source, execAz() { throw new Error('cloud call'); },
+      initializeIdentityBrokerRuntime() { throw new Error('dry-run runtime write'); },
+      initializeFoundationProbeInputs() { throw new Error('dry-run Probe write'); },
+      alignIdentityBrokerHostname() { throw new Error('dry-run alignment write'); },
+    });
+    assert.equal(result.bootstrapIdentityBrokerRuntime, true);
+    assert.equal(result.bootstrapFoundationProbeInputs, true);
+    const steps = [];
+    await deploy({ ...fixture, ...runtime, bootstrapIdentityBrokerState: true, execute: true }, {
+      sourceResolver: () => source, execAz: fakeAzure(), bootstrapNamespace() { steps.push('namespace'); },
+      initializeIdentityBrokerState() { steps.push('state'); },
+      alignIdentityBrokerHostname() { steps.push('alignment'); },
+      initializeIdentityBrokerRuntime() { steps.push('runtime'); },
+      initializeFoundationProbeInputs() { steps.push('probe'); },
+    });
+    assert.deepEqual(steps, ['namespace', 'alignment', 'state', 'runtime', 'probe']);
+    await assert.rejects(deploy({ ...fixture, brokerImage: runtime.brokerImage }), /require --bootstrap/);
+});
+
 test('dry-run never invokes namespace or PostgreSQL bootstrap, even when requested', async () => {
   let namespaceCalled = false;
   let postgresCalled = false;

@@ -2,7 +2,7 @@
 
 **Issue:** [#1784](https://github.com/sabbour/agentweaver/issues/1784).
 **Prerequisite:** [#1777 dedicated Azure P0 infrastructure](1777-azure-p0-infrastructure.md).
-**Status:** Executable, tests, image build contract, and Kustomize overlay are implemented. No image has been published and no Azure resource or Job has been deployed.
+**Status:** The immutable `0.0.0` image baseline is published. The separate `0.0.1` artifact tracks the deployment-provenance repair. Source and publication do not prove a successful runtime acceptance Job.
 
 ## Scope and boundaries
 
@@ -31,12 +31,13 @@ Its top-level fields are:
 
 | Field | Contract |
 | --- | --- |
-| `sourceSha` | Exact 40-lowercase-hex Git commit from #1777. |
-| `sourceTree` | Exact 40-lowercase-hex Git tree SHA. It is not `sourceHash`. |
-| `sourceHash` | Exact 64-lowercase-hex SHA-256 of tracked infrastructure inputs. |
+| `sourceSha` | Exact 40-lowercase-hex image-build Git commit. |
+| `sourceTree` | Exact 40-lowercase-hex image-build Git tree SHA. It is not `sourceHash`. |
+| `sourceHash` | Exact 64-lowercase-hex SHA-256 of infrastructure inputs at the image-build commit. |
 | `subscriptionId`, `tenantId` | GUIDs for the dedicated deployment. |
 | `resourceGroup`, `resourceGroupId` | Exact `aw-v1-p0` name and matching subscription-scoped ID. |
-| `deploymentName`, `deploymentId` | The SHA-derived deployment name and its exact ARM ID. |
+| `deploymentName`, `deploymentId` | The selected successful infrastructure deployment and its exact ARM ID. |
+| `infrastructure` | Independent deployment scope, source SHA, Git tree, input hash, and original foundation binding. |
 | `aksOidcIssuerUrl` | HTTPS issuer from the deployment output. |
 | `foundationProbeIdentity` | The #1777 identity object, including resource ID, distinct client/principal IDs, namespace, and service account. |
 | `foundationResources` | Exact cluster, Key Vault, storage account/container, PostgreSQL server, workspace, and Application Insights IDs/endpoints. |
@@ -48,6 +49,16 @@ the source metadata embedded in the image. The runtime role is
 the exact 32-lowercase-hex `foundation-probe` secret version. Operators or the
 acceptance orchestrator must map the supported #1777 output fields and separately
 approved runtime configuration into this DTO.
+
+Image-build provenance does not determine the infrastructure deployment name.
+For AKS-only deployment, `infrastructure` binds the actual AKS deployment
+and the original successful full-foundation deployment separately.
+The host verifier checks both against their historical Git sources and native
+ARM receipts. It never substitutes the image-build SHA for either deployment.
+The runtime receipt retains image metadata at the root and records infrastructure
+metadata under `deployment.infrastructure`.
+The previous target shape without this binding is rejected.
+AKS-only collection requires `--foundation-expected-sha` for the original foundation.
 
 The projected token file, `AZURE_CLIENT_ID`, and `AZURE_TENANT_ID` must match
 the target. The JWT claims must have the exact target issuer,

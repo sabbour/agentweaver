@@ -54,6 +54,87 @@ test('independent Job, pod, target, identity, registry, and native probe receipt
     !args.includes('delete') && !args.includes('create')));
 });
 
+test('published image source remains distinct from the successful AKS-only and original foundation receipts', () => {
+  const runtime = makeRuntimeFixture();
+  const imageSource = {
+    sha: 'a7e4fb318cd7339cbb32ef44b8685eb919b7df01',
+    sourceTree: 'd8c15d05f0511c1f28f2acae0d90281c65d1ec5d',
+    sourceHash: '993178aa83383d3ec32367c31db7211b43114e8d5ae3e757b37711b93637f1b2',
+  };
+  const foundation = {
+    scope: 'infrastructure-only',
+    sourceSha: 'f989c5c3457af84e2a0ffbbb7ab82f5ea07901ac',
+    sourceTree: '20d54d53867e091a62ed25b52681c53e49b0de05',
+    sourceHash: imageSource.sourceHash,
+    deploymentName: 'aw-v1-p0-f989c5c3457a',
+    deploymentId: `${runtime.state.deployment.resourceGroupId}/providers/Microsoft.Resources/deployments/aw-v1-p0-f989c5c3457a`,
+  };
+  const infrastructure = {
+    scope: 'aks-only',
+    sourceSha: '9b7da6e64dfd733b69917b7e783c4107a5bf17dc',
+    sourceTree: '26122cb2d9fddc50a7aa7647e1de7719a8d43cb3',
+    sourceHash: imageSource.sourceHash,
+    foundation,
+  };
+  const deployment = {
+    ...infrastructure,
+    deploymentName: 'aw-v1-p0-aks-9b7da6e64dfd',
+    deploymentId: `${runtime.state.deployment.resourceGroupId}/providers/Microsoft.Resources/deployments/aw-v1-p0-aks-9b7da6e64dfd`,
+  };
+  const target = JSON.parse(runtime.state.configMap.data['target.json']);
+  Object.assign(target, {
+    sourceSha: imageSource.sha,
+    sourceTree: imageSource.sourceTree,
+    sourceHash: imageSource.sourceHash,
+    deploymentName: deployment.deploymentName,
+    deploymentId: deployment.deploymentId,
+    infrastructure,
+  });
+  runtime.state.configMap.data['target.json'] = JSON.stringify(target);
+
+  Object.assign(runtime.state.deployment, deployment, {
+    subscriptionId: target.subscriptionId,
+    tenantId: target.tenantId,
+    resourceGroup: target.resourceGroup,
+    resourceGroupId: target.resourceGroupId,
+    aksOidcIssuerUrl: target.aksOidcIssuerUrl,
+    foundationProbeIdentity: target.foundationProbeIdentity,
+    resources: target.foundationResources,
+  });
+  Object.assign(runtime.state.probeReceipt, {
+    sourceSha: imageSource.sha,
+    sourceTree: imageSource.sourceTree,
+    sourceHash: imageSource.sourceHash,
+  });
+  Object.assign(runtime.state.probeReceipt.deployment, {
+    deploymentName: deployment.deploymentName,
+    deploymentId: deployment.deploymentId,
+    infrastructure: structuredClone(infrastructure),
+  });
+  Object.assign(runtime.state.localImageReceipt, {
+    sourceSha: imageSource.sha,
+    sourceTree: imageSource.sourceTree,
+    sourceHash: imageSource.sourceHash,
+  });
+  Object.assign(runtime.state.inspectedImage.Config.Labels, {
+    'org.opencontainers.image.revision': imageSource.sha,
+    'io.agentweaver.source-tree': imageSource.sourceTree,
+    'io.agentweaver.infrastructure-source-hash': imageSource.sourceHash,
+  });
+  runtime.state.imageReference =
+    'registry.example/agentweaver/foundation-probe:source-a7e4fb318cd7339cbb32ef44b8685eb919b7df01';
+  runtime.options.imageReference = runtime.state.imageReference;
+  runtime.options.imageSource = imageSource;
+
+  const result = collect(runtime);
+  assert.equal(check(result, 'foundation-probe-target').status, 'passed');
+  assert.equal(check(result, 'foundation-probe-registry-image').status, 'passed');
+  assert.equal(check(result, 'foundation-probe-receipt').status, 'passed');
+  assert.equal(result.probeReceipt.sourceSha, imageSource.sha);
+  assert.equal(result.probeReceipt.deployment.infrastructure.sourceSha, deployment.sourceSha);
+  assert.equal(result.probeReceipt.deployment.infrastructure.foundation.sourceSha, foundation.sourceSha);
+});
+
 test('incomplete or failed Job and nonzero process exit remain blocked', () => {
   for (const mutate of [
     runtime => { runtime.state.job.status.succeeded = 0; },
@@ -113,9 +194,55 @@ test('pod UID and owner must independently bind exactly one pod to the completed
 test('target configuration and projected workload identity must match the admitted identity', () => {
   for (const mutate of [
     runtime => { runtime.state.configMap.immutable = false; },
+    runtime => {
+      const target = JSON.parse(runtime.state.configMap.data['target.json']);
+      delete target.infrastructure;
+      runtime.state.configMap.data['target.json'] = JSON.stringify(target);
+    },
     runtime => { runtime.state.configMap.data['target.json'] = JSON.stringify({
       ...JSON.parse(runtime.state.configMap.data['target.json']), sourceSha: 'f'.repeat(40),
     }); },
+    runtime => {
+      const target = JSON.parse(runtime.state.configMap.data['target.json']);
+      target.infrastructure.sourceSha = 'f'.repeat(40);
+      runtime.state.configMap.data['target.json'] = JSON.stringify(target);
+    },
+    runtime => {
+      const target = JSON.parse(runtime.state.configMap.data['target.json']);
+      target.infrastructure.sourceTree = 'f'.repeat(40);
+      runtime.state.configMap.data['target.json'] = JSON.stringify(target);
+    },
+    runtime => {
+      const target = JSON.parse(runtime.state.configMap.data['target.json']);
+      target.infrastructure.sourceHash = 'f'.repeat(64);
+      runtime.state.configMap.data['target.json'] = JSON.stringify(target);
+    },
+    runtime => {
+      const target = JSON.parse(runtime.state.configMap.data['target.json']);
+      target.infrastructure.scope = 'aks-only';
+      runtime.state.configMap.data['target.json'] = JSON.stringify(target);
+    },
+    runtime => {
+      const target = JSON.parse(runtime.state.configMap.data['target.json']);
+      target.infrastructure.unreviewedField = true;
+      runtime.state.configMap.data['target.json'] = JSON.stringify(target);
+    },
+    runtime => {
+      const target = JSON.parse(runtime.state.configMap.data['target.json']);
+      target.infrastructure.foundation.deploymentId += '-other';
+      runtime.state.configMap.data['target.json'] = JSON.stringify(target);
+    },
+    runtime => {
+      const target = JSON.parse(runtime.state.configMap.data['target.json']);
+      target.deploymentId += '-other';
+      runtime.state.configMap.data['target.json'] = JSON.stringify(target);
+    },
+    runtime => {
+      const target = JSON.parse(runtime.state.configMap.data['target.json']);
+      target.foundationResources.monitorWorkspaceId = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+      runtime.state.configMap.data['target.json'] = JSON.stringify(target);
+    },
+    runtime => { runtime.options.deployment.sourceTree = 'f'.repeat(40); },
     runtime => { runtime.state.serviceAccount.metadata.annotations['azure.workload.identity/client-id'] = 'wrong'; },
     runtime => { runtime.state.pod.spec.volumes = runtime.state.pod.spec.volumes.filter(volume => !volume.projected); },
     runtime => { runtime.state.pod.spec.volumes.find(volume => volume.projected).projected.sources[0].serviceAccountToken.audience = 'wrong'; },
@@ -165,6 +292,11 @@ test('probe receipt must correlate source, Git tree, nonce, issuer, and audience
   for (const mutate of [
     runtime => { runtime.state.probeReceipt.sourceSha = 'f'.repeat(40); },
     runtime => { runtime.state.probeReceipt.sourceTree = 'f'.repeat(40); },
+    runtime => { runtime.state.probeReceipt.deployment.infrastructure.sourceSha = 'f'.repeat(40); },
+    runtime => { runtime.state.probeReceipt.deployment.infrastructure.sourceTree = 'f'.repeat(40); },
+    runtime => { runtime.state.probeReceipt.deployment.infrastructure.sourceHash = 'f'.repeat(64); },
+    runtime => { delete runtime.state.probeReceipt.deployment.infrastructure; },
+    runtime => { runtime.state.probeReceipt.deployment.infrastructure.unreviewedField = true; },
     runtime => { runtime.state.probeReceipt.nonce = 'f'.repeat(32); },
     runtime => { runtime.state.probeReceipt.telemetry.startedAt = '2026-10-03T11:55:00.000Z'; },
     runtime => { runtime.state.probeReceipt.workloadIdentity.issuer = 'https://wrong.example/'; },
