@@ -139,9 +139,12 @@ operator's Entra object ID. The tooling resolves a deterministic assignment
 name and creates or reuses only that principal's built-in Azure Kubernetes
 Service RBAC Cluster Admin assignment at the exact AKS resource scope. This
 permanent grant is not removed or broadened to resource-group or subscription
-scope. The existing subnet Network Contributor assignment is retained; it is
-removed only when its exact deterministic binding is proven to reference a
-deleted cluster principal, and otherwise the operation fails closed.
+scope. The existing subnet Network Contributor assignment is retained by
+default. If its exact deterministic binding is proven to reference a deleted
+cluster principal, deployment stops without deleting it. Only after separate
+operator approval, pass `--allow-stale-aks-subnet-role-cleanup` to authorize
+deletion of that exact assignment; the flag alone cannot bypass the stale
+principal proof.
 
 The AKS-only template reads the issuer URL from the deployed cluster and
 updates exactly the three existing P0 workload-identity federated credentials.
@@ -174,6 +177,15 @@ clean HEAD equal to the fetched admitted `origin/v1` tip; deployment does not
 accept a caller-selected `--expected-sha`.
 Bicep source parameters and outputs bind the receipt to exact reviewed inputs.
 No unsupported deployment tags occur.
+
+After a successful AKS-only deployment, the command also bootstraps only
+`deploy\k8s\base\namespace.yaml`. It uses the signed-in user's
+`az aks get-credentials` context without `--admin`, stores kubeconfig in a
+temporary directory, waits a bounded time for create/get/patch authorization,
+applies the namespace manifest, and verifies the P0 namespace and required
+labels. It removes the temporary kubeconfig on success or failure. A bootstrap
+failure is reported even if the infrastructure deployment already succeeded;
+the command never falls back to an admin kubeconfig or applies other manifests.
 
 ## Acceptance
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDeployArgs, deploy } from '../deploy.mjs';
+import { buildDeployArgs, cliConfig, cliOptions, deploy } from '../deploy.mjs';
 import {
   fixture, source, fakeAzure, ids, tags, deploymentOutputs, operatorRoleAssignmentName,
   subnetId, subnetRoleAssignmentName,
@@ -23,6 +23,12 @@ test('offline dry-run never reads account or mutates', () => {
   const result = deploy(fixture, { sourceResolver: () => source, execAz: () => { throw new Error('cloud call'); } });
   assert.equal(result.executed, false);
   assert.equal(result.scope, 'infrastructure-only');
+});
+
+test('stale subnet-role cleanup requires a separate explicit CLI authorization', () => {
+  assert.equal(cliOptions['allow-stale-aks-subnet-role-cleanup'].type, 'boolean');
+  assert.equal(cliOptions['allow-stale-aks-subnet-role-cleanup'].default, false);
+  assert.equal(cliConfig({ 'allow-stale-aks-subnet-role-cleanup': true }).allowStaleAksSubnetRoleCleanup, true);
 });
 
 test('deployment checks real account, group and resources, then what-if before create', () => {
@@ -112,6 +118,14 @@ test('scoped redeploy resolves and reuses the exact existing Cluster Admin assig
   const result = deploy({ ...scopedFixture, execute: true }, {
     sourceResolver: () => scopedSource,
     execAz: fakeAzure({ operatorAssignments: { status: 0, stdout: JSON.stringify(assignments), stderr: '' } }, calls),
+    bootstrapNamespace: options => {
+      assert.deepEqual(options, {
+        resourceGroup: fixture.resourceGroup,
+        subscriptionId: ids.subscriptionId,
+        repoRoot: scopedFixture.repoRoot,
+        clusterName: 'aw-v1-p0-aks',
+      });
+    },
   });
   const create = calls.find(args => args[0] === 'deployment' && args[2] === 'create');
   assert.ok(create.includes(`operatorRoleAssignmentName=${existingName}`));
@@ -121,7 +135,7 @@ test('scoped redeploy resolves and reuses the exact existing Cluster Admin assig
   assert.equal(calls.filter(args => args[0] === 'deployment' && args[2] === 'create').length, 1);
 });
 
-test('only an exact dangling subnet Network Contributor assignment is removed before the final plan', () => {
+test('default execute refuses a proven dangling subnet role without deleting it', () => {
   const subnetAssignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`;
   const stale = {
     id: subnetAssignmentId,
@@ -135,7 +149,33 @@ test('only an exact dangling subnet Network Contributor assignment is removed be
     },
   };
   const calls = [];
-  deploy({ ...fixture, execute: true }, {
+  assert.throws(() => deploy({ ...fixture, execute: true }, {
+    sourceResolver: () => source,
+    execAz: fakeAzure({
+      networkRoleAssignment: { status: 0, stdout: JSON.stringify(stale), stderr: '' },
+      aksShow: { status: 1, stdout: '', stderr: '(ResourceNotFound) Managed cluster was not found.' },
+      servicePrincipal: { status: 1, stdout: '', stderr: `ERROR: Resource '${stale.properties.principalId}' does not exist.` },
+    }, calls),
+  }), /pass --allow-stale-aks-subnet-role-cleanup/);
+  assert.ok(!calls.some(args => args[0] === 'role' && args[1] === 'assignment' && args[2] === 'delete'));
+  assert.ok(!calls.some(args => args[0] === 'deployment' && args[2] === 'create'));
+});
+
+test('only an exact dangling subnet Network Contributor assignment is removed with explicit authorization', () => {
+  const subnetAssignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`;
+  const stale = {
+    id: subnetAssignmentId,
+    name: subnetRoleAssignmentName,
+    type: 'Microsoft.Authorization/roleAssignments',
+    properties: {
+      scope: subnetId,
+      principalId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      principalType: 'ServicePrincipal',
+      roleDefinitionId: `/subscriptions/${ids.subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7`,
+    },
+  };
+  const calls = [];
+  deploy({ ...fixture, execute: true, allowStaleAksSubnetRoleCleanup: true }, {
     sourceResolver: () => source,
     execAz: fakeAzure({
       networkRoleAssignment: { status: 0, stdout: JSON.stringify(stale), stderr: '' },
@@ -168,7 +208,7 @@ test('a live or unverifiable subnet role principal is never removed', () => {
     { status: 1, stdout: '', stderr: '(AuthorizationFailed)' },
   ]) {
     const calls = [];
-    assert.throws(() => deploy({ ...fixture, execute: true }, {
+    assert.throws(() => deploy({ ...fixture, execute: true, allowStaleAksSubnetRoleCleanup: true }, {
       sourceResolver: () => source,
       execAz: fakeAzure({
         networkRoleAssignment: { status: 0, stdout: JSON.stringify(stale), stderr: '' },
