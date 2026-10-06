@@ -208,6 +208,96 @@ public sealed class EnvironmentLifecyclePostgresTests(EnvironmentPostgresFixture
         Assert.Equal(41, second.ExpectedPreviousPolicyGeneration);
     }
 
+    [Fact]
+    public async Task FailedBeforeProviderCallDoesNotBlockEnvironmentRelease()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var registered = await RegisterAsync(store, owner);
+        var reservation = await store.ReserveNetworkEffectAsync(
+            registered.Snapshot.Fence,
+            "namespace/policy",
+            policyGeneration: 41,
+            expectedPreviousPolicyGeneration: 0,
+            EnvironmentNetworkEffectKind.Apply,
+            "apply-before-provider",
+            CancellationToken.None);
+
+        var failed = await store.CompleteNetworkEffectAsync(
+            reservation.OperationId,
+            registered.Snapshot.Fence,
+            effectMayHaveApplied: false,
+            exactGenerationVerified: false,
+            CancellationToken.None);
+        Assert.Equal(EnvironmentNetworkEffectState.Failed, failed.State);
+
+        var released = await store.TransitionAsync(
+            Transition(
+                owner,
+                registered.Snapshot.Fence.LifecycleGeneration,
+                EnvironmentLifecycleState.Released,
+                "release-after-failed-policy"),
+            CancellationToken.None);
+
+        Assert.Equal(EnvironmentLifecycleState.Released, released.Snapshot.State);
+    }
+
+    [Fact]
+    public async Task VerifiedPolicyGenerationRequiresAResolvedOwnerEffect()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var registered = await RegisterAsync(store, owner);
+        const string resourceId = "namespace/policy";
+        var applied = await store.ReserveNetworkEffectAsync(
+            registered.Snapshot.Fence,
+            resourceId,
+            policyGeneration: 41,
+            expectedPreviousPolicyGeneration: 0,
+            EnvironmentNetworkEffectKind.Apply,
+            "apply-41",
+            CancellationToken.None);
+        _ = await store.CompleteNetworkEffectAsync(
+            applied.OperationId,
+            registered.Snapshot.Fence,
+            effectMayHaveApplied: true,
+            exactGenerationVerified: true,
+            CancellationToken.None);
+        await store.RequireVerifiedNetworkPolicyGenerationAsync(
+            registered.Snapshot.Fence,
+            resourceId,
+            41,
+            CancellationToken.None);
+
+        var unresolved = await store.ReserveNetworkEffectAsync(
+            registered.Snapshot.Fence,
+            resourceId,
+            policyGeneration: 47,
+            expectedPreviousPolicyGeneration: 41,
+            EnvironmentNetworkEffectKind.Apply,
+            "apply-47",
+            CancellationToken.None);
+        var blocked = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            store.RequireVerifiedNetworkPolicyGenerationAsync(
+                registered.Snapshot.Fence,
+                resourceId,
+                41,
+                CancellationToken.None));
+        Assert.Equal("environment_effect_reconciliation_required", blocked.Code);
+
+        _ = await store.CompleteNetworkEffectAsync(
+            unresolved.OperationId,
+            registered.Snapshot.Fence,
+            effectMayHaveApplied: false,
+            exactGenerationVerified: false,
+            CancellationToken.None);
+        await store.RequireVerifiedNetworkPolicyGenerationAsync(
+            registered.Snapshot.Fence,
+            resourceId,
+            41,
+            CancellationToken.None);
+    }
+
     private static EnvironmentOwnerIdentity NewOwner()
     {
         var suffix = Guid.NewGuid().ToString("N");

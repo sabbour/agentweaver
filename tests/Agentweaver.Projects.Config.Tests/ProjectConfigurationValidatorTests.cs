@@ -55,6 +55,43 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void ReadsLegacyRunSelectionEgressWithoutBroadeningItsEffectiveDestinations()
+    {
+        const string legacySnapshot = """
+            {
+              "projectId": "project",
+              "runId": "run",
+              "projectRevision": 1,
+              "projectConfigurationRevision": 1,
+              "platformRuntimeRevision": 1,
+              "contextRevision": "legacy-context",
+              "modelSelection": { "reference": "model" },
+              "providers": [],
+              "egressAllowlist": [
+                { "host": "API.Example.com.", "port": 443, "protocol": "tcp" }
+              ],
+              "runLimits": {},
+              "projectConfiguration": {
+                "egressNarrowing": [
+                  { "host": "API.Example.com.", "port": 443, "protocol": "tcp" }
+                ]
+              }
+            }
+            """;
+
+        var selection = ProjectsConfigService.DeserializeRunSelection(legacySnapshot);
+        var effectiveRule = Assert.Single(selection.EgressAllowlist);
+
+        Assert.Equal("api.example.com", effectiveRule.Destination);
+        Assert.Equal(NetworkEgressPurpose.PublicHttps, effectiveRule.Purpose);
+        Assert.Equal(NetworkEgressDestinationKind.Fqdn, effectiveRule.DestinationKind);
+        Assert.Equal(selection.EgressAllowlist, selection.EgressBaseline);
+        Assert.Equal(selection.EgressAllowlist, selection.ProjectEgressNarrowing);
+        Assert.Equal(selection.EgressAllowlist, selection.RequiredEgress);
+        Assert.Equal(effectiveRule, Assert.Single(selection.ProjectConfiguration.EgressNarrowing!.Value));
+    }
+
+    [Fact]
     public void ProjectRunLimitsCannotExceedPlatformLimits()
     {
         var platform = ProjectConfigurationValidator.Validate(PlatformDefaults());

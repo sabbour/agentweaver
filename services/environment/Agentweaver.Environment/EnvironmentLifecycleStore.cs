@@ -321,6 +321,56 @@ public sealed class EnvironmentLifecycleStore(
         return reservation;
     }
 
+    public async Task RequireVerifiedNetworkPolicyGenerationAsync(
+        EnvironmentGenerationFence fence,
+        string resourceId,
+        long policyGeneration,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        if (string.IsNullOrWhiteSpace(resourceId) || policyGeneration < 1)
+            throw new ArgumentException("A policy resource and positive generation are required.");
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await AcquireOwnerLockAsync(connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
+        await RequireActiveInTransactionAsync(connection, transaction, fence, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT COALESCE((
+                SELECT policy_generation
+                FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND effect_kind = 'NetworkPolicy' AND resource_id = @resource_id
+                  AND effect_state IN ('Completed', 'Reconciled')
+                ORDER BY policy_generation DESC
+                LIMIT 1
+            ), 0),
+            EXISTS (
+                SELECT 1 FROM {OwnerEffects}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND effect_kind = 'NetworkPolicy' AND resource_id = @resource_id
+                  AND effect_state IN ('Reserved', 'ReconciliationRequired')
+            )
+            """, connection, transaction);
+        AddOwnerParameters(command, fence.Owner);
+        command.Parameters.AddWithValue("resource_id", NpgsqlDbType.Text, resourceId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        var currentGeneration = reader.GetInt64(0);
+        var hasUnresolvedEffect = reader.GetBoolean(1);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        if (hasUnresolvedEffect)
+            throw new EnvironmentLifecycleException(
+                "environment_effect_reconciliation_required",
+                "A pending or unresolved provider effect blocks network-policy verification.");
+        if (currentGeneration != policyGeneration)
+            throw new EnvironmentLifecycleException(
+                "environment_policy_generation_untracked",
+                "The requested policy generation is not the Environment owner's latest verified generation.");
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<EnvironmentNetworkEffectReservation> CompleteNetworkEffectAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -1736,6 +1786,7 @@ public sealed class EnvironmentLifecycleStore(
                         WHERE tenant_id = @tenant_id AND project_id = @project_id
                           AND run_id = @run_id AND environment_id = @environment_id
                           AND effect_kind = 'NetworkPolicy'
+                          AND effect_state IN ('Completed', 'Reconciled')
                         ORDER BY resource_id, policy_generation DESC
                     ) AS policies
                     WHERE policies.operation <> 'Revoke'

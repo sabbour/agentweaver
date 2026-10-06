@@ -87,6 +87,10 @@ public sealed class EgressIntentCompilerTests
         Assert.True(NetworkEgressRuleSemantics.IsSubset(childCidr, parentCidr));
         Assert.Equal(exact, NetworkEgressRuleSemantics.Intersect(exact, wildcard));
         Assert.Equal(childCidr, NetworkEgressRuleSemantics.Intersect(parentCidr, childCidr));
+        Assert.False(NetworkEgressRuleSemantics.IsSubset(Fqdn("nested.api.example.com"), wildcard));
+        Assert.False(NetworkEgressRuleSemantics.IsSubset(
+            Fqdn("*.api.example.com"),
+            wildcard));
         Assert.False(NetworkEgressRuleSemantics.IsSubset(Fqdn("example.com"), wildcard));
         Assert.False(NetworkEgressRuleSemantics.IsSubset(Fqdn("other.test"), wildcard));
         Assert.False(NetworkEgressRuleSemantics.IsSubset(
