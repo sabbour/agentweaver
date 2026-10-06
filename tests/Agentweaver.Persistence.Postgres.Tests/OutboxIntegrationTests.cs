@@ -137,6 +137,29 @@ public sealed class OutboxIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ClaimOneTargetsOneEventAndPreservesStreamOrder()
+    {
+        var first = await EnqueueAsync(Message(stream: "owner/a", key: "first"));
+        var second = await EnqueueAsync(Message(stream: "owner/a", key: "second"));
+        var independent = await EnqueueAsync(Message(stream: "owner/b", key: "independent"));
+
+        Assert.Null(await _outbox.ClaimOneAsync(
+            "worker-a", second.Message.Id, TimeSpan.FromMinutes(1)));
+        var other = Assert.IsType<OutboxDelivery>(await _outbox.ClaimOneAsync(
+            "worker-b", independent.Message.Id, TimeSpan.FromMinutes(1)));
+        Assert.Equal(independent.Message.Id, other.Event.Message.Id);
+        Assert.True(await _outbox.AcknowledgeAsync(other.Event.Message.Id, other.LeaseToken));
+
+        var firstClaim = Assert.IsType<OutboxDelivery>(await _outbox.ClaimOneAsync(
+            "worker-a", first.Message.Id, TimeSpan.FromMinutes(1)));
+        Assert.True(await _outbox.AcknowledgeAsync(first.Message.Id, firstClaim.LeaseToken));
+        var secondClaim = Assert.IsType<OutboxDelivery>(await _outbox.ClaimOneAsync(
+            "worker-a", second.Message.Id, TimeSpan.FromMinutes(1)));
+        Assert.Equal(second.Message.Id, secondClaim.Event.Message.Id);
+        Assert.True(await _outbox.AcknowledgeAsync(second.Message.Id, secondClaim.LeaseToken));
+    }
+
+    [Fact]
     public async Task ConcurrentSameKeyCreatesOneDurableEvent()
     {
         var message = Message(key: "race");

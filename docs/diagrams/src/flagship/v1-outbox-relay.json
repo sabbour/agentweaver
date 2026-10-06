@@ -1,8 +1,8 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Outbox relay lease and acknowledgment",
-  "alt": "A caller explicitly invokes OutboxRelay.RelayOnceAsync; the library has no daemon. It claims leased events through PostgresOutbox, publishes through IOutboxPublisher, and acknowledges confirmed publishes with the current lease token. Failures remain reclaimable and delivery is at least once.",
+  "title": "Outbox ClaimOneAsync and relay",
+  "alt": "A caller explicitly invokes OutboxRelay.RelayOnceAsync; the library has no daemon. It claims leased events through PostgresOutbox, publishes through IOutboxPublisher, and acknowledges confirmed publishes with the current lease token. ClaimOneAsync leases a requested stream-head event for synchronous owner admission.",
   "autonumber": true,
   "participants": [
     {

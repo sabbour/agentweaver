@@ -12,6 +12,8 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.14.0" />
+    <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" />
     <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator.Core\Agentweaver.Orchestrator.Core.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
   </ItemGroup>
