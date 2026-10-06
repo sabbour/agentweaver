@@ -24,7 +24,7 @@ sequenceDiagram
 
 ## API surface
 
-All routes require a validated bearer token with exactly one `sub`, the required OAuth scopes, and the service's audience. Projects & Config resolves that issuer and subject to one active tenant membership and current resource-role assignments in its own database. A tenant selector can choose among existing memberships but cannot create authority; any signed tenant assertion must agree with the selected membership. Project reads require an assigned Owner, Contributor, or Viewer role (or tenant administrator); project writes require Owner or tenant administrator; project creation requires an existing tenant administrator and does not auto-assign an Owner. Platform defaults require an assigned platform administrator. Run-selection reads and accepts require an assigned project Orchestrator role as well as matching signed project/run bindings when present. Every privileged request rechecks current membership and role state, so revocation takes effect without refreshing the broker token.
+All routes require a validated bearer token with exactly one `sub`, the required OAuth scopes, and the service's audience. Projects & Config is the sole live owner of issuer-and-subject memberships and resource-role assignments. It resolves the current caller to one active tenant membership and current resource-role assignments in its own database. A tenant selector can choose among existing memberships but cannot create authority; any signed tenant assertion must agree with the selected membership. Project reads require an assigned Owner, Contributor, or Viewer role (or tenant administrator); project writes require Owner or tenant administrator; project creation requires an existing tenant administrator and does not auto-assign an Owner. Platform defaults require an assigned platform administrator. Run-selection reads and accepts require an assigned project Orchestrator role as well as matching signed project/run bindings when present. Every privileged request rechecks current membership and role state, so revocation takes effect without refreshing the broker token.
 
 The Identity broker validates upstream identity but does not forward upstream tenant or role claims or assign application roles. OAuth scopes remain necessary route permissions, but they are not authority by themselves. Role claims and request headers never create authority; missing, ambiguous, stale, or foreign memberships fail closed.
 
@@ -40,8 +40,11 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/platform/runtime-defaults` | Append platform defaults using an expected revision. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
+| `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
+
+The authorization-context route requires `api.read`, accepts the existing optional `X-Agentweaver-Tenant` selector, and resolves only the authenticated issuer and subject. It rejects query parameters, including caller-subject and role selectors, and purpose-bound tokens. It applies the validated service audience, OAuth scopes, and optional project/run bindings before returning grouped effective permissions with membership and role revisions; it does not return assignment rows or a transferable credential. Responses use `Cache-Control: no-store`. Resource services request this context for each privileged operation and do not maintain separate membership/role records, caches, or authorization pins.
 
 ## Selection and persistence rules
 

@@ -64,6 +64,12 @@
       "project": "services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj"
     },
     {
+      "id": "Agentweaver.EventsAndSessions",
+      "kind": "service",
+      "version": "0.0.0",
+      "project": "services/events-and-sessions/Agentweaver.EventsAndSessions/Agentweaver.EventsAndSessions.csproj"
+    },
+    {
       "id": "Agentweaver.Projects.Config",
       "kind": "service",
       "version": "0.0.0",

@@ -6,7 +6,7 @@ The broker accepts an external OIDC provider. It validates the upstream issuer, 
 
 OAuth authorization codes require registered clients, exact redirect URIs, registered scopes, and S256 PKCE. Consent requires the local cookie and antiforgery token. Refresh-token replay revokes the authorization and token family.
 
-After upstream OIDC validation, the broker creates a local subject and issues access tokens with registered OAuth scopes and resources. It does not forward upstream tenant or role claims and does not assign application roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Other resource services obtain current authorization context through its versioned owner contract instead of keeping duplicate membership or role records; token claims and tenant selectors cannot create authority. Grant-validated `project_id` and `run_id` are included only for tokens bound to that exact project and run.
+After upstream OIDC validation, the broker creates a local subject and issues access tokens with registered OAuth scopes and resources. It does not forward upstream tenant or role claims and does not assign application roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Other resource services obtain current effective permissions through `GET /api/authorization/context` instead of keeping duplicate membership or role records or caches. The route uses the validated caller and returns a versioned, no-store context; token claims and tenant selectors cannot create authority. Grant-validated `project_id` and `run_id` are included only for tokens bound to that exact project and run.
 
 ```mermaid
 sequenceDiagram
@@ -21,10 +21,10 @@ sequenceDiagram
     Broker->>Broker: Apply registered scopes and resource audience
     Broker-->>API: Signed access token (sub, scope, audience, optional project/run binding)
     API->>API: Validate issuer, signature, lifetime, and audience
-    API->>Projects: Read current authorization context through versioned owner contract
-    Projects-->>API: Current membership and role context
-    API->>API: Authorize without duplicate membership or role records
-    Note over API,Projects: Logical contract boundary; no transport or endpoint is specified here.
+    API->>Projects: GET /api/authorization/context with caller token
+    Projects-->>API: Effective permissions, contract v1, Cache-Control: no-store
+    API->>API: Authorize this request; keep no membership or role cache
+    Note over API,Projects: Each privileged request obtains fresh owner context; no authorization pins are issued.
 ```
 
 <figure class="aw-diagram" tabindex="0">

@@ -7,6 +7,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -23,6 +25,11 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixture postgres)
     : IAsyncLifetime
 {
+    private static readonly JsonSerializerOptions AuthorizationJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
     private static readonly string[] ProjectScopes =
     [
         "projects.bootstrap",
@@ -123,6 +130,61 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         using var ownerRead = await SendAsync(
             projects.Client, HttpMethod.Get, $"/api/projects/{project.ProjectId}", ownerToken, [TenantId]);
         Assert.Equal(HttpStatusCode.OK, ownerRead.StatusCode);
+        using var ownerContextResponse = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", ownerToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, ownerContextResponse.StatusCode);
+        AssertNoStore(ownerContextResponse);
+        var ownerContextJsonText = await ownerContextResponse.Content.ReadAsStringAsync();
+        var ownerContext = JsonSerializer.Deserialize<ProjectAuthorizationContextResponse>(
+            ownerContextJsonText, AuthorizationJsonOptions)
+            ?? throw new InvalidOperationException("Projects & Config returned an empty authorization context.");
+        Assert.Equal(ProjectAuthorizationContext.CurrentContractVersion, ownerContext.ContractVersion);
+        Assert.Equal(new Uri(TestIssuer).AbsoluteUri, ownerContext.Issuer);
+        Assert.Equal(ownerSubject, ownerContext.ActorId);
+        Assert.Equal(TenantId, ownerContext.TenantId);
+        Assert.Equal(ownerMembership.Revision, ownerContext.MembershipRevision);
+        Assert.True(HasPermission(
+            ownerContext, ProjectAuthorityResourceType.Tenant, TenantId,
+            ProjectAuthorizationPermission.CreateProjects));
+        Assert.True(HasPermission(
+            ownerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.ReadProjects));
+        Assert.True(HasPermission(
+            ownerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.WriteProjects));
+        var ownerProjectAuthority = Assert.Single(
+            ownerContext.EffectiveAuthority,
+            item => item.ResourceType == ProjectAuthorityResourceType.Project &&
+                item.ResourceId == project.ProjectId);
+        Assert.Contains(ownerProjectAuthority.Permissions, permission =>
+            permission.Permission == ProjectAuthorizationPermission.ReadProjects &&
+            permission.RoleRevision == ownerAssignment.Revision);
+        using (var ownerContextJson = JsonDocument.Parse(ownerContextJsonText))
+        {
+            Assert.False(ownerContextJson.RootElement.TryGetProperty("grants", out _));
+            foreach (var resource in ownerContextJson.RootElement
+                .GetProperty("effectiveAuthority").EnumerateArray())
+            foreach (var permission in resource.GetProperty("permissions").EnumerateArray())
+            {
+                Assert.False(permission.TryGetProperty("assignmentId", out _));
+                Assert.False(permission.TryGetProperty("role", out _));
+            }
+        }
+        using var subjectQuerySpoof = await SendAsync(
+            projects.Client, HttpMethod.Get,
+            $"/api/authorization/context?subject={Uri.EscapeDataString(ownerSubject)}",
+            ownerToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, subjectQuerySpoof.StatusCode);
+        using var roleQuerySpoof = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context?role=platformAdmin",
+            ownerToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, roleQuerySpoof.StatusCode);
+        var duplicateSubjectToken = CreateSignedAccessToken(
+            ownerSubject, new Claim("sub", "spoofed-subject"));
+        using var duplicateSubjectDenied = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context",
+            duplicateSubjectToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Unauthorized, duplicateSubjectDenied.StatusCode);
 
         var unassignedAdminToken = await IssueTokenAsync(
             "projects.admin", [TenantId], "platform_admin");
@@ -209,6 +271,23 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
             projects.Client, HttpMethod.Get, $"/api/projects/{project.ProjectId}", multiTenantToken,
             [TenantId]);
         Assert.Equal(HttpStatusCode.OK, selectedTenant.StatusCode);
+        using var ambiguousContext = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", multiTenantToken, null);
+        Assert.Equal(HttpStatusCode.Forbidden, ambiguousContext.StatusCode);
+        using var duplicateSelectorContext = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", multiTenantToken,
+            [TenantId, TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, duplicateSelectorContext.StatusCode);
+        using var foreignSelectorContext = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", multiTenantToken,
+            ["tenant-foreign"]);
+        Assert.Equal(HttpStatusCode.Forbidden, foreignSelectorContext.StatusCode);
+        using var selectedTenantContext = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", multiTenantToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, selectedTenantContext.StatusCode);
+        Assert.Equal(
+            multiTenantSubject,
+            (await ReadAuthorizationContextAsync(selectedTenantContext)).ActorId);
 
         var platformAdminToken = await IssueTokenAsync("projects.admin", [TenantId]);
         var platformAdminSubject = SingleClaim(
@@ -240,6 +319,10 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
             projects.Client, HttpMethod.Get, "/api/platform/runtime-defaults",
             platformReadOnlyToken, [TenantId]);
         Assert.Equal(HttpStatusCode.Forbidden, roleCannotReplaceAdminScope.StatusCode);
+        using var readOnlyContext = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", platformReadOnlyToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, readOnlyContext.StatusCode);
+        Assert.Empty((await ReadAuthorizationContextAsync(readOnlyContext)).EffectiveAuthority);
 
         var orchestratorBootstrap = await IssueTokenAsync(
             "projects.bootstrap", [TenantId], "run-actor", null, null, ["orchestrator"]);
@@ -266,6 +349,25 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         var runClaims = new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims;
         Assert.Contains(runClaims, claim => claim.Type == "project_id" && claim.Value == project.ProjectId);
         Assert.Contains(runClaims, claim => claim.Type == "run_id" && claim.Value == RunId);
+        using var runContextResponse = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", runToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, runContextResponse.StatusCode);
+        AssertNoStore(runContextResponse);
+        var runContext = await ReadAuthorizationContextAsync(runContextResponse);
+        Assert.Equal(project.ProjectId, runContext.BoundProjectId);
+        Assert.Equal(RunId, runContext.BoundRunId);
+        var scopedRunAuthority = Assert.Single(runContext.EffectiveAuthority);
+        Assert.Equal(ProjectAuthorityResourceType.Project, scopedRunAuthority.ResourceType);
+        Assert.Equal(project.ProjectId, scopedRunAuthority.ResourceId);
+        Assert.True(HasPermission(
+            runContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.ReadRunSelection));
+        Assert.True(HasPermission(
+            runContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.AcceptRunSelection));
+        Assert.False(HasPermission(
+            runContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.ReadProjects));
 
         var defaults = new PlatformRuntimeDefaults
         {
@@ -346,6 +448,10 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
             orchestratorReadOnlyToken, [TenantId]);
         Assert.Equal(HttpStatusCode.Forbidden, roleCannotReplaceOrchestratorScope.StatusCode);
         await RevokeRoleAsync(projects.PrivilegedFixtureDataSource, orchestratorAssignment.AssignmentId, 1);
+        using var refreshedRunContext = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", runToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, refreshedRunContext.StatusCode);
+        Assert.Empty((await ReadAuthorizationContextAsync(refreshedRunContext)).EffectiveAuthority);
         using var afterRevocation = await SendAsync(
             projects.Client, HttpMethod.Get,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/selection", runToken, [TenantId]);
@@ -381,12 +487,25 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         using var purposeDenied = await SendAsync(
             projects.Client, HttpMethod.Get, "/api/platform/runtime-defaults", purposeToken, [TenantId]);
         Assert.Equal(HttpStatusCode.Forbidden, purposeDenied.StatusCode);
+        using var purposeContextDenied = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", purposeToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, purposeContextDenied.StatusCode);
 
         await using var wrongAudience = await ProjectsConfigResourceServer.StartAsync(
             _connectionString, new X509SecurityKey(certificate), "https://other-api.test");
         using var wrongResource = await SendAsync(
             wrongAudience.Client, HttpMethod.Get, $"/api/projects/{project.ProjectId}", ownerToken, [TenantId]);
         Assert.Equal(HttpStatusCode.Unauthorized, wrongResource.StatusCode);
+        using var wrongResourceContext = await SendAsync(
+            wrongAudience.Client, HttpMethod.Get, "/api/authorization/context", ownerToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Unauthorized, wrongResourceContext.StatusCode);
+
+        await new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(projects.PrivilegedFixtureDataSource), TimeProvider.System)
+            .RevokeMembershipAsync(orchestratorMembership.MembershipId, 1, "local-test-fixture");
+        using var revokedMembershipContext = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", runToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, revokedMembershipContext.StatusCode);
         Assert.NotEqual(Guid.Empty, ownerAssignment.AssignmentId);
     }
 
@@ -503,6 +622,25 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
                 CreateDbContextOptions(privilegedDataSource), TimeProvider.System)
             .RevokeRoleAssignmentAsync(assignmentId, expectedRevision, "local-test-fixture");
     }
+
+    private static async Task<ProjectAuthorizationContextResponse> ReadAuthorizationContextAsync(
+        HttpResponseMessage response) =>
+        await response.Content.ReadFromJsonAsync<ProjectAuthorizationContextResponse>(
+            AuthorizationJsonOptions)
+        ?? throw new InvalidOperationException("Projects & Config returned an empty authorization context.");
+
+    private static bool HasPermission(
+        ProjectAuthorizationContextResponse context,
+        ProjectAuthorityResourceType resourceType,
+        string resourceId,
+        ProjectAuthorizationPermission permission) =>
+        context.EffectiveAuthority.Any(resource =>
+            resource.ResourceType == resourceType &&
+            resource.ResourceId == resourceId &&
+            resource.Permissions.Any(grant => grant.Permission == permission));
+
+    private static void AssertNoStore(HttpResponseMessage response) =>
+        Assert.True(response.Headers.CacheControl?.NoStore ?? false);
 
     private static ProjectsConfigDbContext CreateDbContext(NpgsqlDataSource dataSource)
     {

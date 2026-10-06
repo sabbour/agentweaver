@@ -34,6 +34,27 @@ public static class ProjectConfigEndpoints
 {
     public static IEndpointRouteBuilder MapProjectConfigEndpoints(this IEndpointRouteBuilder app)
     {
+        var authorization = app.MapGroup("/api/authorization").RequireAuthorization();
+        authorization.MapGet("/context", async (
+            HttpContext context,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Count != 0)
+                    throw ProjectConfigException.Forbidden();
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(caller.ToEffectiveResponse());
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("GetAuthorizationContext");
+
         var projects = app.MapGroup("/api/projects").RequireAuthorization();
 
         projects.MapPost("/", async (
