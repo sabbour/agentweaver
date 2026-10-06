@@ -13,6 +13,36 @@ public sealed record ProjectAuthorizationGrant(
     ProjectAuthorityRole Role,
     long Revision);
 
+public enum ProjectAuthorizationPermission
+{
+    ReadProjects,
+    WriteProjects,
+    CreateProjects,
+    ReadRunSelection,
+    AcceptRunSelection,
+    ReadPlatformRuntimeDefaults,
+    WritePlatformRuntimeDefaults
+}
+
+public sealed record ProjectAuthorizationPermissionGrant(
+    ProjectAuthorizationPermission Permission,
+    long RoleRevision);
+
+public sealed record EffectiveProjectAuthorization(
+    ProjectAuthorityResourceType ResourceType,
+    string ResourceId,
+    ImmutableArray<ProjectAuthorizationPermissionGrant> Permissions);
+
+public sealed record ProjectAuthorizationContextResponse(
+    int ContractVersion,
+    string Issuer,
+    string ActorId,
+    string TenantId,
+    long MembershipRevision,
+    string? BoundProjectId,
+    string? BoundRunId,
+    ImmutableArray<EffectiveProjectAuthorization> EffectiveAuthority);
+
 public sealed class ProjectAuthorizationContext
 {
     public const int CurrentContractVersion = 1;
@@ -101,6 +131,113 @@ public sealed class ProjectAuthorizationContext
             (BoundRunId is not null &&
                 !string.Equals(BoundRunId, runId, StringComparison.Ordinal)))
             throw ProjectConfigException.Forbidden();
+    }
+
+    public ProjectAuthorizationContextResponse ToEffectiveResponse()
+    {
+        RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+
+        var adminScope = Scopes.Contains(ProjectAuthorizationOwner.ProjectAdminScope);
+        var orchestratorScope = Scopes.Contains(ProjectAuthorizationOwner.OrchestratorScope);
+        var permissions = new Dictionary<
+            (ProjectAuthorityResourceType ResourceType, string ResourceId),
+            HashSet<ProjectAuthorizationPermissionGrant>>();
+
+        void Add(
+            ProjectAuthorizationGrant grant,
+            ProjectAuthorizationPermission permission,
+            ProjectAuthorityResourceType? resourceType = null,
+            string? resourceId = null)
+        {
+            var key = (resourceType ?? grant.ResourceType, resourceId ?? grant.ResourceId);
+            if (!permissions.TryGetValue(key, out var grants))
+            {
+                grants = [];
+                permissions.Add(key, grants);
+            }
+            grants.Add(new ProjectAuthorizationPermissionGrant(permission, grant.Revision));
+        }
+
+        foreach (var grant in Grants)
+        {
+            if (grant.ResourceType == ProjectAuthorityResourceType.Project &&
+                BoundProjectId is not null &&
+                !string.Equals(grant.ResourceId, BoundProjectId, StringComparison.Ordinal))
+                continue;
+
+            switch (grant.ResourceType, grant.Role)
+            {
+                case (ProjectAuthorityResourceType.Platform, ProjectAuthorityRole.PlatformAdmin)
+                    when adminScope && BoundProjectId is null && BoundRunId is null:
+                    Add(grant, ProjectAuthorizationPermission.ReadPlatformRuntimeDefaults);
+                    Add(grant, ProjectAuthorizationPermission.WritePlatformRuntimeDefaults);
+                    break;
+                case (ProjectAuthorityResourceType.Tenant, ProjectAuthorityRole.TenantAdmin)
+                    when BoundRunId is null:
+                    if (BoundProjectId is null)
+                    {
+                        Add(grant, ProjectAuthorizationPermission.ReadProjects);
+                        if (adminScope)
+                        {
+                            Add(grant, ProjectAuthorizationPermission.WriteProjects);
+                            Add(grant, ProjectAuthorizationPermission.CreateProjects);
+                        }
+                    }
+                    else
+                    {
+                        Add(
+                            grant,
+                            ProjectAuthorizationPermission.ReadProjects,
+                            ProjectAuthorityResourceType.Project,
+                            BoundProjectId);
+                        if (adminScope)
+                            Add(
+                                grant,
+                                ProjectAuthorizationPermission.WriteProjects,
+                                ProjectAuthorityResourceType.Project,
+                                BoundProjectId);
+                    }
+                    break;
+                case (ProjectAuthorityResourceType.Project, ProjectAuthorityRole.Owner)
+                    when BoundRunId is null:
+                    Add(grant, ProjectAuthorizationPermission.ReadProjects);
+                    if (adminScope)
+                        Add(grant, ProjectAuthorizationPermission.WriteProjects);
+                    break;
+                case (ProjectAuthorityResourceType.Project,
+                    ProjectAuthorityRole.Contributor or ProjectAuthorityRole.Viewer)
+                    when BoundRunId is null:
+                    Add(grant, ProjectAuthorizationPermission.ReadProjects);
+                    break;
+                case (ProjectAuthorityResourceType.Project, ProjectAuthorityRole.Orchestrator)
+                    when orchestratorScope:
+                    Add(grant, ProjectAuthorizationPermission.ReadRunSelection);
+                    Add(grant, ProjectAuthorizationPermission.AcceptRunSelection);
+                    break;
+            }
+        }
+
+        var effectiveAuthority = permissions
+            .OrderBy(item => item.Key.ResourceType)
+            .ThenBy(item => item.Key.ResourceId, StringComparer.Ordinal)
+            .Select(item => new EffectiveProjectAuthorization(
+                item.Key.ResourceType,
+                item.Key.ResourceId,
+                item.Value
+                    .OrderBy(permission => permission.Permission)
+                    .ThenBy(permission => permission.RoleRevision)
+                    .ToImmutableArray()))
+            .ToImmutableArray();
+
+        return new ProjectAuthorizationContextResponse(
+            CurrentContractVersion,
+            Issuer,
+            ActorId,
+            TenantId,
+            MembershipRevision,
+            BoundProjectId,
+            BoundRunId,
+            effectiveAuthority);
     }
 }
 
