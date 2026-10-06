@@ -16,6 +16,12 @@
       "project": "packages/Agentweaver.Providers/Agentweaver.Providers.csproj"
     },
     {
+      "id": "Agentweaver.Orchestrator.Core",
+      "kind": "library",
+      "version": "0.0.0",
+      "project": "services/orchestrator/Agentweaver.Orchestrator.Core/Agentweaver.Orchestrator.Core.csproj"
+    },
+    {
       "id": "Agentweaver.Persistence.Postgres",
       "kind": "library",
       "version": "0.0.0",
@@ -97,6 +103,13 @@
     },
     {
       "consumer": "Agentweaver.Providers",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": [
+        "0.0.0"
+      ]
+    },
+    {
+      "consumer": "Agentweaver.Orchestrator.Core",
       "dependency": "Agentweaver.Abstractions",
       "versions": [
         "0.0.0"

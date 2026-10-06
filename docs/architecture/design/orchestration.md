@@ -63,18 +63,25 @@ silently change an active run.
 
 | Field | Meaning |
 | --- | --- |
-| `id` and purpose | Stable step identity and the outcome the step covers |
+| `id`, purpose, and order | Stable step identity, the outcome it covers, and deterministic catalog ordering |
 | Mode | `fixed`, `open`, or `platform`; determines who creates work and who may propose subtasks |
 | Allowed roles and phase | Eligibility for work in the step, including planning versus execution or validation |
 | Cardinality | Exactly one, one or more, optional, or any number of matching work items |
 | Dependencies and ordering | Required preceding steps, join boundaries, and the step-order constraints on child work |
+| Isolation and provider requirements | Allowed isolation choices and capability requirements checked against the run's pinned provider binding |
 
-A **fixed** step creates its prescribed subtask through the platform, as a static
-branch does in 0.x. An **open** step lets the coordinator propose one or more child
-work items that assemble at the step boundary. A **platform** step runs a gate or
-platform action through a registered executor; the coordinator cannot fill it with a
-normal subtask. Built-in workflows include an open implementation step so the
-existing flexibility survives under a declared boundary.
+A **fixed** step carries its prescribed task, role, phase, isolation choice, and
+declared outputs; the platform creates that work, as it does for a static branch in
+0.x. An **open** step lets the coordinator propose bounded child work that assembles
+at the step boundary. A **platform** step names a platform-owned gate; the
+coordinator cannot fill it with a normal subtask or claim that its executor ran.
+The catalog's version and ordered step definitions are snapshotted together.
+Built-in workflows include an open implementation step so the existing flexibility
+survives under a declared boundary.
+
+Run validation also binds prescribed fixed work to the selected role's isolation
+choice and the run's pinned Sandbox provider, rejecting work whose required
+capabilities were not negotiated.
 
 Platform steps can include build/test and preview, responsible AI (RAI),
 rubber-ducking, review, opening a pull request, merge, Scribe, and application
@@ -86,9 +93,19 @@ owner's approval to an exact revision and its test evidence before promotion to
 
 A workflow may label exploratory work with `allowUnmappedWork`, but the label does
 not waive step identity. Otherwise-unclassified work must be assigned to a declared
-open step. If no such step exists, the WorkPlan is rejected. This is the strictness
-rule in [R13](../decisions/0001-platform-architecture.md#risk-register), including
-for generated workflows.
+open step. If no such step exists, the WorkPlan is rejected. An empty optional open
+step is valid; a broad exploratory step remains usable while retaining finite
+cardinality and run-level item bounds. This is the strictness rule in
+[R13](../decisions/0001-platform-architecture.md#risk-register), including for
+generated workflows.
+
+The pure `Agentweaver.Orchestrator.Core` domain library validates built-in and
+generated catalogs before creating a versioned definition snapshot. It validates
+WorkPlans only against such a snapshot; an invalid definition or plan produces
+structured reasons and no snapshot value. Generated definitions remain marked for
+first-use confirmation. The library does not dispatch work, persist a
+journal/checkpoint, resolve Projects settings, or transport approvals; those
+runtime consumers are separate slices.
 
 ### Outcome, selection, and confirmation
 
@@ -121,7 +138,7 @@ choice, dependencies, and declared outputs. The identifier generalizes the 0.x
 remain platform-created; model-authored subtasks belong to open steps. Platform
 steps are never normal plannable subtasks.
 
-The typed `propose_work_plan` schema contains the selected catalog, rather than a
+The typed `propose_work_plan` schema contains the selected catalog version, rather than a
 free-text hint. A proposal with no matching step is reassigned to a declared open
 step by an explicit revision or rejected; it is never accepted as a step-less
 subtask. A project workflow can grant broad exploration through its open step,
@@ -142,8 +159,19 @@ and applicable project and platform policy:
    each open-step join completes before its dependent step proceeds.
 5. **Gate ownership:** no proposed subtask masquerades as a platform build/test,
    review, publish, merge, or other platform-owned gate.
-6. **Resource bounds:** children, concurrency, budget, and wall time stay within
-   workflow-enforced run limits and applicable file-conflict serialization.
+6. **Resource and output bounds:** child count and declared-output count and path
+   length stay within domain limits. Paths must be canonical repository-relative
+   files; rooted paths and traversal are rejected.
+7. **Run selections:** the model-selection reference and agent must be eligible for
+   the assigned role in the immutable run-selection context. The selected isolation
+   provider must match the run's pinned Sandbox binding, and required capabilities
+   must be in its negotiated capability set. Model references are opaque;
+   Orchestrator does not introduce a Model provider seam.
+8. **Output conflicts:** exact, case-insensitive path, path-suffix, and bare-filename
+   overlaps are conservatively serialized with deterministic dependency edges.
+   Existing reverse dependencies are preserved rather than turned into cycles.
+   Invalid output paths reject the plan; they never degrade into an empty output
+   declaration.
 
 A rejection returns structured reasons and the coordinator may revise a bounded
 number of times. Exhausting that budget holds work for human guidance; it does not
@@ -163,11 +191,11 @@ flowchart TD
     E --> F["Validate grammar and catalog"]
     F --> D
     D --> G["Propose step-snapped WorkPlan"]
-    G --> V{"Coverage, cardinality, roles, order, limits, and policy valid?"}
-    V -->|"No: reasons"| R["Bounded WorkPlan revision"]
+    G -->     V{"Step identity, coverage, joins, eligibility, pins, bounds, and outputs valid?"}
+    V -->|"No: structured reasons"| R["Bounded WorkPlan revision"]
     R --> G
     R -->|"Attempts exhausted"| Z["Hold for human guidance"]
-    V -->|"Yes"| H["Confirm generated workflow or scope change"]
+    V -->|"Yes; conflicts serialized"| H["Confirm generated workflow or scope change"]
     H --> S["Snapshot executable definition"]
     S --> M["Bind steps to MAF executors"]
     M --> O["Open step: child work and join"]
@@ -268,9 +296,12 @@ and its surface panel share these state transitions rather than creating a UI-on
 publish path.
 
 A running workflow may need to change its plan. The coordinator calls
-`revise_work_plan`; the Orchestrator validates the candidate, computes a diff, and
-records the accepted version. Revising subtasks inside an existing open step is
-replanning within its catalog limits and run budget. Widening the agreed scope or
+`revise_work_plan`; the Orchestrator validates the candidate, computes a structured
+diff against the previous immutable snapshot, and records the accepted version.
+Changes to steps, eligibility, required capabilities, cardinality, fixed work, or
+planned child items carry an explicit confirmation requirement. A catalog-version
+change alone does not widen scope. Revising subtasks inside an existing open step
+is still subject to catalog limits and run policy. Widening the agreed scope or
 adding or removing steps changes the workflow contract and requires confirmation
 before the changed work can dispatch
 ([R12](../decisions/0001-platform-architecture.md#risk-register)).

@@ -4,6 +4,7 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 
 | Test suite | What it exercises | What it does not prove |
 | --- | --- | --- |
+| Orchestrator Core tests | Workflow grammar and step DAG validation, bounded WorkPlan eligibility and joins, pinned model/provider selection checks, output-path validation/serialization, immutable snapshots, and scope diffs. | Child dispatch, journal persistence, approval transport, or runtime checkpoint recovery. |
 | Provider tests | Catalog validation, cardinality, overrides, capability negotiation, and run pinning. | Resource provisioning or network-policy enforcement. |
 | Identity library tests | Exact actor, project, run, purpose, secret ID, and version grants. They cover revocation races, expiry, cancellation, and credential invalidation. | Network authentication or a deployed broker. |
 | Identity broker tests | OpenIddict validation, external login, consent, S256 PKCE, refresh replay, PostgreSQL grants, and redemption HTTP. | Deployed OAuth, Azure RBAC, or Azure acceptance. |
@@ -23,6 +24,7 @@ Run these commands from the repository root:
 ```powershell
 dotnet restore Agentweaver.slnx --locked-mode
 dotnet build Agentweaver.slnx --no-restore --configuration Release
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --no-build --no-restore --configuration Release
 npm run coverage:dotnet
 npm run coverage:node
 node --test scripts\coverage\tests\*.test.mjs

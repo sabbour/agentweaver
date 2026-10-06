@@ -53,6 +53,10 @@ fallback. Resolving a descriptor produces a candidate, not a provisioned resourc
 A run binding pins negotiated capabilities only after provisioning; layered pinning
 also requires the confirmed applied egress-intent generation.
 
+The P1 Orchestrator Core library adds pure, deterministic workflow-catalog and
+step-bound WorkPlan validation. It validates pinned run selections, output bounds,
+joins, snapshots, and scope diffs; it does not dispatch children or persist run state.
+
 The release manifest describes independently versioned libraries and the unpublished Identity broker candidate.
 It is a draft composition, not evidence of deployment or a released platform.
 
@@ -170,6 +174,7 @@ Run these commands from the repository root:
 ```powershell
 dotnet restore Agentweaver.slnx --locked-mode
 dotnet build Agentweaver.slnx --no-restore --configuration Release
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Secrets.AzureKeyVault.Tests\Agentweaver.Secrets.AzureKeyVault.Tests.csproj --no-build --no-restore --configuration Release
 dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj --no-build --no-restore --configuration Release

@@ -22,6 +22,9 @@ const projectReferences = new Map([
     '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
     '..\\..\\..\\packages\\Agentweaver.Secrets.AzureKeyVault\\Agentweaver.Secrets.AzureKeyVault.csproj',
   ]],
+  ['Agentweaver.Orchestrator.Core', [
+    '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+  ]],
 ]);
 const projects = new Map(fixture.components.map((component) => {
   const references = projectReferences.get(component.id) ?? [];
@@ -50,6 +53,13 @@ test('the checked-in draft composition has a valid shape and references', () => 
   assert.equal(check(fixture).stage, 'draft');
 });
 
+test('a library component may be checked in under services', () => {
+  const orchestrator = fixture.components.find(component => component.id === 'Agentweaver.Orchestrator.Core');
+  assert.equal(orchestrator.kind, 'library');
+  assert.ok(orchestrator.project.startsWith('services/'));
+  assert.equal(check(fixture).stage, 'draft');
+});
+
 test('the acceptance-only Probe is tracked as its exact image artifact, not an arbitrary tools project', () => {
   const probe = fixture.components.find(component => component.id === 'Agentweaver.FoundationProbe');
   assert.equal(probe.kind, 'service');
@@ -71,7 +81,7 @@ test('the initial P0 NuGet baseline contains exactly the eight packages at 0.0.0
     'Agentweaver.Telemetry.AzureMonitor',
     'Agentweaver.ObjectStore.AzureBlob',
   ].sort();
-  const packages = fixture.components.filter(({ kind }) => kind !== 'service');
+  const packages = fixture.components.filter(({ id }) => packageIds.includes(id));
   assert.deepEqual(packages.map(({ id }) => id).sort(), packageIds);
   assert.ok(packages.every(({ version }) => version === '0.0.0'));
   assert.ok(fixture.compatibility.every(({ versions }) => versions.length === 1 && versions[0] === '0.0.0'));
@@ -79,6 +89,7 @@ test('the initial P0 NuGet baseline contains exactly the eight packages at 0.0.0
   const baseline = JSON.parse(readFileSync(path.join(root, 'releases', 'initial-baseline.json'), 'utf8'));
   assert.equal(baseline.baselineVersion, '0.0.0');
   assert.deepEqual([...baseline.components].sort(), packageIds);
+  assert.ok(!baseline.components.includes('Agentweaver.Orchestrator.Core'));
   assert.equal(baseline.changeset, '.changeset/initial-p0-baseline-1825.md');
 });
 

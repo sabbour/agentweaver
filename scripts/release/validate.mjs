@@ -40,10 +40,12 @@ function version(value, location) {
 
 function projectPath(value, kind, location) {
   if (kind === 'service' && value === 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj') return;
-  const prefix = kind === 'service' ? 'services' : 'packages';
-  if (typeof value !== 'string' || !new RegExp(`^${prefix}/[A-Za-z0-9./-]+\\.csproj$`).test(value) ||
+  const prefixes = kind === 'service' ? ['services'] : kind === 'library' ? ['packages', 'services'] : ['packages'];
+  const expectedPaths = prefixes.map((prefix) => `${prefix}/.../*.csproj`).join(' or ');
+  if (typeof value !== 'string' || !prefixes.some((prefix) =>
+      new RegExp(`^${prefix}/[A-Za-z0-9./-]+\\.csproj$`).test(value)) ||
       value.split('/').some((part) => part === '.' || part === '..' || part === '')) {
-    fail(location, `expected a safe ${prefix}/.../*.csproj path`);
+    fail(location, `expected a safe ${expectedPaths} path`);
   }
 }
 
