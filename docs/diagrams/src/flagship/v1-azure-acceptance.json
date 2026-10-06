@@ -79,7 +79,7 @@
       "type": "message",
       "from": "verifier",
       "to": "registry",
-      "label": "Verify source-bound image manifest digest",
+      "label": "Verify source-bound digest; replacement keeps 452/835 history with distinct claims",
       "line": "solid",
       "arrow": "filled"
     },
