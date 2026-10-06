@@ -412,7 +412,8 @@ public static class EnvironmentEndpoints
     {
         var status = exception.Code switch
         {
-            "project_read_not_authorized" or "authorization_context_denied" or
+            "project_read_not_authorized" or "project_write_not_authorized" or
+                "run_selection_not_authorized" or "authorization_context_denied" or
                 "authorization_context_mismatch" or "authorization_changed" or
                 "tenant_selector_mismatch" => StatusCodes.Status403Forbidden,
             "upstream_unavailable" or "upstream_timeout" => StatusCodes.Status503ServiceUnavailable,
