@@ -20,7 +20,8 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
 
         await using var context = CreateDbContext();
         var service = new ProjectsConfigService(context, providerCatalog, TimeProvider.System);
-        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(context, TimeProvider.System);
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
         var platformAdmin = await SeedCallerAsync(
             context, authorityStore, "platform-admin", "tenant-1",
             ["api.read", "projects.admin"],
@@ -216,13 +217,24 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             ("run_id", selection.RunId));
         await AssertImmutableAsync(
             "TRUNCATE projects_config.project_run_selections");
+
+        Assert.True(orchestrator.HasRole(
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator));
+        await authorityStore.RevokeMembershipAsync(orchestrator.MembershipId, 1, "fixture");
+        var staleAuthorization = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.GetRunSelectionAsync(
+                orchestrator, project.ProjectId, "run-immutable-1", CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, staleAuthorization.StatusCode);
     }
 
     [Fact]
     public async Task AuthorityRevocationUsesCasAuditAndPreservesTheLastProjectOwner()
     {
         await using var context = CreateDbContext();
-        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(context, TimeProvider.System);
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
         var tenantId = $"tenant-{Guid.NewGuid():N}";
         var tenantAdmin = await SeedCallerAsync(
             context,
@@ -252,13 +264,15 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
 
         await using (var revokeFirstOwnerContext = CreateDbContext())
         {
-            var store = new ProjectsConfigPrivilegedAuthorityStore(revokeFirstOwnerContext, TimeProvider.System);
+            var store = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
             await store.RevokeRoleAssignmentAsync(firstOwnerAssignment.AssignmentId, 1, "fixture");
         }
 
         await using (var revokeLastOwnerContext = CreateDbContext())
         {
-            var store = new ProjectsConfigPrivilegedAuthorityStore(revokeLastOwnerContext, TimeProvider.System);
+            var store = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
             await Assert.ThrowsAsync<ProjectAuthorityConcurrencyException>(() =>
                 store.RevokeRoleAssignmentAsync(secondOwnerAssignment.AssignmentId, 1, "fixture"));
             await Assert.ThrowsAsync<ProjectAuthorityConcurrencyException>(() =>
@@ -267,7 +281,8 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
 
         await using (var staleCasContext = CreateDbContext())
         {
-            var store = new ProjectsConfigPrivilegedAuthorityStore(staleCasContext, TimeProvider.System);
+            var store = new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(), TimeProvider.System);
             await Assert.ThrowsAsync<ProjectAuthorityConcurrencyException>(() =>
                 store.RevokeRoleAssignmentAsync(firstOwnerAssignment.AssignmentId, 1, "fixture"));
         }
@@ -299,6 +314,156 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         await AssertImmutableAsync(
             "DELETE FROM projects_config.authority_audit WHERE event_id = @event_id",
             ("event_id", roleRevoked.EventId));
+    }
+
+    [Fact]
+    public async Task AuthorityStoreRetriesSerializationFailuresWithFreshContexts()
+    {
+        var options = CreateDbContextOptions();
+        await using var context = new ProjectsConfigDbContext(options);
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var tenantId = $"tenant-{Guid.NewGuid():N}";
+        var tenantAdmin = await SeedCallerAsync(
+            context,
+            authorityStore,
+            $"tenant-admin-{Guid.NewGuid():N}",
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(context, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(tenantAdmin, "Serialization retry project", CancellationToken.None);
+        var member = await authorityStore.GrantMembershipAsync(
+            TestIssuer,
+            $"contributor-{Guid.NewGuid():N}",
+            tenantId,
+            "fixture");
+
+        ProjectRoleAssignmentRecord assignment = null!;
+        await WithFirstSerializationFailureAsync(
+            RetryTriggerTarget.AssignmentInsert,
+            () => AssignContributorAsync());
+        async Task AssignContributorAsync() =>
+            assignment = await authorityStore.AssignRoleAsync(
+                member.MembershipId,
+                ProjectAuthorityResourceType.Project,
+                project.ProjectId,
+                ProjectAuthorityRole.Contributor,
+                "fixture");
+
+        await using (var verifyAssignmentContext = CreateDbContext())
+        {
+            Assert.Equal(1, await verifyAssignmentContext.RoleAssignments.AsNoTracking()
+                .CountAsync(item => item.MembershipId == member.MembershipId));
+            Assert.Equal(1, await verifyAssignmentContext.AuthorityAudit.AsNoTracking()
+                .CountAsync(item =>
+                    item.AssignmentId == assignment.AssignmentId &&
+                    item.EventType == "role_assigned" &&
+                    item.Revision == 1));
+        }
+
+        await WithFirstSerializationFailureAsync(
+            RetryTriggerTarget.AssignmentUpdate,
+            () => authorityStore.RevokeRoleAssignmentAsync(
+                assignment.AssignmentId, 1, "fixture"));
+        await using (var verifyRoleRevocationContext = CreateDbContext())
+        {
+            var stored = await verifyRoleRevocationContext.RoleAssignments.AsNoTracking()
+                .SingleAsync(item => item.AssignmentId == assignment.AssignmentId);
+            Assert.Equal(ProjectAuthorityRecordState.Revoked, stored.State);
+            Assert.Equal(2, stored.Revision);
+            Assert.Equal(1, await verifyRoleRevocationContext.AuthorityAudit.AsNoTracking()
+                .CountAsync(item =>
+                    item.AssignmentId == assignment.AssignmentId &&
+                    item.EventType == "role_revoked" &&
+                    item.Revision == 2));
+        }
+
+        var membershipToRevoke = await authorityStore.GrantMembershipAsync(
+            TestIssuer,
+            $"membership-revoke-{Guid.NewGuid():N}",
+            tenantId,
+            "fixture");
+        await WithFirstSerializationFailureAsync(
+            RetryTriggerTarget.MembershipUpdate,
+            () => authorityStore.RevokeMembershipAsync(
+                membershipToRevoke.MembershipId, 1, "fixture"));
+        await using (var verifyMembershipRevocationContext = CreateDbContext())
+        {
+            var stored = await verifyMembershipRevocationContext.TenantMemberships.AsNoTracking()
+                .SingleAsync(item => item.MembershipId == membershipToRevoke.MembershipId);
+            Assert.Equal(ProjectAuthorityRecordState.Revoked, stored.State);
+            Assert.Equal(2, stored.Revision);
+            Assert.Equal(1, await verifyMembershipRevocationContext.AuthorityAudit.AsNoTracking()
+                .CountAsync(item =>
+                    item.MembershipId == membershipToRevoke.MembershipId &&
+                    item.EventType == "membership_revoked" &&
+                    item.Revision == 2));
+        }
+    }
+
+    private async Task WithFirstSerializationFailureAsync(
+        RetryTriggerTarget target,
+        Func<Task> operation)
+    {
+        var (table, eventName) = target switch
+        {
+            RetryTriggerTarget.AssignmentInsert => ("project_role_assignments", "INSERT"),
+            RetryTriggerTarget.AssignmentUpdate => ("project_role_assignments", "UPDATE"),
+            RetryTriggerTarget.MembershipUpdate => ("tenant_memberships", "UPDATE"),
+            _ => throw new ArgumentOutOfRangeException(nameof(target)),
+        };
+        var suffix = Guid.NewGuid().ToString("N");
+        var sequence = $"projects_config.test_retry_sequence_{suffix}";
+        var function = $"projects_config.test_retry_function_{suffix}";
+        var trigger = $"test_retry_trigger_{suffix}";
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+
+        async Task ExecuteAsync(string sql)
+        {
+            await using var command = new NpgsqlCommand(sql, connection);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            await ExecuteAsync($"CREATE SEQUENCE {sequence}");
+            await ExecuteAsync($"""
+                CREATE FUNCTION {function}() RETURNS trigger
+                LANGUAGE plpgsql AS $body$
+                BEGIN
+                    IF nextval('{sequence}'::regclass) = 1 THEN
+                        RAISE EXCEPTION 'forced serialization retry' USING ERRCODE = '40001';
+                    END IF;
+                    RETURN NEW;
+                END;
+                $body$;
+                """);
+            await ExecuteAsync($"""
+                CREATE TRIGGER {trigger}
+                BEFORE {eventName} ON projects_config.{table}
+                FOR EACH ROW EXECUTE FUNCTION {function}();
+                """);
+
+            await operation();
+
+            await using var attempts = new NpgsqlCommand($"SELECT last_value FROM {sequence}", connection);
+            Assert.Equal(2L, await attempts.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await ExecuteAsync($"DROP TRIGGER IF EXISTS {trigger} ON projects_config.{table}");
+            await ExecuteAsync($"DROP FUNCTION IF EXISTS {function}()");
+            await ExecuteAsync($"DROP SEQUENCE IF EXISTS {sequence}");
+        }
+    }
+
+    private enum RetryTriggerTarget
+    {
+        AssignmentInsert,
+        AssignmentUpdate,
+        MembershipUpdate,
     }
 
     private async Task AssertImmutableAsync(string sql, (string Name, object Value)? parameter = null)
@@ -356,12 +521,14 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
 
     private ProjectsConfigDbContext CreateDbContext()
     {
-        var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+        return new ProjectsConfigDbContext(CreateDbContextOptions());
+    }
+
+    private DbContextOptions<ProjectsConfigDbContext> CreateDbContextOptions() =>
+        new DbContextOptionsBuilder<ProjectsConfigDbContext>()
             .UseNpgsql(fixture.DataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options;
-        return new ProjectsConfigDbContext(options);
-    }
 
     private static ProviderCatalog CreateProviderCatalog()
     {

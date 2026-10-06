@@ -225,6 +225,21 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         using var defaultsResponse = await SendAsync(
             projects.Client, HttpMethod.Get, "/api/platform/runtime-defaults", platformAdminToken, [TenantId]);
         Assert.Equal(HttpStatusCode.OK, defaultsResponse.StatusCode);
+        var platformReadOnlyToken = await IssueTokenAsync("api.read", [TenantId]);
+        var platformReadOnlySubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(platformReadOnlyToken).Claims, "sub");
+        var platformReadOnlyMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, platformReadOnlySubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            platformReadOnlyMembership.MembershipId,
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        using var roleCannotReplaceAdminScope = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/platform/runtime-defaults",
+            platformReadOnlyToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, roleCannotReplaceAdminScope.StatusCode);
 
         var orchestratorBootstrap = await IssueTokenAsync(
             "projects.bootstrap", [TenantId], "run-actor", null, null, ["orchestrator"]);
@@ -314,6 +329,22 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
             projects.Client, HttpMethod.Get,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/selection", runToken, [TenantId]);
         Assert.Equal(HttpStatusCode.OK, beforeRevocation.StatusCode);
+        var orchestratorReadOnlyToken = await IssueTokenAsync("api.read", [TenantId]);
+        var orchestratorReadOnlySubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(orchestratorReadOnlyToken).Claims, "sub");
+        var orchestratorReadOnlyMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, orchestratorReadOnlySubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            orchestratorReadOnlyMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+        using var roleCannotReplaceOrchestratorScope = await SendAsync(
+            projects.Client, HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/selection",
+            orchestratorReadOnlyToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, roleCannotReplaceOrchestratorScope.StatusCode);
         await RevokeRoleAsync(projects.PrivilegedFixtureDataSource, orchestratorAssignment.AssignmentId, 1);
         using var afterRevocation = await SendAsync(
             projects.Client, HttpMethod.Get,
@@ -338,13 +369,11 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
                 .Where(item => item.AssignmentId == orchestratorAssignment.AssignmentId)
                 .ToArrayAsync(), item => item.EventType == "role_revoked" && item.Revision == 2);
         }
-        await using (var staleDb = CreateDbContext(projects.PrivilegedFixtureDataSource))
-        {
-            var staleStore = new ProjectsConfigPrivilegedAuthorityStore(staleDb, TimeProvider.System);
-            await Assert.ThrowsAsync<ProjectAuthorityConcurrencyException>(() =>
-                staleStore.RevokeRoleAssignmentAsync(
-                    orchestratorAssignment.AssignmentId, 1, "local-test-fixture"));
-        }
+        var staleStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(projects.PrivilegedFixtureDataSource), TimeProvider.System);
+        await Assert.ThrowsAsync<ProjectAuthorityConcurrencyException>(() =>
+            staleStore.RevokeRoleAssignmentAsync(
+                orchestratorAssignment.AssignmentId, 1, "local-test-fixture"));
 
         var purposeToken = CreateSignedAccessToken(
             platformAdminSubject,
@@ -448,8 +477,8 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         string subject,
         string tenantId)
     {
-        await using var db = CreateDbContext(privilegedDataSource);
-        return await new ProjectsConfigPrivilegedAuthorityStore(db, TimeProvider.System)
+        return await new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(privilegedDataSource), TimeProvider.System)
             .GrantMembershipAsync(new Uri(TestIssuer).AbsoluteUri, subject, tenantId, "local-test-fixture");
     }
 
@@ -460,8 +489,8 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         string resourceId,
         ProjectAuthorityRole role)
     {
-        await using var db = CreateDbContext(privilegedDataSource);
-        return await new ProjectsConfigPrivilegedAuthorityStore(db, TimeProvider.System)
+        return await new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(privilegedDataSource), TimeProvider.System)
             .AssignRoleAsync(membershipId, resourceType, resourceId, role, "local-test-fixture");
     }
 
@@ -470,19 +499,22 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         Guid assignmentId,
         long expectedRevision)
     {
-        await using var db = CreateDbContext(privilegedDataSource);
-        await new ProjectsConfigPrivilegedAuthorityStore(db, TimeProvider.System)
+        await new ProjectsConfigPrivilegedAuthorityStore(
+                CreateDbContextOptions(privilegedDataSource), TimeProvider.System)
             .RevokeRoleAssignmentAsync(assignmentId, expectedRevision, "local-test-fixture");
     }
 
     private static ProjectsConfigDbContext CreateDbContext(NpgsqlDataSource dataSource)
     {
-        var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+        return new ProjectsConfigDbContext(CreateDbContextOptions(dataSource));
+    }
+
+    private static DbContextOptions<ProjectsConfigDbContext> CreateDbContextOptions(
+        NpgsqlDataSource dataSource) =>
+        new DbContextOptionsBuilder<ProjectsConfigDbContext>()
             .UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options;
-        return new ProjectsConfigDbContext(options);
-    }
 
     private static async Task AssertRuntimeCannotWriteAuthorityAsync(NpgsqlDataSource runtimeDataSource)
     {
