@@ -1,4 +1,5 @@
 extern alias ProjectsConfig;
+extern alias EnvironmentService;
 
 using System.Collections.Immutable;
 using System.IdentityModel.Tokens.Jwt;
@@ -17,6 +18,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using ProjectsConfig::Agentweaver.Projects.Config;
+using EnvironmentCaller = EnvironmentService::Agentweaver.Environment.CurrentCallerRequest;
+using EnvironmentProjectsConfigHttpClient = EnvironmentService::Agentweaver.Environment.ProjectsConfigHttpClient;
 using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
@@ -97,7 +100,12 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         await AssertRuntimeCannotWriteAuthorityAsync(projects.RuntimeDataSource);
 
         var ownerToken = await IssueTokenAsync(
-            "projects.admin", ["upstream-tenant"], "platform_admin");
+            "projects.admin",
+            ["upstream-tenant"],
+            "projects-owner",
+            null,
+            null,
+            ["platform_admin"]);
         var ownerClaims = new JwtSecurityTokenHandler().ReadJwtToken(ownerToken).Claims.ToArray();
         var ownerSubject = SingleClaim(ownerClaims, "sub");
         Assert.DoesNotContain(ownerClaims,
@@ -127,6 +135,55 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
             ProjectAuthorityResourceType.Project,
             project.ProjectId,
             ProjectAuthorityRole.Owner);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            ownerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+        var ownerConsumerToken = await IssueTokenAsync(
+            "projects.admin projects.orchestrator",
+            [TenantId],
+            "projects-owner",
+            null,
+            null,
+            ["platform_admin"]);
+        var ownerConsumerClaims = new JwtSecurityTokenHandler().ReadJwtToken(ownerConsumerToken).Claims;
+        Assert.DoesNotContain(ownerConsumerClaims, claim => claim.Type is "project_id" or "run_id");
+
+        var environmentProjects = new EnvironmentProjectsConfigHttpClient(projects.Client);
+        var ownerConsumer = new EnvironmentCaller(ownerConsumerToken, TenantId);
+        var ownerConsumerContext = await environmentProjects.GetAuthorizationContextAsync(
+            ownerConsumer, CancellationToken.None);
+        Assert.Null(ownerConsumerContext.BoundProjectId);
+        Assert.Null(ownerConsumerContext.BoundRunId);
+        Assert.True(HasPermission(
+            ownerConsumerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.ReadRunSelection));
+        Assert.True(HasPermission(
+            ownerConsumerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.WriteProjects));
+
+        using var updateProjectConfiguration = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
+        {
+            Content = JsonContent.Create(new UpdateProjectConfigurationRequest
+            {
+                ExpectedRevision = project.ConfigurationRevision,
+                Configuration = new ProjectConfiguration
+                {
+                    ModelSelection = new ModelSelectionSettings("owner-consumer-model"),
+                },
+            }),
+        };
+        AddBearerAndTenant(updateProjectConfiguration, ownerConsumerToken, TenantId);
+        using var updatedProjectConfiguration = await projects.Client.SendAsync(updateProjectConfiguration);
+        Assert.Equal(HttpStatusCode.OK, updatedProjectConfiguration.StatusCode);
+        var updatedConfiguration = await updatedProjectConfiguration.Content
+            .ReadFromJsonAsync<VersionedProjectConfiguration>();
+        Assert.NotNull(updatedConfiguration);
+        Assert.Equal(project.ConfigurationRevision + 1, updatedConfiguration.Revision);
+
         using var ownerRead = await SendAsync(
             projects.Client, HttpMethod.Get, $"/api/projects/{project.ProjectId}", ownerToken, [TenantId]);
         Assert.Equal(HttpStatusCode.OK, ownerRead.StatusCode);
@@ -397,13 +454,13 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
 
         var selectionRequest = new AcceptRunSelectionRequest
         {
-            ExpectedProjectConfigRevision = project.ConfigurationRevision,
+            ExpectedProjectConfigRevision = updatedConfiguration.Revision,
             ExpectedPlatformRuntimeRevision = 1,
             Context = new RunSelectionContext
             {
                 Revision = "provider-catalog-v1",
                 AvailableModelSelectionReferences = ImmutableHashSet.Create(
-                    StringComparer.Ordinal, "platform-model"),
+                    StringComparer.Ordinal, "owner-consumer-model"),
             },
         };
         using var acceptSelection = new HttpRequestMessage(
@@ -414,6 +471,11 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         AddBearerAndTenant(acceptSelection, runToken, TenantId);
         using var acceptedSelection = await projects.Client.SendAsync(acceptSelection);
         Assert.Equal(HttpStatusCode.OK, acceptedSelection.StatusCode);
+
+        var ownerConsumerSelection = await environmentProjects.GetRunSelectionAsync(
+            ownerConsumer, project.ProjectId, RunId, CancellationToken.None);
+        Assert.Equal(project.ProjectId, ownerConsumerSelection.ProjectId);
+        Assert.Equal(RunId, ownerConsumerSelection.RunId);
 
         using var runBoundPlatformAdmin = await SendAsync(
             projects.Client, HttpMethod.Get, "/api/platform/runtime-defaults", runToken, [TenantId]);

@@ -833,6 +833,44 @@ public sealed class ProjectsConfigService(
 
     private static string Fingerprint(string projectId, string runId, AcceptRunSelectionRequest request)
     {
+        var requiredEgress = ProjectConfigurationValidator
+            .ValidateEgressRules(request.Context.RequiredEgress);
+        var modelReferences = request.Context.AvailableModelSelectionReferences
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var providerRequirements = request.Context.ProviderRequirements
+            .OrderBy(item => item.Seam)
+            .ThenBy(item => item.MeterSource, StringComparer.Ordinal)
+            .Select(item => new ProviderRequirementFingerprint(
+                item.Seam, item.RequiredAdapterVersion, item.RequiredOptionsSchemaVersion,
+                item.RequiredCapabilities.Order(StringComparer.Ordinal).ToArray(),
+                item.RequiredL3L4Capabilities.Order(StringComparer.Ordinal).ToArray(),
+                item.RequiredL7Capabilities.Order(StringComparer.Ordinal).ToArray(),
+                item.MeterSource)).ToArray();
+
+        if (requiredEgress.All(rule =>
+            rule.Purpose == NetworkEgressPurpose.PublicHttps &&
+            rule.DestinationKind == NetworkEgressDestinationKind.Fqdn))
+        {
+            var legacyCanonical = new
+            {
+                projectId,
+                runId,
+                request.ExpectedProjectConfigRevision,
+                request.ExpectedPlatformRuntimeRevision,
+                ContextRevision = request.Context.Revision,
+                ModelReferences = modelReferences,
+                ProviderRequirements = providerRequirements,
+                RequiredEgress = requiredEgress
+                    .Select(rule => new LegacyEgressFingerprint(rule.Destination, rule.Port, rule.Protocol))
+                    .OrderBy(rule => rule.Host, StringComparer.Ordinal)
+                    .ThenBy(rule => rule.Port)
+                    .ThenBy(rule => rule.Protocol)
+                    .ToArray(),
+            };
+            return HashFingerprint(legacyCanonical);
+        }
+
         var canonical = new
         {
             projectId,
@@ -840,18 +878,9 @@ public sealed class ProjectsConfigService(
             request.ExpectedProjectConfigRevision,
             request.ExpectedPlatformRuntimeRevision,
             ContextRevision = request.Context.Revision,
-            ModelReferences = request.Context.AvailableModelSelectionReferences.Order(StringComparer.Ordinal).ToArray(),
-            ProviderRequirements = request.Context.ProviderRequirements
-                .OrderBy(item => item.Seam)
-                .ThenBy(item => item.MeterSource, StringComparer.Ordinal)
-                .Select(item => new ProviderRequirementFingerprint(
-                    item.Seam, item.RequiredAdapterVersion, item.RequiredOptionsSchemaVersion,
-                    item.RequiredCapabilities.Order(StringComparer.Ordinal).ToArray(),
-                    item.RequiredL3L4Capabilities.Order(StringComparer.Ordinal).ToArray(),
-                    item.RequiredL7Capabilities.Order(StringComparer.Ordinal).ToArray(),
-                    item.MeterSource)).ToArray(),
-            RequiredEgress = ProjectConfigurationValidator
-                .ValidateEgressRules(request.Context.RequiredEgress)
+            ModelReferences = modelReferences,
+            ProviderRequirements = providerRequirements,
+            RequiredEgress = requiredEgress
                 .OrderBy(rule => rule.Purpose)
                 .ThenBy(rule => rule.DestinationKind)
                 .ThenBy(rule => rule.Destination, StringComparer.Ordinal)
@@ -859,9 +888,16 @@ public sealed class ProjectsConfigService(
                 .ThenBy(rule => rule.Protocol)
                 .ToArray(),
         };
+        return HashFingerprint(canonical);
+    }
+
+    private static string HashFingerprint<TCanonical>(TCanonical canonical)
+    {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(canonical, JsonOptions);
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     }
+
+    private sealed record LegacyEgressFingerprint(string Host, int Port, EgressProtocol Protocol);
 
     private sealed record ProviderRequirementFingerprint(
         ProviderSeam Seam,

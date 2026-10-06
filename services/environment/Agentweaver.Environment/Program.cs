@@ -49,10 +49,10 @@ if (!Uri.TryCreate(authority, UriKind.Absolute, out var authorityUri) ||
     authorityUri.Scheme != Uri.UriSchemeHttps)
     throw new InvalidOperationException("Environment authentication authority must use HTTPS.");
 var audience = Required(identity["Audience"], "Environment:Authentication:Audience");
-var projectsBaseAddress = RequireHttpsUri(
+var projectsBaseAddress = EnvironmentHttpTransport.RequireTrustedHttpsBaseUri(
     Required(builder.Configuration["ProjectsConfig:BaseAddress"], "ProjectsConfig:BaseAddress"),
     "ProjectsConfig:BaseAddress");
-var kubernetesBaseAddress = RequireHttpsUri(
+var kubernetesBaseAddress = EnvironmentHttpTransport.RequireTrustedHttpsBaseUri(
     builder.Configuration["Kubernetes:ApiServer"] ?? "https://kubernetes.default.svc/",
     "Kubernetes:ApiServer");
 var serviceAccountToken = builder.Configuration["Kubernetes:ServiceAccountTokenFile"] ??
@@ -83,7 +83,7 @@ builder.Services.AddHttpClient<IProjectsConfigClient, ProjectsConfigHttpClient>(
 {
     client.BaseAddress = projectsBaseAddress;
     client.Timeout = TimeSpan.FromSeconds(15);
-});
+}).ConfigurePrimaryHttpMessageHandler(EnvironmentHttpTransport.CreateRedirectDisabledHandler);
 builder.Services.AddHttpClient<KubernetesCiliumPolicyResourceStore>(client =>
 {
     client.BaseAddress = kubernetesBaseAddress;
@@ -167,14 +167,6 @@ static CiliumEgressProviderOptions ReadCiliumOptions(IConfiguration configuratio
             StringComparer.Ordinal)).Validate();
 }
 
-static Uri RequireHttpsUri(string value, string name)
-{
-    if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-        uri.Scheme != Uri.UriSchemeHttps)
-        throw new InvalidOperationException($"'{name}' must be an absolute HTTPS URI.");
-    return uri;
-}
-
 static string Required(string? value, string name) =>
     !string.IsNullOrWhiteSpace(value)
         ? value
@@ -184,7 +176,7 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
 {
     private readonly string _tokenFile;
 
-    private KubernetesServiceAccountHandler(HttpMessageHandler innerHandler, string tokenFile)
+    internal KubernetesServiceAccountHandler(HttpMessageHandler innerHandler, string tokenFile)
         : base(innerHandler) =>
         _tokenFile = tokenFile;
 
@@ -194,12 +186,11 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
             throw new InvalidOperationException("Kubernetes token and CA paths must be absolute.");
         if (!File.Exists(tokenFile) || !File.Exists(caFile))
             throw new InvalidOperationException("The projected Kubernetes service-account token and CA are required.");
+        var handler = EnvironmentHttpTransport.CreateRedirectDisabledHandler();
+        handler.ServerCertificateCustomValidationCallback = (_, certificate, chain, errors) =>
+            ValidateClusterCertificate(certificate, chain, errors, caFile);
         return new KubernetesServiceAccountHandler(
-            new HttpClientHandler
-            {
-                ServerCertificateCustomValidationCallback = (_, certificate, chain, errors) =>
-                    ValidateClusterCertificate(certificate, chain, errors, caFile)
-            },
+            handler,
             tokenFile);
     }
 
@@ -211,7 +202,13 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
         if (string.IsNullOrWhiteSpace(token) || token.Any(char.IsWhiteSpace))
             throw new HttpRequestException("The projected Kubernetes service-account token is invalid.");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (EnvironmentHttpTransport.IsRedirect(response))
+        {
+            response.Dispose();
+            throw new HttpRequestException("Kubernetes API redirects are not permitted for authenticated requests.");
+        }
+        return response;
     }
 
     private static bool ValidateClusterCertificate(

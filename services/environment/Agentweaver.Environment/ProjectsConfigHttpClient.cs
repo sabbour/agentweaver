@@ -122,6 +122,13 @@ public sealed class ProjectsConfigHttpClient(HttpClient httpClient) : IProjectsC
                 Agentweaver.Abstractions.ProjectAuthorizationContextContract.TenantSelectorHeader,
                 caller.TenantSelector);
         var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (EnvironmentHttpTransport.IsRedirect(response))
+        {
+            response.Dispose();
+            throw new ProjectsConfigApiException(
+                "projects_config_redirect_rejected",
+                "Projects & Config redirects are not permitted for authenticated requests.");
+        }
         if (!response.IsSuccessStatusCode)
         {
             var statusCode = (int)response.StatusCode;
