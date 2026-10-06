@@ -422,27 +422,27 @@ test('sampler replacement rejects an unavailable preserved initial index before 
   assert.ok(!f.externalCalls.some(call => call.args[0] === 'push'));
 });
 
-test('existing Linux workflow defaults off and selects the same source-bound Probe-only pack and protected publisher', () => {
+test('existing Linux workflow defaults off and isolates the approved sampler route from ordinary protected publication', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8');
   assert.match(workflow, /foundation_probe_sampler_replacement:[\s\S]*?default: false/);
   assert.match(workflow, /expected_probe_digest:[\s\S]*?default: ''/);
   assert.match(workflow, /args\+=\(--foundation-probe-only\); fi/);
   assert.match(workflow, /npm run release:pack -- "\$\{args\[@\]\}"/);
   assert.match(workflow, /--confirm-foundation-probe-sampler-replacement "\$GITHUB_SHA" --expected-foundation-probe-sampler-digest "\$EXPECTED_PROBE_DIGEST"/);
-  assert.match(workflow, /environment: v1-publication/);
   assert.match(workflow, /if: \$\{\{ inputs\.publish && inputs\.foundation_probe_sampler_replacement \}\}/);
   assert.ok(workflow.includes(currentProbeDigest));
   assert.equal((workflow.match(/fetch-depth: 0/g) ?? []).length, 3);
   const ordinary = workflow.slice(workflow.indexOf('\n  publish:'), workflow.indexOf('\n  publish-probe-sampler:'));
   const sampler = workflow.slice(workflow.indexOf('\n  publish-probe-sampler:'));
   assert.doesNotMatch(ordinary, /packages: write/);
+  assert.match(ordinary, /environment: v1-publication/);
   assert.match(ordinary, /inputs\.publish && !inputs\.foundation_probe_sampler_replacement/);
   assert.match(ordinary, /RELEASE_REGISTRY_PASSWORD: \$\{\{ secrets\.RELEASE_REGISTRY_PASSWORD \}\}/);
   assert.match(sampler, /packages: write/);
   assert.match(sampler, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
   assert.match(sampler, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
   assert.match(sampler, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
-  assert.match(sampler, /environment: v1-publication/);
+  assert.doesNotMatch(sampler, /\benvironment:/);
   assert.doesNotMatch(sampler, /secrets\.|RELEASE_NUGET|console\.log|echo.*TOKEN/);
 });
 

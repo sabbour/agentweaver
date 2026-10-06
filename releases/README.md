@@ -67,7 +67,12 @@ It records the pushed digest before later verification can fail.
 The existing `v1 release pack` workflow runs this path on Linux.
 Set `foundation_probe_sampler_replacement: true` and the exact `expected_probe_digest`.
 With `publish: false`, it prepares only the Probe archive and creates no claim.
-Publication requires separate user approval and the protected `v1-publication` job.
+Sampler publication requires separate user approval, the exact current digest, and the permanent single-use claim.
+The sampler-only job has no GitHub environment.
+It uses the ephemeral GitHub token with package-write permission for the fixed GHCR target.
+The token must already have write access to the existing package.
+This route does not authorize new persistent package grants.
+Ordinary publication retains the protected `v1-publication` environment.
 Use the final admitted source SHA, not the earlier sampler-only commit.
 These options do not authorize publication, deployment, consent, or fixture creation.
 
