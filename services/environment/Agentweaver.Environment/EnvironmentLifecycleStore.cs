@@ -2080,7 +2080,10 @@ public sealed class EnvironmentLifecycleStore(
                     EnvironmentWorkspaceVolumeState.Bound or
                     EnvironmentWorkspaceVolumeState.Attached =>
                 current.State,
-            EnvironmentWorkspaceVolumeOperation.Release => EnvironmentWorkspaceVolumeState.Released,
+            EnvironmentWorkspaceVolumeOperation.Release
+                when current.State is EnvironmentWorkspaceVolumeState.Requested or
+                    EnvironmentWorkspaceVolumeState.Ready =>
+                EnvironmentWorkspaceVolumeState.Released,
             _ => throw new EnvironmentLifecycleException(
                 "environment_volume_transition_invalid",
                 "The workspace-volume operation is not valid for its current owner-recorded state.")

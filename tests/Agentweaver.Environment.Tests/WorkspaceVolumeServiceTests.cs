@@ -3,6 +3,8 @@ using System.Reflection;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Agentweaver.Providers.Storage.AzureFiles;
+using Microsoft.AspNetCore.Http;
 using Npgsql;
 using Xunit;
 
@@ -31,6 +33,10 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
         Assert.True(replay.Reservation.Replayed);
         Assert.Null(replay.Completion);
         Assert.Equal(first.Completion.TargetResource, replay.CurrentVolume!.Resource);
+        Assert.Equal(
+            StatusCodes.Status200OK,
+            Assert.IsAssignableFrom<IStatusCodeHttpResult>(
+                EnvironmentEndpoints.ToWorkspaceVolumeTransitionResult(replay)).StatusCode);
         Assert.Single(setup.Provider.ProvisionRequests);
         Assert.NotNull(current);
         Assert.Equal(first.Completion.TargetResource, current.Resource);
@@ -78,6 +84,69 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
         Assert.Equal(bind.Completion.ExpectedResource, unbind.Completion.ExpectedResource);
         Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, current!.Phase);
         Assert.Equal(1, current.ResourceGeneration);
+        Assert.Empty(setup.Provider.ReleaseRequests);
+    }
+
+    [Theory]
+    [InlineData(EnvironmentWorkspaceVolumeState.Bound)]
+    [InlineData(EnvironmentWorkspaceVolumeState.Attached)]
+    public async Task ReleaseCannotDeleteABoundOrAttachedVolume(EnvironmentWorkspaceVolumeState expectedState)
+    {
+        var setup = await CreateRequestedVolumeAsync();
+        var provision = await setup.Service.ProvisionAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Provision,
+                1,
+                0,
+                "provision-release-guard"));
+        var resource = provision.Completion!.TargetResource!;
+        await setup.Service.BindAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Bind,
+                2,
+                1,
+                "bind-release-guard"));
+
+        var expectedRevision = 3;
+        if (expectedState == EnvironmentWorkspaceVolumeState.Attached)
+        {
+            var attach = await setup.Store.ReserveWorkspaceVolumeAttachAsync(
+                setup.Fence,
+                setup.Specification.VolumeId,
+                expectedRevision,
+                1,
+                0,
+                "attach-release-guard",
+                CancellationToken.None);
+            await setup.Store.CompleteWorkspaceVolumeAttachAsync(
+                attach.OperationId,
+                setup.Fence,
+                effectMayHaveApplied: true,
+                resource,
+                effectVerified: true,
+                CancellationToken.None);
+            expectedRevision++;
+        }
+
+        var exception = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            setup.Service.ReleaseAsync(
+                setup.Fence,
+                Transition(
+                    setup.Specification.VolumeId,
+                    WorkspaceVolumeTransitionKind.Release,
+                    expectedRevision,
+                    1,
+                    "release-while-in-use")));
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+
+        Assert.Equal("environment_volume_transition_invalid", exception.Code);
+        Assert.Equal(expectedState, current!.Phase);
+        Assert.Equal(resource, current.Resource);
         Assert.Empty(setup.Provider.ReleaseRequests);
     }
 
@@ -722,10 +791,150 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
         Assert.Equal(
             EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired,
             replay.Reservation.TransitionState);
+        Assert.Equal(
+            StatusCodes.Status202Accepted,
+            Assert.IsAssignableFrom<IStatusCodeHttpResult>(
+                EnvironmentEndpoints.ToWorkspaceVolumeTransitionResult(replay)).StatusCode);
         Assert.Equal(EnvironmentWorkspaceVolumeState.Requested, current!.Phase);
         Assert.Equal(0, current.ResourceGeneration);
         Assert.Null(current.Resource);
         Assert.Single(setup.Provider.ProvisionRequests);
+    }
+
+    [Fact]
+    public async Task KnownNoEffectProvisionRejectionFailsOperationAndAllowsRetry()
+    {
+        var setup = await CreateRequestedVolumeAsync();
+        setup.Provider.ProvisionFailure = new AzureFilesCsiException(
+            "capacity_exceeded",
+            "The capacity exceeds the provider limit.",
+            effectMayHaveApplied: false);
+        var request = Transition(
+            setup.Specification.VolumeId,
+            WorkspaceVolumeTransitionKind.Provision,
+            1,
+            0,
+            "provision-capacity-rejected");
+
+        var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
+            setup.Service.ProvisionAsync(setup.Fence, request));
+        var replay = await setup.Service.ProvisionAsync(setup.Fence, request);
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+
+        Assert.Equal("capacity_exceeded", exception.Code);
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Failed, replay.Reservation.TransitionState);
+        Assert.Equal(
+            StatusCodes.Status409Conflict,
+            Assert.IsAssignableFrom<IStatusCodeHttpResult>(
+                EnvironmentEndpoints.ToWorkspaceVolumeTransitionResult(replay)).StatusCode);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Requested, current!.Phase);
+        Assert.Equal(0, current.ResourceGeneration);
+        Assert.Null(current.Resource);
+
+        setup.Provider.ProvisionFailure = null;
+        var retried = await setup.Service.ProvisionAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Provision,
+                1,
+                0,
+                "provision-capacity-corrected"));
+
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, retried.Completion!.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, retried.Completion.TargetPhase);
+    }
+
+    [Fact]
+    public async Task KnownNoEffectReplacementRejectionPreservesTheCurrentGeneration()
+    {
+        var setup = await CreateRequestedVolumeAsync();
+        var provision = await setup.Service.ProvisionAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Provision,
+                1,
+                0,
+                "provision-before-rejected-replace"));
+        var resource = provision.Completion!.TargetResource!;
+        setup.Provider.ProvisionFailure = new AzureFilesCsiException(
+            "capacity_exceeded",
+            "The capacity exceeds the provider limit.",
+            effectMayHaveApplied: false);
+        var request = Transition(
+            setup.Specification.VolumeId,
+            WorkspaceVolumeTransitionKind.Replace,
+            2,
+            1,
+            "replace-capacity-rejected");
+
+        var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
+            setup.Service.ReplaceAsync(setup.Fence, request));
+        var replay = await setup.Service.ReplaceAsync(setup.Fence, request);
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+
+        Assert.Equal("capacity_exceeded", exception.Code);
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Failed, replay.Reservation.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, current!.Phase);
+        Assert.Equal(1, current.ResourceGeneration);
+        Assert.Equal(resource, current.Resource);
+        Assert.Empty(setup.Provider.ReleaseRequests);
+    }
+
+    [Fact]
+    public async Task KnownNoEffectReleaseRejectionPreservesTheReadyResourceAndAllowsRetry()
+    {
+        var setup = await CreateRequestedVolumeAsync();
+        var provision = await setup.Service.ProvisionAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Provision,
+                1,
+                0,
+                "provision-before-release-rejection"));
+        var resource = provision.Completion!.TargetResource!;
+        setup.Provider.ReleaseFailure = new AzureFilesCsiException(
+            "cluster_identity_mismatch",
+            "The Kubernetes target changed.",
+            effectMayHaveApplied: false);
+        var request = Transition(
+            setup.Specification.VolumeId,
+            WorkspaceVolumeTransitionKind.Release,
+            2,
+            1,
+            "release-target-rejected");
+
+        var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
+            setup.Service.ReleaseAsync(setup.Fence, request));
+        var replay = await setup.Service.ReleaseAsync(setup.Fence, request);
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+
+        Assert.Equal("cluster_identity_mismatch", exception.Code);
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Failed, replay.Reservation.TransitionState);
+        Assert.Equal(
+            StatusCodes.Status409Conflict,
+            Assert.IsAssignableFrom<IStatusCodeHttpResult>(
+                EnvironmentEndpoints.ToWorkspaceVolumeTransitionResult(replay)).StatusCode);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, current!.Phase);
+        Assert.Equal(resource, current.Resource);
+
+        setup.Provider.ReleaseFailure = null;
+        var retried = await setup.Service.ReleaseAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Release,
+                2,
+                1,
+                "release-target-restored"));
+
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, retried.Completion!.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Released, retried.Completion.TargetPhase);
     }
 
     [Fact]

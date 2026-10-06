@@ -48,6 +48,26 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
     }
 
     [Fact]
+    public async Task EnvironmentIdentityScopesClaimNamesAndAnnotations()
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client);
+        var firstSpec = Spec();
+        var secondSpec = Spec(environmentId: "environment-2");
+
+        var first = await provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(firstSpec, 1, "scope-1"));
+        var second = await provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(secondSpec, 1, "scope-2"));
+
+        var firstClaim = Assert.Single(client.Claims.Values, claim =>
+            claim.Annotations["agentweaver.dev/environment-id"] == "environment-1");
+        var secondClaim = Assert.Single(client.Claims.Values, claim =>
+            claim.Annotations["agentweaver.dev/environment-id"] == "environment-2");
+        Assert.NotEqual(first.Resource.ResourceId, second.Resource.ResourceId);
+        Assert.NotEqual(firstClaim.Name, secondClaim.Name);
+        Assert.Equal(2, client.EnsureClaimCalls);
+    }
+
+    [Fact]
     public async Task ReplacementGenerationUsesANewClaimAndOldGenerationCannotReleaseIt()
     {
         var client = new FakeAzureFilesCsiClient();
@@ -58,9 +78,9 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         var replacement = await provider.ProvisionAsync(
             new WorkspaceVolumeProvisionRequest(spec, 2, "provision-generation-2"));
         var firstName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
-            spec.ProjectId, spec.VolumeId, first.Resource.Generation);
+            spec.ProjectId, spec.VolumeId, first.Resource.Generation, spec.EnvironmentId);
         var replacementName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
-            spec.ProjectId, spec.VolumeId, replacement.Resource.Generation);
+            spec.ProjectId, spec.VolumeId, replacement.Resource.Generation, spec.EnvironmentId);
         var firstKey = $"{Options.Namespace}/{firstName}";
         var replacementKey = $"{Options.Namespace}/{replacementName}";
 
@@ -116,6 +136,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(Spec(), 1, "provision-3")));
 
         Assert.Equal("mount_options_invalid", exception.Code);
+        Assert.False(exception.EffectMayHaveApplied);
         Assert.Equal(0, client.EnsureClaimCalls);
     }
 
@@ -134,6 +155,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
 
         Assert.Equal("consistency_unsupported", consistency.Code);
         Assert.Equal("capacity_exceeded", capacity.Code);
+        Assert.False(consistency.EffectMayHaveApplied);
+        Assert.False(capacity.EffectMayHaveApplied);
         Assert.Equal(0, client.EnsureClaimCalls);
     }
 
@@ -148,6 +171,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
                 Spec(storageClass: "other-storage-class"), 1, "provision-storage-class-mismatch")));
 
         Assert.Equal("storage_class_mismatch", exception.Code);
+        Assert.False(exception.EffectMayHaveApplied);
         Assert.Equal(0, client.GetStorageClassCalls);
         Assert.Equal(0, client.EnsureClaimCalls);
     }
@@ -215,9 +239,9 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             deleted, deletedResource, WorkspaceVolumeReclaimPolicy.Delete, "release-deleted"));
 
         var retainedName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
-            retained.ProjectId, retained.VolumeId, 1);
+            retained.ProjectId, retained.VolumeId, 1, retained.EnvironmentId);
         var deletedName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
-            deleted.ProjectId, deleted.VolumeId, 1);
+            deleted.ProjectId, deleted.VolumeId, 1, deleted.EnvironmentId);
         Assert.Contains($"{Options.Namespace}/{retainedName}", client.Claims.Keys);
         Assert.Equal("Retain", client.PersistentVolumes[client.Claims[$"{Options.Namespace}/{retainedName}"].VolumeName!]
             .ReclaimPolicy);
@@ -271,7 +295,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
 
         Assert.Equal("claim_release_unconfirmed", exception.Code);
         var pendingClaimName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
-            "project-1", "volume-1", 1);
+            "project-1", "volume-1", 1, "environment-1");
         Assert.Contains($"{Options.Namespace}/{pendingClaimName}", pendingClient.Claims.Keys);
     }
 
@@ -284,7 +308,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         var resource = await provider.ProvisionAsync(
             new WorkspaceVolumeProvisionRequest(spec, 1, "provision-pv-proof"));
         var request = ReleaseRequest(spec, resource, WorkspaceVolumeReclaimPolicy.Delete, "release-pv-proof");
-        var claimName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(spec.ProjectId, spec.VolumeId, 1);
+        var claimName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
+            spec.ProjectId, spec.VolumeId, 1, spec.EnvironmentId);
         var claimKey = $"{Options.Namespace}/{claimName}";
         client.Claims.Remove(claimKey);
 
@@ -305,7 +330,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         var replacementRequest = ReleaseRequest(
             spec, replacementResource, WorkspaceVolumeReclaimPolicy.Delete, "release-pv-uid-proof");
         var replacementClaim = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
-            spec.ProjectId, spec.VolumeId, 1);
+            spec.ProjectId, spec.VolumeId, 1, spec.EnvironmentId);
         replacementClient.Claims.Remove($"{Options.Namespace}/{replacementClaim}");
         var replacementPvName = replacementResource.ProviderBinding.ReleaseDescriptor
             .GetProperty("persistentVolumeName").GetString()!;
@@ -345,6 +370,26 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
     }
 
     [Fact]
+    public async Task ReleaseRefusesAChangedKubernetesTargetBeforeReadingResources()
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client);
+        var spec = Spec(reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete);
+        var resource = await provider.ProvisionAsync(
+            new WorkspaceVolumeProvisionRequest(spec, 1, "provision-target-pinned"));
+        var request = ReleaseRequest(spec, resource, WorkspaceVolumeReclaimPolicy.Delete, "release-target-pinned");
+        var getClaimCalls = client.GetClaimCalls;
+        client.ClusterIdentity = "https://different-kubernetes.example";
+
+        var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() => provider.ReleaseAsync(request));
+
+        Assert.Equal("cluster_identity_mismatch", exception.Code);
+        Assert.False(exception.EffectMayHaveApplied);
+        Assert.Equal(getClaimCalls, client.GetClaimCalls);
+        Assert.Empty(client.DeletedClaims);
+    }
+
+    [Fact]
     public async Task RetainReleaseReportsAnAlreadyAbsentClaimWithoutDeleting()
     {
         var client = new FakeAzureFilesCsiClient();
@@ -353,7 +398,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         var resource = await provider.ProvisionAsync(
             new WorkspaceVolumeProvisionRequest(spec, 1, "provision-retained-absent"));
         var claimName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
-            spec.ProjectId, spec.VolumeId, 1);
+            spec.ProjectId, spec.VolumeId, 1, spec.EnvironmentId);
         client.Claims.Remove($"{Options.Namespace}/{claimName}");
 
         var receipt = await provider.ReleaseAsync(ReleaseRequest(
@@ -397,7 +442,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         var client = new FakeAzureFilesCsiClient();
         var provider = CreateProvider(client);
         var resource = await provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(Spec(), 1, "provision-8"));
-        var claimName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName("project-1", "volume-1", 1);
+        var claimName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
+            "project-1", "volume-1", 1, "environment-1");
         var claimKey = $"{Options.Namespace}/{claimName}";
         client.Claims[claimKey] = client.Claims[claimKey] with
         {
@@ -487,6 +533,20 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
     }
 
     [Fact]
+    public void KubernetesClusterIdentityIsStableAndDoesNotExposeTheApiAddress()
+    {
+        using var first = new HttpClient { BaseAddress = new Uri("https://Kubernetes.example/") };
+        using var equivalent = new HttpClient { BaseAddress = new Uri("https://kubernetes.example") };
+        using var other = new HttpClient { BaseAddress = new Uri("https://other-kubernetes.example/") };
+
+        var identity = new KubernetesAzureFilesCsiClient(first).ClusterIdentity;
+
+        Assert.Equal(identity, new KubernetesAzureFilesCsiClient(equivalent).ClusterIdentity);
+        Assert.NotEqual(identity, new KubernetesAzureFilesCsiClient(other).ClusterIdentity);
+        Assert.DoesNotContain("kubernetes.example", identity, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task KubernetesClientCreatesAnOwnedPvcWithoutCredentialValues()
     {
         var request = new AzureFilesClaimRequest(
@@ -507,12 +567,18 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             return Task.FromResult(JsonResponse(HttpStatusCode.Created, ClaimJson(request, "claim-uid-4", "Pending")));
         });
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://kubernetes.example/") };
+        request = request with { EnvironmentId = "environment-4" };
         var claim = await new KubernetesAzureFilesCsiClient(httpClient).EnsureClaimAsync(request);
 
         Assert.Equal("Pending", claim.Phase);
         Assert.Equal("4", claim.Annotations["agentweaver.dev/generation"]);
+        Assert.Equal("environment-4", claim.Annotations["agentweaver.dev/environment-id"]);
         Assert.EndsWith("/api/v1/namespaces/agentweaver/persistentvolumeclaims", handler.RequestPath);
         using var body = JsonDocument.Parse(handler.RequestBody!);
+        Assert.Equal(
+            "environment-4",
+            body.RootElement.GetProperty("metadata").GetProperty("annotations")
+                .GetProperty("agentweaver.dev/environment-id").GetString());
         var spec = body.RootElement.GetProperty("spec");
         Assert.Equal("azure-files-premium", spec.GetProperty("storageClassName").GetString());
         Assert.Equal("ReadWriteMany", spec.GetProperty("accessModes")[0].GetString());
@@ -636,6 +702,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         WorkspaceVolumeReclaimPolicy reclaimPolicy = WorkspaceVolumeReclaimPolicy.Retain,
         WorkspaceVolumeOwnerDeletionPolicy ownerDeletionPolicy = WorkspaceVolumeOwnerDeletionPolicy.Delete,
         WorkspaceVolumeBindingMode bindingMode = WorkspaceVolumeBindingMode.Environment,
+        string environmentId = "environment-1",
         string? storageClass = null)
     {
         var isShared = bindingMode == WorkspaceVolumeBindingMode.Shared;
@@ -645,7 +712,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             new WorkspaceVolumeOwner(
                 isShared ? WorkspaceVolumeOwnerKind.Team : WorkspaceVolumeOwnerKind.Run,
                 isShared ? "team-1" : "run-1"),
-            isShared ? null : "environment-1",
+            isShared ? null : environmentId,
             bindingMode,
             WorkspaceVolumeAccessMode.ReadWriteMany,
             capacityGiB,
@@ -681,15 +748,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
                 @namespace = request.Namespace,
                 name = request.Name,
                 uid,
-                annotations = new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["agentweaver.dev/project-id"] = request.ProjectId,
-                    ["agentweaver.dev/volume-id"] = request.VolumeId,
-                    ["agentweaver.dev/generation"] = request.ResourceGeneration.ToString(
-                        System.Globalization.CultureInfo.InvariantCulture),
-                    ["agentweaver.dev/owner-kind"] = request.Owner.Kind.ToString(),
-                    ["agentweaver.dev/owner-id"] = request.Owner.Id
-                }
+                annotations = CreateAnnotations(request)
             },
             spec = new
             {
@@ -710,6 +769,22 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             status = new { phase }
         });
 
+    private static Dictionary<string, string> CreateAnnotations(AzureFilesClaimRequest request)
+    {
+        var annotations = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["agentweaver.dev/project-id"] = request.ProjectId,
+            ["agentweaver.dev/volume-id"] = request.VolumeId,
+            ["agentweaver.dev/generation"] = request.ResourceGeneration.ToString(
+                System.Globalization.CultureInfo.InvariantCulture),
+            ["agentweaver.dev/owner-kind"] = request.Owner.Kind.ToString(),
+            ["agentweaver.dev/owner-id"] = request.Owner.Id
+        };
+        if (request.EnvironmentId is not null)
+            annotations["agentweaver.dev/environment-id"] = request.EnvironmentId;
+        return annotations;
+    }
+
     private static HttpResponseMessage JsonResponse(HttpStatusCode status, string json) =>
         new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
 
@@ -719,6 +794,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         private readonly Dictionary<string, int> _pendingReads = new(StringComparer.Ordinal);
         private int _nextUid = 1;
 
+        public string ClusterIdentity { get; set; } = "https://kubernetes.example";
         public AzureFilesStorageClassSnapshot? StorageClass { get; set; } =
             new(
                 Options.StorageClassName,
@@ -858,6 +934,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
                 System.Globalization.CultureInfo.InvariantCulture);
             annotations["agentweaver.dev/owner-kind"] = request.Owner.Kind.ToString();
             annotations["agentweaver.dev/owner-id"] = request.Owner.Id;
+            if (request.EnvironmentId is not null)
+                annotations["agentweaver.dev/environment-id"] = request.EnvironmentId;
             return new AzureFilesClaimSnapshot(
                 request.Namespace,
                 request.Name,

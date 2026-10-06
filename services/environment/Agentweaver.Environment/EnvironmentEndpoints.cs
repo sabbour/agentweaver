@@ -260,11 +260,31 @@ public static class EnvironmentEndpoints
                 var result = await execute(
                     manager, caller!, projectId, runId, environmentId, volumeId, request, cancellationToken)
                     .ConfigureAwait(false);
-                return result.CleanupPending
-                    ? Results.Json(result, statusCode: StatusCodes.Status202Accepted)
-                    : Results.Ok(result);
+                return ToWorkspaceVolumeTransitionResult(result);
             }, cancellationToken).ConfigureAwait(false);
         });
+    }
+
+    internal static IResult ToWorkspaceVolumeTransitionResult(WorkspaceVolumeLifecycleResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (result.CleanupPending)
+            return Results.Json(result, statusCode: StatusCodes.Status202Accepted);
+
+        var state = result.Completion?.TransitionState ?? result.Reservation.TransitionState;
+        return state switch
+        {
+            EnvironmentWorkspaceVolumeTransitionState.Completed => Results.Ok(result),
+            EnvironmentWorkspaceVolumeTransitionState.Failed or
+                EnvironmentWorkspaceVolumeTransitionState.Stale =>
+                Results.Conflict(new
+                {
+                    code = "workspace_volume_transition_not_completed",
+                    message = "Refresh the owner state and retry with a new idempotency key.",
+                    transitionState = state
+                }),
+            _ => Results.Json(result, statusCode: StatusCodes.Status202Accepted)
+        };
     }
 
     private static async Task<IResult> ExecuteWorkspaceVolumeApiAsync(
@@ -304,11 +324,9 @@ public static class EnvironmentEndpoints
         {
             return Results.Conflict(new { code = "workspace_volume_state_conflict", message = exception.Message });
         }
-        catch (AzureFilesCsiException)
+        catch (AzureFilesCsiException exception)
         {
-            return Results.Json(
-                new { code = "storage_provider_unavailable" },
-                statusCode: StatusCodes.Status503ServiceUnavailable);
+            return ToAzureFilesCsiErrorResult(exception);
         }
         catch (AzureFilesKubernetesApiException)
         {
@@ -328,6 +346,21 @@ public static class EnvironmentEndpoints
                 new { code = "upstream_timeout" },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
+    }
+
+    internal static IResult ToAzureFilesCsiErrorResult(AzureFilesCsiException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var statusCode = exception.Code is
+                "capacity_exceeded" or
+                "consistency_unsupported" or
+                "storage_class_mismatch" or
+                "storage_class_missing" or
+                "storage_class_invalid" or
+                "mount_options_invalid"
+                    ? StatusCodes.Status422UnprocessableEntity
+                    : StatusCodes.Status503ServiceUnavailable;
+        return Results.Json(new { code = exception.Code }, statusCode: statusCode);
     }
 
     private static bool TryReadCaller(HttpContext context, out CurrentCallerRequest? caller)
