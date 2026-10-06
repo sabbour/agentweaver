@@ -200,7 +200,8 @@ public sealed class WorkspaceVolumeService
                 false,
                 token),
             cancellationToken,
-            authorizationAndFenceCheck).ConfigureAwait(false);
+            authorizationAndFenceCheck,
+            token => FailReplaceAsync(reservation, environmentFence, token)).ConfigureAwait(false);
 
         // Replacement is committed before cleanup, so cleanup failure must not undo its new generation.
         await CheckAuthorizationBeforeOwnerCommitAsync(
@@ -301,7 +302,8 @@ public sealed class WorkspaceVolumeService
                 false,
                 token),
             cancellationToken,
-            authorizationAndFenceCheck).ConfigureAwait(false);
+            authorizationAndFenceCheck,
+            token => FailProvisionAsync(reservation, environmentFence, token)).ConfigureAwait(false);
 
         // Record a successful provider effect even if the caller cancels afterward.
         await CheckAuthorizationBeforeOwnerCommitAsync(
@@ -408,13 +410,13 @@ public sealed class WorkspaceVolumeService
             .ConfigureAwait(false);
         var reservation = await ReserveAsync(
             environmentFence, request, snapshot, cancellationToken).ConfigureAwait(false);
+        var releaseReconciliation =
+            reservation.Replayed &&
+            reservation.Operation == EnvironmentWorkspaceVolumeOperation.Release &&
+            reservation.TransitionState == EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
         if (reservation.Replayed ||
             reservation.TransitionState != EnvironmentWorkspaceVolumeTransitionState.Reserved)
         {
-            var releaseReconciliation =
-                reservation.Replayed &&
-                reservation.Operation == EnvironmentWorkspaceVolumeOperation.Release &&
-                reservation.TransitionState == EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
             if (!releaseReconciliation)
                 return await ReplayedAsync(
                     environmentFence, request.VolumeId, reservation, cancellationToken).ConfigureAwait(false);
@@ -466,7 +468,11 @@ public sealed class WorkspaceVolumeService
             token => _lifecycleStore.CompleteWorkspaceVolumeReleaseAsync(
                 reservation.OperationId, environmentFence, true, false, token),
             cancellationToken,
-            authorizationAndFenceCheck).ConfigureAwait(false);
+            authorizationAndFenceCheck,
+            releaseReconciliation
+                ? null
+                : token => _lifecycleStore.CompleteWorkspaceVolumeReleaseAsync(
+                    reservation.OperationId, environmentFence, false, false, token)).ConfigureAwait(false);
 
         // Record a successful provider effect even if the caller cancels afterward.
         await CheckAuthorizationBeforeOwnerCommitAsync(
@@ -726,6 +732,20 @@ public sealed class WorkspaceVolumeService
         _lifecycleStore.CompleteWorkspaceVolumeReplaceAsync(
             reservation.OperationId, fence, true, resource, providerBinding, verified, cancellationToken);
 
+    private Task<EnvironmentWorkspaceVolumeTransitionResult> FailProvisionAsync(
+        EnvironmentWorkspaceVolumeTransitionReservation reservation,
+        EnvironmentGenerationFence fence,
+        CancellationToken cancellationToken) =>
+        _lifecycleStore.CompleteWorkspaceVolumeProvisionAsync(
+            reservation.OperationId, fence, false, null, null, false, cancellationToken);
+
+    private Task<EnvironmentWorkspaceVolumeTransitionResult> FailReplaceAsync(
+        EnvironmentWorkspaceVolumeTransitionReservation reservation,
+        EnvironmentGenerationFence fence,
+        CancellationToken cancellationToken) =>
+        _lifecycleStore.CompleteWorkspaceVolumeReplaceAsync(
+            reservation.OperationId, fence, false, null, null, false, cancellationToken);
+
     private Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteMetadataTransitionAsync(
         WorkspaceVolumeTransitionKind operation,
         EnvironmentWorkspaceVolumeTransitionReservation reservation,
@@ -893,7 +913,8 @@ public sealed class WorkspaceVolumeService
         Func<CancellationToken, Task<T>> effect,
         Func<CancellationToken, Task<EnvironmentWorkspaceVolumeTransitionResult>> markUnverified,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? beforeEffectCheck)
+        Func<CancellationToken, Task>? beforeEffectCheck,
+        Func<CancellationToken, Task<EnvironmentWorkspaceVolumeTransitionResult>>? markNoEffect = null)
     {
         var effectStarted = false;
         try
@@ -906,6 +927,35 @@ public sealed class WorkspaceVolumeService
         {
             if (!effectStarted)
                 ExceptionDispatchInfo.Capture(effectFailure).Throw();
+
+            if (effectFailure is AzureFilesCsiException { EffectMayHaveApplied: false } &&
+                markNoEffect is not null)
+            {
+                EnvironmentWorkspaceVolumeTransitionResult failed;
+                try
+                {
+                    failed = await markNoEffect(CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception failureRecordException)
+                {
+                    throw new AggregateException(
+                        "The provider rejected the request before applying an effect, but the owner transition could not be recorded as failed.",
+                        effectFailure,
+                        failureRecordException);
+                }
+
+                if (failed.TransitionState is not (
+                    EnvironmentWorkspaceVolumeTransitionState.Failed or
+                    EnvironmentWorkspaceVolumeTransitionState.Stale))
+                    throw new AggregateException(
+                        "The provider rejected the request before applying an effect, but the owner transition was not safely failed.",
+                        effectFailure,
+                        new InvalidOperationException(
+                            $"The owner returned transition state {failed.TransitionState}."));
+
+                ExceptionDispatchInfo.Capture(effectFailure).Throw();
+                throw;
+            }
 
             EnvironmentWorkspaceVolumeTransitionResult reconciliation;
             try

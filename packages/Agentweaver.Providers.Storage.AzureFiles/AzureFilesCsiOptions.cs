@@ -95,7 +95,10 @@ public sealed record AzureFilesClaimRequest(
     WorkspaceVolumeOwner Owner,
     string StorageClassName,
     long CapacityGiB,
-    WorkspaceVolumeAccessMode AccessMode);
+    WorkspaceVolumeAccessMode AccessMode)
+{
+    public string? EnvironmentId { get; init; }
+}
 
 public sealed record AzureFilesClaimSnapshot(
     string Namespace,
@@ -119,6 +122,8 @@ public sealed record AzureFilesPersistentVolumeSnapshot(
 
 public interface IAzureFilesCsiClient
 {
+    string ClusterIdentity { get; }
+
     Task<AzureFilesStorageClassSnapshot?> GetStorageClassAsync(
         string name,
         CancellationToken cancellationToken = default);
@@ -149,9 +154,20 @@ public interface IAzureFilesCsiClient
         CancellationToken cancellationToken = default);
 }
 
-public sealed class AzureFilesCsiException(string code, string message) : Exception(message)
+public sealed class AzureFilesCsiException : Exception
 {
-    public string Code { get; } = code;
+    public AzureFilesCsiException(
+        string code,
+        string message,
+        bool effectMayHaveApplied = true,
+        Exception? innerException = null) : base(message, innerException)
+    {
+        Code = code;
+        EffectMayHaveApplied = effectMayHaveApplied;
+    }
+
+    public string Code { get; }
+    public bool EffectMayHaveApplied { get; }
 }
 
 public sealed class AzureFilesKubernetesApiException(

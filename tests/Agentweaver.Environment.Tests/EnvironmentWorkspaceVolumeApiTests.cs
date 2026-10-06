@@ -5,6 +5,7 @@ using Agentweaver.Environment;
 using Agentweaver.Providers.Storage.AzureFiles;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -12,6 +13,34 @@ namespace Agentweaver.Environment.Tests;
 
 public sealed class EnvironmentWorkspaceVolumeApiTests
 {
+    [Theory]
+    [InlineData("capacity_exceeded")]
+    [InlineData("consistency_unsupported")]
+    [InlineData("storage_class_mismatch")]
+    [InlineData("storage_class_missing")]
+    [InlineData("storage_class_invalid")]
+    [InlineData("mount_options_invalid")]
+    public void DeterministicAzureFilesRejectionsReturnUnprocessableEntity(string code)
+    {
+        var result = EnvironmentEndpoints.ToAzureFilesCsiErrorResult(
+            new AzureFilesCsiException(code, "preflight rejection", effectMayHaveApplied: false));
+
+        Assert.Equal(
+            StatusCodes.Status422UnprocessableEntity,
+            Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+    }
+
+    [Fact]
+    public void TransientAzureFilesFailuresRemainServiceUnavailable()
+    {
+        var result = EnvironmentEndpoints.ToAzureFilesCsiErrorResult(
+            new AzureFilesCsiException("storage_class_unavailable", "Kubernetes API unavailable."));
+
+        Assert.Equal(
+            StatusCodes.Status503ServiceUnavailable,
+            Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+    }
+
     [Fact]
     public void WorkspaceVolumeRoutesRequireAuthenticationAndExcludeUngatedOperations()
     {

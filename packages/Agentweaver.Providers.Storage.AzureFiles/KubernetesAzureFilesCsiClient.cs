@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using System.Numerics;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 
@@ -19,6 +21,16 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
             !string.IsNullOrEmpty(_httpClient.BaseAddress.Query) ||
             !string.IsNullOrEmpty(_httpClient.BaseAddress.Fragment))
             throw new ArgumentException("The Kubernetes API client requires an HTTPS base address.", nameof(httpClient));
+    }
+
+    public string ClusterIdentity
+    {
+        get
+        {
+            var target = _httpClient.BaseAddress!.GetLeftPart(UriPartial.Path).TrimEnd('/');
+            var digest = SHA256.HashData(Encoding.UTF8.GetBytes(target));
+            return Convert.ToHexString(digest).ToLowerInvariant();
+        }
     }
 
     public async Task<AzureFilesStorageClassSnapshot?> GetStorageClassAsync(
@@ -50,6 +62,18 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
         if (existing is not null)
             return existing;
 
+        var annotations = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["agentweaver.dev/project-id"] = request.ProjectId,
+            ["agentweaver.dev/volume-id"] = request.VolumeId,
+            ["agentweaver.dev/generation"] = request.ResourceGeneration.ToString(
+                System.Globalization.CultureInfo.InvariantCulture),
+            ["agentweaver.dev/owner-kind"] = request.Owner.Kind.ToString(),
+            ["agentweaver.dev/owner-id"] = request.Owner.Id
+        };
+        if (request.EnvironmentId is not null)
+            annotations["agentweaver.dev/environment-id"] = request.EnvironmentId;
+
         var payload = JsonSerializer.Serialize(new
         {
             apiVersion = "v1",
@@ -58,15 +82,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
             {
                 name = request.Name,
                 @namespace = request.Namespace,
-                annotations = new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["agentweaver.dev/project-id"] = request.ProjectId,
-                    ["agentweaver.dev/volume-id"] = request.VolumeId,
-                    ["agentweaver.dev/generation"] = request.ResourceGeneration.ToString(
-                        System.Globalization.CultureInfo.InvariantCulture),
-                    ["agentweaver.dev/owner-kind"] = request.Owner.Kind.ToString(),
-                    ["agentweaver.dev/owner-id"] = request.Owner.Id
-                }
+                annotations
             },
             spec = new
             {

@@ -87,12 +87,14 @@ contracts are described in the [journal service reference](events-sessions.md).
 ### Workspace-volume lifecycle
 
 Environment owns each volume's status and separate transition, resource, and data generations. Azure Files
-claims are generation-scoped; the owner pins the adapter/options snapshot and exact claim/PV release
-descriptor. Replace pins the verified target and records cleanup for the exact old resource in one owner
+claims are scoped by Environment identity and resource generation; the owner pins the adapter/options
+snapshot, Kubernetes target identity, and exact claim/PV release descriptor. Replace pins the verified target and records cleanup for the exact old resource in one owner
 transaction. A current-fence lease retries that cleanup with the original binding. Retained resources and
 shared Delete work without an authoritative reference registry remain blocked; a `Released` receipt requires
 the exact claim and saved PV to be absent. This confirms Kubernetes control-plane removal, not Azure Files
-data erasure. Azure Files does not claim Sandbox mounting or durable flush.
+data erasure. Release is rejected while the volume is bound or attached. Known preflight rejections leave the
+owner record safely retryable; uncertain provider effects remain reconcilable. Azure Files does not claim
+Sandbox mounting or durable flush.
 
 The repository does not contain the AgentHost, product
 API, web UI, product MCP server, or application router. It does not contain a published
