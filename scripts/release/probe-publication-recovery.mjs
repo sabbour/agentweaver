@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { runPublicationCommand } from './command.mjs';
 import { diagnosticPins as pins, verifyFrozenProbeArtifact, verifyFrozenLoadedImage } from './probe-publication-diagnostic.mjs';
 
-export const recoveryClaimNamespace = 'agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-attempt-1';
+export const recoveryClaimNamespace = 'agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-attempt-2';
 const helperNamespace = sha => `agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-helper/${sha}`;
 const repository = 'ghcr.io/sabbour/agentweaver-foundation-probe';
 const target = `${repository}:0.0.0`;

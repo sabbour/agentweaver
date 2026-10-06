@@ -42,6 +42,8 @@ function fixture(t) {
     'agentweaver-publication/initial-foundation-probe-0.0.0-replacement',
     'agentweaver-publication/foundation-probe-0.0.0-sampler-replacement',
     `agentweaver-publication/${pins.sourceSha}`,
+    'agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-attempt-1',
+    'agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-helper/3b73ddbe556133a7847f048f4a2e6524cb3430b2',
   ]) for (const name of ['claim', 'result']) {
     const ref = `refs/tags/${namespace}/${name}`;
     refs.set(ref, { ref, object: { type: 'tag', sha: 'b'.repeat(40) } });
