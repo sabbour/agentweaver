@@ -206,7 +206,6 @@ builder.Services
                     ?? throw new InvalidOperationException("The external identity provider did not return a subject claim.");
                 var displayName = principal.FindFirst(ClaimTypes.Name)?.Value;
                 var email = principal.FindFirst(ClaimTypes.Email)?.Value;
-                var authorizationContext = IdentityAuthorizationContext.FromValidatedExternalPrincipal(principal);
 
                 var provisioner = context.HttpContext.RequestServices.GetRequiredService<BrokerUserProvisioner>();
                 var user = await provisioner.ProvisionAsync(
@@ -215,9 +214,6 @@ builder.Services
 
                 var identity = new ClaimsIdentity(IdentityBrokerEndpoints.LocalCookieScheme);
                 identity.AddClaim(new Claim(Claims.Subject, user.Id.ToString()));
-                if (authorizationContext is not null)
-                    foreach (var claim in authorizationContext.ToClaims())
-                        identity.AddClaim(claim);
                 var localPrincipal = new ClaimsPrincipal(identity);
 
                 context.Principal = localPrincipal;

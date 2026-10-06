@@ -10,13 +10,82 @@ public sealed class ProjectRecord
 {
     public required string ProjectId { get; set; }
     public required string TenantId { get; set; }
-    public required string OwnerActorId { get; set; }
+    public required string CreatedByActorId { get; set; }
     public required string Name { get; set; }
     public ProjectLifecycleState State { get; set; }
     public long Revision { get; set; }
     public long ConfigurationRevision { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public enum ProjectAuthorityRecordState
+{
+    Active,
+    Revoked
+}
+
+public enum ProjectAuthorityResourceType
+{
+    Platform,
+    Tenant,
+    Project
+}
+
+public enum ProjectAuthorityRole
+{
+    PlatformAdmin,
+    TenantAdmin,
+    Owner,
+    Contributor,
+    Viewer,
+    Orchestrator
+}
+
+public sealed class ProjectTenantMembershipRecord
+{
+    public Guid MembershipId { get; set; }
+    public required string Issuer { get; set; }
+    public required string Subject { get; set; }
+    public required string TenantId { get; set; }
+    public ProjectAuthorityRecordState State { get; set; }
+    public long Revision { get; set; }
+    public required string GrantedBy { get; set; }
+    public DateTimeOffset GrantedAt { get; set; }
+    public string? RevokedBy { get; set; }
+    public DateTimeOffset? RevokedAt { get; set; }
+}
+
+public sealed class ProjectRoleAssignmentRecord
+{
+    public Guid AssignmentId { get; set; }
+    public Guid MembershipId { get; set; }
+    public ProjectAuthorityResourceType ResourceType { get; set; }
+    public required string ResourceId { get; set; }
+    public ProjectAuthorityRole Role { get; set; }
+    public ProjectAuthorityRecordState State { get; set; }
+    public long Revision { get; set; }
+    public required string GrantedBy { get; set; }
+    public DateTimeOffset GrantedAt { get; set; }
+    public string? RevokedBy { get; set; }
+    public DateTimeOffset? RevokedAt { get; set; }
+}
+
+public sealed class ProjectAuthorityAuditRecord
+{
+    public Guid EventId { get; set; }
+    public required string EventType { get; set; }
+    public Guid MembershipId { get; set; }
+    public Guid? AssignmentId { get; set; }
+    public required string Issuer { get; set; }
+    public required string Subject { get; set; }
+    public required string TenantId { get; set; }
+    public ProjectAuthorityResourceType? ResourceType { get; set; }
+    public string? ResourceId { get; set; }
+    public ProjectAuthorityRole? Role { get; set; }
+    public long Revision { get; set; }
+    public required string Actor { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
 }
 
 public sealed class ProjectConfigurationRevisionRecord

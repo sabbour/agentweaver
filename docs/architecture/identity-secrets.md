@@ -6,7 +6,7 @@ The broker accepts an external OIDC provider. It validates the upstream issuer, 
 
 OAuth authorization codes require registered clients, exact redirect URIs, registered scopes, and S256 PKCE. Consent requires the local cookie and antiforgery token. Refresh-token replay revokes the authorization and token family.
 
-After upstream OIDC validation, the broker maps exactly one `tid` claim to `tenant_id` and copies only the recognized `platform_admin` and `orchestrator` values from signed role claims. It puts this authorization context in the protected local cookie and broker-signed access token, not the identity token. Missing, invalid, or ambiguous tenant claims produce no context; unknown roles are omitted. OAuth scopes and resources remain separate client permissions and audiences.
+After upstream OIDC validation, the broker creates a local subject and issues access tokens with registered OAuth scopes and resources. It does not forward upstream tenant or role claims and does not assign application roles. Resource services resolve the validated issuer and local `sub` against their own active membership and role records; token claims and tenant selectors cannot create authority. Grant-validated `project_id` and `run_id` are included only for tokens bound to that exact project and run.
 
 ```mermaid
 sequenceDiagram
@@ -15,12 +15,12 @@ sequenceDiagram
     participant Broker as Identity Broker
     participant API as Resource API
     User->>IdP: Authenticate
-    IdP-->>Broker: Validated identity claims (tid, roles)
+    IdP-->>Broker: Validated upstream identity
     Broker->>Broker: Replace upstream subject with local broker subject
-    Broker->>Broker: Map unique tid and allowlisted roles
-    Broker-->>API: Signed access token (sub, tenant_id, role, audience)
+    Broker->>Broker: Apply registered scopes and resource audience
+    Broker-->>API: Signed access token (sub, scope, audience, optional project/run binding)
     API->>API: Validate issuer, signature, lifetime, and audience
-    API->>API: Reject missing or ambiguous tenant context
+    API->>API: Resolve current membership and roles in its owned authority store
 ```
 
 <figure class="aw-diagram" tabindex="0">
@@ -31,7 +31,7 @@ sequenceDiagram
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.drawio'">Open editable draw.io source</a></p>
 
-The broker issues `project_id` and `run_id` claims only after it finds an active grant for the authenticated local user. Token exchange and refresh repeat that binding check.
+The broker issues `project_id` and `run_id` claims only after it finds an active grant for the authenticated local user. Token exchange and refresh repeat that binding check. These claims constrain a request to the signed project/run; they do not grant a project role. Projects & Config owns its issuer-and-subject memberships, resource-role assignments, and immutable authorization audit in `projects_config`. Its runtime database principal can read but cannot insert, update, or delete those records; provisioning and revocation use a separate privileged source path.
 
 `POST /secrets/redeem` accepts a `SecretRef` identifier and exact version, purpose, and run ID. The bearer token supplies actor, project, and run claims. The broker does not accept caller-supplied identity claims.
 

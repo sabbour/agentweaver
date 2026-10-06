@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Security.Claims;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
 using Microsoft.AspNetCore.Http;
@@ -99,30 +98,6 @@ public sealed class ProjectConfigurationValidatorTests
                 AgentCharters = ImmutableArray.CreateRange(new ProjectAgentCharter[] { null! }),
             }));
         Assert.Equal(StatusCodes.Status400BadRequest, charterError.StatusCode);
-    }
-
-    [Fact]
-    public void CallerRequiresExactlyOneAuthenticatedSubjectAndTenant()
-    {
-        var principal = new ClaimsPrincipal(new ClaimsIdentity(
-        [
-            new Claim("sub", "actor-1"),
-            new Claim("tenant_id", "tenant-1"),
-            new Claim("role", ProjectCaller.OrchestratorRole),
-        ], "test"));
-        var caller = ProjectCaller.FromPrincipal(principal);
-        Assert.Equal("actor-1", caller.ActorId);
-        Assert.Equal("tenant-1", caller.TenantId);
-        Assert.Contains(ProjectCaller.OrchestratorRole, caller.Roles);
-
-        var duplicateSubject = new ClaimsPrincipal(new ClaimsIdentity(
-        [
-            new Claim("sub", "actor-1"),
-            new Claim("sub", "actor-2"),
-            new Claim("tenant_id", "tenant-1"),
-        ], "test"));
-        Assert.Equal(StatusCodes.Status403Forbidden,
-            Assert.Throws<ProjectConfigException>(() => ProjectCaller.FromPrincipal(duplicateSubject)).StatusCode);
     }
 
     [Fact]

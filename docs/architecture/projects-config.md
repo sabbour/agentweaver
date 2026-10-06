@@ -10,7 +10,7 @@ sequenceDiagram
     participant P as Provider catalog
     participant DB as PostgreSQL
     O->>C: Accept run ID, expected revisions, immutable context
-    C->>DB: Authorize tenant; lock run ID and project/platform heads
+    C->>DB: Recheck active membership and Orchestrator role; lock run ID and project/platform heads
     DB-->>C: Project configuration and platform defaults at expected revisions
     C->>C: Select project model or platform default; fail closed if unavailable
     C->>P: Resolve allowed provider candidates and capabilities
@@ -24,14 +24,14 @@ sequenceDiagram
 
 ## API surface
 
-All routes require a validated bearer token with exactly one `sub` and `tenant_id` claim. Project management is owner-scoped; a platform administrator can manage platform defaults. The Orchestrator role can accept and read run selections only for projects in the caller's tenant.
+All routes require a validated bearer token with exactly one `sub`, the required OAuth scopes, and the service's audience. Projects & Config resolves that issuer and subject to one active tenant membership and current resource-role assignments in its own database. A tenant selector can choose among existing memberships but cannot create authority; any signed tenant assertion must agree with the selected membership. Project reads require an assigned Owner, Contributor, or Viewer role (or tenant administrator); project writes require Owner or tenant administrator; project creation requires an existing tenant administrator and does not auto-assign an Owner. Platform defaults require an assigned platform administrator. Run-selection reads and accepts require an assigned project Orchestrator role as well as matching signed project/run bindings when present. Every privileged request rechecks current membership and role state, so revocation takes effect without refreshing the broker token.
 
-The Identity broker derives `tenant_id` from a unique `tid` in the configured, validated upstream OIDC identity and forwards only the `platform_admin` and `orchestrator` role values into broker-signed access tokens. The Projects API validates its configured issuer and audience before reading the shared Identity claim contract. It ignores request headers and OAuth scopes when determining tenant or roles; missing or ambiguous tenant context and unknown roles fail closed.
+The Identity broker validates upstream identity but does not forward upstream tenant or role claims or assign application roles. OAuth scopes remain necessary route permissions, but they are not authority by themselves. Role claims and request headers never create authority; missing, ambiguous, stale, or foreign memberships fail closed.
 
 | Route | Operation |
 | --- | --- |
 | `POST /api/projects` | Create an active project and its initial configuration revision. |
-| `GET /api/projects` | List projects in the caller's tenant; owners see their projects and platform administrators see the tenant's projects. |
+| `GET /api/projects` | List projects visible through current project roles; a tenant administrator sees all projects in that tenant. |
 | `GET /api/projects/{projectId}` | Read an authorized project summary. |
 | `PATCH /api/projects/{projectId}` | Change project name or lifecycle state using an expected project revision. Archive rather than physically delete. |
 | `GET /api/projects/{projectId}/configuration?revision={n}` | Read the current or a retained configuration revision. |
@@ -50,7 +50,8 @@ Revision conflicts and a reused run ID with a different request return conflict 
 - Project provider overrides only select provider IDs permitted by the platform catalog. Exclusive, ordered-composite, platform-singleton, and layered provider seams use the existing `ProviderResolver`; unsupported cardinalities fail explicitly. The snapshot preserves adapter/options versions and advertised/required capabilities.
 - The service requires project egress rules to be a subset of the platform baseline and checks each run's required destinations. Project run limits may only reduce configured platform limits.
 - Project configuration revisions, platform runtime revisions, and run-selection snapshots are append-only at the database boundary. Project metadata and revision heads remain mutable under optimistic revision checks.
-- Run-selection acceptance serializes a run ID and holds share locks on the project and platform revision heads through persistence, so concurrent edits cannot change the accepted input set. Replays return the originally stored snapshot.
+- Memberships and role assignments live in this service's schema and are provisioned or revoked only through a privileged source path; public APIs cannot self-grant roles. Revocation uses expected revisions, records an immutable audit event, and cannot remove the last explicit project Owner. Runtime database credentials have SELECT-only access to membership, assignment, and audit tables.
+- Run-selection acceptance serializes a run ID and rechecks the current Orchestrator assignment before committing. Replays return the originally stored snapshot, but still require current authorization; snapshots never pin membership or roles.
 - Provider resolution returns candidates, not resource bindings. Resource identity, generation, negotiated capabilities, and final pins are owned by the consumer after provisioning.
 
 The service does not own provider catalog registrations, Git or workflow materialization, remote MCP, UI state, run journals, or secret redemption. The catalog owner supplies its snapshot through the required `ProjectsConfig:ProviderCatalog` startup configuration section, containing `Registrations`, `Defaults`, `PermittedOverrides`, `OrderedSelections`, and `LayerSelections`; provider registrations include adapter version, options schema/revision, hosting pattern, enabled state, and advertised capabilities. The service validates the supplied catalog through `ProviderCatalog.Create` and fails startup if it is missing or invalid rather than using an empty catalog. The snapshot is fixed for the service process lifetime, and run requests carry their own immutable context revision. Database migrations run through the separate `--migrate` operation; normal startup verifies that migrations have already been applied.
@@ -63,4 +64,4 @@ Run the pure validator tests and the PostgreSQL integration test from the reposi
 dotnet test tests/Agentweaver.Projects.Config.Tests/Agentweaver.Projects.Config.Tests.csproj --configuration Release
 ```
 
-The PostgreSQL test uses Testcontainers. It verifies the migration, tenant-scoped run selection, revision and idempotency behavior, model fail-closed semantics, provider candidate metadata, and database append-only triggers.
+The PostgreSQL tests use Testcontainers. They verify tenant-scoped run selection, revision and idempotency behavior, model fail-closed semantics, provider candidate metadata, SELECT-only runtime authority grants, CAS revocation and audit retention, the last-Owner invariant, and database append-only triggers.

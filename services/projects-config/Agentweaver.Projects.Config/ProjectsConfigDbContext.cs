@@ -8,6 +8,9 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     public const string Schema = "projects_config";
 
     public DbSet<ProjectRecord> Projects => Set<ProjectRecord>();
+    public DbSet<ProjectTenantMembershipRecord> TenantMemberships => Set<ProjectTenantMembershipRecord>();
+    public DbSet<ProjectRoleAssignmentRecord> RoleAssignments => Set<ProjectRoleAssignmentRecord>();
+    public DbSet<ProjectAuthorityAuditRecord> AuthorityAudit => Set<ProjectAuthorityAuditRecord>();
     public DbSet<ProjectConfigurationRevisionRecord> ProjectConfigurationRevisions => Set<ProjectConfigurationRevisionRecord>();
     public DbSet<PlatformRuntimeHeadRecord> PlatformRuntimeHeads => Set<PlatformRuntimeHeadRecord>();
     public DbSet<PlatformRuntimeRevisionRecord> PlatformRuntimeRevisions => Set<PlatformRuntimeRevisionRecord>();
@@ -28,7 +31,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.HasKey(project => project.ProjectId);
             entity.Property(project => project.ProjectId).HasColumnName("project_id").HasMaxLength(32);
             entity.Property(project => project.TenantId).HasColumnName("tenant_id").HasMaxLength(256).IsRequired();
-            entity.Property(project => project.OwnerActorId).HasColumnName("owner_actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(project => project.CreatedByActorId).HasColumnName("created_by_actor_id").HasMaxLength(256).IsRequired();
             entity.Property(project => project.Name).HasColumnName("name").HasMaxLength(160).IsRequired();
             entity.Property(project => project.State).HasColumnName("state").HasConversion<string>().HasMaxLength(16);
             entity.Property(project => project.Revision).HasColumnName("revision").IsConcurrencyToken();
@@ -36,7 +39,105 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasColumnName("configuration_revision").IsConcurrencyToken();
             entity.Property(project => project.CreatedAt).HasColumnName("created_at");
             entity.Property(project => project.UpdatedAt).HasColumnName("updated_at");
-            entity.HasIndex(project => new { project.TenantId, project.OwnerActorId, project.State });
+            entity.HasIndex(project => new { project.TenantId, project.State });
+        });
+
+        modelBuilder.Entity<ProjectTenantMembershipRecord>(entity =>
+        {
+            entity.ToTable("tenant_memberships", table =>
+            {
+                table.HasCheckConstraint("ck_tenant_memberships_state", "state IN ('Active', 'Revoked')");
+                table.HasCheckConstraint("ck_tenant_memberships_revision", "revision > 0");
+            });
+            entity.HasKey(membership => membership.MembershipId);
+            entity.Property(membership => membership.MembershipId).HasColumnName("membership_id");
+            entity.Property(membership => membership.Issuer).HasColumnName("issuer").HasMaxLength(512).IsRequired();
+            entity.Property(membership => membership.Subject).HasColumnName("subject").HasMaxLength(256).IsRequired();
+            entity.Property(membership => membership.TenantId).HasColumnName("tenant_id").HasMaxLength(256).IsRequired();
+            entity.Property(membership => membership.State).HasColumnName("state").HasConversion<string>().HasMaxLength(16);
+            entity.Property(membership => membership.Revision).HasColumnName("revision").IsConcurrencyToken();
+            entity.Property(membership => membership.GrantedBy).HasColumnName("granted_by").HasMaxLength(256).IsRequired();
+            entity.Property(membership => membership.GrantedAt).HasColumnName("granted_at");
+            entity.Property(membership => membership.RevokedBy).HasColumnName("revoked_by").HasMaxLength(256);
+            entity.Property(membership => membership.RevokedAt).HasColumnName("revoked_at");
+            entity.HasIndex(membership => new { membership.Issuer, membership.Subject, membership.TenantId })
+                .IsUnique()
+                .HasFilter("\"state\" = 'Active'");
+            entity.HasIndex(membership => new { membership.Issuer, membership.Subject, membership.State });
+        });
+
+        modelBuilder.Entity<ProjectRoleAssignmentRecord>(entity =>
+        {
+            entity.ToTable("project_role_assignments", table =>
+            {
+                table.HasCheckConstraint("ck_project_role_assignments_state", "state IN ('Active', 'Revoked')");
+                table.HasCheckConstraint(
+                    "ck_project_role_assignments_resource_type",
+                    "resource_type IN ('Platform', 'Tenant', 'Project')");
+                table.HasCheckConstraint(
+                    "ck_project_role_assignments_role",
+                    "role IN ('PlatformAdmin', 'TenantAdmin', 'Owner', 'Contributor', 'Viewer', 'Orchestrator')");
+                table.HasCheckConstraint("ck_project_role_assignments_revision", "revision > 0");
+            });
+            entity.HasKey(assignment => assignment.AssignmentId);
+            entity.Property(assignment => assignment.AssignmentId).HasColumnName("assignment_id");
+            entity.Property(assignment => assignment.MembershipId).HasColumnName("membership_id");
+            entity.Property(assignment => assignment.ResourceType).HasColumnName("resource_type")
+                .HasConversion<string>().HasMaxLength(16);
+            entity.Property(assignment => assignment.ResourceId).HasColumnName("resource_id").HasMaxLength(256).IsRequired();
+            entity.Property(assignment => assignment.Role).HasColumnName("role").HasConversion<string>().HasMaxLength(32);
+            entity.Property(assignment => assignment.State).HasColumnName("state").HasConversion<string>().HasMaxLength(16);
+            entity.Property(assignment => assignment.Revision).HasColumnName("revision").IsConcurrencyToken();
+            entity.Property(assignment => assignment.GrantedBy).HasColumnName("granted_by").HasMaxLength(256).IsRequired();
+            entity.Property(assignment => assignment.GrantedAt).HasColumnName("granted_at");
+            entity.Property(assignment => assignment.RevokedBy).HasColumnName("revoked_by").HasMaxLength(256);
+            entity.Property(assignment => assignment.RevokedAt).HasColumnName("revoked_at");
+            entity.HasOne<ProjectTenantMembershipRecord>()
+                .WithMany()
+                .HasForeignKey(assignment => assignment.MembershipId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(assignment => new
+                {
+                    assignment.MembershipId,
+                    assignment.ResourceType,
+                    assignment.ResourceId,
+                    assignment.Role,
+                })
+                .IsUnique()
+                .HasFilter("\"state\" = 'Active'");
+            entity.HasIndex(assignment => new
+                {
+                    assignment.ResourceType,
+                    assignment.ResourceId,
+                    assignment.Role,
+                    assignment.State,
+                });
+        });
+
+        modelBuilder.Entity<ProjectAuthorityAuditRecord>(entity =>
+        {
+            entity.ToTable("authority_audit", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_authority_audit_event_type",
+                    "event_type IN ('membership_granted', 'membership_revoked', 'role_assigned', 'role_revoked')");
+                table.HasCheckConstraint("ck_authority_audit_revision", "revision > 0");
+            });
+            entity.HasKey(audit => audit.EventId);
+            entity.Property(audit => audit.EventId).HasColumnName("event_id");
+            entity.Property(audit => audit.EventType).HasColumnName("event_type").HasMaxLength(32).IsRequired();
+            entity.Property(audit => audit.MembershipId).HasColumnName("membership_id");
+            entity.Property(audit => audit.AssignmentId).HasColumnName("assignment_id");
+            entity.Property(audit => audit.Issuer).HasColumnName("issuer").HasMaxLength(512).IsRequired();
+            entity.Property(audit => audit.Subject).HasColumnName("subject").HasMaxLength(256).IsRequired();
+            entity.Property(audit => audit.TenantId).HasColumnName("tenant_id").HasMaxLength(256).IsRequired();
+            entity.Property(audit => audit.ResourceType).HasColumnName("resource_type").HasConversion<string>().HasMaxLength(16);
+            entity.Property(audit => audit.ResourceId).HasColumnName("resource_id").HasMaxLength(256);
+            entity.Property(audit => audit.Role).HasColumnName("role").HasConversion<string>().HasMaxLength(32);
+            entity.Property(audit => audit.Revision).HasColumnName("revision");
+            entity.Property(audit => audit.Actor).HasColumnName("actor").HasMaxLength(256).IsRequired();
+            entity.Property(audit => audit.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(audit => new { audit.MembershipId, audit.CreatedAt });
         });
 
         modelBuilder.Entity<ProjectConfigurationRevisionRecord>(entity =>

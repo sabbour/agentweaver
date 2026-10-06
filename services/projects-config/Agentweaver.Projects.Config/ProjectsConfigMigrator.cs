@@ -37,6 +37,38 @@ public static class ProjectsConfigMigrator
                 $"The Projects & Config database has pending migrations ({string.Join(", ", pending)}). Run the approved Projects & Config migration Job before starting the service.");
     }
 
+    public static async Task VerifyRuntimeAuthorityReadOnlyAsync(
+        NpgsqlDataSource dataSource,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT has_schema_privilege(current_user, 'projects_config', 'USAGE')
+               AND NOT has_schema_privilege(current_user, 'projects_config', 'CREATE')
+               AND has_table_privilege(current_user, 'projects_config.tenant_memberships', 'SELECT')
+               AND NOT has_table_privilege(current_user, 'projects_config.tenant_memberships', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'projects_config.tenant_memberships', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.tenant_memberships', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'projects_config.tenant_memberships', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'projects_config.project_role_assignments', 'SELECT')
+               AND NOT has_table_privilege(current_user, 'projects_config.project_role_assignments', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'projects_config.project_role_assignments', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.project_role_assignments', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'projects_config.project_role_assignments', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'projects_config.authority_audit', 'SELECT')
+               AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'TRUNCATE')
+            """,
+            connection);
+        if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+            throw new InvalidOperationException(
+                "The Projects & Config runtime database principal must have SELECT-only access to authority tables and no schema CREATE privilege.");
+    }
+
     public static async Task MigrateAsync(
         NpgsqlDataSource dataSource,
         DbContextOptions<ProjectsConfigDbContext> options,

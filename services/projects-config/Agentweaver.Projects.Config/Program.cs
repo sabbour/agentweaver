@@ -62,6 +62,8 @@ if (!Uri.TryCreate(authority, UriKind.Absolute, out var authorityUri) ||
     throw new InvalidOperationException(
         "Projects & Config authentication requires an HTTPS authority and an explicit audience.");
 
+builder.Services.AddSingleton(new ProjectsConfigIdentityOptions(authorityUri.AbsoluteUri));
+builder.Services.AddScoped<ProjectAuthorizationOwner>();
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -83,6 +85,7 @@ var app = builder.Build();
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 var dbOptions = app.Services.GetRequiredService<DbContextOptions<ProjectsConfigDbContext>>();
 await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);
+await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
