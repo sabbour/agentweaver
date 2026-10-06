@@ -358,6 +358,11 @@ service, with its Dockerfile, chart, and service version. Shared .NET contracts 
 CI path filters limit unrelated builds without weakening integration checks on the tested release
 set.
 
+The initial `services/orchestrator/Agentweaver.Orchestrator.Core` component is a
+pure domain library for workflow catalog and WorkPlan validation, not an executable
+service. The typed decision API, Projects resolution, journal, checkpoint host, and
+dispatch runtime remain owned integration work.
+
 The AgentHost, Tool & MCP gateway, app router, and other versioned data-plane images participate in
 the same release composition. A hosted application is output of a workflow, not a platform release
 image. Provider sidecars may have their own compatible versions, but none reintroduces a single

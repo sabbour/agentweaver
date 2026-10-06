@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -61,6 +62,32 @@ test('warns when implementation paths change without mapped documentation', () =
       'docs/architecture/providers-models.md',
       'docs/diagrams/src/flagship/v1-provider-resolution.json',
     ], rules),
+    [],
+  );
+});
+
+test('maps Orchestrator Core changes to its architecture and test documentation', () => {
+  const sourceMap = JSON.parse(
+    readFileSync(new URL('../../docs/docs-source-map.json', import.meta.url), 'utf8'),
+  );
+  const rule = sourceMap.rules.find(({ name }) => name === 'Orchestrator workflow catalogs');
+  assert.ok(rule);
+  assert.deepEqual(
+    findMissingDocumentation(
+      ['services/orchestrator/Agentweaver.Orchestrator.Core/WorkflowPlan.cs'],
+      [rule],
+    ),
+    [{
+      rule: 'Orchestrator workflow catalogs',
+      affected: ['services/orchestrator/Agentweaver.Orchestrator.Core/WorkflowPlan.cs'],
+      missing: rule.required,
+    }],
+  );
+  assert.deepEqual(
+    findMissingDocumentation([
+      'services/orchestrator/Agentweaver.Orchestrator.Core/WorkflowPlan.cs',
+      ...rule.required,
+    ], [rule]),
     [],
   );
 });

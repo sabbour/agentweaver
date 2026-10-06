@@ -7,6 +7,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const output = join(root, 'artifacts', 'coverage', 'dotnet');
 const manifest = join(root, '.config', 'dotnet-tools.json');
 const suites = [
+  ['orchestrator-core', 'Agentweaver.Orchestrator.Core.Tests'],
   ['providers', 'Agentweaver.Providers.Tests'],
   ['postgres', 'Agentweaver.Persistence.Postgres.Tests'],
   ['keyvault', 'Agentweaver.Secrets.AzureKeyVault.Tests'],
@@ -19,6 +20,7 @@ const suites = [
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
+  'Agentweaver.Orchestrator.Core',
   'Agentweaver.Providers',
   'Agentweaver.Persistence.Postgres',
   'Agentweaver.Secrets.AzureKeyVault',

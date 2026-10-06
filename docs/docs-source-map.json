@@ -16,6 +16,17 @@
   ],
   "rules": [
     {
+      "name": "Orchestrator workflow catalogs",
+      "sourcePrefixes": [
+        "services/orchestrator/Agentweaver.Orchestrator.Core/"
+      ],
+      "required": [
+        "docs/architecture/design/orchestration.md",
+        "docs/architecture/design/services-and-release.md",
+        "docs/guide/testing.md"
+      ]
+    },
+    {
       "name": "foundation architecture",
       "sourcePrefixes": [
         "packages/Agentweaver.Abstractions/",
