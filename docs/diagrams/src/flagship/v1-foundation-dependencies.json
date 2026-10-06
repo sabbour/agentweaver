@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "V1 services, contracts, and adapters",
-  "alt": "Structural component view of unpublished Knowledge, Events & Sessions, and Environment candidates, Orchestrator/Core Policy adapters, and Azure Files, Kubernetes, Azure Blob, and Key Vault adapters. The journal rejects untrusted PolicyEvaluation writes. Source structure, not deployment topology.",
+  "alt": "Structural view of unpublished Knowledge, Events & Sessions, and Environment candidates; Orchestrator/Core Policy adapters and owner flow; journal evidence and addressed-message delivery; Azure Files/Kubernetes, Azure Blob, and Key Vault adapters. The journal rejects untrusted PolicyEvaluation writes. Source structure, not deployment topology.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -226,7 +226,7 @@
       "group": "knowledge-composition"
     },
     {
-        "id": "azure-blob-container",
+      "id": "azure-blob-container",
       "label": "Azure Blob container",
       "subLabel": "External object-storage resource.",
       "icon": "box",

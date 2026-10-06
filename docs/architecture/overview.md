@@ -24,7 +24,7 @@ negotiation, a pricing adapter, or usage ingestion.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'" alt="Structural view of unpublished Knowledge, Events & Sessions, and Environment candidates, Orchestrator/Core Policy adapters, and Azure Files, Kubernetes, Azure Blob, and Key Vault. The journal rejects untrusted PolicyEvaluation writes. Source structure, not deployment topology." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'" alt="Structural view of unpublished Knowledge, Events & Sessions, and Environment candidates; Orchestrator/Core Policy adapters and owner flow; journal evidence and addressed-message delivery; Azure Files/Kubernetes, Azure Blob, and Key Vault adapters. The journal rejects untrusted PolicyEvaluation writes. Source structure, not deployment topology." />
   </a>
   <figcaption>Direct project references and adapter/resource relationships in the v1 source; Events & Sessions and Environment are unpublished service candidates, not a deployed topology. The Orchestrator owner flow is shown in the <a href="./events-sessions">Sessions journal diagram</a>. Host composition and Foundation Probe registration IDs are listed below.</figcaption>
 </figure>
