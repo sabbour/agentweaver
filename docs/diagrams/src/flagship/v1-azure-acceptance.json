@@ -79,7 +79,7 @@
       "type": "message",
       "from": "verifier",
       "to": "registry",
-      "label": "Verify digest; retain 452/835; diagnostic reuses f46 artifact without claims/push",
+      "label": "Verify digest; retain 452/835; separately approved recovery reuses frozen f46 image",
       "line": "solid",
       "arrow": "filled"
     },

@@ -408,6 +408,9 @@ Preparation uses checked-in .NET lock files and immutable container base-image d
 Source-bound provenance describes prepared packages and local image archives.
 A separate manual workflow can publish those artifacts and record registry digests.
 Partial-publication receipts do not prove completed publication.
+The separately approved Probe recovery consumes one new permanent attempt and reuses the original frozen image.
+Its image-source SHA remains separate from the admitted publisher helper SHA.
+Historical claims and receipts remain unchanged. A partial recovery cannot authorize another push.
 Preparation does not carry existing release/deployment evidence across version changes.
 See the [command contract](../../../releases/README.md#release-planning-and-package-preparation).
 
