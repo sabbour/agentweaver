@@ -14,7 +14,7 @@
     },
     {
       "name": "v1-storage-volume-provisioning",
-      "concept": "Generation-scoped Azure Files provisioning and attachment negotiation",
+      "concept": "Azure Files provisioning, Replace cleanup, and attachment negotiation",
       "docs": ["docs/architecture/design/provider-seams.md"]
     },
     {

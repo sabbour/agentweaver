@@ -71,14 +71,14 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             new WorkspaceVolumeReleaseRequest(
                 new WorkspaceVolumeReference(spec.ProjectId, spec.VolumeId, first.Resource.Generation),
                 replacement.Resource,
+                spec.BindingMode,
                 WorkspaceVolumeReclaimPolicy.Delete,
+                spec.OwnerDeletionPolicy,
+                replacement.ProviderBinding,
                 "stale-release").Validate());
 
-        var receipt = await provider.ReleaseAsync(new WorkspaceVolumeReleaseRequest(
-            new WorkspaceVolumeReference(spec.ProjectId, spec.VolumeId, first.Resource.Generation),
-            first.Resource,
-            WorkspaceVolumeReclaimPolicy.Delete,
-            "release-generation-1"));
+        var receipt = await provider.ReleaseAsync(ReleaseRequest(
+            spec, first, WorkspaceVolumeReclaimPolicy.Delete, "release-generation-1"));
 
         Assert.Equal(first.Resource, receipt.Resource);
         Assert.Equal("release-generation-1", receipt.IdempotencyKey);
@@ -173,16 +173,10 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         var deletedResource = await provider.ProvisionAsync(
             new WorkspaceVolumeProvisionRequest(deleted, 1, "provision-deleted"));
 
-        var retainedReceipt = await provider.ReleaseAsync(new WorkspaceVolumeReleaseRequest(
-            new WorkspaceVolumeReference(retained.ProjectId, retained.VolumeId, 1),
-            retainedResource.Resource,
-            WorkspaceVolumeReclaimPolicy.Retain,
-            "release-retained"));
-        var deletedReceipt = await provider.ReleaseAsync(new WorkspaceVolumeReleaseRequest(
-            new WorkspaceVolumeReference(deleted.ProjectId, deleted.VolumeId, 1),
-            deletedResource.Resource,
-            WorkspaceVolumeReclaimPolicy.Delete,
-            "release-deleted"));
+        var retainedReceipt = await provider.ReleaseAsync(ReleaseRequest(
+            retained, retainedResource, WorkspaceVolumeReclaimPolicy.Retain, "release-retained"));
+        var deletedReceipt = await provider.ReleaseAsync(ReleaseRequest(
+            deleted, deletedResource, WorkspaceVolumeReclaimPolicy.Delete, "release-deleted"));
 
         var retainedName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
             retained.ProjectId, retained.VolumeId, 1);
@@ -209,9 +203,9 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
                 Spec(reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete),
                 1,
                 "provision-release-retry"));
-        var request = new WorkspaceVolumeReleaseRequest(
-            new WorkspaceVolumeReference("project-1", "volume-1", 1),
-            resource.Resource,
+        var request = ReleaseRequest(
+            Spec(reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete),
+            resource,
             WorkspaceVolumeReclaimPolicy.Delete,
             "release-retry");
 
@@ -219,7 +213,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         var retry = await provider.ReleaseAsync(request);
 
         Assert.Equal(WorkspaceVolumeReleaseDisposition.Released, released.Disposition);
-        Assert.Equal(WorkspaceVolumeReleaseDisposition.AlreadyAbsent, retry.Disposition);
+        Assert.Equal(WorkspaceVolumeReleaseDisposition.Released, retry.Disposition);
         Assert.Equal(request.Resource, retry.Resource);
         Assert.Equal(request.IdempotencyKey, retry.IdempotencyKey);
 
@@ -230,9 +224,9 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
                 Spec(reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete),
                 1,
                 "provision-release-pending"));
-        var pendingRequest = new WorkspaceVolumeReleaseRequest(
-            new WorkspaceVolumeReference("project-1", "volume-1", 1),
-            pendingResource.Resource,
+        var pendingRequest = ReleaseRequest(
+            Spec(reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete),
+            pendingResource,
             WorkspaceVolumeReclaimPolicy.Delete,
             "release-pending");
 
@@ -243,6 +237,75 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         var pendingClaimName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
             "project-1", "volume-1", 1);
         Assert.Contains($"{Options.Namespace}/{pendingClaimName}", pendingClient.Claims.Keys);
+    }
+
+    [Fact]
+    public async Task DeleteRequiresExactSavedPvAbsenceAfterTheClaimDisappears()
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client);
+        var spec = Spec(reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete);
+        var resource = await provider.ProvisionAsync(
+            new WorkspaceVolumeProvisionRequest(spec, 1, "provision-pv-proof"));
+        var request = ReleaseRequest(spec, resource, WorkspaceVolumeReclaimPolicy.Delete, "release-pv-proof");
+        var claimName = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(spec.ProjectId, spec.VolumeId, 1);
+        var claimKey = $"{Options.Namespace}/{claimName}";
+        client.Claims.Remove(claimKey);
+
+        var stillPresent = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
+            provider.ReleaseAsync(request));
+        Assert.Equal("persistent_volume_release_unconfirmed", stillPresent.Code);
+
+        var pvName = resource.ProviderBinding.ReleaseDescriptor
+            .GetProperty("persistentVolumeName").GetString()!;
+        client.PersistentVolumes.Remove(pvName);
+        var released = await provider.ReleaseAsync(request);
+        Assert.Equal(WorkspaceVolumeReleaseDisposition.Released, released.Disposition);
+
+        var replacementClient = new FakeAzureFilesCsiClient();
+        var replacementProvider = CreateProvider(replacementClient);
+        var replacementResource = await replacementProvider.ProvisionAsync(
+            new WorkspaceVolumeProvisionRequest(spec, 1, "provision-pv-uid-proof"));
+        var replacementRequest = ReleaseRequest(
+            spec, replacementResource, WorkspaceVolumeReclaimPolicy.Delete, "release-pv-uid-proof");
+        var replacementClaim = AzureFilesCsiWorkspaceVolumeProvider.GetClaimName(
+            spec.ProjectId, spec.VolumeId, 1);
+        replacementClient.Claims.Remove($"{Options.Namespace}/{replacementClaim}");
+        var replacementPvName = replacementResource.ProviderBinding.ReleaseDescriptor
+            .GetProperty("persistentVolumeName").GetString()!;
+        replacementClient.PersistentVolumes[replacementPvName] =
+            replacementClient.PersistentVolumes[replacementPvName] with { Uid = "different-pv-uid" };
+
+        var mismatched = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
+            replacementProvider.ReleaseAsync(replacementRequest));
+        Assert.Equal("persistent_volume_mismatch", mismatched.Code);
+    }
+
+    [Fact]
+    public async Task ReleaseUsesTheSavedOptionsAndDescriptorInsteadOfCurrentDefaults()
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var originalProvider = CreateProvider(client);
+        var spec = Spec(reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete);
+        var resource = await originalProvider.ProvisionAsync(
+            new WorkspaceVolumeProvisionRequest(spec, 1, "provision-pinned-options"));
+        var request = ReleaseRequest(spec, resource, WorkspaceVolumeReclaimPolicy.Delete, "release-pinned-options");
+        var reconfiguredProvider = new AzureFilesCsiWorkspaceVolumeProvider(
+            Options with
+            {
+                OptionsRevision = "azure-files-options-2",
+                Namespace = "other-namespace",
+                StorageClassName = "other-storage-class"
+            },
+            client);
+        var savedClaimName = resource.ProviderBinding.ReleaseDescriptor
+            .GetProperty("claimName").GetString()!;
+
+        var receipt = await reconfiguredProvider.ReleaseAsync(request);
+
+        Assert.Equal(WorkspaceVolumeReleaseDisposition.Released, receipt.Disposition);
+        Assert.DoesNotContain($"{Options.Namespace}/{savedClaimName}", client.Claims.Keys);
+        Assert.Equal($"{Options.Namespace}/{savedClaimName}", client.LastClaimLookup);
     }
 
     [Fact]
@@ -257,13 +320,10 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             spec.ProjectId, spec.VolumeId, 1);
         client.Claims.Remove($"{Options.Namespace}/{claimName}");
 
-        var receipt = await provider.ReleaseAsync(new WorkspaceVolumeReleaseRequest(
-            new WorkspaceVolumeReference(spec.ProjectId, spec.VolumeId, 1),
-            resource.Resource,
-            WorkspaceVolumeReclaimPolicy.Retain,
-            "release-retained-absent"));
+        var receipt = await provider.ReleaseAsync(ReleaseRequest(
+            spec, resource, WorkspaceVolumeReclaimPolicy.Retain, "release-retained-absent"));
 
-        Assert.Equal(WorkspaceVolumeReleaseDisposition.AlreadyAbsent, receipt.Disposition);
+        Assert.Equal(WorkspaceVolumeReleaseDisposition.Retained, receipt.Disposition);
         Assert.Equal(resource.Resource, receipt.Resource);
         Assert.Empty(client.DeletedClaims);
     }
@@ -276,13 +336,22 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         var request = new WorkspaceVolumeReleaseRequest(
             new WorkspaceVolumeReference("project-1", "volume-1", 1),
             new ProviderResourceRef(ProviderSeam.Storage, "other-provider", "claim-uid-1", 1),
+            WorkspaceVolumeBindingMode.Environment,
             WorkspaceVolumeReclaimPolicy.Delete,
+            WorkspaceVolumeOwnerDeletionPolicy.Delete,
+            new WorkspaceVolumeProviderBindingSnapshot(
+                "other-provider",
+                "1.0.0",
+                1,
+                "test-options",
+                JsonSerializer.SerializeToElement(new { setting = "test" }),
+                JsonSerializer.SerializeToElement(new { resource = "test" })),
             "release-wrong-provider");
 
         var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
             provider.ReleaseAsync(request));
 
-        Assert.Equal("claim_resource_mismatch", exception.Code);
+        Assert.Equal("provider_binding_unsupported", exception.Code);
         Assert.Equal(0, client.GetClaimCalls);
     }
 
@@ -301,9 +370,9 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         };
 
         var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
-            provider.ReleaseAsync(new WorkspaceVolumeReleaseRequest(
-                new WorkspaceVolumeReference("project-1", "volume-1", 1),
-                resource.Resource,
+            provider.ReleaseAsync(ReleaseRequest(
+                Spec(reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete),
+                resource,
                 WorkspaceVolumeReclaimPolicy.Delete,
                 "release-8")));
 
@@ -323,10 +392,13 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             provider.ReleaseAsync(new WorkspaceVolumeReleaseRequest(
                 new WorkspaceVolumeReference("project-1", "volume-1", 1),
                 stale,
+                Spec(reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete).BindingMode,
                 WorkspaceVolumeReclaimPolicy.Delete,
+                Spec(reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete).OwnerDeletionPolicy,
+                resource.ProviderBinding,
                 "release-stale")));
 
-        Assert.Equal("claim_resource_mismatch", exception.Code);
+        Assert.Equal("provider_binding_mismatch", exception.Code);
         Assert.Empty(client.DeletedClaims);
     }
 
@@ -525,7 +597,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         string volumeId = "volume-1",
         long capacityGiB = 8,
         WorkspaceVolumeConsistency consistency = WorkspaceVolumeConsistency.Strict,
-        WorkspaceVolumeReclaimPolicy reclaimPolicy = WorkspaceVolumeReclaimPolicy.Retain) =>
+        WorkspaceVolumeReclaimPolicy reclaimPolicy = WorkspaceVolumeReclaimPolicy.Retain,
+        WorkspaceVolumeOwnerDeletionPolicy ownerDeletionPolicy = WorkspaceVolumeOwnerDeletionPolicy.Delete) =>
         new(
             volumeId,
             "project-1",
@@ -537,8 +610,25 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             Options.StorageClassName,
             consistency,
             reclaimPolicy,
-            WorkspaceVolumeOwnerDeletionPolicy.Retain,
+            ownerDeletionPolicy,
             []);
+
+    private static WorkspaceVolumeReleaseRequest ReleaseRequest(
+        WorkspaceVolumeSpec spec,
+        WorkspaceVolumeResource resource,
+        WorkspaceVolumeReclaimPolicy reclaimPolicy,
+        string idempotencyKey) =>
+        new(
+            new WorkspaceVolumeReference(
+                spec.ProjectId,
+                spec.VolumeId,
+                resource.Resource.Generation),
+            resource.Resource,
+            spec.BindingMode,
+            reclaimPolicy,
+            spec.OwnerDeletionPolicy,
+            resource.ProviderBinding,
+            idempotencyKey);
 
     private static string ClaimJson(AzureFilesClaimRequest request, string uid, string phase) =>
         JsonSerializer.Serialize(new
@@ -599,6 +689,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         public int EnsureClaimCalls { get; private set; }
         public int GetClaimCalls { get; private set; }
         public AzureFilesClaimRequest? LastClaimRequest { get; private set; }
+        public string? LastClaimLookup { get; private set; }
         public Dictionary<string, AzureFilesClaimSnapshot> Claims { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, AzureFilesPersistentVolumeSnapshot> PersistentVolumes { get; } =
             new(StringComparer.Ordinal);
@@ -637,6 +728,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         {
             GetClaimCalls++;
             var key = Key(kubernetesNamespace, name);
+            LastClaimLookup = key;
             if (!Claims.TryGetValue(key, out var claim))
                 return Task.FromResult<AzureFilesClaimSnapshot?>(null);
             if (claim.Phase == "Pending")
@@ -685,7 +777,11 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
                 throw new AzureFilesCsiException("claim_identity_mismatch", "Unexpected test claim UID.");
             DeletedClaims.Add((expectedUid, name));
             if (!ClaimRemainsAfterDelete)
+            {
+                if (claim?.VolumeName is { } volumeName)
+                    PersistentVolumes.Remove(volumeName);
                 Claims.Remove(key);
+            }
             return Task.CompletedTask;
         }
 

@@ -1,6 +1,9 @@
 using System.Collections.Immutable;
+using System.Reflection;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Npgsql;
 using Xunit;
 
 namespace Agentweaver.Environment.Tests;
@@ -90,6 +93,8 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
                 1,
                 0,
                 "provision-for-release"));
+        var provisioned = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
 
         var release = await setup.Service.ReleaseAsync(
             setup.Fence,
@@ -118,11 +123,292 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
         Assert.Null(current.Resource);
         var providerRequest = Assert.Single(setup.Provider.ReleaseRequests);
         Assert.Equal(provision.Completion.TargetResource, providerRequest.Resource);
-        Assert.Equal(setup.Specification.ReclaimPolicy, providerRequest.ReclaimPolicy);
+        Assert.Equal(setup.Specification.GetEffectiveReleasePolicy(), providerRequest.ReclaimPolicy);
+        Assert.Equal(setup.Specification.BindingMode, providerRequest.BindingMode);
+        Assert.Equal(setup.Specification.OwnerDeletionPolicy, providerRequest.OwnerDeletionPolicy);
         Assert.Equal("release-volume", providerRequest.IdempotencyKey);
+        Assert.Equal(provisioned!.ProviderBinding!.ProviderId, providerRequest.ProviderBinding.ProviderId);
+        Assert.True(JsonElement.DeepEquals(
+            provisioned.ProviderBinding.OptionsSnapshot,
+            providerRequest.ProviderBinding.OptionsSnapshot));
+        Assert.True(JsonElement.DeepEquals(
+            provisioned.ProviderBinding.ReleaseDescriptor,
+            providerRequest.ProviderBinding.ReleaseDescriptor));
         Assert.True(replay.Reservation.Replayed);
         Assert.Null(replay.Completion);
         Assert.Equal(EnvironmentWorkspaceVolumeState.Released, replay.CurrentVolume!.Phase);
+    }
+
+    [Fact]
+    public async Task ReplaceAtomicallyQueuesCleanupForTheExactPreviousGeneration()
+    {
+        var setup = await CreateRequestedVolumeAsync(
+            ownerDeletionPolicy: WorkspaceVolumeOwnerDeletionPolicy.Delete);
+        var oldResource = (await ProvisionAsync(setup)).Resource;
+        var oldSnapshot = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+        var request = Transition(
+            setup.Specification.VolumeId,
+            WorkspaceVolumeTransitionKind.Replace,
+            2,
+            1,
+            "replace-volume");
+
+        var replaced = await setup.Service.ReplaceAsync(setup.Fence, request);
+        var replay = await setup.Service.ReplaceAsync(setup.Fence, request);
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+        var cleanupStatus = await setup.Store.GetWorkspaceVolumeCleanupStatusAsync(
+            setup.Fence, replaced.Reservation.OperationId, CancellationToken.None);
+
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, replaced.Completion!.TransitionState);
+        Assert.NotNull(cleanupStatus);
+        Assert.Single(setup.Provider.ReleaseRequests);
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Completed, replaced.CleanupStatus!.State);
+        Assert.True(replay.Reservation.Replayed);
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Completed, replay.CleanupStatus!.State);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, current!.Phase);
+        Assert.Equal(2, current.ResourceGeneration);
+        Assert.NotEqual(oldResource, current.Resource);
+        var release = Assert.Single(setup.Provider.ReleaseRequests);
+        Assert.Equal(oldResource, release.Resource);
+        Assert.Equal(oldSnapshot!.ProviderBinding!.ProviderId, release.ProviderBinding.ProviderId);
+        Assert.Equal(oldSnapshot.ProviderBinding.AdapterVersion, release.ProviderBinding.AdapterVersion);
+        Assert.True(JsonElement.DeepEquals(
+            oldSnapshot.ProviderBinding.OptionsSnapshot,
+            release.ProviderBinding.OptionsSnapshot));
+        Assert.True(JsonElement.DeepEquals(
+            oldSnapshot.ProviderBinding.ReleaseDescriptor,
+            release.ProviderBinding.ReleaseDescriptor));
+        Assert.Equal(1, release.Volume.ResourceGeneration);
+        Assert.Equal(setup.Specification.GetEffectiveReleasePolicy(), release.ReclaimPolicy);
+        Assert.Equal(setup.Specification.OwnerDeletionPolicy, release.OwnerDeletionPolicy);
+    }
+
+    [Fact]
+    public async Task ReplaceCleanupFailureIsPendingAndReplayRetriesWithoutCallerDescriptors()
+    {
+        var setup = await CreateRequestedVolumeAsync(
+            ownerDeletionPolicy: WorkspaceVolumeOwnerDeletionPolicy.Delete);
+        var oldResource = (await ProvisionAsync(setup)).Resource;
+        setup.Provider.ReleaseFailure = new HttpRequestException("temporary cleanup failure");
+        var request = Transition(
+            setup.Specification.VolumeId,
+            WorkspaceVolumeTransitionKind.Replace,
+            2,
+            1,
+            "replace-retry-cleanup");
+
+        var replaced = await setup.Service.ReplaceAsync(setup.Fence, request);
+        var afterReplace = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+        var cleanupStatus = await setup.Store.GetWorkspaceVolumeCleanupStatusAsync(
+            setup.Fence, replaced.Reservation.OperationId, CancellationToken.None);
+        setup.Provider.ReleaseFailure = null;
+        var replay = await setup.Service.ReplaceAsync(setup.Fence, request);
+
+        Assert.True(replaced.CleanupPending);
+        Assert.Equal("cleanup_transport_failure", replaced.CleanupFailureCode);
+        Assert.Equal(nameof(HttpRequestException), replaced.CleanupFailureType);
+        Assert.NotNull(cleanupStatus);
+        Assert.Equal(2, setup.Provider.ReleaseRequests.Count);
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Pending, replaced.CleanupStatus!.State);
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, replaced.Completion!.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, afterReplace!.Phase);
+        Assert.Equal(2, afterReplace.ResourceGeneration);
+        Assert.True(replay.Reservation.Replayed);
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Completed, replay.CleanupStatus!.State);
+        Assert.Equal(oldResource, setup.Provider.ReleaseRequests[0].Resource);
+        Assert.Equal(oldResource, setup.Provider.ReleaseRequests[1].Resource);
+        Assert.Equal(2, setup.Provider.ReleaseRequests.Count);
+    }
+
+    [Fact]
+    public async Task ReplaceDoesNotSuppressUnexpectedCleanupExceptions()
+    {
+        var setup = await CreateRequestedVolumeAsync(
+            ownerDeletionPolicy: WorkspaceVolumeOwnerDeletionPolicy.Delete);
+        await ProvisionAsync(setup);
+        setup.Provider.ReleaseFailure = new InvalidOperationException("provider bug");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            setup.Service.ReplaceAsync(
+                setup.Fence,
+                Transition(
+                    setup.Specification.VolumeId,
+                    WorkspaceVolumeTransitionKind.Replace,
+                    2,
+                    1,
+                    "replace-unexpected-cleanup-failure")));
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+
+        Assert.Equal("provider bug", exception.Message);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, current!.Phase);
+        Assert.Equal(2, current.ResourceGeneration);
+    }
+
+    [Fact]
+    public async Task ReplaceReportsCleanupStatusReadFailureInsteadOfTreatingItAsAbsent()
+    {
+        var setup = await CreateRequestedVolumeAsync(
+            ownerDeletionPolicy: WorkspaceVolumeOwnerDeletionPolicy.Delete);
+        await ProvisionAsync(setup);
+        setup.Provider.ReleaseFailure = new HttpRequestException("temporary cleanup failure");
+        var storeProxy = DispatchProxy.Create<IEnvironmentLifecycleStore, CleanupStatusReadFailingStore>();
+        ((CleanupStatusReadFailingStore)(object)storeProxy).Inner = setup.Store;
+        var service = new WorkspaceVolumeService(storeProxy, setup.Provider);
+
+        var replaced = await service.ReplaceAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Replace,
+                2,
+                1,
+                "replace-cleanup-status-read-failure"));
+        var current = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+
+        Assert.True(replaced.CleanupPending);
+        Assert.Null(replaced.CleanupStatus);
+        Assert.Equal("cleanup_storage_failure", replaced.CleanupFailureCode);
+        Assert.Equal(nameof(NpgsqlException), replaced.CleanupFailureType);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, current!.Phase);
+        Assert.Equal(2, current.ResourceGeneration);
+    }
+
+    [Fact]
+    public async Task OwnerScopedRetryRecoversPendingCleanupAfterServiceRestart()
+    {
+        var setup = await CreateRequestedVolumeAsync(
+            ownerDeletionPolicy: WorkspaceVolumeOwnerDeletionPolicy.Delete);
+        var oldResource = (await ProvisionAsync(setup)).Resource;
+        setup.Provider.ReleaseFailure = new HttpRequestException("temporary cleanup failure");
+        var replaced = await setup.Service.ReplaceAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Replace,
+                2,
+                1,
+                "replace-restart-cleanup"));
+        setup.Provider.ReleaseFailure = null;
+
+        var restartedService = new WorkspaceVolumeService(setup.Store, setup.Provider);
+        var retried = await restartedService.RetryCleanupAsync(setup.Fence);
+
+        Assert.True(replaced.CleanupPending);
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Completed, retried!.State);
+        Assert.Equal(2, setup.Provider.ReleaseRequests.Count);
+        Assert.All(setup.Provider.ReleaseRequests, request => Assert.Equal(oldResource, request.Resource));
+    }
+
+    [Fact]
+    public async Task SharedDeleteReplacementRemainsBlockedAndPreventsEnvironmentRelease()
+    {
+        var setup = await CreateRequestedVolumeAsync(
+            bindingMode: WorkspaceVolumeBindingMode.Shared);
+        await ProvisionAsync(setup);
+
+        var replaced = await setup.Service.ReplaceAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Replace,
+                2,
+                1,
+                "replace-shared-delete"));
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(() =>
+            setup.Service.ReleaseAsync(
+                setup.Fence,
+                Transition(
+                    setup.Specification.VolumeId,
+                    WorkspaceVolumeTransitionKind.Release,
+                    3,
+                    2,
+                    "release-shared-delete")));
+        var release = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            setup.Store.TransitionAsync(
+                new(
+                    setup.Owner,
+                    setup.Fence.LifecycleGeneration,
+                    EnvironmentLifecycleState.Released,
+                    "release-shared-environment"),
+                CancellationToken.None));
+
+        Assert.True(replaced.CleanupPending);
+        Assert.True(replaced.CleanupBlocked);
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Blocked, replaced.CleanupStatus!.State);
+        Assert.Contains("cross-owner", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("environment_resources_not_released", release.Code);
+        Assert.Empty(setup.Provider.ReleaseRequests);
+    }
+
+    [Fact]
+    public async Task SharedRetainReplacementPerformsOnlyRetainCleanup()
+    {
+        var setup = await CreateRequestedVolumeAsync(
+            WorkspaceVolumeReclaimPolicy.Retain,
+            WorkspaceVolumeBindingMode.Shared);
+        var oldResource = (await ProvisionAsync(setup)).Resource;
+
+        var replaced = await setup.Service.ReplaceAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Replace,
+                2,
+                1,
+                "replace-shared-retain"));
+
+        Assert.True(replaced.CleanupPending);
+        Assert.True(replaced.CleanupBlocked);
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Blocked, replaced.CleanupStatus!.State);
+        var cleanup = Assert.Single(setup.Provider.ReleaseRequests);
+        Assert.Equal(oldResource, cleanup.Resource);
+        Assert.Equal(WorkspaceVolumeReclaimPolicy.Retain, cleanup.ReclaimPolicy);
+        Assert.Equal(
+            WorkspaceVolumeReleaseDisposition.Retained,
+            Assert.Single(setup.Provider.ReleaseReceipts).Disposition);
+        var release = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            setup.Store.TransitionAsync(
+                new(
+                    setup.Owner,
+                    setup.Fence.LifecycleGeneration,
+                    EnvironmentLifecycleState.Released,
+                    "release-shared-retain-environment"),
+                CancellationToken.None));
+        Assert.Equal("environment_resources_not_released", release.Code);
+    }
+
+    [Fact]
+    public async Task ReplacementDeletesOnlyWhenBothPoliciesAndEnvironmentBindingAuthorizeIt()
+    {
+        var setup = await CreateRequestedVolumeAsync(
+            WorkspaceVolumeReclaimPolicy.Delete,
+            WorkspaceVolumeBindingMode.Environment,
+            WorkspaceVolumeOwnerDeletionPolicy.Delete);
+        var oldResource = (await ProvisionAsync(setup)).Resource;
+
+        var replaced = await setup.Service.ReplaceAsync(
+            setup.Fence,
+            Transition(
+                setup.Specification.VolumeId,
+                WorkspaceVolumeTransitionKind.Replace,
+                2,
+                1,
+                "replace-delete-authorized"));
+
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Completed, replaced.CleanupStatus!.State);
+        var cleanup = Assert.Single(setup.Provider.ReleaseRequests);
+        Assert.Equal(WorkspaceVolumeReclaimPolicy.Delete, cleanup.ReclaimPolicy);
+        Assert.Equal(WorkspaceVolumeBindingMode.Environment, cleanup.BindingMode);
+        Assert.Equal(WorkspaceVolumeOwnerDeletionPolicy.Delete, cleanup.OwnerDeletionPolicy);
+        Assert.Equal(oldResource, cleanup.Resource);
+        Assert.Equal(
+            WorkspaceVolumeReleaseDisposition.Released,
+            Assert.Single(setup.Provider.ReleaseReceipts).Disposition);
     }
 
     [Fact]
@@ -486,30 +772,6 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
     }
 
     [Fact]
-    public async Task ReplaceFailsBeforeReadingOwnerOrCallingProvider()
-    {
-        var setup = await CreateRequestedVolumeAsync();
-        var exception = await Assert.ThrowsAsync<NotSupportedException>(() =>
-            setup.Service.ReplaceAsync(
-                setup.Fence,
-                Transition(
-                    setup.Specification.VolumeId,
-                    WorkspaceVolumeTransitionKind.Replace,
-                    1,
-                    1,
-                    "replace-unavailable")));
-
-        Assert.Contains("cleanup", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Empty(setup.Provider.ProvisionRequests);
-        Assert.Empty(setup.Provider.ReleaseRequests);
-        var current = await setup.Store.GetWorkspaceVolumeAsync(
-            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
-        Assert.Equal(EnvironmentWorkspaceVolumeState.Requested, current!.Phase);
-        Assert.Equal(1, current.TransitionRevision);
-        Assert.Equal(0, current.ResourceGeneration);
-    }
-
-    [Fact]
     public async Task CreateRejectsSpecificationsOutsideAuthorizedScope()
     {
         var store = fixture.CreateStore();
@@ -580,7 +842,9 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
     }
 
     private async Task<Setup> CreateRequestedVolumeAsync(
-        WorkspaceVolumeReclaimPolicy reclaimPolicy = WorkspaceVolumeReclaimPolicy.Delete)
+        WorkspaceVolumeReclaimPolicy reclaimPolicy = WorkspaceVolumeReclaimPolicy.Delete,
+        WorkspaceVolumeBindingMode bindingMode = WorkspaceVolumeBindingMode.Environment,
+        WorkspaceVolumeOwnerDeletionPolicy ownerDeletionPolicy = WorkspaceVolumeOwnerDeletionPolicy.Retain)
     {
         var store = fixture.CreateStore();
         var owner = NewOwner();
@@ -590,16 +854,18 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
         var specification = new WorkspaceVolumeSpec(
             "workspace-volume",
             owner.ProjectId,
-            new WorkspaceVolumeOwner(WorkspaceVolumeOwnerKind.Run, owner.RunId),
-            owner.EnvironmentId,
-            WorkspaceVolumeBindingMode.Environment,
+            bindingMode == WorkspaceVolumeBindingMode.Shared
+                ? new WorkspaceVolumeOwner(WorkspaceVolumeOwnerKind.Team, "workspace-team")
+                : new WorkspaceVolumeOwner(WorkspaceVolumeOwnerKind.Run, owner.RunId),
+            bindingMode == WorkspaceVolumeBindingMode.Shared ? null : owner.EnvironmentId,
+            bindingMode,
             WorkspaceVolumeAccessMode.ReadWriteMany,
             8,
             "azure-files",
             WorkspaceVolumeConsistency.Strict,
             reclaimPolicy,
-            WorkspaceVolumeOwnerDeletionPolicy.Retain,
-            []);
+            ownerDeletionPolicy,
+            bindingMode == WorkspaceVolumeBindingMode.Shared ? [owner.EnvironmentId] : []);
         var provider = new RecordingWorkspaceVolumeProvider();
         var service = new WorkspaceVolumeService(store, provider);
         var create = new WorkspaceVolumeTransitionRequest(
@@ -630,7 +896,8 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
             result.Completion!.TargetResource!,
             ImmutableHashSet.Create(
                 StringComparer.Ordinal,
-                WorkspaceVolumeCapabilities.ReadWriteMany));
+                WorkspaceVolumeCapabilities.ReadWriteMany),
+            Binding(result.Completion.TargetResource!));
     }
 
     private static WorkspaceVolumeTransitionRequest Transition(
@@ -654,6 +921,16 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
         return new("tenant-" + suffix, "project-" + suffix, "run-" + suffix, "environment-" + suffix);
     }
 
+    private static WorkspaceVolumeProviderBindingSnapshot Binding(ProviderResourceRef resource) =>
+        new WorkspaceVolumeProviderBindingSnapshot(
+            resource.ProviderId,
+            "1.0.0",
+            1,
+            "test-options-1",
+            JsonSerializer.SerializeToElement(new { endpoint = "test" }),
+            JsonSerializer.SerializeToElement(new { resourceId = resource.ResourceId }))
+            .ValidateFor(resource);
+
     private sealed record Setup(
         EnvironmentLifecycleStore Store,
         WorkspaceVolumeService Service,
@@ -666,6 +943,7 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
     {
         public List<WorkspaceVolumeProvisionRequest> ProvisionRequests { get; } = [];
         public List<WorkspaceVolumeReleaseRequest> ReleaseRequests { get; } = [];
+        public List<WorkspaceVolumeReleaseReceipt> ReleaseReceipts { get; } = [];
         public Func<WorkspaceVolumeProvisionRequest, Task>? BeforeProvisionAsync { get; set; }
         public Func<WorkspaceVolumeReleaseRequest, Task>? BeforeReleaseAsync { get; set; }
         public Func<WorkspaceVolumeReleaseRequest, WorkspaceVolumeReleaseReceipt>? ReleaseReceiptFactory { get; set; }
@@ -692,7 +970,12 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
                     ProvisionedResourceGeneration ?? request.ResourceGeneration),
                 ProvisionedCapabilities ?? ImmutableHashSet.Create(
                     StringComparer.Ordinal,
-                    WorkspaceVolumeCapabilities.ForAccessMode(request.Spec.AccessMode)));
+                    WorkspaceVolumeCapabilities.ForAccessMode(request.Spec.AccessMode)),
+                Binding(new ProviderResourceRef(
+                    ProviderSeam.Storage,
+                    "test-storage",
+                    "resource-" + request.ResourceGeneration,
+                    ProvisionedResourceGeneration ?? request.ResourceGeneration)));
         }
 
         public async Task<WorkspaceVolumeReleaseReceipt> ReleaseAsync(
@@ -711,7 +994,21 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
                     request.ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Retain
                         ? WorkspaceVolumeReleaseDisposition.Retained
                         : WorkspaceVolumeReleaseDisposition.Released);
+            ReleaseReceipts.Add(receipt);
             return receipt;
+        }
+    }
+
+    public class CleanupStatusReadFailingStore : DispatchProxy
+    {
+        public IEnvironmentLifecycleStore Inner { get; set; } = null!;
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod?.Name == nameof(IEnvironmentLifecycleStore.GetWorkspaceVolumeCleanupStatusAsync))
+                return Task.FromException<EnvironmentWorkspaceVolumeCleanupStatus?>(
+                    new NpgsqlException("cleanup status read failed"));
+            return targetMethod!.Invoke(Inner, args);
         }
     }
 }

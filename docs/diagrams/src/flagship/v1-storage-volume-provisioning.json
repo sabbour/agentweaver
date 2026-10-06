@@ -1,14 +1,14 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Storage volume provisioning and attachment negotiation",
-  "alt": "The Storage caller provisions an Azure Files PVC, verifies its real claim and PV identities, receives the actual Storage resource, negotiates it with an actual Sandbox attachment profile and declared mount, then pins the resource. Negotiation does not mount or dispatch the volume, and the Azure Files adapter does not claim durable flush.",
+  "title": "Storage volume provisioning, replacement cleanup, and attachment negotiation",
+  "alt": "Environment provisions an Azure Files PVC, verifies its real claim and PV identities, and pins the actual Storage resource. A Replace atomically pins the new generation and queues cleanup for the exact old claim and PV using the original provider binding; the provider verifies claim and PV absence before returning Released. Cleanup does not prove Azure data erasure. Attachment remains capability negotiation only and does not mount or dispatch the volume.",
   "autonumber": true,
   "participants": [
     {
       "id": "storage-caller",
-      "label": "Environment Core",
-      "subLabel": "Storage lifecycle role",
+      "label": "Environment Core + owner store",
+      "subLabel": "Storage API and owner CAS",
       "icon": "server",
       "fluentIcon": "api",
       "badge": { "text": "Core", "tone": "neutral" }
@@ -161,7 +161,7 @@
     {
       "type": "note",
       "over": ["azure-files", "storage-caller"],
-      "label": "Environment owner completes or reconciles the effect under its fence. CSI does not mount a Sandbox volume or promise durable flush."
+      "label": "Replace atomically pins new target and old binding. Cleanup needs exact claim/PV absence; Retained/shared Delete stays pending. No mount or data-erasure proof."
     }
   ]
 }

@@ -28,4 +28,6 @@
   <Project Path="tools\Agentweaver.FoundationProbe\Agentweaver.FoundationProbe.csproj" />
   <Project Path="tools\IdentityPostgresTcpProxy\IdentityPostgresTcpProxy.csproj" />
   <Project Path="tests\Agentweaver.FoundationProbe.Tests\Agentweaver.FoundationProbe.Tests.csproj" />
+  <Project Path="packages\Agentweaver.Providers.Storage.AzureFiles\Agentweaver.Providers.Storage.AzureFiles.csproj" />
+  <Project Path="tests\Agentweaver.Providers.Storage.AzureFiles.Tests\Agentweaver.Providers.Storage.AzureFiles.Tests.csproj" />
 </Solution>

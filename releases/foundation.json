@@ -92,6 +92,12 @@
       "kind": "service",
       "version": "0.0.0",
       "project": "tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj"
+    },
+    {
+      "id": "Agentweaver.Providers.Storage.AzureFiles",
+      "kind": "library",
+      "version": "0.0.0",
+      "project": "packages/Agentweaver.Providers.Storage.AzureFiles/Agentweaver.Providers.Storage.AzureFiles.csproj"
     }
   ],
   "compatibility": [
@@ -250,6 +256,16 @@
       "versions": [
         "0.0.0"
       ]
+    },
+    {
+      "consumer": "Agentweaver.Providers.Storage.AzureFiles",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Environment",
+      "dependency": "Agentweaver.Providers.Storage.AzureFiles",
+      "versions": ["0.0.0"]
     }
   ]
 }

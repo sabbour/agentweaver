@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 
 namespace Agentweaver.Abstractions;
 
@@ -339,6 +340,12 @@ public sealed record WorkspaceVolumeSpec
     public WorkspaceVolumeReclaimPolicy ReclaimPolicy { get; }
     public WorkspaceVolumeOwnerDeletionPolicy OwnerDeletionPolicy { get; }
     public ImmutableArray<string> AuthorizedEnvironmentIds { get; }
+    public WorkspaceVolumeReclaimPolicy GetEffectiveReleasePolicy() =>
+        BindingMode == WorkspaceVolumeBindingMode.Environment &&
+        ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Delete &&
+        OwnerDeletionPolicy == WorkspaceVolumeOwnerDeletionPolicy.Delete
+            ? WorkspaceVolumeReclaimPolicy.Delete
+            : WorkspaceVolumeReclaimPolicy.Retain;
 
     public bool AllowsEnvironment(string projectId, string environmentId) =>
         string.Equals(ProjectId, projectId, StringComparison.Ordinal) &&
@@ -717,10 +724,80 @@ public sealed record WorkspaceVolumeProvisionRequest(
     }
 }
 
+public sealed record WorkspaceVolumeProviderBindingSnapshot(
+    string ProviderId,
+    string AdapterVersion,
+    int OptionsSchemaVersion,
+    string OptionsRevision,
+    JsonElement OptionsSnapshot,
+    JsonElement ReleaseDescriptor)
+{
+    public WorkspaceVolumeProviderBindingSnapshot ValidateFor(ProviderResourceRef resource)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        if (string.IsNullOrWhiteSpace(ProviderId) ||
+            ProviderId.Length > 256 ||
+            ProviderId.Any(char.IsControl) ||
+            !string.Equals(ProviderId, resource.ProviderId, StringComparison.Ordinal))
+            throw new ArgumentException("The provider binding does not match its Storage resource.", nameof(ProviderId));
+        if (!Version.TryParse(AdapterVersion, out var version) ||
+            version.Major < 1 ||
+            !string.Equals(version.ToString(), AdapterVersion, StringComparison.Ordinal))
+            throw new ArgumentException("The provider binding adapter version must be exact and canonical.", nameof(AdapterVersion));
+        if (OptionsSchemaVersion < 1)
+            throw new ArgumentOutOfRangeException(nameof(OptionsSchemaVersion));
+        if (string.IsNullOrWhiteSpace(OptionsRevision) ||
+            OptionsRevision.Length > 128 ||
+            OptionsRevision.Any(char.IsControl))
+            throw new ArgumentException("A bounded provider options revision is required.", nameof(OptionsRevision));
+        ValidateObject(OptionsSnapshot, nameof(OptionsSnapshot));
+        ValidateObject(ReleaseDescriptor, nameof(ReleaseDescriptor));
+        RejectSecretFields(OptionsSnapshot);
+        RejectSecretFields(ReleaseDescriptor);
+        return this with
+        {
+            OptionsSnapshot = OptionsSnapshot.Clone(),
+            ReleaseDescriptor = ReleaseDescriptor.Clone()
+        };
+    }
+
+    private static void ValidateObject(JsonElement value, string name)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("Provider snapshots must be JSON objects.", name);
+    }
+
+    private static void RejectSecretFields(JsonElement value)
+    {
+        foreach (var property in value.EnumerateObject())
+        {
+            var name = property.Name;
+            if (name.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("credential", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("privatekey", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("accesskey", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("accountkey", StringComparison.OrdinalIgnoreCase) ||
+                name.Equals("sas", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Provider snapshots cannot persist secret-bearing fields.");
+            if (property.Value.ValueKind == JsonValueKind.Object)
+                RejectSecretFields(property.Value);
+            else if (property.Value.ValueKind == JsonValueKind.Array)
+                foreach (var item in property.Value.EnumerateArray())
+                    if (item.ValueKind == JsonValueKind.Object)
+                        RejectSecretFields(item);
+        }
+    }
+}
+
 public sealed record WorkspaceVolumeReleaseRequest(
     WorkspaceVolumeReference Volume,
     ProviderResourceRef Resource,
+    WorkspaceVolumeBindingMode BindingMode,
     WorkspaceVolumeReclaimPolicy ReclaimPolicy,
+    WorkspaceVolumeOwnerDeletionPolicy OwnerDeletionPolicy,
+    WorkspaceVolumeProviderBindingSnapshot ProviderBinding,
     string IdempotencyKey)
 {
     public WorkspaceVolumeReleaseRequest Validate()
@@ -735,8 +812,20 @@ public sealed record WorkspaceVolumeReleaseRequest(
             throw new ArgumentException(
                 "Release requires the exact Storage resource and volume generation.",
                 nameof(Resource));
+        if (!Enum.IsDefined(BindingMode))
+            throw new ArgumentOutOfRangeException(nameof(BindingMode));
         if (!Enum.IsDefined(ReclaimPolicy))
             throw new ArgumentOutOfRangeException(nameof(ReclaimPolicy));
+        if (!Enum.IsDefined(OwnerDeletionPolicy))
+            throw new ArgumentOutOfRangeException(nameof(OwnerDeletionPolicy));
+        if (ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Delete &&
+            (BindingMode != WorkspaceVolumeBindingMode.Environment ||
+             OwnerDeletionPolicy != WorkspaceVolumeOwnerDeletionPolicy.Delete))
+            throw new ArgumentException(
+                "Delete requires an Environment-bound volume and an owner deletion policy of Delete.",
+                nameof(ReclaimPolicy));
+        ArgumentNullException.ThrowIfNull(ProviderBinding);
+        _ = ProviderBinding.ValidateFor(Resource);
         _ = WorkspaceVolumeIdentity.Validate(IdempotencyKey, nameof(IdempotencyKey));
         return this;
     }
@@ -766,8 +855,8 @@ public sealed record WorkspaceVolumeReleaseReceipt(
                 "Release receipt must identify the exact provider resource, idempotency key, and outcome.",
                 nameof(request));
         if (request.ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Retain
-                ? Disposition == WorkspaceVolumeReleaseDisposition.Released
-                : Disposition == WorkspaceVolumeReleaseDisposition.Retained)
+                ? Disposition != WorkspaceVolumeReleaseDisposition.Retained
+                : Disposition != WorkspaceVolumeReleaseDisposition.Released)
             throw new ArgumentException(
                 "Release receipt outcome does not match the requested reclaim policy.",
                 nameof(Disposition));
@@ -777,18 +866,21 @@ public sealed record WorkspaceVolumeReleaseReceipt(
 
 public sealed record WorkspaceVolumeResource(
     ProviderResourceRef Resource,
-    ImmutableHashSet<string> NegotiatedCapabilities)
+    ImmutableHashSet<string> NegotiatedCapabilities,
+    WorkspaceVolumeProviderBindingSnapshot ProviderBinding)
 {
     public WorkspaceVolumeResource Validate()
     {
         ArgumentNullException.ThrowIfNull(Resource);
         ArgumentNullException.ThrowIfNull(NegotiatedCapabilities);
+        ArgumentNullException.ThrowIfNull(ProviderBinding);
         if (Resource.Seam != ProviderSeam.Storage ||
             string.IsNullOrWhiteSpace(Resource.ProviderId) ||
             string.IsNullOrWhiteSpace(Resource.ResourceId) ||
             Resource.Generation < 1 ||
             NegotiatedCapabilities.Any(string.IsNullOrWhiteSpace))
             throw new ArgumentException("Provisioned workspace volume resource is invalid.");
+        _ = ProviderBinding.ValidateFor(Resource);
         return this with
         {
             NegotiatedCapabilities = NegotiatedCapabilities.ToImmutableHashSet(StringComparer.Ordinal)

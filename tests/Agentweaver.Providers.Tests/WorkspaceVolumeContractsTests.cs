@@ -281,12 +281,14 @@ public sealed class WorkspaceVolumeContractsTests
             ReadOnly: true);
         var manifest = new WorkspaceVolumeMountManifest([mount]);
         var sandbox = new ProviderResourceRef(ProviderSeam.Sandbox, "agent-sandbox", "sandbox-uid", 11);
+        var storageResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "claim-uid", 2);
         var storage = new WorkspaceVolumeResource(
-            new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "claim-uid", 2),
+            storageResource,
             ImmutableHashSet.Create(
                 StringComparer.Ordinal,
                 WorkspaceVolumeCapabilities.ReadWriteMany,
-                WorkspaceVolumeCapabilities.ReadOnlyMount));
+                WorkspaceVolumeCapabilities.ReadOnlyMount),
+            Binding(storageResource));
         var environmentFence = EnvironmentFence(lifecycleGeneration: 4);
         var profile = new WorkspaceSandboxAttachmentProfile(
             sandbox,
@@ -534,18 +536,24 @@ public sealed class WorkspaceVolumeContractsTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             (request with { ResourceGeneration = 0 }).Validate());
         Assert.Throws<ArgumentException>(() => (request with { IdempotencyKey = " " }).Validate());
+        var releaseResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "claim-uid-1", 1);
         var release = new WorkspaceVolumeReleaseRequest(
             new WorkspaceVolumeReference("project-1", "volume-1", 1),
-            new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "claim-uid-1", 1),
+            releaseResource,
+            WorkspaceVolumeBindingMode.Environment,
             WorkspaceVolumeReclaimPolicy.Retain,
+            WorkspaceVolumeOwnerDeletionPolicy.Retain,
+            Binding(releaseResource),
             "release-1");
         Assert.Same(release, release.Validate());
         Assert.Equal(WorkspaceVolumeCapabilities.ReadOnlyMany,
             WorkspaceVolumeCapabilities.ForAccessMode(WorkspaceVolumeAccessMode.ReadOnlyMany));
 
+        var volumeResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "claim-uid", 1);
         var resource = new WorkspaceVolumeResource(
-            new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "claim-uid", 1),
-            ImmutableHashSet.Create(StringComparer.Ordinal, WorkspaceVolumeCapabilities.ReadWriteMany));
+            volumeResource,
+            ImmutableHashSet.Create(StringComparer.Ordinal, WorkspaceVolumeCapabilities.ReadWriteMany),
+            Binding(volumeResource));
         Assert.Equal(
             ImmutableHashSet.Create(StringComparer.Ordinal, WorkspaceVolumeCapabilities.ReadWriteMany),
             resource.Validate().NegotiatedCapabilities);
@@ -667,10 +675,14 @@ public sealed class WorkspaceVolumeContractsTests
     [Fact]
     public void ReleaseReceiptIsBoundToTheExactResourceKeyAndPolicy()
     {
+        var resource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "claim-uid-1", 1);
         var request = new WorkspaceVolumeReleaseRequest(
             new WorkspaceVolumeReference("project-1", "volume-1", 1),
-            new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "claim-uid-1", 1),
+            resource,
+            WorkspaceVolumeBindingMode.Environment,
             WorkspaceVolumeReclaimPolicy.Delete,
+            WorkspaceVolumeOwnerDeletionPolicy.Delete,
+            Binding(resource),
             "release-1");
         var released = new WorkspaceVolumeReleaseReceipt(
             request.Resource,
@@ -679,7 +691,7 @@ public sealed class WorkspaceVolumeContractsTests
         var absent = released with { Disposition = WorkspaceVolumeReleaseDisposition.AlreadyAbsent };
 
         Assert.Same(released, released.ValidateFor(request));
-        Assert.Same(absent, absent.ValidateFor(request));
+        Assert.Throws<ArgumentException>(() => absent.ValidateFor(request));
         Assert.Throws<ArgumentException>(() =>
             (released with
             {
@@ -690,13 +702,30 @@ public sealed class WorkspaceVolumeContractsTests
         Assert.Throws<ArgumentException>(() =>
             (released with { Disposition = WorkspaceVolumeReleaseDisposition.Retained }).ValidateFor(request));
 
-        var retainedRequest = request with { ReclaimPolicy = WorkspaceVolumeReclaimPolicy.Retain };
+        var retainedRequest = request with
+        {
+            ReclaimPolicy = WorkspaceVolumeReclaimPolicy.Retain,
+            OwnerDeletionPolicy = WorkspaceVolumeOwnerDeletionPolicy.Retain
+        };
         var retained = released with { Disposition = WorkspaceVolumeReleaseDisposition.Retained };
         var retainedAbsent = absent with { Disposition = WorkspaceVolumeReleaseDisposition.AlreadyAbsent };
-        Assert.Same(retained, retained.ValidateFor(retainedRequest));
-        Assert.Same(retainedAbsent, retainedAbsent.ValidateFor(retainedRequest));
         Assert.Throws<ArgumentException>(() => released.ValidateFor(retainedRequest));
+        Assert.Same(retained, retained.ValidateFor(retainedRequest));
+        Assert.Throws<ArgumentException>(() => retainedAbsent.ValidateFor(retainedRequest));
+        Assert.Throws<ArgumentException>(() =>
+            (request with { OwnerDeletionPolicy = WorkspaceVolumeOwnerDeletionPolicy.Retain }).Validate());
+        Assert.Throws<ArgumentException>(() =>
+            (request with { BindingMode = WorkspaceVolumeBindingMode.Shared }).Validate());
     }
+
+    private static WorkspaceVolumeProviderBindingSnapshot Binding(ProviderResourceRef resource) =>
+        new WorkspaceVolumeProviderBindingSnapshot(
+            resource.ProviderId,
+            "1.0.0",
+            1,
+            "test-options-1",
+            JsonSerializer.SerializeToElement(new { endpoint = "test" }),
+            JsonSerializer.SerializeToElement(new { resourceId = resource.ResourceId }));
 
     private static EnvironmentGenerationFence EnvironmentFence(
         string tenantId = "tenant-1",
