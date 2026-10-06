@@ -42,8 +42,14 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
 ## Implemented foundations
 
 The initial P0 delivery contains provider descriptor and binding contracts, a pure
-catalog/resolver, conformance-focused tests, and build/release validation. It does not
-start any product services or provision Azure resources.
+catalog/resolver, conformance-focused tests, and build/release validation. The v1 source
+now also includes an unpublished Events & Sessions service candidate for the first P1
+journal slice. The service can be built and tested, but is not deployed or published;
+the source does not provision Azure resources or include the AgentHost, product API,
+web UI, or product MCP server.
+
+See the [Events & Sessions journal](docs/architecture/events-sessions.md) for its
+implemented contract, PostgreSQL ownership, provider pin, and current limits.
 
 Provider selection covers exclusive and platform-singleton seams, ordered Guardrails/
 Telemetry sets, and layered Network Policy (required L3/L4, optional L7). Cost

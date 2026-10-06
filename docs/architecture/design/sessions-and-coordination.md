@@ -18,6 +18,17 @@
 - Agentweaver keeps its own run page, topology, approvals, chat, and surface panel. It
   borrows coordination primitives, not the Copilot app's UX.
 
+## Current v1 source slice
+
+The repository now contains an unpublished Events & Sessions service candidate for the
+first journal slice. It supplies provider-neutral versioned event contracts, an
+authoritative PostgreSQL run journal with transactional append, one ordered position
+across every session in a project/run, bounded run or session replay, and reconnectable
+live cursors. It also persists immutable native Sessions provider pins. This does not
+implement the entire P1 design: session trees, MAF checkpoints, consistency manifests,
+addressed messages, Knowledge records, and product UI/MCP integration remain outside
+this service. See the [implemented journal contract and limits](../../architecture/events-sessions.md).
+
 ## Today in 0.x
 
 Paths refer to the 0.x code on the `dev` branch. In 0.x, an AgentHost agent turn is a

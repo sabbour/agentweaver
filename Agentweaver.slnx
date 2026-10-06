@@ -1,6 +1,8 @@
 <Solution>
+  <Project Path="services\events-and-sessions\Agentweaver.EventsAndSessions\Agentweaver.EventsAndSessions.csproj" />
   <Project Path="services\identity\Agentweaver.Identity.Broker\Agentweaver.Identity.Broker.csproj" />
   <Project Path="services\orchestrator\Agentweaver.Orchestrator.Core\Agentweaver.Orchestrator.Core.csproj" />
+  <Project Path="tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj" />
   <Project Path="tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj" />
   <Project Path="tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj" />
   <Project Path="packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
