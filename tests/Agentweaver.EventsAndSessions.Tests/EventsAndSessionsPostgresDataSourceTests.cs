@@ -219,18 +219,17 @@ public sealed class EventsAndSessionsPostgresDataSourceTests(SessionsPostgresFix
     }
 
     [Fact]
-    public async Task ExpiredTokenRefreshFailureDoesNotReuseTokenForANewConnection()
+    public async Task RefreshFailureDoesNotReusePriorTokenForANewConnection()
     {
         var connection = new NpgsqlConnectionStringBuilder(postgres.ConnectionString) { Pooling = false };
         var testPassword = connection.Password
             ?? throw new InvalidOperationException("Testcontainers did not provide a PostgreSQL password.");
         connection.Remove("Password");
         var failure = new InvalidOperationException("token refresh failed");
-        var firstTokenExpiresOn = DateTimeOffset.UtcNow.AddSeconds(1);
         var tokenRequest = 0;
         var credential = new FakeTokenCredential((_, _) =>
             Interlocked.Increment(ref tokenRequest) == 1
-                ? ValueTask.FromResult(new AccessToken(testPassword, firstTokenExpiresOn))
+                ? ValueTask.FromResult(new AccessToken(testPassword, DateTimeOffset.UtcNow.AddMinutes(5)))
                 : ValueTask.FromException<AccessToken>(failure));
         await using var dataSource = EventsAndSessionsPostgresDataSource.Create(
             connection.ConnectionString, credential, SslMode.Disable);
@@ -239,15 +238,13 @@ public sealed class EventsAndSessionsPostgresDataSourceTests(SessionsPostgresFix
         await using (var query = new NpgsqlCommand("SELECT 1", initial))
             Assert.Equal(1, await query.ExecuteScalarAsync());
 
-        await Task.Delay(TimeSpan.FromSeconds(1.1));
-        Assert.True(Assert.Single(credential.Tokens).ExpiresOn <= DateTimeOffset.UtcNow);
         var exception = await Assert.ThrowsAsync<NpgsqlException>(async () =>
         {
             await using var refreshed = await dataSource.OpenConnectionAsync();
         });
         Assert.Contains("token refresh failed", exception.ToString(), StringComparison.Ordinal);
         Assert.True(credential.Requests.Count > 1);
-        Assert.Single(credential.Tokens);
+        Assert.True(Assert.Single(credential.Tokens).ExpiresOn > DateTimeOffset.UtcNow);
     }
 
     private sealed class FakeTokenCredential(
