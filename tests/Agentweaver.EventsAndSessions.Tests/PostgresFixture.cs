@@ -13,6 +13,7 @@ public sealed class SessionsPostgresFixture : IAsyncLifetime
 
     public NpgsqlDataSource DataSource { get; private set; } = null!;
     public string DatabaseName => new NpgsqlConnectionStringBuilder(_container.GetConnectionString()).Database!;
+    public string ConnectionString => _container.GetConnectionString();
 
     public async Task InitializeAsync()
     {

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
+using Azure.Core;
 using Agentweaver.Providers;
 using Agentweaver.Telemetry;
 using Microsoft.AspNetCore.Authentication;
@@ -13,7 +14,6 @@ if (args.Contains("--migrate", StringComparer.Ordinal) && !migrate)
 
 var builder = WebApplication.CreateBuilder(migrate ? [] : args);
 builder.WebHost.ConfigureKestrel(server => server.Limits.MaxRequestBodySize = 64 * 1024);
-var connectionString = Required(builder.Configuration, "ConnectionStrings:EventsAndSessions");
 var providerSection = builder.Configuration.GetSection("EventsAndSessions:Provider");
 var options = new PostgresSessionsProviderOptions(
     RequiredSection(providerSection, "ResourceId"),
@@ -26,14 +26,25 @@ var options = new PostgresSessionsProviderOptions(
     providerSection.GetValue("ReferenceRetentionDays", 365));
 options.Validate();
 
-var dataSource = NpgsqlDataSource.Create(connectionString);
 if (migrate)
 {
-    await EventsAndSessionsMigrator.MigrateAsync(dataSource, options.Schema);
-    await dataSource.DisposeAsync();
+    var migrationConnection = EventsAndSessionsPostgresDataSource.ReadMigrationConnection(builder.Configuration);
+    var migrationCredential = EventsAndSessionsPostgresDataSource.CreateCredential(migrationConnection);
+    try
+    {
+        await using var migrationDataSource = EventsAndSessionsPostgresDataSource.Create(
+            migrationConnection.ConnectionString, migrationCredential);
+        await EventsAndSessionsMigrator.MigrateAsync(migrationDataSource, options.Schema);
+    }
+    finally
+    {
+        if (migrationCredential is IDisposable disposable)
+            disposable.Dispose();
+    }
     return;
 }
 
+var runtimeConnection = EventsAndSessionsPostgresDataSource.ReadRuntimeConnection(builder.Configuration);
 var issuer = Required(builder.Configuration, "Identity:Issuer");
 if (!Uri.TryCreate(issuer, UriKind.Absolute, out var issuerUri) || issuerUri.Scheme != Uri.UriSchemeHttps)
     throw new InvalidOperationException("Identity issuer must be an absolute HTTPS URI.");
@@ -45,7 +56,11 @@ builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warnin
 builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 builder.Logging.AddFilter("Npgsql", LogLevel.Warning);
 
-builder.Services.AddSingleton(dataSource);
+builder.Services.AddSingleton<TokenCredential>(_ =>
+    EventsAndSessionsPostgresDataSource.CreateCredential(runtimeConnection));
+builder.Services.AddSingleton<NpgsqlDataSource>(services =>
+    EventsAndSessionsPostgresDataSource.Create(
+        runtimeConnection.ConnectionString, services.GetRequiredService<TokenCredential>()));
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddAgentweaverTelemetry("agentweaver.events");
@@ -91,6 +106,7 @@ builder.Services.AddSingleton<ISessionsProviderBinder>(services =>
     services.GetRequiredService<SessionsProviderBindingService>());
 
 var app = builder.Build();
+var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 await EventsAndSessionsMigrator.VerifyAsync(dataSource, options.Schema);
 app.UseAuthentication();
 app.UseAuthorization();
