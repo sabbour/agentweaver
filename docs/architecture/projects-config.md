@@ -26,6 +26,8 @@ sequenceDiagram
 
 All routes require a validated bearer token with exactly one `sub` and `tenant_id` claim. Project management is owner-scoped; a platform administrator can manage platform defaults. The Orchestrator role can accept and read run selections only for projects in the caller's tenant.
 
+The Identity broker derives `tenant_id` from a unique `tid` in the configured, validated upstream OIDC identity and forwards only the `platform_admin` and `orchestrator` role values into broker-signed access tokens. The Projects API validates its configured issuer and audience before reading the shared Identity claim contract. It ignores request headers and OAuth scopes when determining tenant or roles; missing or ambiguous tenant context and unknown roles fail closed.
+
 | Route | Operation |
 | --- | --- |
 | `POST /api/projects` | Create an active project and its initial configuration revision. |

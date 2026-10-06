@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
+using Agentweaver.Identity;
 using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Antiforgery;
@@ -50,7 +51,9 @@ public static class IdentityBrokerEndpoints
             return Forbid(Errors.InvalidRequest, "The project and run selectors are invalid.");
 
         var local = await context.AuthenticateAsync(LocalCookieScheme);
-        if (!local.Succeeded || local.Principal?.FindFirst(Claims.Subject) is not { } subjectClaim)
+        if (!local.Succeeded ||
+            local.Principal is not { } localPrincipal ||
+            localPrincipal.FindFirst(Claims.Subject) is not { } subjectClaim)
         {
             var handle = OpaqueHandle.NewHandle();
             db.PendingAuthorizations.Add(new PendingAuthorization
@@ -91,7 +94,7 @@ public static class IdentityBrokerEndpoints
             type: AuthorizationTypes.Permanent, scopes: requestedScopes).ToListAsync(ct);
         if (existing.Count > 0)
             return await SignInAsync(db, scopes, authorizations, existing[0], userId, requestedScopes,
-                runBinding, grantAuthority, ct);
+                runBinding, IdentityAuthorizationContext.FromIssuedPrincipal(localPrincipal), grantAuthority, ct);
 
         var consentHandle = OpaqueHandle.NewHandle();
         db.PendingAuthorizations.Add(new PendingAuthorization
@@ -155,7 +158,8 @@ public static class IdentityBrokerEndpoints
         TimeProvider timeProvider, IAntiforgery antiforgery, CancellationToken ct)
     {
         var local = await context.AuthenticateAsync(LocalCookieScheme);
-        if (!local.Succeeded || !Guid.TryParse(local.Principal?.FindFirst(Claims.Subject)?.Value, out var userId))
+        if (!local.Succeeded || local.Principal is not { } localPrincipal ||
+            !Guid.TryParse(localPrincipal.FindFirst(Claims.Subject)?.Value, out var userId))
             return Results.Unauthorized();
         try
         {
@@ -200,7 +204,11 @@ public static class IdentityBrokerEndpoints
         var applicationId = await applications.GetIdAsync(application, ct);
 
         await authorizations.CreateAsync(
-            principal: BuildMinimalPrincipal(pending.SubjectUserId!.Value, approvedScopes),
+            principal: BuildMinimalPrincipal(
+                pending.SubjectUserId!.Value,
+                approvedScopes,
+                runBinding: null,
+                IdentityAuthorizationContext.FromIssuedPrincipal(localPrincipal)),
             subject: pending.SubjectUserId.Value.ToString(),
             client: applicationId!,
             type: AuthorizationTypes.Permanent,
@@ -243,6 +251,7 @@ public static class IdentityBrokerEndpoints
         IdentityBrokerDbContext db, IOpenIddictScopeManager scopes,
         IOpenIddictAuthorizationManager authorizations, object authorization,
         Guid userId, ImmutableArray<string> requestedScopes, RequestedRunBinding? runBinding,
+        IdentityAuthorizationContext? authorizationContext,
         IdentityGrantAuthority grantAuthority, CancellationToken ct)
     {
         var user = await db.Users.AsNoTracking().SingleAsync(u => u.Id == userId, ct);
@@ -253,18 +262,22 @@ public static class IdentityBrokerEndpoints
             userId.ToString(), runBinding.ProjectId, runBinding.RunId, ct))
             return Forbid(Errors.AccessDenied, "No active grant authorizes the requested project and run.");
 
-        var principal = BuildMinimalPrincipal(userId, requestedScopes, runBinding);
+        var principal = BuildMinimalPrincipal(userId, requestedScopes, runBinding, authorizationContext);
         principal.SetResources(await scopes.ListResourcesAsync(requestedScopes, ct).ToListAsync(ct));
         principal.SetAuthorizationId(await authorizations.GetIdAsync(authorization, ct));
         return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
     private static ClaimsPrincipal BuildMinimalPrincipal(
-        Guid userId, IEnumerable<string> scopes, RequestedRunBinding? runBinding = null)
+        Guid userId, IEnumerable<string> scopes, RequestedRunBinding? runBinding,
+        IdentityAuthorizationContext? authorizationContext)
     {
         var identity = new ClaimsIdentity(
             OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Claims.Name, Claims.Role);
         identity.AddClaim(new Claim(Claims.Subject, userId.ToString()).SetDestinations(Destinations.AccessToken, Destinations.IdentityToken));
+        if (authorizationContext is not null)
+            foreach (var claim in authorizationContext.ToClaims())
+                identity.AddClaim(new Claim(claim.Type, claim.Value).SetDestinations(Destinations.AccessToken));
         if (runBinding is not null)
         {
             identity.AddClaim(new Claim(SecretRedemptionEndpoints.ProjectIdClaim, runBinding.ProjectId)

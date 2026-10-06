@@ -1,12 +1,13 @@
 using System.Collections.Immutable;
 using System.Security.Claims;
+using Agentweaver.Identity;
 
 namespace Agentweaver.Projects.Config;
 
 public sealed record ProjectCaller(string ActorId, string TenantId, ImmutableHashSet<string> Roles)
 {
-    public const string PlatformAdminRole = "platform_admin";
-    public const string OrchestratorRole = "orchestrator";
+    public const string PlatformAdminRole = IdentityAuthorizationContext.PlatformAdminRole;
+    public const string OrchestratorRole = IdentityAuthorizationContext.OrchestratorRole;
 
     public static ProjectCaller FromPrincipal(ClaimsPrincipal principal)
     {
@@ -15,17 +16,14 @@ public sealed record ProjectCaller(string ActorId, string TenantId, ImmutableHas
             throw ProjectConfigException.Forbidden();
 
         var subjects = principal.FindAll("sub").Select(claim => claim.Value).ToArray();
-        var tenants = principal.FindAll("tenant_id").Select(claim => claim.Value).ToArray();
-        if (subjects.Length != 1 || tenants.Length != 1 ||
-            !IsOpaqueId(subjects[0]) || !IsOpaqueId(tenants[0]))
+        var authorization = IdentityAuthorizationContext.FromIssuedPrincipal(principal);
+        if (subjects.Length != 1 || !IsOpaqueId(subjects[0]) || authorization is null)
             throw ProjectConfigException.Forbidden();
 
-        var roles = principal.FindAll("role")
-            .Concat(principal.FindAll(ClaimTypes.Role))
-            .Select(claim => claim.Value)
-            .Where(role => !string.IsNullOrWhiteSpace(role))
-            .ToImmutableHashSet(StringComparer.Ordinal);
-        return new ProjectCaller(subjects[0], tenants[0], roles);
+        return new ProjectCaller(
+            subjects[0],
+            authorization.TenantId,
+            authorization.Roles.ToImmutableHashSet(StringComparer.Ordinal));
     }
 
     private static bool IsOpaqueId(string value) =>

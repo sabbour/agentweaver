@@ -337,6 +337,12 @@
       "agentweaver.abstractions": {
         "type": "Project"
       },
+      "agentweaver.identity": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )"
+        }
+      },
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {

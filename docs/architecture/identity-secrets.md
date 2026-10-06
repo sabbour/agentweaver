@@ -6,6 +6,23 @@ The broker accepts an external OIDC provider. It validates the upstream issuer, 
 
 OAuth authorization codes require registered clients, exact redirect URIs, registered scopes, and S256 PKCE. Consent requires the local cookie and antiforgery token. Refresh-token replay revokes the authorization and token family.
 
+After upstream OIDC validation, the broker maps exactly one `tid` claim to `tenant_id` and copies only the recognized `platform_admin` and `orchestrator` values from signed role claims. It puts this authorization context in the protected local cookie and broker-signed access token, not the identity token. Missing, invalid, or ambiguous tenant claims produce no context; unknown roles are omitted. OAuth scopes and resources remain separate client permissions and audiences.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant IdP as Configured OIDC provider
+    participant Broker as Identity Broker
+    participant API as Resource API
+    User->>IdP: Authenticate
+    IdP-->>Broker: Validated identity claims (tid, roles)
+    Broker->>Broker: Replace upstream subject with local broker subject
+    Broker->>Broker: Map unique tid and allowlisted roles
+    Broker-->>API: Signed access token (sub, tenant_id, role, audience)
+    API->>API: Validate issuer, signature, lifetime, and audience
+    API->>API: Reject missing or ambiguous tenant context
+```
+
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.png'">
     <img :src="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.png'" alt="After bearer validation, Identity.Broker passes the authenticated actor to the authorization wrapper. The wrapper checks the exact grant before and after exact-version Key Vault access, invalidates a credential on a failed postcheck, and the host invalidates it after responding." />

@@ -44,6 +44,14 @@ Reference refresh tokens have no reuse grace period.
 Replay revokes the authorization and its token family.
 Token exchange rejects disabled users and grants bound to another client.
 
+After validating the configured external OIDC identity, the broker maps exactly one
+upstream `tid` claim to `tenant_id` and copies only the recognized `platform_admin`
+and `orchestrator` role values. These claims pass through the protected local cookie
+and appear only in broker-signed access tokens. Missing, invalid, or ambiguous
+tenant context produces no authorization context; unknown roles are omitted.
+Clients cannot supply or widen these claims through OAuth scopes, request parameters,
+or headers.
+
 Startup creates missing clients and scopes.
 It refuses changes to registered redirects, permissions, requirements, type, consent policy, credentials, or scope resources.
 Confidential-client reconciliation uses native secret verification, never plaintext-to-hash comparison.

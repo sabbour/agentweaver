@@ -192,6 +192,13 @@
     },
     {
       "consumer": "Agentweaver.Projects.Config",
+      "dependency": "Agentweaver.Identity",
+      "versions": [
+        "0.0.0"
+      ]
+    },
+    {
+      "consumer": "Agentweaver.Projects.Config",
       "dependency": "Agentweaver.Providers",
       "versions": [
         "0.0.0"

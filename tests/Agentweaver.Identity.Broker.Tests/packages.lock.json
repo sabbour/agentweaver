@@ -161,6 +161,14 @@
           "Docker.DotNet.Enhanced.Handler.Abstractions": "4.3.3"
         }
       },
+      "Microsoft.AspNetCore.Authentication.JwtBearer": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "0BgDfT1GoZnzjJOBwx5vFMK5JtqsTEas9pCEwd1/KKxNUAqFmreN60WeUoF+CsmSd9tOQuqWedvdBo/QqHuNTQ==",
+        "dependencies": {
+          "Microsoft.IdentityModel.Protocols.OpenIdConnect": "8.0.1"
+        }
+      },
       "Microsoft.AspNetCore.Authentication.OpenIdConnect": {
         "type": "Transitive",
         "resolved": "10.0.0",
@@ -1134,6 +1142,24 @@
           "OpenIddict.EntityFrameworkCore": "[7.7.1, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
           "OpenIddict.Validation.ServerIntegration": "[7.7.1, )"
+        }
+      },
+      "agentweaver.projects.config": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Identity": "[0.0.0, )",
+          "Agentweaver.Providers": "[0.0.0, )",
+          "Azure.Identity": "[1.17.1, )",
+          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
+          "Microsoft.EntityFrameworkCore": "[10.0.12, )",
+          "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )"
+        }
+      },
+      "agentweaver.providers": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )"
         }
       },
       "agentweaver.secrets.azurekeyvault": {

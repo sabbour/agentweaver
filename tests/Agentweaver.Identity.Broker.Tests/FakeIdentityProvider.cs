@@ -37,6 +37,10 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
     /// <summary>Overrides the subject claim minted into the next id_token(s).</summary>
     public string Subject { get; set; } = "external-subject-1";
 
+    public IReadOnlyList<string> TenantIds { get; set; } = [];
+
+    public IReadOnlyList<string> Roles { get; set; } = [];
+
     public string? Email { get; set; } = "user@example.test";
 
     public string? Name { get; set; } = "Test User";
@@ -91,7 +95,7 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
                         subject_types_supported = new[] { "public" },
                         id_token_signing_alg_values_supported = new[] { "RS256" },
                         scopes_supported = new[] { "openid", "profile", "email" },
-                        claims_supported = new[] { "sub", "name", "email" },
+                        claims_supported = new[] { "sub", "name", "email", "tid", "roles" },
                         code_challenge_methods_supported = new[] { "S256" },
                         grant_types_supported = new[] { "authorization_code" },
                     });
@@ -132,7 +136,7 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
         var code = Guid.NewGuid().ToString("N");
         SensitiveValues.Add(code);
         _codes[code] = new PendingCode(clientId, redirectUri, nonce, codeChallenge, codeChallengeMethod,
-            Tampering, Subject, Email, Name);
+            Tampering, Subject, Email, Name, [.. TenantIds], [.. Roles]);
 
         var location = $"{redirectUri}?code={Uri.EscapeDataString(code)}&state={Uri.EscapeDataString(state)}";
         context.Response.Redirect(location);
@@ -200,6 +204,8 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
         };
         if (pending.Name is not null) claims.Add(new Claim("name", pending.Name));
         if (pending.Email is not null) claims.Add(new Claim("email", pending.Email));
+        claims.AddRange(pending.TenantIds.Select(tenantId => new Claim("tid", tenantId)));
+        claims.AddRange(pending.Roles.Select(role => new Claim("roles", role)));
         if (!string.IsNullOrEmpty(pending.Nonce) && pending.Tampering != IdTokenTampering.MissingNonce)
             claims.Add(new Claim("nonce", pending.Tampering == IdTokenTampering.WrongNonce ? "wrong-nonce" : pending.Nonce));
 
@@ -237,7 +243,8 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
 
     private sealed record PendingCode(
         string ClientId, string RedirectUri, string Nonce, string CodeChallenge, string CodeChallengeMethod,
-        IdTokenTampering Tampering, string Subject, string? Email, string? Name);
+        IdTokenTampering Tampering, string Subject, string? Email, string? Name,
+        string[] TenantIds, string[] Roles);
 }
 
 public enum IdTokenTampering
