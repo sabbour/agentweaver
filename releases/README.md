@@ -66,7 +66,17 @@ It records the pushed digest before later verification can fail.
 
 The existing `v1 release pack` workflow runs this path on Linux.
 Set `foundation_probe_sampler_replacement: true` and the exact `expected_probe_digest`.
-With `publish: false`, it prepares only the Probe archive and creates no claim.
+With `publish: false` and sampler replacement selected, it runs only the frozen-image diagnostic.
+The diagnostic downloads the original artifact from run `37409181340`.
+It verifies the pinned archive, config, DLL, and `f46cff...` image-source metadata without rebuilding the Probe.
+The dispatch source identifies the admitted diagnostic helper, not a new image build.
+The diagnostic job uses only read permissions for contents, Actions, and packages.
+It permits Docker login, archive loading, config inspection, and the current manifest read.
+It never runs the publisher or writes claims, registry uploads, or tags.
+Its isolated credential directory is temporary and removed after the operations.
+The sanitized result gives only operation names, exit values, and allowlisted error codes.
+Successful login and reads do not prove package-write permission or identify the original failure.
+Ordinary `publish: false` without sampler replacement still prepares release artifacts.
 Sampler publication requires separate user approval, the exact current digest, and the permanent single-use claim.
 The sampler-only job has no GitHub environment.
 It uses the ephemeral GitHub token with package-write permission for the fixed GHCR target.
