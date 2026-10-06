@@ -1,12 +1,15 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Storage.AzureFiles;
 
 public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvider
 {
+    private static readonly JsonSerializerOptions BindingJsonOptions = new(JsonSerializerDefaults.Web);
+
     private static readonly ImmutableHashSet<string> RequiredMountOptions =
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
@@ -114,7 +117,21 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 AzureFilesCsiProviderMetadata.ProviderId,
                 claim.Uid,
                 request.ResourceGeneration),
-            capabilities.ToImmutable()).Validate();
+            capabilities.ToImmutable(),
+            new WorkspaceVolumeProviderBindingSnapshot(
+                AzureFilesCsiProviderMetadata.ProviderId,
+                AzureFilesCsiProviderMetadata.AdapterVersion.ToString(),
+                _options.OptionsSchemaVersion,
+                _options.OptionsRevision,
+                JsonSerializer.SerializeToElement(_options, BindingJsonOptions),
+                JsonSerializer.SerializeToElement(
+                    new AzureFilesReleaseDescriptor(
+                        _options.Namespace,
+                        claim.Name,
+                        claim.Uid,
+                        persistentVolume.Name,
+                        persistentVolume.Uid),
+                    BindingJsonOptions))).Validate();
     }
 
     public async Task<WorkspaceVolumeReleaseReceipt> ReleaseAsync(
@@ -122,92 +139,166 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         CancellationToken cancellationToken = default)
     {
         request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
-        if (!string.Equals(
-                request.Resource.ProviderId,
-                AzureFilesCsiProviderMetadata.ProviderId,
-                StringComparison.Ordinal))
-            throw new AzureFilesCsiException(
-                "claim_resource_mismatch",
-                "The pinned Storage provider differs from the Azure Files adapter.");
-
+        var descriptor = ReadReleaseBinding(request);
         var reference = request.Volume;
-        var claimName = GetClaimName(reference.ProjectId, reference.VolumeId, reference.ResourceGeneration);
         var claim = await _client.GetClaimAsync(
-            _options.Namespace,
-            claimName,
+            descriptor.Namespace,
+            descriptor.ClaimName,
             cancellationToken).ConfigureAwait(false);
         if (claim is null)
-            return CreateReleaseReceipt(request, WorkspaceVolumeReleaseDisposition.AlreadyAbsent);
-
-        if (!string.Equals(request.Resource.ResourceId, claim.Uid, StringComparison.Ordinal))
-            throw new AzureFilesCsiException(
-                "claim_resource_mismatch",
-                "The Azure Files claim UID differs from the resource pinned to this volume generation.");
-        ValidateClaimIdentity(claim, _options.Namespace, claimName, reference);
-        if (request.ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Retain)
         {
-            if (string.IsNullOrWhiteSpace(claim.VolumeName))
-                throw new AzureFilesCsiException(
-                    "retained_volume_unbound",
-                    "An unbound Azure Files claim cannot be retained as a ready workspace volume.");
-            var persistentVolume = await _client.GetPersistentVolumeAsync(
-                claim.VolumeName,
-                cancellationToken).ConfigureAwait(false)
-                ?? throw new AzureFilesCsiException(
-                    "persistent_volume_missing",
-                    "The retained Azure Files persistent volume cannot be read.");
-            ValidatePersistentVolumeIdentity(persistentVolume, claim);
-            if (!string.Equals(persistentVolume.ReclaimPolicy, "Retain", StringComparison.Ordinal))
+            var absentClaimPv = await _client.GetPersistentVolumeAsync(
+                descriptor.PersistentVolumeName,
+                cancellationToken).ConfigureAwait(false);
+            if (absentClaimPv is null)
             {
-                await _client.SetPersistentVolumeReclaimPolicyAsync(
-                    persistentVolume.Name,
-                    persistentVolume.Uid,
-                    WorkspaceVolumeReclaimPolicy.Retain,
-                    cancellationToken).ConfigureAwait(false);
-                persistentVolume = await _client.GetPersistentVolumeAsync(
-                    persistentVolume.Name,
-                    cancellationToken).ConfigureAwait(false)
-                    ?? throw new AzureFilesCsiException(
-                        "persistent_volume_missing",
-                        "The retained Azure Files persistent volume disappeared while applying its reclaim policy.");
-                ValidatePersistentVolumeIdentity(persistentVolume, claim);
-                if (!string.Equals(persistentVolume.ReclaimPolicy, "Retain", StringComparison.Ordinal))
-                    throw new AzureFilesCsiException(
-                        "reclaim_policy_unconfirmed",
-                        "The Azure Files persistent volume did not retain the requested reclaim policy.");
+                if (request.ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Delete)
+                    return CreateReleaseReceipt(request, WorkspaceVolumeReleaseDisposition.Released);
+                throw new AzureFilesCsiException(
+                    "retained_volume_missing",
+                    "The exact Azure Files persistent volume is absent and cannot be confirmed as retained.");
             }
+            ValidatePersistentVolumeDescriptor(absentClaimPv, descriptor, reference);
+            if (request.ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Delete)
+                throw new AzureFilesCsiException(
+                    "persistent_volume_release_unconfirmed",
+                    "The exact Azure Files persistent volume still exists after its claim disappeared.");
+            await EnsureRetainedAsync(absentClaimPv, descriptor, cancellationToken).ConfigureAwait(false);
             return CreateReleaseReceipt(request, WorkspaceVolumeReleaseDisposition.Retained);
         }
 
-        if (!string.IsNullOrWhiteSpace(claim.VolumeName))
+        if (!string.Equals(claim.Uid, descriptor.ClaimUid, StringComparison.Ordinal))
+            throw new AzureFilesCsiException(
+                "claim_resource_mismatch",
+                "The Azure Files claim UID differs from the pinned generation descriptor.");
+        ValidateClaimIdentity(claim, descriptor.Namespace, descriptor.ClaimName, reference);
+        if (!string.Equals(claim.Uid, request.Resource.ResourceId, StringComparison.Ordinal) ||
+            !string.Equals(claim.VolumeName, descriptor.PersistentVolumeName, StringComparison.Ordinal))
+            throw new AzureFilesCsiException(
+                "claim_resource_mismatch",
+                "The Azure Files claim does not match its pinned claim and persistent volume identities.");
+        var persistentVolume = await _client.GetPersistentVolumeAsync(
+            descriptor.PersistentVolumeName,
+            cancellationToken).ConfigureAwait(false)
+            ?? throw new AzureFilesCsiException(
+                "persistent_volume_missing",
+                "The exact Azure Files persistent volume cannot be read for release.");
+        ValidatePersistentVolumeDescriptor(persistentVolume, descriptor, reference);
+        if (request.ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Retain)
         {
-            var persistentVolume = await _client.GetPersistentVolumeAsync(
-                claim.VolumeName,
-                cancellationToken).ConfigureAwait(false)
-                ?? throw new AzureFilesCsiException(
-                    "persistent_volume_missing",
-                    "The Azure Files persistent volume cannot be read before deletion.");
-            ValidatePersistentVolumeIdentity(persistentVolume, claim);
-            if (!string.Equals(persistentVolume.ReclaimPolicy, "Delete", StringComparison.Ordinal))
-                throw new AzureFilesCsiException(
-                    "reclaim_policy_mismatch",
-                    "The Azure Files persistent volume is not configured for the requested Delete policy.");
+            await EnsureRetainedAsync(persistentVolume, descriptor, cancellationToken).ConfigureAwait(false);
+            return CreateReleaseReceipt(request, WorkspaceVolumeReleaseDisposition.Retained);
         }
 
+        if (!string.Equals(persistentVolume.ReclaimPolicy, "Delete", StringComparison.Ordinal))
+            throw new AzureFilesCsiException(
+                "reclaim_policy_mismatch",
+                "The Azure Files persistent volume is not configured for the requested Delete policy.");
+
         await _client.DeleteClaimAsync(
-            _options.Namespace,
-            claimName,
+            descriptor.Namespace,
+            descriptor.ClaimName,
             claim.Uid,
             cancellationToken).ConfigureAwait(false);
         var remainingClaim = await _client.GetClaimAsync(
-            _options.Namespace,
-            claimName,
+            descriptor.Namespace,
+            descriptor.ClaimName,
             cancellationToken).ConfigureAwait(false);
         if (remainingClaim is not null)
             throw new AzureFilesCsiException(
                 "claim_release_unconfirmed",
                 "The Azure Files claim still exists after the UID-guarded delete request.");
+        var remainingPv = await _client.GetPersistentVolumeAsync(
+            descriptor.PersistentVolumeName,
+            cancellationToken).ConfigureAwait(false);
+        if (remainingPv is not null)
+        {
+            ValidatePersistentVolumeDescriptor(remainingPv, descriptor, reference);
+            throw new AzureFilesCsiException(
+                "persistent_volume_release_unconfirmed",
+                "The exact Azure Files persistent volume still exists after claim deletion.");
+        }
         return CreateReleaseReceipt(request, WorkspaceVolumeReleaseDisposition.Released);
+    }
+
+    private static AzureFilesReleaseDescriptor ReadReleaseBinding(WorkspaceVolumeReleaseRequest request)
+    {
+        var binding = request.ProviderBinding;
+        if (!string.Equals(
+                binding.ProviderId,
+                AzureFilesCsiProviderMetadata.ProviderId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                binding.AdapterVersion,
+                AzureFilesCsiProviderMetadata.AdapterVersion.ToString(),
+                StringComparison.Ordinal) ||
+            binding.OptionsSchemaVersion != AzureFilesCsiOptions.CurrentOptionsSchemaVersion)
+            throw new AzureFilesCsiException(
+                "provider_binding_unsupported",
+                "The pinned Azure Files provider binding is not supported by this adapter version.");
+
+        AzureFilesCsiOptions options;
+        AzureFilesReleaseDescriptor descriptor;
+        try
+        {
+            options = (JsonSerializer.Deserialize<AzureFilesCsiOptions>(
+                binding.OptionsSnapshot,
+                BindingJsonOptions)
+                ?? throw new JsonException("Provider options are empty.")).Validate();
+            descriptor = JsonSerializer.Deserialize<AzureFilesReleaseDescriptor>(
+                binding.ReleaseDescriptor,
+                BindingJsonOptions)
+                ?? throw new JsonException("The release descriptor is empty.");
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException or NotSupportedException)
+        {
+            throw new AzureFilesCsiException(
+                "provider_binding_invalid",
+                "The pinned Azure Files provider binding is invalid.");
+        }
+
+        if (!string.Equals(options.OptionsRevision, binding.OptionsRevision, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(descriptor.Namespace) ||
+            string.IsNullOrWhiteSpace(descriptor.ClaimName) ||
+            string.IsNullOrWhiteSpace(descriptor.ClaimUid) ||
+            string.IsNullOrWhiteSpace(descriptor.PersistentVolumeName) ||
+            string.IsNullOrWhiteSpace(descriptor.PersistentVolumeUid) ||
+            !string.Equals(descriptor.Namespace, options.Namespace, StringComparison.Ordinal) ||
+            !string.Equals(descriptor.ClaimUid, request.Resource.ResourceId, StringComparison.Ordinal) ||
+            !string.Equals(
+                descriptor.ClaimName,
+                GetClaimName(request.Volume.ProjectId, request.Volume.VolumeId, request.Volume.ResourceGeneration),
+                StringComparison.Ordinal))
+            throw new AzureFilesCsiException(
+                "provider_binding_mismatch",
+                "The pinned Azure Files options or release descriptor does not match the exact resource generation.");
+        return descriptor;
+    }
+
+    private async Task EnsureRetainedAsync(
+        AzureFilesPersistentVolumeSnapshot persistentVolume,
+        AzureFilesReleaseDescriptor descriptor,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(persistentVolume.ReclaimPolicy, "Retain", StringComparison.Ordinal))
+        {
+            await _client.SetPersistentVolumeReclaimPolicyAsync(
+                persistentVolume.Name,
+                persistentVolume.Uid,
+                WorkspaceVolumeReclaimPolicy.Retain,
+                cancellationToken).ConfigureAwait(false);
+            persistentVolume = await _client.GetPersistentVolumeAsync(
+                descriptor.PersistentVolumeName,
+                cancellationToken).ConfigureAwait(false)
+                ?? throw new AzureFilesCsiException(
+                    "persistent_volume_missing",
+                    "The retained Azure Files persistent volume disappeared while applying its reclaim policy.");
+            ValidatePersistentVolumeDescriptor(persistentVolume, descriptor, null);
+            if (!string.Equals(persistentVolume.ReclaimPolicy, "Retain", StringComparison.Ordinal))
+                throw new AzureFilesCsiException(
+                    "reclaim_policy_unconfirmed",
+                    "The Azure Files persistent volume did not retain the requested reclaim policy.");
+        }
     }
 
     private static WorkspaceVolumeReleaseReceipt CreateReleaseReceipt(
@@ -353,10 +444,38 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 "The persistent volume claim reference does not match the current claim UID.");
     }
 
+    private static void ValidatePersistentVolumeDescriptor(
+        AzureFilesPersistentVolumeSnapshot persistentVolume,
+        AzureFilesReleaseDescriptor descriptor,
+        WorkspaceVolumeReference? reference)
+    {
+        if (!string.Equals(persistentVolume.Name, descriptor.PersistentVolumeName, StringComparison.Ordinal) ||
+            !string.Equals(persistentVolume.Uid, descriptor.PersistentVolumeUid, StringComparison.Ordinal) ||
+            !string.Equals(persistentVolume.ClaimNamespace, descriptor.Namespace, StringComparison.Ordinal) ||
+            !string.Equals(persistentVolume.ClaimName, descriptor.ClaimName, StringComparison.Ordinal) ||
+            !string.Equals(persistentVolume.ClaimUid, descriptor.ClaimUid, StringComparison.Ordinal) ||
+            (reference is not null &&
+             (!string.Equals(
+                  descriptor.ClaimName,
+                  GetClaimName(reference.ProjectId, reference.VolumeId, reference.ResourceGeneration),
+                  StringComparison.Ordinal) ||
+              !string.Equals(descriptor.ClaimUid, persistentVolume.ClaimUid, StringComparison.Ordinal))))
+            throw new AzureFilesCsiException(
+                "persistent_volume_mismatch",
+                "The persistent volume identity differs from the exact saved generation descriptor.");
+    }
+
     private static string ToKubernetesReclaimPolicy(WorkspaceVolumeReclaimPolicy policy) => policy switch
     {
         WorkspaceVolumeReclaimPolicy.Delete => "Delete",
         WorkspaceVolumeReclaimPolicy.Retain => "Retain",
         _ => throw new ArgumentOutOfRangeException(nameof(policy))
     };
+
+    private sealed record AzureFilesReleaseDescriptor(
+        string Namespace,
+        string ClaimName,
+        string ClaimUid,
+        string PersistentVolumeName,
+        string PersistentVolumeUid);
 }

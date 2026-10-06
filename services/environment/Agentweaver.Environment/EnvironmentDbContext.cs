@@ -11,6 +11,8 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
     internal DbSet<EnvironmentLifecycleOperationRow> LifecycleOperations =>
         Set<EnvironmentLifecycleOperationRow>();
     internal DbSet<EnvironmentOwnerEffectRow> OwnerEffects => Set<EnvironmentOwnerEffectRow>();
+    internal DbSet<EnvironmentWorkspaceVolumeCleanupRow> WorkspaceVolumeCleanup =>
+        Set<EnvironmentWorkspaceVolumeCleanupRow>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -151,6 +153,10 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
             entity.Property(row => row.TargetVolumeState).HasColumnName("target_volume_state").HasMaxLength(16);
             entity.Property(row => row.Operation).HasColumnName("operation").HasMaxLength(32);
             entity.Property(row => row.SpecificationJson).HasColumnName("specification_json").HasColumnType("jsonb");
+            entity.Property(row => row.ExpectedProviderBindingJson)
+                .HasColumnName("expected_provider_binding_json").HasColumnType("jsonb");
+            entity.Property(row => row.TargetProviderBindingJson)
+                .HasColumnName("target_provider_binding_json").HasColumnType("jsonb");
             entity.Property(row => row.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
             entity.Property(row => row.RequestFingerprint).HasColumnName("request_fingerprint").HasMaxLength(64);
             entity.Property(row => row.State).HasColumnName("effect_state").HasMaxLength(32);
@@ -204,6 +210,59 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
             entity.HasOne<EnvironmentOwnerRow>()
                 .WithMany()
                 .HasForeignKey(row => new { row.TenantId, row.ProjectId, row.RunId, row.EnvironmentId })
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<EnvironmentWorkspaceVolumeCleanupRow>(entity =>
+        {
+            entity.ToTable("workspace_volume_cleanup", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_environment_workspace_volume_cleanup_state",
+                    "state IN ('Pending', 'Leased', 'Blocked', 'Completed')");
+                table.HasCheckConstraint(
+                    "ck_environment_workspace_volume_cleanup_lease",
+                    "lease_revision >= 0 AND ((state = 'Leased' AND lease_revision > 0 AND lease_id IS NOT NULL AND lease_expires_at IS NOT NULL) OR (state <> 'Leased' AND lease_id IS NULL AND lease_expires_at IS NULL))");
+                table.HasCheckConstraint(
+                    "ck_environment_workspace_volume_cleanup_generation",
+                    "lifecycle_generation > 0 AND resource_generation > 0");
+            });
+            entity.HasKey(row => row.WorkId);
+            entity.Property(row => row.WorkId).HasColumnName("work_id");
+            entity.Property(row => row.TenantId).HasColumnName("tenant_id").HasMaxLength(256);
+            entity.Property(row => row.ProjectId).HasColumnName("project_id").HasMaxLength(256);
+            entity.Property(row => row.RunId).HasColumnName("run_id").HasMaxLength(256);
+            entity.Property(row => row.EnvironmentId).HasColumnName("environment_id").HasMaxLength(256);
+            entity.Property(row => row.LifecycleGeneration).HasColumnName("lifecycle_generation");
+            entity.Property(row => row.SourceReplaceOperationId).HasColumnName("source_replace_operation_id");
+            entity.Property(row => row.VolumeId).HasColumnName("volume_id").HasMaxLength(512);
+            entity.Property(row => row.ResourceGeneration).HasColumnName("resource_generation");
+            entity.Property(row => row.ReleaseRequestJson).HasColumnName("release_request_json").HasColumnType("jsonb");
+            entity.Property(row => row.State).HasColumnName("state").HasMaxLength(16);
+            entity.Property(row => row.BlockReason).HasColumnName("block_reason").HasMaxLength(128);
+            entity.Property(row => row.LeaseRevision).HasColumnName("lease_revision");
+            entity.Property(row => row.LeaseId).HasColumnName("lease_id");
+            entity.Property(row => row.LeaseExpiresAt).HasColumnName("lease_expires_at");
+            entity.Property(row => row.CreatedAt).HasColumnName("created_at");
+            entity.Property(row => row.UpdatedAt).HasColumnName("updated_at");
+            entity.Property(row => row.CompletedAt).HasColumnName("completed_at");
+            entity.HasIndex(row => row.SourceReplaceOperationId).IsUnique();
+            entity.HasIndex(row => new
+            {
+                row.TenantId,
+                row.ProjectId,
+                row.RunId,
+                row.EnvironmentId,
+                row.State,
+                row.CreatedAt
+            });
+            entity.HasOne<EnvironmentOwnerRow>()
+                .WithMany()
+                .HasForeignKey(row => new { row.TenantId, row.ProjectId, row.RunId, row.EnvironmentId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<EnvironmentOwnerEffectRow>()
+                .WithMany()
+                .HasForeignKey(row => row.SourceReplaceOperationId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
     }
@@ -264,7 +323,31 @@ internal sealed class EnvironmentOwnerEffectRow
     public string? TargetVolumeState { get; set; }
     public string Operation { get; set; } = string.Empty;
     public string? SpecificationJson { get; set; }
+    public string? ExpectedProviderBindingJson { get; set; }
+    public string? TargetProviderBindingJson { get; set; }
     public string State { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+}
+
+internal sealed class EnvironmentWorkspaceVolumeCleanupRow
+{
+    public Guid WorkId { get; set; }
+    public string TenantId { get; set; } = string.Empty;
+    public string ProjectId { get; set; } = string.Empty;
+    public string RunId { get; set; } = string.Empty;
+    public string EnvironmentId { get; set; } = string.Empty;
+    public long LifecycleGeneration { get; set; }
+    public Guid SourceReplaceOperationId { get; set; }
+    public string VolumeId { get; set; } = string.Empty;
+    public long ResourceGeneration { get; set; }
+    public string ReleaseRequestJson { get; set; } = string.Empty;
+    public string State { get; set; } = string.Empty;
+    public string? BlockReason { get; set; }
+    public long LeaseRevision { get; set; }
+    public Guid? LeaseId { get; set; }
+    public DateTimeOffset? LeaseExpiresAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }
 }

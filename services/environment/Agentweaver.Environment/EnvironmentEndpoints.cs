@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using Agentweaver.Abstractions;
+using Agentweaver.Providers.Storage.AzureFiles;
 
 namespace Agentweaver.Environment;
 
@@ -125,7 +126,208 @@ public static class EnvironmentEndpoints
             })
             .RequireAuthorization();
 
+        var workspaceVolumes = endpoints.MapGroup(
+                "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes")
+            .RequireAuthorization();
+        workspaceVolumes.MapGet("/{volumeId}", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            string volumeId,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteWorkspaceVolumeApiAsync(async () =>
+            {
+                var snapshot = await manager.InspectAsync(
+                    caller!, projectId, runId, environmentId, volumeId, cancellationToken).ConfigureAwait(false);
+                return snapshot is null ? Results.NotFound() : Results.Ok(snapshot);
+            }, cancellationToken).ConfigureAwait(false);
+        });
+        workspaceVolumes.MapPost("/{volumeId}", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            string volumeId,
+            CreateWorkspaceVolumeApiRequest request,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteWorkspaceVolumeApiAsync(async () =>
+                Results.Ok(await manager.CreateAsync(
+                    caller!, projectId, runId, environmentId, volumeId, request, cancellationToken)
+                    .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
+        });
+        MapWorkspaceVolumeTransition(
+            workspaceVolumes, "provision",
+            static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
+                manager.ProvisionAsync(
+                    caller, projectId, runId, environmentId, volumeId, request, token));
+        MapWorkspaceVolumeTransition(
+            workspaceVolumes, "replace",
+            static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
+                manager.ReplaceAsync(
+                    caller, projectId, runId, environmentId, volumeId, request, token));
+        MapWorkspaceVolumeTransition(
+            workspaceVolumes, "bind",
+            static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
+                manager.BindVolumeAsync(
+                    caller, projectId, runId, environmentId, volumeId, request, token));
+        MapWorkspaceVolumeTransition(
+            workspaceVolumes, "unbind",
+            static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
+                manager.UnbindAsync(
+                    caller, projectId, runId, environmentId, volumeId, request, token));
+        MapWorkspaceVolumeTransition(
+            workspaceVolumes, "release",
+            static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
+                manager.ReleaseAsync(
+                    caller, projectId, runId, environmentId, volumeId, request, token));
+        workspaceVolumes.MapPost("/cleanup/retry", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteWorkspaceVolumeApiAsync(async () =>
+            {
+                var status = await manager.RetryCleanupAsync(
+                    caller!, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+                return status is null
+                    ? Results.NoContent()
+                    : status.State == EnvironmentWorkspaceVolumeCleanupState.Completed
+                        ? Results.Ok(status)
+                        : Results.Json(status, statusCode: StatusCodes.Status202Accepted);
+            }, cancellationToken).ConfigureAwait(false);
+        });
+        workspaceVolumes.MapPost("/cleanup/{sourceReplaceOperationId:guid}/reconcile", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            Guid sourceReplaceOperationId,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteWorkspaceVolumeApiAsync(async () =>
+            {
+                var status = await manager.ReconcileCleanupAsync(
+                    caller!, projectId, runId, environmentId, sourceReplaceOperationId, cancellationToken)
+                    .ConfigureAwait(false);
+                return status is null
+                    ? Results.NotFound()
+                    : status.State == EnvironmentWorkspaceVolumeCleanupState.Completed
+                        ? Results.Ok(status)
+                        : Results.Json(status, statusCode: StatusCodes.Status202Accepted);
+            }, cancellationToken).ConfigureAwait(false);
+        });
+
         return endpoints;
+    }
+
+    private static void MapWorkspaceVolumeTransition(
+        RouteGroupBuilder group,
+        string route,
+        Func<EnvironmentWorkspaceVolumeManager, CurrentCallerRequest, string, string, string, string,
+            WorkspaceVolumeApiTransitionRequest, CancellationToken, Task<WorkspaceVolumeLifecycleResult>> execute)
+    {
+        group.MapPost($"/{{volumeId}}/{route}", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            string volumeId,
+            WorkspaceVolumeApiTransitionRequest request,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteWorkspaceVolumeApiAsync(async () =>
+            {
+                var result = await execute(
+                    manager, caller!, projectId, runId, environmentId, volumeId, request, cancellationToken)
+                    .ConfigureAwait(false);
+                return result.CleanupPending
+                    ? Results.Json(result, statusCode: StatusCodes.Status202Accepted)
+                    : Results.Ok(result);
+            }, cancellationToken).ConfigureAwait(false);
+        });
+    }
+
+    private static async Task<IResult> ExecuteWorkspaceVolumeApiAsync(
+        Func<Task<IResult>> operation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await operation().ConfigureAwait(false);
+        }
+        catch (ProjectsConfigApiException exception)
+        {
+            return ToProjectAuthorizationResult(exception);
+        }
+        catch (EnvironmentLifecycleException exception)
+        {
+            var status = exception.Code == "environment_unknown"
+                ? StatusCodes.Status404NotFound
+                : StatusCodes.Status409Conflict;
+            return Results.Json(new { code = exception.Code, message = exception.Message }, statusCode: status);
+        }
+        catch (KeyNotFoundException exception)
+        {
+            return Results.Json(
+                new { code = "workspace_volume_unknown", message = exception.Message },
+                statusCode: StatusCodes.Status404NotFound);
+        }
+        catch (ArgumentException exception)
+        {
+            return Results.BadRequest(new { code = "invalid_workspace_volume_request", message = exception.Message });
+        }
+        catch (NotSupportedException exception)
+        {
+            return Results.Conflict(new { code = "workspace_volume_operation_unsupported", message = exception.Message });
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Results.Conflict(new { code = "workspace_volume_state_conflict", message = exception.Message });
+        }
+        catch (AzureFilesCsiException)
+        {
+            return Results.Json(
+                new { code = "storage_provider_unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (AzureFilesKubernetesApiException)
+        {
+            return Results.Json(
+                new { code = "storage_provider_unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (HttpRequestException)
+        {
+            return Results.Json(
+                new { code = "upstream_unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(
+                new { code = "upstream_timeout" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
     }
 
     private static bool TryReadCaller(HttpContext context, out CurrentCallerRequest? caller)

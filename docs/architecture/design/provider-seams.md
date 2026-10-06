@@ -452,25 +452,29 @@ boundary. It derives a stable, project-scoped PVC name from the volume ID and ge
 existing claim's owner annotations and requested capacity/access mode, verifies the bound PV's claim UID,
 and uses UID preconditions when changing reclaim policy or deleting a claim. Its StorageClass must use the
 approved `uid=1000`, `gid=1000`, file/dir modes, `mfsymlinks`, strict cache, and `actimeo=30` options.
-Release returns a receipt bound to the exact provider resource and idempotency key. `AlreadyAbsent` means
-the generation's deterministic claim was absent on lookup, `Retained` requires a read-back of the PV's
-`Retain` policy, and `Released` requires a UID-preconditioned PVC delete followed by a read confirming that
-the claim is absent. An unconfirmed delete fails without a receipt. This confirms PVC control-plane removal;
-it does not promise data erasure or completion of asynchronous CSI backend cleanup. Environment must validate
-the receipt before recording owner-side release completion. For Delete cleanup, `AlreadyAbsent` is sufficient
-only when the owner correlates it with immutable history for that exact old resource reference. `Retained`
-records preservation, not cleanup or deletion.
-A Replace cleanup work item must be written atomically with the owner CAS that pins the verified target. It
-preserves the old resource reference, original provider binding and options revision from successful owner
-effect/pin history, resource generation, both reclaim and owner-deletion policies, source-operation proof,
-and stable idempotency key. While cleanup is pending, the old resource remains Retiring and cannot be rebound;
-lease expiry does not make it available. Before physical deletion, Environment claims the item under the current
-fence and expected work revision, then rechecks that the old resource is neither current nor actively shared and
-that owner policy permits deletion. Retries use the original binding and re-prove current authority after
-lifecycle advancement; a Delete cleanup closes only with a matching `Released` receipt or owner-proven
-`AlreadyAbsent` receipt. A `Retained` receipt cannot close a deletion cleanup, and `AlreadyAbsent` under Retain
-never authorizes purge. Failed work remains durably pending. The provider receipt cannot attest owner-side
-sharing or reference safety.
+Environment pins the adapter version, options schema and revision, non-secret options snapshot, and exact
+claim/PV release descriptor with each provisioned generation. Release receipts bind the exact provider
+resource and idempotency key. `Retained` requires a read-back of the exact PV's `Retain` policy. `Released`
+requires either a UID-preconditioned claim delete followed by reads confirming both claim absence and
+absence of the exact saved PV, or a retry that confirms those same identities are already absent. A missing
+claim alone is not proof of release. The receipt confirms Kubernetes control-plane removal; it does not
+promise Azure Files data erasure or completion of asynchronous CSI backend cleanup. Environment validates
+the receipt before recording owner-side release completion. `AlreadyAbsent` is not accepted as a release
+receipt for either reclaim policy.
+
+A Replace cleanup work item is inserted atomically with the owner CAS that pins the verified target. It
+preserves the exact old resource reference and generation, original provider binding/options snapshot and
+release descriptor from completed owner history, both reclaim and owner-deletion policies, source-operation
+proof, and stable idempotency key. The old reference is kept only in that durable cleanup work; it is not
+available through the current volume snapshot for rebinding. The Environment owner claims pending work under
+the current lifecycle fence and expected lease revision, with a database-time expiry and unique lease ID.
+Before cleanup, the owner prevents deleting the current generation; `shared` plus `Delete` stays blocked
+because there is no authoritative cross-owner reference registry. The worker uses the original pinned
+binding, rechecks current authorization around the provider call, and can complete only with the matching
+unexpired lease and exact `Released` receipt. `Retained` records preservation and leaves cleanup blocked;
+an `AlreadyAbsent` disposition cannot close work. Failures and expired leases remain durably retryable, and
+Environment release is blocked while any cleanup is incomplete. The provider receipt cannot attest
+owner-side sharing or data erasure.
 The adapter does not advertise Sandbox attachment or durable-flush capability: a provisioned PVC is not
 proof that a selected Sandbox can attach it or provide the requested flush semantics. The Environment
 lifecycle must negotiate those capabilities and the actual resources before dispatch or immutable pinning.

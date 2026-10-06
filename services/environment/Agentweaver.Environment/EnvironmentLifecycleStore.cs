@@ -16,10 +16,12 @@ public sealed class EnvironmentLifecycleStore(
     NpgsqlDataSource dataSource,
     TimeProvider timeProvider) : IEnvironmentLifecycleStore
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private const string Schema = "\"environment\"";
     private const string Owners = $"{Schema}.\"owners\"";
     private const string LifecycleOperations = $"{Schema}.\"lifecycle_operations\"";
     private const string OwnerEffects = $"{Schema}.\"owner_effects\"";
+    private const string WorkspaceVolumeCleanup = $"{Schema}.\"workspace_volume_cleanup\"";
 
     public async Task<EnvironmentLifecycleSnapshot?> GetAsync(
         EnvironmentOwnerIdentity owner,
@@ -521,12 +523,13 @@ public sealed class EnvironmentLifecycleStore(
             SELECT o.lifecycle_generation, latest.target_transition_revision,
                    latest.target_resource_generation, latest.target_data_generation,
                    latest.target_volume_state, latest.operation, latest.target_provider_seam,
-                   latest.target_provider_id, latest.target_provider_resource_id, spec.specification_json
+                   latest.target_provider_id, latest.target_provider_resource_id,
+                   latest.target_provider_binding_json, spec.specification_json
             FROM {Owners} AS o
             JOIN LATERAL (
                 SELECT target_transition_revision, target_resource_generation,
                        target_data_generation, target_volume_state, operation, target_provider_seam,
-                       target_provider_id, target_provider_resource_id
+                       target_provider_id, target_provider_resource_id, target_provider_binding_json
                 FROM {OwnerEffects}
                 WHERE tenant_id = o.tenant_id AND project_id = o.project_id
                   AND run_id = o.run_id AND environment_id = o.environment_id
@@ -568,8 +571,9 @@ public sealed class EnvironmentLifecycleStore(
                 reader.GetInt64(3),
                 Enum.Parse<EnvironmentWorkspaceVolumeState>(reader.GetString(4), ignoreCase: false),
                 Enum.Parse<EnvironmentWorkspaceVolumeOperation>(reader.GetString(5), ignoreCase: false),
-                ParseSpecification(reader.GetString(9)),
-                ReadProviderResource(reader, 6, 7, 8, reader.GetInt64(2), "snapshot target"))
+                ParseSpecification(reader.GetString(10)),
+                ReadProviderResource(reader, 6, 7, 8, reader.GetInt64(2), "snapshot target"),
+                ReadProviderBinding(reader, 9, ReadProviderResource(reader, 6, 7, 8, reader.GetInt64(2), "snapshot target")))
             : null;
         await reader.DisposeAsync().ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -607,7 +611,8 @@ public sealed class EnvironmentLifecycleStore(
             reservation.TargetPhase,
             EnvironmentWorkspaceVolumeOperation.Create,
             specification.Clone(),
-            reservation.CurrentResource);
+            reservation.CurrentResource,
+            reservation.CurrentProviderBinding);
     }
 
     public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeProvisionAsync(
@@ -635,6 +640,7 @@ public sealed class EnvironmentLifecycleStore(
         EnvironmentGenerationFence environmentFence,
         bool effectMayHaveApplied,
         ProviderResourceRef? providerResource,
+        WorkspaceVolumeProviderBindingSnapshot? providerBinding,
         bool effectVerified,
         CancellationToken cancellationToken) =>
         CompleteWorkspaceVolumeTransitionCoreAsync(
@@ -643,6 +649,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Provision,
             effectMayHaveApplied,
             providerResource,
+            providerBinding,
             effectVerified,
             durableFlushVerified: false,
             cancellationToken);
@@ -682,6 +689,7 @@ public sealed class EnvironmentLifecycleStore(
         EnvironmentGenerationFence environmentFence,
         bool effectMayHaveApplied,
         ProviderResourceRef? providerResource,
+        WorkspaceVolumeProviderBindingSnapshot? providerBinding,
         bool effectVerified,
         CancellationToken cancellationToken) =>
         CompleteWorkspaceVolumeTransitionCoreAsync(
@@ -690,6 +698,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Replace,
             effectMayHaveApplied,
             providerResource,
+            providerBinding,
             effectVerified,
             durableFlushVerified: false,
             cancellationToken);
@@ -737,6 +746,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Bind,
             effectMayHaveApplied,
             providerResource,
+            providerBinding: null,
             effectVerified,
             durableFlushVerified: false,
             cancellationToken);
@@ -784,6 +794,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Unbind,
             effectMayHaveApplied,
             providerResource,
+            providerBinding: null,
             effectVerified,
             durableFlushVerified: false,
             cancellationToken);
@@ -831,6 +842,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Attach,
             effectMayHaveApplied,
             providerResource,
+            providerBinding: null,
             effectVerified,
             durableFlushVerified: false,
             cancellationToken);
@@ -878,6 +890,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Detach,
             effectMayHaveApplied,
             providerResource,
+            providerBinding: null,
             effectVerified,
             durableFlushVerified: false,
             cancellationToken);
@@ -927,6 +940,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Flush,
             effectMayHaveApplied,
             providerResource,
+            providerBinding: null,
             effectVerified,
             durableFlushVerified,
             cancellationToken);
@@ -973,6 +987,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Release,
             effectMayHaveApplied,
             providerResource: null,
+            providerBinding: null,
             releaseVerified,
             durableFlushVerified: false,
             cancellationToken);
@@ -986,6 +1001,260 @@ public sealed class EnvironmentLifecycleStore(
             environmentFence,
             EnvironmentWorkspaceVolumeOperation.Release,
             cancellationToken);
+
+    public async Task<EnvironmentWorkspaceVolumeCleanupLease?> ClaimWorkspaceVolumeCleanupAsync(
+        EnvironmentGenerationFence environmentFence,
+        Guid? sourceReplaceOperationId,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(environmentFence);
+        if (sourceReplaceOperationId == Guid.Empty)
+            throw new ArgumentException("A source replace operation ID cannot be empty.", nameof(sourceReplaceOperationId));
+        if (leaseDuration <= TimeSpan.Zero || leaseDuration > TimeSpan.FromMinutes(5))
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration));
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await AcquireOwnerLockAsync(connection, transaction, environmentFence.Owner, cancellationToken)
+            .ConfigureAwait(false);
+        await RequireActiveInTransactionAsync(connection, transaction, environmentFence, cancellationToken)
+            .ConfigureAwait(false);
+
+        var leaseId = Guid.NewGuid();
+        await using var command = new NpgsqlCommand($"""
+            WITH candidate AS (
+                SELECT work.work_id
+                FROM {WorkspaceVolumeCleanup} AS work
+                JOIN {Owners} AS owner
+                  ON owner.tenant_id = work.tenant_id
+                 AND owner.project_id = work.project_id
+                 AND owner.run_id = work.run_id
+                 AND owner.environment_id = work.environment_id
+                WHERE work.tenant_id = @tenant_id AND work.project_id = @project_id
+                  AND work.run_id = @run_id AND work.environment_id = @environment_id
+                  AND owner.lifecycle_generation = @lifecycle_generation
+                  AND owner.state = 'Active'
+                  AND (@source_replace_operation_id IS NULL
+                       OR work.source_replace_operation_id = @source_replace_operation_id)
+                  AND (work.state = 'Pending'
+                       OR (work.state = 'Leased' AND work.lease_expires_at <= clock_timestamp()))
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM {OwnerEffects} AS latest
+                      WHERE latest.tenant_id = work.tenant_id
+                        AND latest.project_id = work.project_id
+                        AND latest.run_id = work.run_id
+                        AND latest.environment_id = work.environment_id
+                        AND latest.effect_kind = 'WorkspaceVolume'
+                        AND latest.resource_id = work.volume_id
+                        AND latest.effect_state = 'Completed'
+                        AND latest.target_transition_revision = (
+                            SELECT max(current_effect.target_transition_revision)
+                            FROM {OwnerEffects} AS current_effect
+                            WHERE current_effect.tenant_id = work.tenant_id
+                              AND current_effect.project_id = work.project_id
+                              AND current_effect.run_id = work.run_id
+                              AND current_effect.environment_id = work.environment_id
+                              AND current_effect.effect_kind = 'WorkspaceVolume'
+                              AND current_effect.resource_id = work.volume_id
+                              AND current_effect.effect_state = 'Completed')
+                        AND latest.target_resource_generation = work.resource_generation
+                        AND latest.target_volume_state <> 'Released')
+                ORDER BY work.created_at, work.work_id
+                LIMIT 1
+                FOR UPDATE OF work SKIP LOCKED
+            )
+            UPDATE {WorkspaceVolumeCleanup} AS work
+            SET state = 'Leased',
+                lease_revision = work.lease_revision + 1,
+                lease_id = @lease_id,
+                lease_expires_at = clock_timestamp() + @lease_duration,
+                updated_at = clock_timestamp()
+            FROM candidate
+            WHERE work.work_id = candidate.work_id
+            RETURNING work.work_id, work.lifecycle_generation,
+                      work.source_replace_operation_id, work.volume_id,
+                      work.resource_generation, work.release_request_json,
+                      work.lease_revision, work.lease_id, work.lease_expires_at
+            """, connection, transaction);
+        AddOwnerParameters(command, environmentFence.Owner);
+        command.Parameters.AddWithValue(
+            "lifecycle_generation",
+            NpgsqlDbType.Bigint,
+            environmentFence.LifecycleGeneration);
+        command.Parameters.AddWithValue(
+            "source_replace_operation_id",
+            NpgsqlDbType.Uuid,
+            (object?)sourceReplaceOperationId ?? DBNull.Value);
+        command.Parameters.AddWithValue("lease_id", NpgsqlDbType.Uuid, leaseId);
+        command.Parameters.AddWithValue("lease_duration", NpgsqlDbType.Interval, leaseDuration);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await reader.DisposeAsync().ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+        var releaseRequest = JsonSerializer.Deserialize<WorkspaceVolumeReleaseRequest>(
+            reader.GetString(5),
+            JsonOptions)
+            ?? throw new EnvironmentLifecycleException(
+                "environment_volume_cleanup_corrupt",
+                "The persisted workspace-volume cleanup release request is empty.");
+        var lease = new EnvironmentWorkspaceVolumeCleanupLease(
+            reader.GetGuid(0),
+            environmentFence,
+            reader.GetGuid(2),
+            reader.GetInt64(1),
+            reader.GetString(3),
+            reader.GetInt64(4),
+            releaseRequest,
+            reader.GetInt64(6),
+            reader.GetGuid(7),
+            reader.GetFieldValue<DateTimeOffset>(8)).Validate();
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return lease;
+    }
+
+    public async Task<EnvironmentWorkspaceVolumeCleanupStatus> CompleteWorkspaceVolumeCleanupAsync(
+        EnvironmentWorkspaceVolumeCleanupLease lease,
+        WorkspaceVolumeReleaseReceipt receipt,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        ArgumentNullException.ThrowIfNull(receipt);
+        lease.Validate();
+        _ = receipt.ValidateFor(lease.ReleaseRequest);
+        var cleanupState = receipt.Disposition switch
+        {
+            WorkspaceVolumeReleaseDisposition.Released => EnvironmentWorkspaceVolumeCleanupState.Completed,
+            WorkspaceVolumeReleaseDisposition.Retained => EnvironmentWorkspaceVolumeCleanupState.Blocked,
+            _ => throw new ArgumentOutOfRangeException(nameof(receipt), "Cleanup requires a verified release or retain receipt.")
+        };
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await AcquireOwnerLockAsync(connection, transaction, lease.Fence.Owner, cancellationToken)
+            .ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            UPDATE {WorkspaceVolumeCleanup} AS work
+            SET state = @state,
+                lease_id = NULL,
+                lease_expires_at = NULL,
+                completed_at = CASE WHEN @state = 'Completed' THEN clock_timestamp() ELSE NULL END,
+                updated_at = clock_timestamp()
+            FROM {Owners} AS owner
+            WHERE work.work_id = @work_id
+              AND work.tenant_id = @tenant_id AND work.project_id = @project_id
+              AND work.run_id = @run_id AND work.environment_id = @environment_id
+              AND work.source_replace_operation_id = @source_replace_operation_id
+              AND work.lifecycle_generation = @source_lifecycle_generation
+              AND work.resource_generation = @resource_generation
+              AND work.state = 'Leased'
+              AND work.lease_revision = @lease_revision
+              AND work.lease_id = @lease_id
+              AND work.lease_expires_at > clock_timestamp()
+              AND work.release_request_json = @release_request_json
+              AND owner.tenant_id = work.tenant_id AND owner.project_id = work.project_id
+              AND owner.run_id = work.run_id AND owner.environment_id = work.environment_id
+              AND owner.lifecycle_generation = @lifecycle_generation
+              AND owner.state = 'Active'
+            RETURNING work.work_id, work.source_replace_operation_id, work.volume_id,
+                      work.resource_generation, work.state, work.lease_revision,
+                      work.lease_expires_at
+            """, connection, transaction);
+        AddCleanupLeaseParameters(command, lease);
+        command.Parameters.AddWithValue("state", NpgsqlDbType.Text, cleanupState.ToString());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new EnvironmentLifecycleException(
+                "environment_volume_cleanup_lease_stale",
+                "The workspace-volume cleanup lease is stale, expired, or no longer owner-authorized.");
+        var status = ReadCleanupStatus(reader);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return status;
+    }
+
+    public async Task ReleaseWorkspaceVolumeCleanupLeaseAsync(
+        EnvironmentWorkspaceVolumeCleanupLease lease,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        lease.Validate();
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await AcquireOwnerLockAsync(connection, transaction, lease.Fence.Owner, cancellationToken)
+            .ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            UPDATE {WorkspaceVolumeCleanup} AS work
+            SET state = 'Pending',
+                lease_id = NULL,
+                lease_expires_at = NULL,
+                updated_at = clock_timestamp()
+            FROM {Owners} AS owner
+            WHERE work.work_id = @work_id
+              AND work.tenant_id = @tenant_id AND work.project_id = @project_id
+              AND work.run_id = @run_id AND work.environment_id = @environment_id
+              AND work.source_replace_operation_id = @source_replace_operation_id
+              AND work.lifecycle_generation = @source_lifecycle_generation
+              AND work.resource_generation = @resource_generation
+              AND work.state = 'Leased'
+              AND work.lease_revision = @lease_revision
+              AND work.lease_id = @lease_id
+              AND work.lease_expires_at > clock_timestamp()
+              AND owner.tenant_id = work.tenant_id AND owner.project_id = work.project_id
+              AND owner.run_id = work.run_id AND owner.environment_id = work.environment_id
+              AND owner.lifecycle_generation = @lifecycle_generation
+              AND owner.state = 'Active'
+            """, connection, transaction);
+        AddCleanupLeaseParameters(command, lease);
+        if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            throw new EnvironmentLifecycleException(
+                "environment_volume_cleanup_lease_stale",
+                "The workspace-volume cleanup lease is stale, expired, or no longer owner-authorized.");
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<EnvironmentWorkspaceVolumeCleanupStatus?> GetWorkspaceVolumeCleanupStatusAsync(
+        EnvironmentGenerationFence environmentFence,
+        Guid sourceReplaceOperationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(environmentFence);
+        if (sourceReplaceOperationId == Guid.Empty)
+            throw new ArgumentException(
+                "A source replace operation ID cannot be empty.",
+                nameof(sourceReplaceOperationId));
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT work_id, source_replace_operation_id, volume_id, resource_generation,
+                   work.state, lease_revision, lease_expires_at
+            FROM {WorkspaceVolumeCleanup} AS work
+            JOIN {Owners} AS owner
+              ON owner.tenant_id = work.tenant_id AND owner.project_id = work.project_id
+             AND owner.run_id = work.run_id AND owner.environment_id = work.environment_id
+            WHERE work.tenant_id = @tenant_id AND work.project_id = @project_id
+              AND work.run_id = @run_id AND work.environment_id = @environment_id
+              AND owner.lifecycle_generation = @lifecycle_generation AND owner.state = 'Active'
+              AND work.lifecycle_generation <= @lifecycle_generation
+              AND work.source_replace_operation_id = @source_replace_operation_id
+            """, connection);
+        AddOwnerParameters(command, environmentFence.Owner);
+        command.Parameters.AddWithValue(
+            "lifecycle_generation",
+            NpgsqlDbType.Bigint,
+            environmentFence.LifecycleGeneration);
+        command.Parameters.AddWithValue(
+            "source_replace_operation_id",
+            NpgsqlDbType.Uuid,
+            sourceReplaceOperationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadCleanupStatus(reader)
+            : null;
+    }
 
     private Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeOperationAsync(
         EnvironmentGenerationFence environmentFence,
@@ -1078,6 +1347,13 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Release
                 ? null
                 : current?.Resource;
+        var expectedProviderBinding = current?.ProviderBinding;
+        var targetProviderBinding = request.Operation is EnvironmentWorkspaceVolumeOperation.Create or
+            EnvironmentWorkspaceVolumeOperation.Provision or
+            EnvironmentWorkspaceVolumeOperation.Replace or
+            EnvironmentWorkspaceVolumeOperation.Release
+                ? null
+                : current?.ProviderBinding;
         var operation = new WorkspaceVolumeOperation(
             Guid.NewGuid(),
             request.EnvironmentFence.Owner,
@@ -1100,7 +1376,9 @@ public sealed class EnvironmentLifecycleStore(
             ownerOnlyTransition ? now : null,
             request.SpecificationJson,
             expectedResource,
-            targetResource);
+            targetResource,
+            expectedProviderBinding,
+            targetProviderBinding);
         await InsertWorkspaceVolumeOwnerEffectAsync(
             connection, transaction, operation, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -1113,6 +1391,7 @@ public sealed class EnvironmentLifecycleStore(
         EnvironmentWorkspaceVolumeOperation expectedOperation,
         bool effectMayHaveApplied,
         ProviderResourceRef? providerResource,
+        WorkspaceVolumeProviderBindingSnapshot? providerBinding,
         bool effectVerified,
         bool durableFlushVerified,
         CancellationToken cancellationToken)
@@ -1163,8 +1442,16 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Release => providerResource is null,
             _ => providerResource == operation.ExpectedResource
         };
+        var bindingMatchesTarget = operation.Operation switch
+        {
+            EnvironmentWorkspaceVolumeOperation.Provision or
+                EnvironmentWorkspaceVolumeOperation.Replace =>
+                IsValidProviderBinding(providerBinding, providerResource),
+            _ => providerBinding is null
+        };
         var operationVerified = effectVerified &&
             resourceMatchesTarget &&
+            bindingMatchesTarget &&
             (operation.Operation != EnvironmentWorkspaceVolumeOperation.Flush || durableFlushVerified);
         var complete = ownerCurrent && effectMayHaveApplied && operationVerified;
         var operationState = complete
@@ -1175,6 +1462,19 @@ public sealed class EnvironmentLifecycleStore(
                     ? EnvironmentWorkspaceVolumeTransitionState.Failed
                     : EnvironmentWorkspaceVolumeTransitionState.Stale;
 
+        if (!complete)
+        {
+            await UpdateWorkspaceVolumeEffectStateAsync(
+                connection,
+                transaction,
+                operationId,
+                EnvironmentWorkspaceVolumeTransitionState.Reserved,
+                operationState,
+                operation.TargetResource,
+                operation.TargetProviderBinding,
+                timeProvider.GetUtcNow(),
+                cancellationToken).ConfigureAwait(false);
+        }
         if (complete)
         {
             await UpdateWorkspaceVolumeEffectStateAsync(
@@ -1184,20 +1484,19 @@ public sealed class EnvironmentLifecycleStore(
                 EnvironmentWorkspaceVolumeTransitionState.Reserved,
                 EnvironmentWorkspaceVolumeTransitionState.Completed,
                 providerResource,
+                operation.Operation is EnvironmentWorkspaceVolumeOperation.Provision or
+                    EnvironmentWorkspaceVolumeOperation.Replace
+                    ? providerBinding
+                    : operation.TargetProviderBinding,
                 timeProvider.GetUtcNow(),
                 cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            await UpdateWorkspaceVolumeEffectStateAsync(
-                connection,
-                transaction,
-                operationId,
-                EnvironmentWorkspaceVolumeTransitionState.Reserved,
-                operationState,
-                operation.TargetResource,
-                timeProvider.GetUtcNow(),
-                cancellationToken).ConfigureAwait(false);
+            if (operation.Operation == EnvironmentWorkspaceVolumeOperation.Replace)
+                await InsertWorkspaceVolumeCleanupAsync(
+                    connection,
+                    transaction,
+                    operation,
+                    timeProvider.GetUtcNow(),
+                    cancellationToken).ConfigureAwait(false);
         }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return ToVolumeResult(
@@ -1249,6 +1548,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired,
             EnvironmentWorkspaceVolumeTransitionState.Reconciled,
             operation.TargetResource,
+            operation.TargetProviderBinding,
             timeProvider.GetUtcNow(),
             cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -1261,6 +1561,113 @@ public sealed class EnvironmentLifecycleStore(
             replayed: false);
     }
 
+    private static async Task InsertWorkspaceVolumeCleanupAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        WorkspaceVolumeOperation operation,
+        DateTimeOffset createdAt,
+        CancellationToken cancellationToken)
+    {
+        var oldResource = operation.ExpectedResource
+            ?? throw new EnvironmentLifecycleException(
+                "environment_volume_cleanup_source_missing",
+                "A replacement has no exact previous provider resource to clean up.");
+        var oldBinding = operation.ExpectedProviderBinding
+            ?? throw new EnvironmentLifecycleException(
+                "environment_volume_cleanup_binding_missing",
+                "A replacement has no exact previous provider binding to clean up.");
+        if (oldResource.Generation != operation.ExpectedResourceGeneration)
+            throw new EnvironmentLifecycleException(
+                "environment_volume_cleanup_source_mismatch",
+                "The previous provider resource does not match its owner-recorded generation.");
+
+        await using var specificationCommand = new NpgsqlCommand($"""
+            SELECT specification_json
+            FROM {OwnerEffects}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND effect_kind = 'WorkspaceVolume'
+              AND resource_id = @volume_id
+              AND operation = 'Create'
+              AND effect_state = 'Completed'
+            ORDER BY target_transition_revision
+            LIMIT 1
+            """, connection, transaction);
+        AddOwnerParameters(specificationCommand, operation.Owner);
+        specificationCommand.Parameters.AddWithValue("volume_id", NpgsqlDbType.Text, operation.ResourceId);
+        var specificationJson = await specificationCommand.ExecuteScalarAsync(cancellationToken)
+            .ConfigureAwait(false) as string;
+        if (specificationJson is null)
+            throw new EnvironmentLifecycleException(
+                "environment_volume_specification_missing",
+                "The immutable Create specification is unavailable for replacement cleanup.");
+
+        var specification = JsonSerializer.Deserialize<WorkspaceVolumeSpec>(specificationJson, JsonOptions)
+            ?? throw new EnvironmentLifecycleException(
+                "environment_volume_specification_corrupt",
+                "The immutable Create specification is invalid.");
+        if (!string.Equals(specification.VolumeId, operation.ResourceId, StringComparison.Ordinal) ||
+            !string.Equals(specification.ProjectId, operation.Owner.ProjectId, StringComparison.Ordinal))
+            throw new EnvironmentLifecycleException(
+                "environment_volume_specification_mismatch",
+                "The immutable Create specification does not match the replacement owner.");
+
+        var releaseRequest = new WorkspaceVolumeReleaseRequest(
+            new WorkspaceVolumeReference(
+                specification.ProjectId,
+                specification.VolumeId,
+                operation.ExpectedResourceGeneration),
+            oldResource,
+            specification.BindingMode,
+            specification.GetEffectiveReleasePolicy(),
+            specification.OwnerDeletionPolicy,
+            oldBinding.ValidateFor(oldResource),
+            $"replace-cleanup:{operation.OperationId:N}").Validate();
+        var sharedDelete = specification.BindingMode == WorkspaceVolumeBindingMode.Shared &&
+            specification.ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Delete;
+        var workId = Guid.NewGuid();
+        await using var insert = new NpgsqlCommand($"""
+            INSERT INTO {WorkspaceVolumeCleanup}
+                (work_id, tenant_id, project_id, run_id, environment_id, lifecycle_generation,
+                 source_replace_operation_id, volume_id, resource_generation, release_request_json,
+                 state, block_reason, lease_revision, lease_id, lease_expires_at,
+                 created_at, updated_at, completed_at)
+            VALUES
+                (@work_id, @tenant_id, @project_id, @run_id, @environment_id, @lifecycle_generation,
+                 @source_replace_operation_id, @volume_id, @resource_generation, @release_request_json,
+                 @state, @block_reason, 0, NULL, NULL, @created_at, @created_at, NULL)
+            """, connection, transaction);
+        insert.Parameters.AddWithValue("work_id", NpgsqlDbType.Uuid, workId);
+        AddOwnerParameters(insert, operation.Owner);
+        insert.Parameters.AddWithValue(
+            "lifecycle_generation",
+            NpgsqlDbType.Bigint,
+            operation.LifecycleGeneration);
+        insert.Parameters.AddWithValue(
+            "source_replace_operation_id",
+            NpgsqlDbType.Uuid,
+            operation.OperationId);
+        insert.Parameters.AddWithValue("volume_id", NpgsqlDbType.Text, operation.ResourceId);
+        insert.Parameters.AddWithValue(
+            "resource_generation",
+            NpgsqlDbType.Bigint,
+            operation.ExpectedResourceGeneration);
+        insert.Parameters.AddWithValue(
+            "release_request_json",
+            NpgsqlDbType.Jsonb,
+            JsonSerializer.Serialize(releaseRequest, JsonOptions));
+        insert.Parameters.AddWithValue(
+            "state",
+            NpgsqlDbType.Text,
+            sharedDelete ? "Blocked" : "Pending");
+        insert.Parameters.AddWithValue(
+            "block_reason",
+            NpgsqlDbType.Text,
+            sharedDelete ? "SharedDeleteRequiresReferenceRegistry" : DBNull.Value);
+        insert.Parameters.AddWithValue("created_at", NpgsqlDbType.TimestampTz, createdAt);
+        await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task<WorkspaceVolumeState?> ReadWorkspaceVolumeStateAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1271,7 +1678,7 @@ public sealed class EnvironmentLifecycleStore(
         await using var command = new NpgsqlCommand($"""
             SELECT target_transition_revision, target_resource_generation,
                    target_data_generation, target_volume_state, operation, target_provider_seam,
-                   target_provider_id, target_provider_resource_id
+                   target_provider_id, target_provider_resource_id, target_provider_binding_json
             FROM {OwnerEffects}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND run_id = @run_id AND environment_id = @environment_id
@@ -1291,7 +1698,8 @@ public sealed class EnvironmentLifecycleStore(
                 reader.GetInt64(2),
                 Enum.Parse<EnvironmentWorkspaceVolumeState>(reader.GetString(3), ignoreCase: false),
                 Enum.Parse<EnvironmentWorkspaceVolumeOperation>(reader.GetString(4), ignoreCase: false),
-                ReadProviderResource(reader, 5, 6, 7, reader.GetInt64(1), "current target"))
+                ReadProviderResource(reader, 5, 6, 7, reader.GetInt64(1), "current target"),
+                ReadProviderBinding(reader, 8, ReadProviderResource(reader, 5, 6, 7, reader.GetInt64(1), "current target")))
             : null;
     }
 
@@ -1311,7 +1719,8 @@ public sealed class EnvironmentLifecycleStore(
                    target_volume_state, operation, idempotency_key, request_fingerprint,
                    effect_state, created_at, completed_at, specification_json,
                    expected_provider_seam, expected_provider_id, expected_provider_resource_id,
-                   target_provider_seam, target_provider_id, target_provider_resource_id
+                   target_provider_seam, target_provider_id, target_provider_resource_id,
+                   expected_provider_binding_json, target_provider_binding_json
             FROM {OwnerEffects}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND run_id = @run_id AND environment_id = @environment_id
@@ -1348,7 +1757,8 @@ public sealed class EnvironmentLifecycleStore(
                    target_volume_state, operation, idempotency_key, request_fingerprint,
                    effect_state, created_at, completed_at, specification_json,
                    expected_provider_seam, expected_provider_id, expected_provider_resource_id,
-                   target_provider_seam, target_provider_id, target_provider_resource_id
+                   target_provider_seam, target_provider_id, target_provider_resource_id,
+                   expected_provider_binding_json, target_provider_binding_json
             FROM {OwnerEffects}
             WHERE operation_id = @operation_id
               AND tenant_id = @tenant_id AND project_id = @project_id
@@ -1387,7 +1797,15 @@ public sealed class EnvironmentLifecycleStore(
             reader.IsDBNull(16) ? null : reader.GetFieldValue<DateTimeOffset>(16),
             reader.IsDBNull(17) ? null : reader.GetString(17),
             ReadProviderResource(reader, 18, 19, 20, reader.GetInt64(5), "expected"),
-            ReadProviderResource(reader, 21, 22, 23, reader.GetInt64(8), "target"));
+            ReadProviderResource(reader, 21, 22, 23, reader.GetInt64(8), "target"),
+            ReadProviderBinding(
+                reader,
+                24,
+                ReadProviderResource(reader, 18, 19, 20, reader.GetInt64(5), "expected")),
+            ReadProviderBinding(
+                reader,
+                25,
+                ReadProviderResource(reader, 21, 22, 23, reader.GetInt64(8), "target")));
 
     private static ProviderResourceRef? ReadProviderResource(
         NpgsqlDataReader reader,
@@ -1424,6 +1842,37 @@ public sealed class EnvironmentLifecycleStore(
         return resource;
     }
 
+    private static WorkspaceVolumeProviderBindingSnapshot? ReadProviderBinding(
+        NpgsqlDataReader reader,
+        int ordinal,
+        ProviderResourceRef? resource)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            if (resource is not null)
+                throw new EnvironmentLifecycleException(
+                    "environment_volume_binding_missing",
+                    "The persisted workspace-volume generation has no provider binding snapshot.");
+            return null;
+        }
+
+        try
+        {
+            var binding = JsonSerializer.Deserialize<WorkspaceVolumeProviderBindingSnapshot>(
+                reader.GetString(ordinal),
+                JsonOptions);
+            return binding is null || resource is null
+                ? throw new InvalidOperationException("The persisted binding does not match a provider resource.")
+                : binding.ValidateFor(resource);
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException or InvalidOperationException)
+        {
+            throw new EnvironmentLifecycleException(
+                "environment_volume_binding_corrupt",
+                "The persisted workspace-volume provider binding is invalid.");
+        }
+    }
+
     private static void AddProviderResourceParameters(
         NpgsqlCommand command,
         string prefix,
@@ -1457,7 +1906,8 @@ public sealed class EnvironmentLifecycleStore(
                  target_provider_resource_id, expected_transition_revision, expected_resource_generation,
                  expected_data_generation, target_transition_revision, target_resource_generation,
                  target_data_generation, target_volume_state, operation, idempotency_key,
-                 request_fingerprint, effect_state, created_at, completed_at, specification_json)
+                 request_fingerprint, effect_state, created_at, completed_at, specification_json,
+                 expected_provider_binding_json, target_provider_binding_json)
             VALUES
                 (@operation_id, @tenant_id, @project_id, @run_id, @environment_id, @lifecycle_generation,
                  'WorkspaceVolume', @resource_id, @expected_provider_seam, @expected_provider_id,
@@ -1465,7 +1915,8 @@ public sealed class EnvironmentLifecycleStore(
                  @target_provider_resource_id, @expected_transition_revision, @expected_resource_generation,
                  @expected_data_generation, @target_transition_revision, @target_resource_generation,
                  @target_data_generation, @target_volume_state, @operation, @idempotency_key,
-                 @request_fingerprint, @effect_state, @created_at, @completed_at, @specification_json)
+                 @request_fingerprint, @effect_state, @created_at, @completed_at, @specification_json,
+                 @expected_provider_binding_json, @target_provider_binding_json)
             """, connection, transaction);
         command.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, operation.OperationId);
         AddOwnerParameters(command, operation.Owner);
@@ -1511,6 +1962,18 @@ public sealed class EnvironmentLifecycleStore(
             "specification_json",
             NpgsqlDbType.Jsonb,
             (object?)operation.SpecificationJson ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "expected_provider_binding_json",
+            NpgsqlDbType.Jsonb,
+            operation.ExpectedProviderBinding is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(operation.ExpectedProviderBinding, JsonOptions));
+        command.Parameters.AddWithValue(
+            "target_provider_binding_json",
+            NpgsqlDbType.Jsonb,
+            operation.TargetProviderBinding is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(operation.TargetProviderBinding, JsonOptions));
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -1521,6 +1984,7 @@ public sealed class EnvironmentLifecycleStore(
         EnvironmentWorkspaceVolumeTransitionState expectedState,
         EnvironmentWorkspaceVolumeTransitionState state,
         ProviderResourceRef? targetResource,
+        WorkspaceVolumeProviderBindingSnapshot? targetProviderBinding,
         DateTimeOffset completedAt,
         CancellationToken cancellationToken)
     {
@@ -1529,7 +1993,8 @@ public sealed class EnvironmentLifecycleStore(
             SET effect_state = @state, completed_at = @completed_at,
                 target_provider_seam = @target_provider_seam,
                 target_provider_id = @target_provider_id,
-                target_provider_resource_id = @target_provider_resource_id
+                target_provider_resource_id = @target_provider_resource_id,
+                target_provider_binding_json = @target_provider_binding_json
             WHERE operation_id = @operation_id
               AND effect_kind = 'WorkspaceVolume'
               AND effect_state = @expected_state
@@ -1538,6 +2003,12 @@ public sealed class EnvironmentLifecycleStore(
         command.Parameters.AddWithValue("expected_state", NpgsqlDbType.Text, expectedState.ToString());
         command.Parameters.AddWithValue("completed_at", NpgsqlDbType.TimestampTz, completedAt);
         AddProviderResourceParameters(command, "target", targetResource);
+        command.Parameters.AddWithValue(
+            "target_provider_binding_json",
+            NpgsqlDbType.Jsonb,
+            targetProviderBinding is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(targetProviderBinding, JsonOptions));
         command.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, operationId);
         if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
             throw new EnvironmentLifecycleException(
@@ -1726,6 +2197,7 @@ public sealed class EnvironmentLifecycleStore(
             operation.ExpectedResourceGeneration,
             operation.ExpectedDataGeneration,
             operation.ExpectedResource,
+            operation.ExpectedProviderBinding,
             operation.TargetTransitionRevision,
             operation.TargetResourceGeneration,
             operation.TargetDataGeneration,
@@ -1791,6 +2263,12 @@ public sealed class EnvironmentLifecycleStore(
                     ) AS policies
                     WHERE policies.operation <> 'Revoke'
                        OR policies.effect_state NOT IN ('Completed', 'Reconciled')
+                )
+                OR EXISTS (
+                    SELECT 1 FROM {WorkspaceVolumeCleanup}
+                    WHERE tenant_id = @tenant_id AND project_id = @project_id
+                      AND run_id = @run_id AND environment_id = @environment_id
+                      AND state <> 'Completed'
                 )
             """, connection, transaction);
         AddOwnerParameters(command, owner);
@@ -1975,6 +2453,43 @@ public sealed class EnvironmentLifecycleStore(
         command.Parameters.AddWithValue("environment_id", NpgsqlDbType.Text, owner.EnvironmentId);
     }
 
+    private static void AddCleanupLeaseParameters(
+        NpgsqlCommand command,
+        EnvironmentWorkspaceVolumeCleanupLease lease)
+    {
+        command.Parameters.AddWithValue("work_id", NpgsqlDbType.Uuid, lease.WorkId);
+        AddOwnerParameters(command, lease.Fence.Owner);
+        command.Parameters.AddWithValue(
+            "lifecycle_generation",
+            NpgsqlDbType.Bigint,
+            lease.Fence.LifecycleGeneration);
+        command.Parameters.AddWithValue(
+            "source_replace_operation_id",
+            NpgsqlDbType.Uuid,
+            lease.SourceReplaceOperationId);
+        command.Parameters.AddWithValue(
+            "source_lifecycle_generation",
+            NpgsqlDbType.Bigint,
+            lease.SourceLifecycleGeneration);
+        command.Parameters.AddWithValue("resource_generation", NpgsqlDbType.Bigint, lease.ResourceGeneration);
+        command.Parameters.AddWithValue("lease_revision", NpgsqlDbType.Bigint, lease.LeaseRevision);
+        command.Parameters.AddWithValue("lease_id", NpgsqlDbType.Uuid, lease.LeaseId);
+        command.Parameters.AddWithValue(
+            "release_request_json",
+            NpgsqlDbType.Jsonb,
+            JsonSerializer.Serialize(lease.ReleaseRequest, JsonOptions));
+    }
+
+    private static EnvironmentWorkspaceVolumeCleanupStatus ReadCleanupStatus(NpgsqlDataReader reader) =>
+        new(
+            reader.GetGuid(0),
+            reader.GetGuid(1),
+            reader.GetString(2),
+            reader.GetInt64(3),
+            Enum.Parse<EnvironmentWorkspaceVolumeCleanupState>(reader.GetString(4), ignoreCase: false),
+            reader.GetInt64(5),
+            reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6));
+
     private static EnvironmentLifecycleSnapshot Snapshot(
         EnvironmentOwnerIdentity owner,
         long generation,
@@ -2083,6 +2598,23 @@ public sealed class EnvironmentLifecycleStore(
         resource.ResourceId.Length <= 512 &&
         !resource.ResourceId.Any(char.IsControl);
 
+    private static bool IsValidProviderBinding(
+        WorkspaceVolumeProviderBindingSnapshot? binding,
+        ProviderResourceRef? resource)
+    {
+        if (binding is null || resource is null)
+            return false;
+        try
+        {
+            _ = binding.ValidateFor(resource);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
     private sealed record WorkspaceVolumeTransitionCommand(
         EnvironmentGenerationFence EnvironmentFence,
         string VolumeId,
@@ -2103,7 +2635,8 @@ public sealed class EnvironmentLifecycleStore(
         long DataGeneration,
         EnvironmentWorkspaceVolumeState State,
         EnvironmentWorkspaceVolumeOperation LastOperation,
-        ProviderResourceRef? Resource);
+        ProviderResourceRef? Resource,
+        WorkspaceVolumeProviderBindingSnapshot? ProviderBinding);
 
     private sealed record WorkspaceVolumeTarget(
         long TransitionRevision,
@@ -2131,7 +2664,9 @@ public sealed class EnvironmentLifecycleStore(
         DateTimeOffset? CompletedAt,
         string? SpecificationJson,
         ProviderResourceRef? ExpectedResource,
-        ProviderResourceRef? TargetResource)
+        ProviderResourceRef? TargetResource,
+        WorkspaceVolumeProviderBindingSnapshot? ExpectedProviderBinding,
+        WorkspaceVolumeProviderBindingSnapshot? TargetProviderBinding)
     {
         public EnvironmentGenerationFence Fence => new(Owner, LifecycleGeneration);
     }

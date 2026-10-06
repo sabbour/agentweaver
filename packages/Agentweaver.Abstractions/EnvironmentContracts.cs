@@ -135,7 +135,8 @@ public sealed record EnvironmentWorkspaceVolumeSnapshot
         EnvironmentWorkspaceVolumeState phase,
         EnvironmentWorkspaceVolumeOperation lastOperation,
         JsonElement specification,
-        ProviderResourceRef? resource)
+        ProviderResourceRef? resource,
+        WorkspaceVolumeProviderBindingSnapshot? providerBinding)
     {
         ArgumentNullException.ThrowIfNull(environmentFence);
         ArgumentException.ThrowIfNullOrWhiteSpace(volumeId);
@@ -159,6 +160,12 @@ public sealed record EnvironmentWorkspaceVolumeSnapshot
                 "A provider-backed workspace-volume phase requires a positive resource generation.",
                 nameof(resourceGeneration));
         ValidateStorageResource(resource, resourceGeneration, "resource");
+        if ((resource is null) != (providerBinding is null))
+            throw new ArgumentException(
+                "A pinned provider binding must be present exactly when the active provider resource is present.",
+                nameof(providerBinding));
+        if (providerBinding is not null)
+            _ = providerBinding.ValidateFor(resource!);
         if ((resourceGeneration == 0 || phase == EnvironmentWorkspaceVolumeState.Released) && resource is not null)
             throw new ArgumentException(
                 "A requested or released volume cannot expose a provider resource.",
@@ -177,6 +184,7 @@ public sealed record EnvironmentWorkspaceVolumeSnapshot
         LastOperation = lastOperation;
         Specification = specification.Clone();
         Resource = resource;
+        ProviderBinding = providerBinding;
     }
 
     public EnvironmentGenerationFence EnvironmentFence { get; }
@@ -188,6 +196,7 @@ public sealed record EnvironmentWorkspaceVolumeSnapshot
     public EnvironmentWorkspaceVolumeOperation LastOperation { get; }
     public JsonElement Specification { get; }
     public ProviderResourceRef? Resource { get; }
+    public WorkspaceVolumeProviderBindingSnapshot? ProviderBinding { get; }
 
     internal static void ValidateStorageResource(
         ProviderResourceRef? resource,
@@ -220,6 +229,7 @@ public sealed record EnvironmentWorkspaceVolumeTransitionReservation
         long expectedResourceGeneration,
         long expectedDataGeneration,
         ProviderResourceRef? currentResource,
+        WorkspaceVolumeProviderBindingSnapshot? currentProviderBinding,
         long targetTransitionRevision,
         long targetResourceGeneration,
         long targetDataGeneration,
@@ -252,6 +262,12 @@ public sealed record EnvironmentWorkspaceVolumeTransitionReservation
             throw new ArgumentException(
                 "CurrentResource must be present exactly when the volume has a provider resource generation.",
                 nameof(currentResource));
+        if ((currentResource is null) != (currentProviderBinding is null))
+            throw new ArgumentException(
+                "CurrentProviderBinding must be present exactly when CurrentResource is present.",
+                nameof(currentProviderBinding));
+        if (currentProviderBinding is not null)
+            _ = currentProviderBinding.ValidateFor(currentResource!);
 
         OperationId = operationId;
         EnvironmentFence = environmentFence;
@@ -260,6 +276,7 @@ public sealed record EnvironmentWorkspaceVolumeTransitionReservation
         ExpectedResourceGeneration = expectedResourceGeneration;
         ExpectedDataGeneration = expectedDataGeneration;
         CurrentResource = currentResource;
+        CurrentProviderBinding = currentProviderBinding;
         TargetTransitionRevision = targetTransitionRevision;
         TargetResourceGeneration = targetResourceGeneration;
         TargetDataGeneration = targetDataGeneration;
@@ -276,6 +293,7 @@ public sealed record EnvironmentWorkspaceVolumeTransitionReservation
     public long ExpectedResourceGeneration { get; }
     public long ExpectedDataGeneration { get; }
     public ProviderResourceRef? CurrentResource { get; }
+    public WorkspaceVolumeProviderBindingSnapshot? CurrentProviderBinding { get; }
     public long TargetTransitionRevision { get; }
     public long TargetResourceGeneration { get; }
     public long TargetDataGeneration { get; }
@@ -404,6 +422,56 @@ public sealed record EnvironmentNetworkEffectObservation(
     bool Revoked,
     string? IntentHash);
 
+public enum EnvironmentWorkspaceVolumeCleanupState
+{
+    Pending,
+    Leased,
+    Blocked,
+    Completed
+}
+
+public sealed record EnvironmentWorkspaceVolumeCleanupStatus(
+    Guid WorkId,
+    Guid SourceReplaceOperationId,
+    string VolumeId,
+    long ResourceGeneration,
+    EnvironmentWorkspaceVolumeCleanupState State,
+    long LeaseRevision,
+    DateTimeOffset? LeaseExpiresAt);
+
+public sealed record EnvironmentWorkspaceVolumeCleanupLease(
+    Guid WorkId,
+    EnvironmentGenerationFence Fence,
+    Guid SourceReplaceOperationId,
+    long SourceLifecycleGeneration,
+    string VolumeId,
+    long ResourceGeneration,
+    WorkspaceVolumeReleaseRequest ReleaseRequest,
+    long LeaseRevision,
+    Guid LeaseId,
+    DateTimeOffset LeaseExpiresAt)
+{
+    public EnvironmentWorkspaceVolumeCleanupLease Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Fence);
+        ArgumentException.ThrowIfNullOrWhiteSpace(VolumeId);
+        ArgumentNullException.ThrowIfNull(ReleaseRequest);
+        ReleaseRequest.Validate();
+        if (WorkId == Guid.Empty ||
+            SourceReplaceOperationId == Guid.Empty ||
+            SourceLifecycleGeneration < 1 ||
+            ResourceGeneration < 1 ||
+            ReleaseRequest.Volume.ResourceGeneration != ResourceGeneration ||
+            !string.Equals(ReleaseRequest.Volume.VolumeId, VolumeId, StringComparison.Ordinal) ||
+            !string.Equals(ReleaseRequest.Volume.ProjectId, Fence.Owner.ProjectId, StringComparison.Ordinal) ||
+            LeaseRevision < 1 ||
+            LeaseId == Guid.Empty ||
+            LeaseExpiresAt <= DateTimeOffset.MinValue)
+            throw new ArgumentException("The workspace-volume cleanup lease is invalid.");
+        return this;
+    }
+}
+
 public interface IEnvironmentLifecycleStore
 {
     Task<EnvironmentLifecycleSnapshot?> GetAsync(
@@ -477,6 +545,7 @@ public interface IEnvironmentLifecycleStore
         EnvironmentGenerationFence environmentFence,
         bool effectMayHaveApplied,
         ProviderResourceRef? providerResource,
+        WorkspaceVolumeProviderBindingSnapshot? providerBinding,
         bool effectVerified,
         CancellationToken cancellationToken);
 
@@ -499,6 +568,7 @@ public interface IEnvironmentLifecycleStore
         EnvironmentGenerationFence environmentFence,
         bool effectMayHaveApplied,
         ProviderResourceRef? providerResource,
+        WorkspaceVolumeProviderBindingSnapshot? providerBinding,
         bool effectVerified,
         CancellationToken cancellationToken);
 
@@ -638,5 +708,25 @@ public interface IEnvironmentLifecycleStore
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeReleaseReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
+        CancellationToken cancellationToken);
+
+    Task<EnvironmentWorkspaceVolumeCleanupLease?> ClaimWorkspaceVolumeCleanupAsync(
+        EnvironmentGenerationFence environmentFence,
+        Guid? sourceReplaceOperationId,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken);
+
+    Task<EnvironmentWorkspaceVolumeCleanupStatus> CompleteWorkspaceVolumeCleanupAsync(
+        EnvironmentWorkspaceVolumeCleanupLease lease,
+        WorkspaceVolumeReleaseReceipt receipt,
+        CancellationToken cancellationToken);
+
+    Task ReleaseWorkspaceVolumeCleanupLeaseAsync(
+        EnvironmentWorkspaceVolumeCleanupLease lease,
+        CancellationToken cancellationToken);
+
+    Task<EnvironmentWorkspaceVolumeCleanupStatus?> GetWorkspaceVolumeCleanupStatusAsync(
+        EnvironmentGenerationFence environmentFence,
+        Guid sourceReplaceOperationId,
         CancellationToken cancellationToken);
 }
