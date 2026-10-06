@@ -30,6 +30,63 @@ const safeCodes = new Set([
 ]);
 const reject = code => { throw Object.assign(new Error(`Probe diagnostic refused: ${code}`), { code }); };
 
+export function verifyFrozenProbeArtifact(directory, {
+  env = process.env, spawn = spawnSync, readFile = readFileSync, digest = hash,
+} = {}) {
+  const childEnv = { ...env };
+  for (const key of ['GH_TOKEN', 'GITHUB_TOKEN', 'RELEASE_REGISTRY_PASSWORD']) delete childEnv[key];
+  const member = (archive, name, input) => {
+    const response = spawn('tar', ['-xOf', archive, name], {
+      input, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      timeout: 120000, maxBuffer: 64 * 1024 * 1024,
+    });
+    if (response.error || response.status !== 0) reject('ARCHIVE_MEMBER_READ_FAILED');
+    return response.stdout;
+  };
+  const archive = path.resolve(directory, 'Agentweaver.FoundationProbe.0.0.0.tar.gz');
+  const provenanceBytes = readFile(path.resolve(directory, 'provenance.json'));
+  const provenance = JSON.parse(provenanceBytes);
+  if (digest(readFile(archive)) !== diagnosticPins.archiveSha256 ||
+      digest(provenanceBytes) !== diagnosticPins.provenanceSha256 ||
+      provenance.sourceSha !== diagnosticPins.sourceSha || provenance.artifacts?.length !== 1 ||
+      provenance.artifacts[0].path !== 'Agentweaver.FoundationProbe.0.0.0.tar.gz' ||
+      provenance.artifacts[0].sha256 !== diagnosticPins.archiveSha256 ||
+      provenance.artifacts[0].componentId !== 'Agentweaver.FoundationProbe' ||
+      provenance.artifacts[0].kind !== 'image') reject('FROZEN_ARTIFACT_MISMATCH');
+  const manifests = JSON.parse(member(archive, 'manifest.json'));
+  if (!Array.isArray(manifests) || manifests.length !== 1 ||
+      manifests[0].Config !== `${diagnosticPins.configSha256}.json` ||
+      JSON.stringify(manifests[0].RepoTags) !== JSON.stringify([localImage]) ||
+      !Array.isArray(manifests[0].Layers) || manifests[0].Layers.length === 0 ||
+      manifests[0].Layers.some(layer => !/^[a-f0-9]{64}\/layer\.tar$/.test(layer))) reject('ARCHIVE_MANIFEST_INVALID');
+  const configBytes = member(archive, manifests[0].Config);
+  if (digest(configBytes) !== diagnosticPins.configSha256) reject('CONFIG_DIGEST_MISMATCH');
+  const config = JSON.parse(configBytes);
+  const labels = config?.config?.Labels;
+  if (config?.os !== 'linux' || config.architecture !== 'amd64' || config.config?.User !== '10001:10001' ||
+      JSON.stringify(config.config.Entrypoint) !== JSON.stringify(['dotnet', 'Agentweaver.FoundationProbe.dll']) ||
+      labels?.['org.opencontainers.image.revision'] !== diagnosticPins.sourceSha ||
+      labels?.['io.agentweaver.source-tree'] !== diagnosticPins.sourceTree ||
+      labels?.['io.agentweaver.infrastructure-source-hash'] !== diagnosticPins.sourceHash ||
+      labels?.['org.opencontainers.image.version'] !== '0.0.0') reject('IMAGE_SOURCE_BINDING_INVALID');
+  let layer = member(archive, manifests[0].Layers.at(-1));
+  if (layer[0] === 0x1f && layer[1] === 0x8b) layer = gunzipSync(layer, { maxOutputLength: 64 * 1024 * 1024 });
+  if (digest(member('-', 'app/Agentweaver.FoundationProbe.dll', layer)) !== diagnosticPins.dllSha256)
+    reject('DLL_DIGEST_MISMATCH');
+  return { archive, config };
+}
+
+export function verifyFrozenLoadedImage(inspected, config) {
+  const actualConfig = inspected?.Config;
+  if (inspected?.Id !== `sha256:${diagnosticPins.configSha256}` || inspected.Os !== 'linux' ||
+      inspected.Architecture !== 'amd64' ||
+      JSON.stringify(actualConfig?.Entrypoint) !== JSON.stringify(config.config.Entrypoint) ||
+      actualConfig?.User !== config.config.User || actualConfig.Labels?.['org.opencontainers.image.revision'] !== diagnosticPins.sourceSha ||
+      actualConfig.Labels?.['io.agentweaver.source-tree'] !== diagnosticPins.sourceTree ||
+      actualConfig.Labels?.['io.agentweaver.infrastructure-source-hash'] !== diagnosticPins.sourceHash ||
+      actualConfig.Labels?.['org.opencontainers.image.version'] !== '0.0.0') reject('LOADED_IMAGE_BINDING_INVALID');
+}
+
 export function runProbePublicationDiagnostic(directory, {
   env = process.env, spawn = spawnSync, readFile = readFileSync, digest = hash,
 } = {}) {
@@ -46,14 +103,6 @@ export function runProbePublicationDiagnostic(directory, {
     (command, argv, options) => spawn(command, argv, {
       ...options, env: childEnv, timeout: 120000, maxBuffer: 32 * 1024 * 1024, windowsHide: true,
     }));
-  const member = (archive, name, input) => {
-    const response = spawn('tar', ['-xOf', archive, name], {
-      input, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-      timeout: 120000, maxBuffer: 64 * 1024 * 1024,
-    });
-    if (response.error || response.status !== 0) reject('ARCHIVE_MEMBER_READ_FAILED');
-    return response.stdout;
-  };
   const operation = (name, args, input) => {
     try {
       const output = execute('docker', args, input);
@@ -74,36 +123,7 @@ export function runProbePublicationDiagnostic(directory, {
     const helperSource = execute('git', ['rev-parse', 'HEAD']);
     if (helperSource !== env.EXPECTED_SOURCE || execute('git', ['status', '--porcelain'])) reject('HELPER_SOURCE_MISMATCH');
     result.helperSourceSha = helperSource;
-    const archive = path.resolve(directory, 'Agentweaver.FoundationProbe.0.0.0.tar.gz');
-    const provenanceBytes = readFile(path.resolve(directory, 'provenance.json'));
-    const provenance = JSON.parse(provenanceBytes);
-    if (digest(readFile(archive)) !== diagnosticPins.archiveSha256 ||
-        digest(provenanceBytes) !== diagnosticPins.provenanceSha256 ||
-        provenance.sourceSha !== diagnosticPins.sourceSha || provenance.artifacts?.length !== 1 ||
-        provenance.artifacts[0].path !== 'Agentweaver.FoundationProbe.0.0.0.tar.gz' ||
-        provenance.artifacts[0].sha256 !== diagnosticPins.archiveSha256 ||
-        provenance.artifacts[0].componentId !== 'Agentweaver.FoundationProbe' ||
-        provenance.artifacts[0].kind !== 'image') reject('FROZEN_ARTIFACT_MISMATCH');
-    const manifests = JSON.parse(member(archive, 'manifest.json'));
-    if (!Array.isArray(manifests) || manifests.length !== 1 ||
-        manifests[0].Config !== `${diagnosticPins.configSha256}.json` ||
-        JSON.stringify(manifests[0].RepoTags) !== JSON.stringify([localImage]) ||
-        !Array.isArray(manifests[0].Layers) || manifests[0].Layers.length === 0 ||
-        manifests[0].Layers.some(layer => !/^[a-f0-9]{64}\/layer\.tar$/.test(layer))) reject('ARCHIVE_MANIFEST_INVALID');
-    const configBytes = member(archive, manifests[0].Config);
-    if (digest(configBytes) !== diagnosticPins.configSha256) reject('CONFIG_DIGEST_MISMATCH');
-    const config = JSON.parse(configBytes);
-    const labels = config?.config?.Labels;
-    if (config?.os !== 'linux' || config.architecture !== 'amd64' || config.config?.User !== '10001:10001' ||
-        JSON.stringify(config.config.Entrypoint) !== JSON.stringify(['dotnet', 'Agentweaver.FoundationProbe.dll']) ||
-        labels?.['org.opencontainers.image.revision'] !== diagnosticPins.sourceSha ||
-        labels?.['io.agentweaver.source-tree'] !== diagnosticPins.sourceTree ||
-        labels?.['io.agentweaver.infrastructure-source-hash'] !== diagnosticPins.sourceHash ||
-        labels?.['org.opencontainers.image.version'] !== '0.0.0') reject('IMAGE_SOURCE_BINDING_INVALID');
-    let layer = member(archive, manifests[0].Layers.at(-1));
-    if (layer[0] === 0x1f && layer[1] === 0x8b) layer = gunzipSync(layer, { maxOutputLength: 64 * 1024 * 1024 });
-    if (digest(member('-', 'app/Agentweaver.FoundationProbe.dll', layer)) !== diagnosticPins.dllSha256)
-      reject('DLL_DIGEST_MISMATCH');
+    const { archive, config } = verifyFrozenProbeArtifact(directory, { env, spawn, readFile, digest });
     result.frozenArtifactVerified = true;
     authDirectory = mkdtempSync(path.join(tmpdir(), 'agentweaver-probe-diagnostic-'));
     result.credentialDirectoryRemoved = false;
@@ -111,14 +131,7 @@ export function runProbePublicationDiagnostic(directory, {
     operation('docker.login', ['login', 'ghcr.io', '--username', 'sabbour', '--password-stdin'], env.RELEASE_REGISTRY_PASSWORD);
     operation('docker.load', ['load', '--input', archive]);
     const inspected = JSON.parse(operation('docker.inspect', ['inspect', '--format', '{{json .}}', localImage]));
-    const actualConfig = inspected?.Config;
-    if (inspected?.Id !== `sha256:${diagnosticPins.configSha256}` || inspected.Os !== 'linux' ||
-        inspected.Architecture !== 'amd64' ||
-        JSON.stringify(actualConfig?.Entrypoint) !== JSON.stringify(config.config.Entrypoint) ||
-        actualConfig.User !== config.config.User || actualConfig.Labels?.['org.opencontainers.image.revision'] !== diagnosticPins.sourceSha ||
-        actualConfig.Labels?.['io.agentweaver.source-tree'] !== diagnosticPins.sourceTree ||
-        actualConfig.Labels?.['io.agentweaver.infrastructure-source-hash'] !== diagnosticPins.sourceHash ||
-        actualConfig.Labels?.['org.opencontainers.image.version'] !== '0.0.0') reject('LOADED_IMAGE_BINDING_INVALID');
+    verifyFrozenLoadedImage(inspected, config);
     result.loadedConfigDigest = inspected.Id;
     const raw = operation('docker.manifest-read', ['buildx', 'imagetools', 'inspect', target, '--raw']);
     result.currentDigest = `sha256:${digest(raw)}`;

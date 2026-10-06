@@ -13,7 +13,7 @@ on:
         default: false
         type: boolean
       foundation_probe_sampler_replacement:
-        description: Select only the Probe sampler path (publish=false diagnoses the frozen image; separate approval required)
+        description: Select only the frozen Probe path (false diagnoses; true consumes the separately approved recovery attempt)
         required: true
         default: false
         type: boolean
@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   pack:
-    if: ${{ inputs.publish || !inputs.foundation_probe_sampler_replacement }}
+    if: ${{ !inputs.foundation_probe_sampler_replacement }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -161,11 +161,11 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
   publish-probe-sampler:
-    needs: pack
     if: ${{ inputs.publish && inputs.foundation_probe_sampler_replacement }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -176,23 +176,36 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Require exact v1 recovery source and frozen target
+        env:
+          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/v1" || { echo "::error::Recovery requires v1"; exit 1; }
+          test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Recovery source mismatch"; exit 1; }
+          test "$GITHUB_RUN_ATTEMPT" = "1" || { echo "::error::Recovery cannot rerun"; exit 1; }
+          test "$EXPECTED_PROBE_DIGEST" = "sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969" || { echo "::error::Recovery target mismatch"; exit 1; }
       - uses: actions/download-artifact@v4
         with:
-          name: v1-release-pack-${{ github.sha }}-${{ github.run_id }}
-          path: artifacts/release/pack/
-      - name: Publish only the separately approved sampler-fixed Probe
+          github-token: ${{ github.token }}
+          run-id: 37409181340
+          name: v1-release-pack-f46cff3c65a97b76b78c9ea717ec8b2068d56de5-37409181340
+          path: artifacts/release/frozen-probe/
+      - name: Consume only the separately approved frozen Probe recovery attempt
         env:
+          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
+          PUBLISH: 'true'
+          PROBE_SAMPLER_REPLACEMENT: 'true'
           GH_TOKEN: ${{ github.token }}
           RELEASE_REGISTRY: ghcr.io/sabbour
           RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
           RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
-          DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
-          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
-        run: node scripts/release/publish.mjs releases/foundation.json artifacts/release/pack "$GITHUB_SHA" --confirm-publication --foundation-probe-only --confirm-foundation-probe-sampler-replacement "$GITHUB_SHA" --expected-foundation-probe-sampler-digest "$EXPECTED_PROBE_DIGEST"
+        run: node scripts/release/probe-publication-recovery.mjs artifacts/release/frozen-probe
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
-          name: v1-publication-receipt-${{ github.sha }}-${{ github.run_attempt }}
-          path: artifacts/release/pack/publication.json
+          name: v1-probe-recovery-receipt-${{ github.sha }}-${{ github.run_id }}
+          path: artifacts/release/frozen-probe/publication.json
           if-no-files-found: warn
           retention-days: 30

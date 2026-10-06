@@ -51,7 +51,7 @@ The pending patch records future ordinary release intent. No release plan or
 version bump runs for this initial replacement.
 The Broker and eight NuGet baselines remain unchanged.
 
-The sampler-fixed Probe has a separate, default-off replacement path.
+The sampler-fixed Probe has a separate, default-off legacy replacement path.
 It permits only the current `0.0.0` manifest
 `sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969`.
 Use `--foundation-probe-only`, `--confirm-publication`,
@@ -63,6 +63,7 @@ The permanent claim is
 It blocks further attempts across source commits, including after partial publication.
 The publisher preserves the previous manifest by digest and all historical receipts.
 It records the pushed digest before later verification can fail.
+This legacy attempt is consumed. The recovery route does not reuse its claims or receipts.
 
 The existing `v1 release pack` workflow runs this path on Linux.
 Set `foundation_probe_sampler_replacement: true` and the exact `expected_probe_digest`.
@@ -77,13 +78,44 @@ Its isolated credential directory is temporary and removed after the operations.
 The sanitized result gives only operation names, exit values, and allowlisted error codes.
 Successful login and reads do not prove package-write permission or identify the original failure.
 Ordinary `publish: false` without sampler replacement still prepares release artifacts.
-Sampler publication requires separate user approval, the exact current digest, and the permanent single-use claim.
+With `publish: true` and sampler replacement selected, the workflow runs only the separately approved recovery attempt.
+Both sampler selections skip preparation. The recovery job downloads the same original artifact from run `37409181340`.
+It never rebuilds the image or substitutes an image from the publisher helper source.
+The shared verifier checks the pinned archive, provenance, config, DLL, and original image-source metadata.
+The image source remains `f46cff3c65a97b76b78c9ea717ec8b2068d56de5`.
+The dispatch source identifies the final admitted publisher helper SHA.
+
+The fixed recovery claim namespace is
+`agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-attempt-1`.
+The separate helper claim namespace is
+`agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-helper/<admitted-helper-sha>`.
+Both namespaces retain their claim and result records permanently.
+The fixed namespace blocks another helper after a consumed attempt.
+No input can select another recovery namespace.
+The workflow and publisher also reject Actions reruns.
+
+Recovery requires fresh user approval for one attempt against the exact current `835d...` digest.
+The publisher verifies that digest before claims and immediately before its sole push.
+It verifies the loaded image's complete config digest, source labels, numeric user, and execution command.
+Successful publication requires the new tag digest and continued access to the previous manifest, initial index, and platform manifests.
+The registry update is not a conditional transaction. An unobserved external write between the final check and push remains possible.
+
+The recovery publisher covers claim creation, native operations, and result persistence with its partial-receipt boundary.
+An ambiguous claim response stops before push and records attempted versus acknowledged claims.
+Each acknowledged claim receives an independent permanent result attempt.
+The local receipt uses create-only file creation. It cannot overwrite a prior receipt.
+The publisher records the actual new digest before later verification.
+It records only allowlisted operation names, exit values, and error codes.
+The publisher removes only its newly created temporary Docker credential directory.
+Failure consumes acknowledged claims and stops without automatic retry, claim reuse, or claim deletion.
+The operator then reads the tag independently and preserves the original and new receipts.
+
 The sampler-only job has no GitHub environment.
-It uses the ephemeral GitHub token with package-write permission for the fixed GHCR target.
+It uses the ephemeral GitHub token with contents-write, Actions-read, and package-write permissions for this fixed route.
 The token must already have write access to the existing package.
 This route does not authorize new persistent package grants.
 Ordinary publication retains the protected `v1-publication` environment.
-Use the final admitted source SHA, not the earlier sampler-only commit.
+Use the final admitted helper SHA, not the original image-source SHA, for the recovery dispatch.
 These options do not authorize publication, deployment, consent, or fixture creation.
 
 There is no repository-wide version authority, deployable image, local runtime,

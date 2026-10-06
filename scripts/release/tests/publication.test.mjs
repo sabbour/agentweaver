@@ -167,7 +167,7 @@ test('a Debug-only pin is forced into the actual Release build and container pub
 
 test('pack upload and download use the same attempt-independent source/run identity', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8');
-  assert.equal((workflow.match(/name: v1-release-pack-\$\{\{ github.sha \}\}-\$\{\{ github.run_id \}\}/g) ?? []).length, 3);
+  assert.equal((workflow.match(/name: v1-release-pack-\$\{\{ github.sha \}\}-\$\{\{ github.run_id \}\}/g) ?? []).length, 2);
   assert.doesNotMatch(workflow, /name: v1-release-pack-.*github\.run_attempt/);
   assert.match(workflow, /name: v1-release-pack-[^\n]+\n\s+overwrite: true/);
 });
@@ -428,7 +428,7 @@ test('existing Linux workflow defaults off and isolates the approved sampler rou
   assert.match(workflow, /expected_probe_digest:[\s\S]*?default: ''/);
   assert.match(workflow, /args\+=\(--foundation-probe-only\); fi/);
   assert.match(workflow, /npm run release:pack -- "\$\{args\[@\]\}"/);
-  assert.match(workflow, /--confirm-foundation-probe-sampler-replacement "\$GITHUB_SHA" --expected-foundation-probe-sampler-digest "\$EXPECTED_PROBE_DIGEST"/);
+  assert.match(workflow, /probe-publication-recovery\.mjs artifacts\/release\/frozen-probe/);
   assert.match(workflow, /if: \$\{\{ inputs\.publish && inputs\.foundation_probe_sampler_replacement \}\}/);
   assert.ok(workflow.includes(currentProbeDigest));
   assert.equal((workflow.match(/fetch-depth: 0/g) ?? []).length, 4);
