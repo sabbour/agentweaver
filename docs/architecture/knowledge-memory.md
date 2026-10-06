@@ -19,11 +19,14 @@ Events project-fact stream. Project facts are separate from the Sessions run jou
 Projects & Config remains the sole owner of caller memberships and project roles.
 Before a record operation, Knowledge forwards the validated request's original bearer
 token and optional `X-Agentweaver-Tenant` selector to
-`GET /api/authorization/context`. It requires current effective `ReadProjects` for
-reads or `WriteProjects` for writes. A caller's existing signed project/run bindings,
-when present, must exactly match the requested project/run and the Projects authority
-response. Knowledge keeps no membership table, role table, authorization cache, or
-authorization pin.
+`GET /api/authorization/context`. Private record reads and writes both require fresh
+effective `WriteProjects` for the target project. `ReadProjects` is metadata-only and,
+even with `ReadRunSelection`, does not authorize record search, reads, revision
+history, or context composition. Projects & Config remains the source of the current
+project-admin permission; Knowledge does not infer it from the route's `agentId`.
+A caller's existing signed project/run bindings, when present, must exactly match the
+requested project/run and the Projects authority response. Knowledge keeps no
+membership table, role table, authorization cache, or authorization pin.
 
 Provider resolution also requires current effective project `ReadRunSelection`.
 Knowledge fetches the immutable run-selection snapshot from Projects & Config with
@@ -32,8 +35,24 @@ binding a Memory provider. Redirects, owner errors, malformed or mismatched resp
 and missing permissions fail explicitly; Knowledge does not mint a token or infer
 authority from path values.
 
-The API is scoped by `projectId` and `agentId`. Searches, single-record reads, and
-revision-history reads are constrained to both. Knowledge owns record, revision,
+Visibility is project-admin scoped, not agent-owned: a current project Owner has
+`WriteProjects` for that project, and a current TenantAdmin has tenant-scoped
+`WriteProjects` within the selected tenant. These admins may inspect any agent's
+records in an authorized project by explicitly selecting that agent. The route's
+`agentId` selects rows; it does not prove the caller is that agent, and an admin
+grant does not extend to another project or tenant. Before provider resolution,
+Knowledge also requires `ReadRunSelection` for the exact project and reads its
+accepted run selection from Projects & Config.
+
+The data paths preserve project and agent/run scope. Search filters by project and
+agent before counting or returning records. Direct record reads return the same
+not-found result when a record is absent or belongs to a different requested agent;
+the revisions endpoint checks that record/agent match before querying revision
+history. Context candidates are filtered by project, with active approved decisions
+available project-wide, agent memories kept agent-local unless approved and tagged
+`cross-team`, and SessionContext limited to the requested agent and run. The current
+runtime authority contract has no agent-to-principal visibility grant, so a runtime
+caller without current `WriteProjects` fails closed. Knowledge owns record, revision,
 idempotency, provider-binding, and outbox storage; it does not read or write another
 service's schema.
 

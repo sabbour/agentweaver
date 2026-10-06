@@ -229,23 +229,25 @@ These routes belong to the unpublished `Agentweaver.Knowledge` .NET 10 service
 candidate. Protected routes require the configured OpenIddict issuer and audience.
 Each privileged request forwards its original validated bearer token to Projects &
 Config for a fresh authorization-context check; Knowledge does not keep memberships,
-roles, or authorization caches. Reads require effective `ReadProjects`, writes require
-effective `WriteProjects`, and Memory-provider resolution additionally requires
-effective project `ReadRunSelection`. If the validated caller token is already bound to
-a project/run, those bindings must match the requested route and the authority response.
+roles, or authorization caches. Private content reads and writes require fresh effective
+`WriteProjects` for the target project; `ReadProjects` alone is metadata-only and does
+not authorize private Knowledge records, revisions, or context. Memory-provider
+resolution additionally requires effective project `ReadRunSelection`. If the validated
+caller token is already bound to a project/run, those bindings must match the requested
+route and the authority response.
 
 | Method and path | Contract |
 | --- | --- |
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL and current owned-schema readiness; returns `503` when migrations, tables, or required runtime grants are missing. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records` | Create a Memory, SessionContext, or Proposal record. Requires one `Idempotency-Key`; a new write returns `201`, an identical retry returns `200`, and reuse with different request content returns `409`. |
-| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records?kind={kind}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` | Search only the requested project and agent, with bounded pages. |
-| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Read one record in the requested project/agent scope. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records?kind={kind}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` | Search only the requested project and agent, with bounded pages; requires current `WriteProjects` for private content. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Read one record in the requested project/agent scope; requires current `WriteProjects` for private content. |
 | `PUT /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Append a revision using `expectedRevision` compare-and-swap and an `Idempotency-Key`; stale revisions return `409`. |
-| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/revisions?page={n}&pageSize={n}` | Read bounded immutable revision history. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/revisions?page={n}&pageSize={n}` | Read bounded immutable revision history; requires current `WriteProjects` for private content. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/proposals/{proposalId}/promote` | Explicitly promote an owned pending proposal using its expected revision and an `Idempotency-Key`. The response includes `delivery` (`DELIVERED` or `PENDING`); pending delivery does not undo the committed promotion. An identical retry uses the same immutable receipt. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/proposals/{proposalId}/reject` | Explicitly reject a pending proposal using its expected revision and an `Idempotency-Key`. |
-| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/context?q={text}&maxItems={n}&maxTokens={n}` | Compose bounded context with immutable revision references. Invalid narrowing is `400`; mandatory-content, candidate, or output budget overflow is returned explicitly as `413`. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/context?q={text}&maxItems={n}&maxTokens={n}` | Compose bounded context with immutable revision references; requires current `WriteProjects` for private content. Invalid narrowing is `400`; mandatory-content, candidate, or output budget overflow is returned explicitly as `413`. |
 | `GET /internal/accepted-effects/{receiptId}` | No-store redacted accepted-effect receipt for the original issuer/subject and matching bounds, after a fresh current project `WriteProjects` check. Does not return proposal or decision content. |
 
 The service owns a separate `knowledge` PostgreSQL schema. Revisions are append-only,

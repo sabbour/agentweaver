@@ -111,7 +111,9 @@ public sealed class ProjectsConfigClient(
         if (HasPermission(authority, ProjectAuthorityResourceType.Project, projectId, permission) ||
             HasPermission(authority, ProjectAuthorityResourceType.Tenant, authority.TenantId, permission))
             return;
-        var action = permission == ProjectAuthorizationPermission.ReadProjects ? "read" : "write";
+        var action = permission == ProjectAuthorizationPermission.ReadProjects
+            ? "read project metadata"
+            : "access private Knowledge content";
         throw new KnowledgeApiException(
             $"missing_effective_{permission.ToString().ToLowerInvariant()}",
             $"The caller has no current effective {permission} permission for this project and cannot {action} Knowledge records.",

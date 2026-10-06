@@ -139,7 +139,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
     }
 
     [Fact]
-    public async Task EndpointDeniesCurrentOwnerWithoutWriteAndEnforcesContextBounds()
+    public async Task EndpointDeniesMetadataReaderFromWritesAndPrivateContext()
     {
         await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
         var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: false);
@@ -173,10 +173,32 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         using var bounded = await client.SendAsync(contextRequest);
 
         Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, bounded.StatusCode);
-        Assert.Contains("context_budget_exceeded", await bounded.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.Forbidden, bounded.StatusCode);
+        Assert.Contains("missing_effective_writeprojects", await bounded.Content.ReadAsStringAsync());
         Assert.Equal(2, owner.Paths.Count(path => path == "/api/authorization/context"));
-        Assert.Single(owner.Paths, path => path.EndsWith("/selection", StringComparison.Ordinal));
+        Assert.DoesNotContain(owner.Paths, path => path.EndsWith("/selection", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task EndpointEnforcesContextBoundsForCurrentProjectOwner()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        using var contextRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/projects/project-a/runs/run-a/agents/agent-a/context?maxItems=21");
+        contextRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", "caller-token");
+
+        using var response = await client.SendAsync(contextRequest);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("context_budget_exceeded", await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            ["/api/authorization/context", "/api/projects/project-a/runs/run-a/selection"],
+            owner.Paths.ToArray());
     }
 
     [Fact]

@@ -1213,6 +1213,17 @@
           "OpenIddict.Validation.ServerIntegration": "[7.7.1, )"
         }
       },
+      "agentweaver.knowledge": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Persistence.Postgres": "[0.0.0, )",
+          "Agentweaver.Providers": "[0.0.0, )",
+          "Agentweaver.Telemetry": "[0.0.0, )",
+          "Azure.Identity": "[1.17.1, )",
+          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )"
+        }
+      },
       "agentweaver.orchestrator": {
         "type": "Project",
         "dependencies": {

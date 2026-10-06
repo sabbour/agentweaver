@@ -47,7 +47,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
     public static async Task<ProjectsConfigResourceServer> StartAsync(
         string connectionString,
         SecurityKey signingKey,
-        string audience = "https://api.test")
+        string audience = "https://api.test",
+        ProviderCatalog? providerCatalog = null)
     {
         var privilegedDataSource = NpgsqlDataSource.Create(connectionString);
         var privilegedDbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
@@ -73,7 +74,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);
         await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
 
-        var catalog = ProviderCatalogConfiguration.Load(new ConfigurationBuilder()
+        var catalog = providerCatalog ?? ProviderCatalogConfiguration.Load(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ProjectsConfig:ProviderCatalog:Registrations:0:Seam"] = "Sandbox",

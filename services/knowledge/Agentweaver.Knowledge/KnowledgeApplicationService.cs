@@ -58,7 +58,7 @@ public sealed class KnowledgeApplicationService(
     {
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.ReadProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
             .ConfigureAwait(false);
         return await context.Provider.SearchAsync(
             new KnowledgeRecordQuery(projectId, agentId, kind, query, includeInactive, page, pageSize),
@@ -74,7 +74,7 @@ public sealed class KnowledgeApplicationService(
     {
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.ReadProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
             .ConfigureAwait(false);
         var record = await context.Provider.ReadAsync(projectId, recordId, cancellationToken)
             .ConfigureAwait(false);
@@ -92,7 +92,7 @@ public sealed class KnowledgeApplicationService(
     {
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.ReadProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
             .ConfigureAwait(false);
         _ = RequireAgentRecord(
             await context.Provider.ReadAsync(projectId, recordId, cancellationToken).ConfigureAwait(false),
@@ -272,7 +272,7 @@ public sealed class KnowledgeApplicationService(
     {
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.ReadProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
             .ConfigureAwait(false);
         var allowedTokens = Math.Min(options.DefaultContextTokens, context.Selection.RunLimits.MaxPromptTokens);
         var itemLimit = maximumItems ?? options.DefaultContextItems;
