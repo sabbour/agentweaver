@@ -83,6 +83,8 @@ public sealed record ProviderRegistration(
 
 public sealed record ProviderSelection(ProviderSeam Seam, string ProviderId);
 
+public sealed record ProviderMeterSourceSelection(string MeterSource, string ProviderId);
+
 public sealed record ProviderOverridePermission(ProviderSeam Seam, string ProviderId);
 
 public sealed record ProviderOrderedSelection(ProviderSeam Seam, ImmutableArray<string> ProviderIds);
@@ -111,6 +113,12 @@ public sealed record ProviderResolutionRequest(
     int RequiredOptionsSchemaVersion,
     ImmutableHashSet<string> RequiredCapabilities);
 
+public sealed record CostProviderResolutionRequest(
+    string MeterSource,
+    Version RequiredAdapterVersion,
+    int RequiredOptionsSchemaVersion,
+    ImmutableHashSet<string> RequiredCapabilities);
+
 public sealed class ProviderCandidate
 {
     internal ProviderCandidate(ProviderRegistration registration, ImmutableHashSet<string> required)
@@ -134,6 +142,15 @@ public sealed class ProviderCandidate
     public ProviderHostingPattern Hosting { get; }
     public ImmutableHashSet<string> AdvertisedCapabilities { get; }
     public ImmutableHashSet<string> RequiredCapabilities { get; }
+}
+
+public sealed class CostProviderResolution
+{
+    internal CostProviderResolution(string meterSource, ProviderCandidate candidate) =>
+        (MeterSource, Candidate) = (meterSource, candidate);
+
+    public string MeterSource { get; }
+    public ProviderCandidate Candidate { get; }
 }
 
 public sealed class ProviderResolution

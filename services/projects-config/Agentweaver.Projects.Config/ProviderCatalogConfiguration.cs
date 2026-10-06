@@ -45,8 +45,10 @@ public static class ProviderCatalogConfiguration
                 item.ProviderIds.ToImmutableArray()));
         var layers = settings.LayerSelections.Select(item =>
             new ProviderLayerSelection(ParseEnum<NetworkPolicyLayer>(item.Layer, "network policy layer"), item.ProviderId));
+        var meters = settings.MeterSourceSelections.Select(item =>
+            new ProviderMeterSourceSelection(item.MeterSource, item.ProviderId));
 
-        var result = ProviderCatalog.Create(registrations, defaults, overrides, ordered, layers);
+        var result = ProviderCatalog.Create(registrations, defaults, overrides, ordered, layers, meters);
         return result.Value
             ?? throw new InvalidOperationException(
                 $"The provider catalog owner supplied an invalid snapshot: {result.Error?.Code}: {result.Error?.Message}");
@@ -64,6 +66,7 @@ public static class ProviderCatalogConfiguration
         public List<ProviderOverrideSettings> PermittedOverrides { get; init; } = [];
         public List<ProviderOrderedSelectionSettings> OrderedSelections { get; init; } = [];
         public List<ProviderLayerSelectionSettings> LayerSelections { get; init; } = [];
+        public List<ProviderMeterSourceSelectionSettings> MeterSourceSelections { get; init; } = [];
     }
 
     private sealed class ProviderRegistrationSettings
@@ -99,6 +102,12 @@ public static class ProviderCatalogConfiguration
     private sealed class ProviderLayerSelectionSettings
     {
         public string Layer { get; init; } = string.Empty;
+        public string ProviderId { get; init; } = string.Empty;
+    }
+
+    private sealed class ProviderMeterSourceSelectionSettings
+    {
+        public string MeterSource { get; init; } = string.Empty;
         public string ProviderId { get; init; } = string.Empty;
     }
 }

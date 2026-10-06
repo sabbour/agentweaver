@@ -6,6 +6,11 @@ The Identity Broker is the host for caller authentication and secret-redemption 
 
 The Foundation Probe resolves provider descriptors and pins binding evidence for acceptance checks. The IDs `azure-blob`, `azure-key-vault`, and `azure-monitor` identify catalog entries; they do not instantiate adapters. `AzureProbeOperations` separately constructs the Key Vault and Blob classes, while `Program` registers telemetry composition. The probe is not an agent runtime.
 
+Projects & Config loads the catalog owner's meter-source selections and uses the
+existing resolver to persist Cost candidates through its native run-selection
+routes. This is source-keyed selection, not SDK model/producer authority, resource
+negotiation, a pricing adapter, or usage ingestion.
+
 ## Canonical component overview
 
 <figure class="aw-diagram" tabindex="0">

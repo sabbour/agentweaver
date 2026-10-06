@@ -9,7 +9,7 @@
     {
       "id": "contracts",
       "label": "Generic interfaces",
-      "subLabel": "Contracts do not access Azure resources.",
+      "subLabel": "Contracts are not SDK proof.",
       "tier": 1
     },
     {

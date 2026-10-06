@@ -47,7 +47,8 @@ public sealed record EffectiveProviderCandidate(
 public sealed record EffectiveProviderSelection(
     ProviderCardinality Cardinality,
     ProviderSeam Seam,
-    ImmutableArray<EffectiveProviderCandidate> Candidates);
+    ImmutableArray<EffectiveProviderCandidate> Candidates,
+    string? MeterSource = null);
 
 public sealed record EffectiveRunSelection(
     string ProjectId,
@@ -619,7 +620,8 @@ public sealed class ProjectsConfigService(
     {
         var resolver = new ProviderResolver(providerCatalog);
         var selections = ImmutableArray.CreateBuilder<EffectiveProviderSelection>();
-        foreach (var requirement in context.ProviderRequirements.OrderBy(item => item.Seam))
+        foreach (var requirement in context.ProviderRequirements.OrderBy(item => item.Seam)
+            .ThenBy(item => item.MeterSource, StringComparer.Ordinal))
         {
             var version = Version.TryParse(requirement.RequiredAdapterVersion, out var parsed)
                 ? parsed
@@ -678,6 +680,16 @@ public sealed class ProjectsConfigService(
                     break;
                 }
                 case ProviderCardinality.KeyedByMeterSource:
+                {
+                    var resolution = RequireProviderResult(resolver.ResolveCost(
+                        new CostProviderResolutionRequest(
+                            requirement.MeterSource!, version, requirement.RequiredOptionsSchemaVersion,
+                            requirement.RequiredCapabilities)));
+                    selections.Add(new EffectiveProviderSelection(
+                        cardinality, requirement.Seam, [ToEffective(resolution.Candidate)],
+                        resolution.MeterSource));
+                    break;
+                }
                 case ProviderCardinality.PerApplication:
                 {
                     var result = resolver.Resolve(new ProviderResolutionRequest(
@@ -736,7 +748,7 @@ public sealed class ProjectsConfigService(
         foreach (var reference in context.AvailableModelSelectionReferences)
             ValidateIdentifier(reference, "context.availableModelSelectionReferences");
         if (context.ProviderRequirements.Any(requirement => requirement is null) ||
-            context.ProviderRequirements.Select(item => item.Seam).Distinct().Count() !=
+            context.ProviderRequirements.Select(item => (item.Seam, item.MeterSource)).Distinct().Count() !=
                 context.ProviderRequirements.Length)
             throw new ProjectConfigException(
                 "invalid_run_selection_context",
@@ -756,6 +768,18 @@ public sealed class ProjectsConfigService(
                 throw new ProjectConfigException(
                     "invalid_run_selection_context",
                     "Run selection provider requirements are invalid.",
+                    StatusCodes.Status400BadRequest);
+            if (requirement.Seam == ProviderSeam.Cost)
+            {
+                if (requirement.MeterSource is null)
+                    throw new ProjectConfigException(
+                        "invalid_run_selection_context", "Cost requirements need an explicit meter source.",
+                        StatusCodes.Status400BadRequest);
+                ValidateIdentifier(requirement.MeterSource, "context.providerRequirements.meterSource");
+            }
+            else if (requirement.MeterSource is not null)
+                throw new ProjectConfigException(
+                    "invalid_run_selection_context", "Only Cost requirements accept a meter source.",
                     StatusCodes.Status400BadRequest);
             var layered = ProviderSeams.Cardinality(requirement.Seam) == ProviderCardinality.Layered;
             if (layered
@@ -792,15 +816,13 @@ public sealed class ProjectsConfigService(
             ModelReferences = request.Context.AvailableModelSelectionReferences.Order(StringComparer.Ordinal).ToArray(),
             ProviderRequirements = request.Context.ProviderRequirements
                 .OrderBy(item => item.Seam)
-                .Select(item => new
-                {
-                    item.Seam,
-                    item.RequiredAdapterVersion,
-                    item.RequiredOptionsSchemaVersion,
-                    RequiredCapabilities = item.RequiredCapabilities.Order(StringComparer.Ordinal).ToArray(),
-                    RequiredL3L4Capabilities = item.RequiredL3L4Capabilities.Order(StringComparer.Ordinal).ToArray(),
-                    RequiredL7Capabilities = item.RequiredL7Capabilities.Order(StringComparer.Ordinal).ToArray(),
-                }).ToArray(),
+                .ThenBy(item => item.MeterSource, StringComparer.Ordinal)
+                .Select(item => new ProviderRequirementFingerprint(
+                    item.Seam, item.RequiredAdapterVersion, item.RequiredOptionsSchemaVersion,
+                    item.RequiredCapabilities.Order(StringComparer.Ordinal).ToArray(),
+                    item.RequiredL3L4Capabilities.Order(StringComparer.Ordinal).ToArray(),
+                    item.RequiredL7Capabilities.Order(StringComparer.Ordinal).ToArray(),
+                    item.MeterSource)).ToArray(),
             RequiredEgress = ProjectConfigurationValidator
                 .ValidateEgressRules(request.Context.RequiredEgress)
                 .OrderBy(rule => rule.Host, StringComparer.Ordinal)
@@ -809,6 +831,15 @@ public sealed class ProjectsConfigService(
         var bytes = JsonSerializer.SerializeToUtf8Bytes(canonical, JsonOptions);
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     }
+
+    private sealed record ProviderRequirementFingerprint(
+        ProviderSeam Seam,
+        string RequiredAdapterVersion,
+        int RequiredOptionsSchemaVersion,
+        string[] RequiredCapabilities,
+        string[] RequiredL3L4Capabilities,
+        string[] RequiredL7Capabilities,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MeterSource);
 
     private static bool IsUniqueViolation(DbUpdateException exception) =>
         exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };

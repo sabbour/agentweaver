@@ -86,6 +86,7 @@ public sealed record PlatformRuntimeDefaults
 public sealed record ProviderRequirement
 {
     public ProviderSeam Seam { get; init; }
+    public string? MeterSource { get; init; }
     public string RequiredAdapterVersion { get; init; } = string.Empty;
     public int RequiredOptionsSchemaVersion { get; init; }
     public ImmutableHashSet<string> RequiredCapabilities { get; init; } =

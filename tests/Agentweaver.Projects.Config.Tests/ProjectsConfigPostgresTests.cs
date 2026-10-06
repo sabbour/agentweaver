@@ -1,9 +1,14 @@
 using System.Collections.Immutable;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Npgsql;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -13,6 +18,208 @@ namespace Agentweaver.Projects.Config.Tests;
 public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fixture)
     : IClassFixture<ProjectsConfigPostgresFixture>
 {
+    [Fact]
+    public async Task ReplaysLegacyNonCostFingerprintAndSnapshotWithoutMeterSource()
+    {
+        await using var db = CreateDbContext();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "legacy-tenant-" + suffix;
+        var admin = await SeedCallerAsync(db, store, "legacy-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var owner = await SeedCallerAsync(db, store, "legacy-owner-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var head = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+        var platform = await service.UpdatePlatformRuntimeDefaultsAsync(
+            admin, head.Revision, PlatformDefaults(), CancellationToken.None);
+        var project = await service.CreateProjectAsync(owner, "Legacy selection", CancellationToken.None);
+        var configuration = await service.UpdateProjectConfigurationAsync(
+            owner, project.ProjectId, project.ConfigurationRevision, ProjectSettings(), CancellationToken.None);
+        var membership = await SeedMembershipAsync(store, "legacy-orchestrator-" + suffix, tenantId);
+        await store.AssignRoleAsync(membership, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorityRole.Orchestrator, "fixture");
+        var caller = await ResolveCallerAsync(
+            db, "legacy-orchestrator-" + suffix, tenantId, ["api.read", "projects.orchestrator"]);
+        var request = RunRequest(configuration.Revision, platform.Revision);
+        var runId = "legacy-run-" + suffix;
+        var legacyBytes = LegacyFingerprintBytes(project.ProjectId, runId, request);
+        var expectedCanonical = $$"""
+            {"projectId":"{{project.ProjectId}}","runId":"{{runId}}","expectedProjectConfigRevision":{{configuration.Revision}},"expectedPlatformRuntimeRevision":{{platform.Revision}},"contextRevision":"provider-catalog-revision-1","modelReferences":["platform-model","project-model"],"providerRequirements":[{"seam":"sandbox","requiredAdapterVersion":"1.0.0","requiredOptionsSchemaVersion":1,"requiredCapabilities":["container.create"],"requiredL3L4Capabilities":[],"requiredL7Capabilities":[]}],"requiredEgress":[{"host":"api.example.com","port":443,"protocol":"tcp"}]}
+            """;
+        Assert.Equal(Encoding.UTF8.GetBytes(expectedCanonical), legacyBytes);
+        var legacyFingerprint = Convert.ToHexString(SHA256.HashData(legacyBytes)).ToLowerInvariant();
+        var legacySnapshot = JsonSerializer.Serialize(new
+        {
+            project.ProjectId,
+            RunId = runId,
+            ProjectRevision = project.Revision,
+            ProjectConfigurationRevision = configuration.Revision,
+            PlatformRuntimeRevision = platform.Revision,
+            ContextRevision = request.Context.Revision,
+            ModelSelection = new ModelSelectionSettings("project-model"),
+            Providers = new[]
+            {
+                new
+                {
+                    Cardinality = ProviderCardinality.Exclusive,
+                    Seam = ProviderSeam.Sandbox,
+                    Candidates = new[]
+                    {
+                        new EffectiveProviderCandidate(
+                            ProviderSeam.Sandbox, "sandbox-project", "1.0.0", 1, "options-v3",
+                            ProviderHostingPattern.KubernetesController,
+                            ["container.create"], ["container.create"]),
+                    },
+                },
+            },
+            EgressAllowlist = new[] { new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp) },
+            RunLimits = new CopilotRunLimits
+            {
+                MaxModelTurns = 6, MaxToolCalls = 100, MaxChildren = 0, MaxConcurrentChildren = 0,
+                MaxWallTimeSeconds = 3600, MaxPromptTokens = 20000,
+            },
+            ProjectConfiguration = configuration.Configuration,
+        }, LegacyJsonOptions());
+        Assert.DoesNotContain("\"meterSource\"", legacySnapshot);
+        db.RunSelections.Add(new ProjectRunSelectionRecord
+        {
+            RunId = runId,
+            ProjectId = project.ProjectId,
+            ProjectRevision = project.Revision,
+            ProjectConfigurationRevision = configuration.Revision,
+            PlatformRuntimeRevision = platform.Revision,
+            ContextRevision = request.Context.Revision,
+            RequestFingerprint = legacyFingerprint,
+            SnapshotJson = legacySnapshot,
+            CreatedAt = new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero),
+        });
+        await db.SaveChangesAsync();
+        var storedBefore = await db.RunSelections.AsNoTracking().SingleAsync(item => item.RunId == runId);
+
+        var replay = await service.AcceptRunSelectionAsync(
+            caller, project.ProjectId, runId, request, CancellationToken.None);
+        var read = await service.GetRunSelectionAsync(
+            caller, project.ProjectId, runId, CancellationToken.None);
+        Assert.Equal("project-model", replay.ModelSelection.Reference);
+        Assert.Equal("options-v3", Assert.Single(Assert.Single(read.Providers).Candidates).OptionsRevision);
+        Assert.Null(Assert.Single(replay.Providers).MeterSource);
+        Assert.Null(Assert.Single(read.Providers).MeterSource);
+        var storedAfter = await db.RunSelections.AsNoTracking().SingleAsync(item => item.RunId == runId);
+        Assert.Equal(legacyFingerprint, storedAfter.RequestFingerprint);
+        Assert.Equal(storedBefore.SnapshotJson, storedAfter.SnapshotJson);
+        Assert.Equal(storedBefore.CreatedAt, storedAfter.CreatedAt);
+
+        var freshRunId = "fresh-legacy-format-" + suffix;
+        await service.AcceptRunSelectionAsync(
+            caller, project.ProjectId, freshRunId, request, CancellationToken.None);
+        var fresh = await db.RunSelections.AsNoTracking().SingleAsync(item => item.RunId == freshRunId);
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(
+                LegacyFingerprintBytes(project.ProjectId, freshRunId, request))).ToLowerInvariant(),
+            fresh.RequestFingerprint);
+    }
+
+    [Fact]
+    public async Task PersistsMeterKeyedCostCandidatesAndRejectsMissingDuplicateOrUnknownSources()
+    {
+        var catalog = ProviderCatalogConfiguration.Load(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ProjectsConfig:ProviderCatalog:Registrations:0:Seam"] = "Cost",
+                ["ProjectsConfig:ProviderCatalog:Registrations:0:Id"] = "cost-test",
+                ["ProjectsConfig:ProviderCatalog:Registrations:0:AdapterVersion"] = "1.0.0",
+                ["ProjectsConfig:ProviderCatalog:Registrations:0:OptionsSchemaVersion"] = "1",
+                ["ProjectsConfig:ProviderCatalog:Registrations:0:Hosting"] = "InProcess",
+                ["ProjectsConfig:ProviderCatalog:Registrations:0:AdvertisedCapabilities:0"] = "cost.usage.price",
+                ["ProjectsConfig:ProviderCatalog:Registrations:0:Enabled"] = "true",
+                ["ProjectsConfig:ProviderCatalog:Registrations:0:OptionsRevision"] = "cost-options-v1",
+                ["ProjectsConfig:ProviderCatalog:MeterSourceSelections:0:MeterSource"] = "copilot.nano_aiu",
+                ["ProjectsConfig:ProviderCatalog:MeterSourceSelections:0:ProviderId"] = "cost-test",
+                ["ProjectsConfig:ProviderCatalog:MeterSourceSelections:1:MeterSource"] = "hosted.tokens",
+                ["ProjectsConfig:ProviderCatalog:MeterSourceSelections:1:ProviderId"] = "cost-test",
+            }).Build());
+        await using var db = CreateDbContext();
+        var store = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var service = new ProjectsConfigService(db, catalog, TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var admin = await SeedCallerAsync(db, store, "cost-admin-" + suffix, "tenant-cost-" + suffix,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var owner = await SeedCallerAsync(db, store, "cost-owner-" + suffix, "tenant-cost-" + suffix,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            "tenant-cost-" + suffix, ProjectAuthorityRole.TenantAdmin);
+        var head = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+        var defaults = await service.UpdatePlatformRuntimeDefaultsAsync(
+            admin, head.Revision, PlatformDefaults(), CancellationToken.None);
+        var project = await service.CreateProjectAsync(owner, "Cost selection", CancellationToken.None);
+        var membership = await SeedMembershipAsync(store, "cost-orchestrator-" + suffix, owner.TenantId);
+        await store.AssignRoleAsync(membership, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorityRole.Orchestrator, "fixture");
+        var caller = await ResolveCallerAsync(
+            db, "cost-orchestrator-" + suffix, owner.TenantId, ["api.read", "projects.orchestrator"]);
+        var requirement = new ProviderRequirement
+        {
+            Seam = ProviderSeam.Cost,
+            MeterSource = "copilot.nano_aiu",
+            RequiredAdapterVersion = "1.0.0",
+            RequiredOptionsSchemaVersion = 1,
+            RequiredCapabilities = ImmutableHashSet.Create("cost.usage.price"),
+        };
+        var request = new AcceptRunSelectionRequest
+        {
+            ExpectedProjectConfigRevision = project.ConfigurationRevision,
+            ExpectedPlatformRuntimeRevision = defaults.Revision,
+            Context = new RunSelectionContext
+            {
+                Revision = "cost-context-v1",
+                AvailableModelSelectionReferences = ImmutableHashSet.Create("platform-model"),
+                ProviderRequirements = [requirement, requirement with { MeterSource = "hosted.tokens" }],
+            },
+        };
+        var runId = "cost-run-" + suffix;
+        var selected = await service.AcceptRunSelectionAsync(
+            caller, project.ProjectId, runId, request, CancellationToken.None);
+        Assert.Equal(2, selected.Providers.Length);
+        var cost = selected.Providers[0];
+        Assert.Equal(ProviderCardinality.KeyedByMeterSource, cost.Cardinality);
+        Assert.Equal("copilot.nano_aiu", cost.MeterSource);
+        Assert.Equal("cost-options-v1", Assert.Single(cost.Candidates).OptionsRevision);
+        Assert.Equal("hosted.tokens", selected.Providers[1].MeterSource);
+        var replay = await service.AcceptRunSelectionAsync(
+            caller, project.ProjectId, runId, request, CancellationToken.None);
+        Assert.Equal(cost.MeterSource, replay.Providers[0].MeterSource);
+        var read = await service.GetRunSelectionAsync(
+            caller, project.ProjectId, runId, CancellationToken.None);
+        Assert.Equal("hosted.tokens", read.Providers[1].MeterSource);
+        var ownerRead = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.GetRunSelectionAsync(owner, project.ProjectId, runId, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, ownerRead.StatusCode);
+
+        foreach (var requirements in new ImmutableArray<ProviderRequirement>[]
+        {
+            [requirement with { MeterSource = null }],
+            [requirement, requirement],
+            [requirement with { Seam = ProviderSeam.Sandbox }],
+        })
+        {
+            var invalid = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.AcceptRunSelectionAsync(caller, project.ProjectId, "invalid-" + Guid.NewGuid().ToString("N"),
+                    request with { Context = request.Context with { ProviderRequirements = requirements } },
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status400BadRequest, invalid.StatusCode);
+        }
+        var unknown = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.AcceptRunSelectionAsync(caller, project.ProjectId, "unknown-" + suffix,
+                request with { Context = request.Context with
+                {
+                    ProviderRequirements = [requirement with { MeterSource = "unknown.meter" }],
+                } }, CancellationToken.None));
+        Assert.Equal("provider_resolution_failed", unknown.Code);
+    }
+
     [Fact]
     public async Task KeepsRunSelectionsImmutableAndEnforcesTenantScopedRunSelection()
     {
@@ -580,6 +787,47 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             MaxChildren = 0,
         },
     };
+
+    private static byte[] LegacyFingerprintBytes(
+        string projectId, string runId, AcceptRunSelectionRequest request)
+    {
+        // Preserve the anonymous-object format used before meter-source selection.
+        var canonical = new
+        {
+            projectId,
+            runId,
+            request.ExpectedProjectConfigRevision,
+            request.ExpectedPlatformRuntimeRevision,
+            ContextRevision = request.Context.Revision,
+            ModelReferences = request.Context.AvailableModelSelectionReferences.Order(StringComparer.Ordinal).ToArray(),
+            ProviderRequirements = request.Context.ProviderRequirements
+                .OrderBy(item => item.Seam)
+                .Select(item => new
+                {
+                    item.Seam,
+                    item.RequiredAdapterVersion,
+                    item.RequiredOptionsSchemaVersion,
+                    RequiredCapabilities = item.RequiredCapabilities.Order(StringComparer.Ordinal).ToArray(),
+                    RequiredL3L4Capabilities = item.RequiredL3L4Capabilities.Order(StringComparer.Ordinal).ToArray(),
+                    RequiredL7Capabilities = item.RequiredL7Capabilities.Order(StringComparer.Ordinal).ToArray(),
+                }).ToArray(),
+            RequiredEgress = ProjectConfigurationValidator
+                .ValidateEgressRules(request.Context.RequiredEgress)
+                .OrderBy(rule => rule.Host, StringComparer.Ordinal)
+                .ThenBy(rule => rule.Port).ThenBy(rule => rule.Protocol).ToArray(),
+        };
+        return JsonSerializer.SerializeToUtf8Bytes(canonical, LegacyJsonOptions());
+    }
+
+    private static JsonSerializerOptions LegacyJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        };
+        options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        return options;
+    }
 
     private static AcceptRunSelectionRequest RunRequest(long projectRevision, long platformRevision) => new()
     {
