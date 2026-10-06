@@ -6,26 +6,63 @@ deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="An authorized caller creates a session; the Events & Sessions host resolves and negotiates the native PostgreSQL Sessions provider, stores an immutable project/run provider pin, rejects PolicyEvaluation writes without trusted Core-writer provenance, and serves ordinary events through ordered replay or live subscriptions." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL provider per run, serves the ordered journal, and stores addressed messages admitted from the Orchestrator owner outbox for fenced presentation at turn boundaries. Generic callers cannot write PolicyEvaluation events without trusted Core provenance." />
   </a>
-  <figcaption>The current host validates project/run scope, pins one native Sessions provider per run, and uses PostgreSQL as the journal authority. Generic run-scoped append does not establish Orchestrator Core writer provenance, so it rejects PolicyEvaluation events. The figure describes source behavior, not a deployment topology.</figcaption>
+  <figcaption>The source connects the Orchestrator owner to the Events & Sessions journal and addressed-message store, with current authority resolved through Projects & Config. PostgreSQL is the journal authority; generic run-scoped append does not establish Orchestrator Core writer provenance, so PolicyEvaluation writes are rejected. The figure describes source behavior, not deployment topology.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
 
 ## Ownership and scope
 
 `Agentweaver.EventsAndSessions` owns the event journal, session records, immutable
-Sessions-provider bindings, and object-reference retention metadata in its PostgreSQL
-schema. The shared `Agentweaver.Persistence.Postgres` library supplies the
-transactional outbox and inbox; it does not own these domain tables. The service uses
-the existing provider catalog/resolver and telemetry helper. The provider-neutral
+Sessions-provider bindings, object-reference retention metadata, and addressed-message
+records in its PostgreSQL schema. The Orchestrator owns run/session relationships,
+execution fences and turn state, coordination requests, parent notifications, and its
+durable message outbox. The shared `Agentweaver.Persistence.Postgres` library supplies
+the transactional outbox and inbox; it does not own these domain tables. The service
+uses the existing provider catalog/resolver and telemetry helper. The provider-neutral
 `ISessionsJournal` interface and `SessionSubscriptionRequest` contract live in
 `Agentweaver.Abstractions`; this service owns their PostgreSQL implementation.
 
-This slice does not implement the rest of the proposed service responsibilities:
-session-tree transitions, addressed-message delivery, usage accounting, consistency
-manifests, MAF checkpoints, AgentHost integration, or Gateway/UI/MCP routes. The
-broader Sessions and coordination design remains Proposed for those larger workflows.
+This source slice connects owner-validated addressed-message delivery to session
+turn-boundary requests. It does not implement the rest of the proposed platform:
+automatic AgentHost scheduling, a background delivery relay, gate approval decisions,
+usage accounting, consistency manifests, MAF checkpoints, or Gateway/UI/MCP routes.
+The broader Sessions and coordination design remains Proposed for those workflows.
+
+## Addressed-message owner integration
+
+The Orchestrator exposes protected root/child registration and session-scoped send,
+turn-boundary, turn-completion, notification, and acknowledgment routes. Before each
+operation it requires the current Projects & Config authorization context and accepted
+run selection; it does not trust token claims alone for current permission. It writes
+outbound messages to its durable owner outbox before synchronously admitting them to
+Events & Sessions. Events asks the Orchestrator to verify that the complete message
+matches that outbox record, that both sessions belong to the active run, and that
+sender/recipient writer and execution fences are current. It persists the journal
+reference and Events-side outbox/inbox transactionally.
+
+At an explicit owner turn-boundary request, the Orchestrator asks Events to claim and
+present the next addressed message. Events re-reads the current owner session binding
+for every operation and permits claim or presentation only while the owner reports
+`presenting`; acknowledgment remains available after that boundary under the current
+execution and claim fences. The owner records delivery and exposes parent notifications.
+The completed boundary result is stored with its request state version, so retrying the
+same request returns the same result without claiming another message. A blocked session
+can resume when a pending wake exists, and a wake received during presentation is not
+lost. `progress` messages remain in sender history but are not claimable as recipient
+input; idempotency is scoped to the sender run and session.
+When a valid correlated reply is admitted, the owner moves the matching pending request
+to `input_available`. Later acknowledgment records receipt only: it does not approve a
+gate or complete child work.
+Needs-input and error messages can set a pending wake. The owner drives these calls
+synchronously; no background relay or automatic AgentHost scheduler is included.
+
+The Broker-backed HTTP integration test exercises this path with a real Broker-issued
+run token, disposable PostgreSQL, accepted Projects selection, root/child registration,
+owner-outbox validation, delivery and journal mapping, turn-boundary presentation,
+fenced acknowledgment, parent notification, and permission revocation. It is an
+integration test of the source hosts, not evidence of a deployed service.
 
 ## Provider pin and session creation
 

@@ -33,8 +33,13 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
     private readonly string _schema = "sessions_" + Guid.NewGuid().ToString("N");
     private readonly ClaimsPrincipal _owner = Principal("project-1", "run-1");
     private PostgresSessionsProviderOptions _options = null!;
+    private NativePostgresMessagingProviderOptions _messagingOptions = null!;
     private PostgresSessionsJournal _journal = null!;
     private SessionsProviderBindingService _bindingService = null!;
+    private ProviderCatalog _catalog = null!;
+    private ProviderResolver _resolver = null!;
+    private NativePostgresMessagingProvider _messagingProvider = null!;
+    private PostgresAddressedMessageStore _messages = null!;
     private SessionProviderBinding _binding = null!;
 
     public SessionsJournalPostgresTests(SessionsPostgresFixture fixture) => _fixture = fixture;
@@ -43,18 +48,26 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
     {
         _options = new PostgresSessionsProviderOptions(
             "resource-1", _fixture.DatabaseName, 4, _schema, "options-v1", PollIntervalMilliseconds: 50);
+        _messagingOptions = new NativePostgresMessagingProviderOptions("messaging-options-v1");
         await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
         _journal = new PostgresSessionsJournal(_fixture.DataSource, _options);
         var provider = new NativePostgresSessionsProvider();
         var registration = provider.CreateRegistration(_options);
-        var catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
-            [registration],
-            [new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId)],
+        _messagingProvider = new NativePostgresMessagingProvider();
+        var messagingRegistration = _messagingProvider.CreateRegistration(_messagingOptions);
+        _catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [registration, messagingRegistration],
+            [
+                new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId),
+                new ProviderSelection(ProviderSeam.Messaging, NativePostgresMessagingProvider.ProviderId)
+            ],
             []).Value);
+        _resolver = new ProviderResolver(_catalog);
         _bindingService = new SessionsProviderBindingService(
-            provider, catalog, new ProviderResolver(catalog), _options, _fixture.DataSource);
+            provider, _catalog, _resolver, _options, _fixture.DataSource);
         _binding = await _bindingService.ResolveAndPinAsync(_owner);
         await _journal.CreateSessionAsync(_owner, "session-1", _binding);
+        _messages = NewMessageStore();
     }
 
     public async Task DisposeAsync()
@@ -62,6 +75,362 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{_schema}\" CASCADE", connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    [Fact]
+    public async Task AddressedMessageIsIdempotentAndCommitsWithJournalAndOutbox()
+    {
+        await _journal.CreateSessionAsync(_owner, "session-2", _binding);
+        var draft = Message("first-message", AddressedMessageDeliveryMode.Immediate) with
+        {
+            Purpose = AddressedMessagePurpose.Handoff,
+            UserQuote = "Please verify the exact output.",
+            CoordinatorInstructions = "Report evidence without changing scope."
+        };
+
+        var sent = await _messages.SendAsync(_owner, draft);
+        var replay = await NewMessageStore().SendAsync(_owner, draft);
+        Assert.False(sent.IsDuplicate);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(sent.Message.MessageId, replay.Message.MessageId);
+        Assert.Equal(1, sent.Message.ThreadSequence);
+        Assert.Equal("Please verify the exact output.", replay.Message.UserQuote);
+        Assert.Equal("Report evidence without changing scope.", replay.Message.CoordinatorInstructions);
+        Assert.Equal(24, sent.Message.Provider.ResourceIdHash.Length);
+        Assert.DoesNotContain(_options.ResourceId, JsonSerializer.Serialize(sent.Message), StringComparison.Ordinal);
+
+        var history = await _journal.ReplayAsync(_owner, new SessionEventPageRequest("session-1"));
+        var messageReference = Assert.IsType<AddressedMessageSessionPayload>(
+            Assert.Single(history.Events).Payload);
+        Assert.Equal(sent.Message.MessageId, messageReference.MessageId);
+        Assert.Equal(AddressedMessagePurpose.Handoff, messageReference.Purpose);
+
+        await Assert.ThrowsAsync<AddressedMessageException>(() =>
+            _messages.SendAsync(_owner, draft with { Payload = Payload("""{"text":"changed"}""") }));
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var verify = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".addressed_messages),
+                (SELECT count(*) FROM "{_schema}".addressed_message_threads),
+                (SELECT count(*) FROM "{_schema}".session_events),
+                (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts),
+                (SELECT count(*) FROM "{_schema}".outbox_events
+                    WHERE event_type = 'sessions.addressed_message'),
+                (SELECT payload ->> 'purpose' FROM "{_schema}".outbox_events
+                    WHERE event_type = 'sessions.addressed_message'),
+                (SELECT payload ->> 'deliveryMode' FROM "{_schema}".outbox_events
+                    WHERE event_type = 'sessions.addressed_message')
+            """, connection);
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1, reader.GetInt64(0));
+        Assert.Equal(1, reader.GetInt64(1));
+        Assert.Equal(1, reader.GetInt64(2));
+        Assert.Equal(1, reader.GetInt64(3));
+        Assert.Equal(1, reader.GetInt64(4));
+        Assert.Equal("handoff", reader.GetString(5));
+        Assert.Equal("immediate", reader.GetString(6));
+    }
+
+    [Fact]
+    public async Task AddressedMessageIdempotencyIsScopedToTheSenderSession()
+    {
+        await _journal.CreateSessionAsync(_owner, "session-2", _binding);
+
+        var first = await _messages.SendAsync(
+            _owner, Message("same-key", AddressedMessageDeliveryMode.Immediate));
+        var second = await _messages.SendAsync(
+            _owner,
+            Message("same-key", AddressedMessageDeliveryMode.Immediate,
+                senderSession: "session-2", recipientSession: "session-1"));
+
+        Assert.False(first.IsDuplicate);
+        Assert.False(second.IsDuplicate);
+        Assert.NotEqual(first.Message.MessageId, second.Message.MessageId);
+    }
+
+    [Fact]
+    public async Task ProgressMessagesAreStoredButNotPresentedAsRecipientInput()
+    {
+        await _journal.CreateSessionAsync(_owner, "session-2", _binding);
+        var recipient = new SessionIdentity("project-1", "run-1", "session-2");
+        var progress = await _messages.SendAsync(
+            _owner, Message("progress", AddressedMessageDeliveryMode.Immediate));
+        var input = await _messages.SendAsync(
+            _owner,
+            Message("input", AddressedMessageDeliveryMode.Immediate) with
+            {
+                Purpose = AddressedMessagePurpose.Handoff,
+                ThreadId = progress.Message.ThreadId
+            });
+
+        var claim = await NewMessageStore().ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 4, owner: "recipient-worker");
+
+        Assert.Equal(input.Message.MessageId, Assert.IsType<AddressedMessageClaim>(claim).Message.MessageId);
+        Assert.Equal(AddressedMessageStatus.Accepted,
+            (await NewMessageStore().GetAsync("project-1", progress.Message.MessageId))!.Status);
+        var history = await _journal.ReplayAsync(_owner, new SessionEventPageRequest("session-1"));
+        Assert.Equal(2, history.Events.Length);
+    }
+
+    [Fact]
+    public async Task AddressedMessageJournalAndOutboxFailureRollsBackMessageAndThread()
+    {
+        await _journal.CreateSessionAsync(_owner, "session-2", _binding);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            $"""
+            CREATE FUNCTION "{_schema}".reject_test_outbox_insert()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RAISE EXCEPTION 'injected outbox insert failure';
+            END;
+            $$;
+            CREATE TRIGGER reject_test_outbox_insert
+                BEFORE INSERT ON "{_schema}".outbox_events
+                FOR EACH ROW EXECUTE FUNCTION "{_schema}".reject_test_outbox_insert();
+            """, connection))
+            await command.ExecuteNonQueryAsync();
+
+        await Assert.ThrowsAsync<PostgresException>(() =>
+            _messages.SendAsync(_owner, Message("rollback", AddressedMessageDeliveryMode.Immediate)));
+
+        await using var verify = await _fixture.DataSource.OpenConnectionAsync();
+        await using var query = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".addressed_messages),
+                (SELECT count(*) FROM "{_schema}".addressed_message_threads),
+                (SELECT count(*) FROM "{_schema}".messaging_provider_bindings),
+                (SELECT last_position FROM "{_schema}".session_run_streams
+                    WHERE project_id = 'project-1' AND run_id = 'run-1'),
+                (SELECT count(*) FROM "{_schema}".session_events),
+                (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts)
+            """, verify);
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(0, reader.GetInt64(0));
+        Assert.Equal(0, reader.GetInt64(1));
+        Assert.Equal(0, reader.GetInt64(2));
+        Assert.Equal(0, reader.GetInt64(3));
+        Assert.Equal(0, reader.GetInt64(4));
+        Assert.Equal(0, reader.GetInt64(5));
+    }
+
+    [Fact]
+    public async Task AddressedMessageBoundaryClaimPrioritizesImmediateAndRecoversFencedClaims()
+    {
+        await _journal.CreateSessionAsync(_owner, "session-2", _binding);
+        var recipient = new SessionIdentity("project-1", "run-1", "session-2");
+        var queued = await _messages.SendAsync(
+            _owner, Message("queued-first", AddressedMessageDeliveryMode.Enqueue) with
+            {
+                Purpose = AddressedMessagePurpose.Handoff
+            });
+        var laterImmediateSameThread = await _messages.SendAsync(
+            _owner, Message("immediate-same-thread", AddressedMessageDeliveryMode.Immediate) with
+            {
+                Purpose = AddressedMessagePurpose.Handoff,
+                ThreadId = queued.Message.ThreadId
+            });
+        var immediateOtherThread = await _messages.SendAsync(
+            _owner, Message("immediate-other-thread", AddressedMessageDeliveryMode.Immediate) with
+            {
+                Purpose = AddressedMessagePurpose.Handoff
+            });
+
+        var first = (await NewMessageStore().ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 4, owner: "worker-1"))!;
+        Assert.Equal(immediateOtherThread.Message.MessageId, first.Message.MessageId);
+        var firstPresented = await NewMessageStore().PresentAsync(first);
+        Assert.Equal(AddressedMessageStatus.Delivered, firstPresented.Status);
+        var firstAcknowledged = await NewMessageStore().AcknowledgeAsync(
+            recipient, first.Message.MessageId, first.Owner, first.Message.ClaimFence);
+        Assert.Equal(AddressedMessageStatus.Acknowledged, firstAcknowledged.Status);
+        var repeatedAcknowledgment = await NewMessageStore().AcknowledgeAsync(
+            recipient, first.Message.MessageId, first.Owner, first.Message.ClaimFence);
+        Assert.Equal(firstAcknowledged.AcknowledgedAt, repeatedAcknowledgment.AcknowledgedAt);
+
+        var second = (await NewMessageStore().ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 4, owner: "worker-1"))!;
+        Assert.Equal(queued.Message.MessageId, second.Message.MessageId);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var expireLease = new NpgsqlCommand($"""
+            UPDATE "{_schema}".addressed_messages
+            SET claimed_until = clock_timestamp() - interval '1 second'
+            WHERE project_id = 'project-1' AND message_id = @message
+            """, connection))
+        {
+            expireLease.Parameters.AddWithValue("message", NpgsqlDbType.Uuid, second.Message.MessageId);
+            Assert.Equal(1, await expireLease.ExecuteNonQueryAsync());
+        }
+
+        var recovered = (await NewMessageStore().ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 4, owner: "worker-2"))!;
+        Assert.Equal(second.Message.MessageId, recovered.Message.MessageId);
+        Assert.Equal(second.Message.ClaimFence + 1, recovered.Message.ClaimFence);
+        await Assert.ThrowsAsync<AddressedMessageException>(() =>
+            NewMessageStore().PresentAsync(second));
+        var delivered = await NewMessageStore().PresentAsync(recovered);
+        Assert.NotNull(delivered.PresentedAt);
+        await Assert.ThrowsAsync<AddressedMessageException>(() =>
+            NewMessageStore().AcknowledgeAsync(
+                recipient, delivered.MessageId, second.Owner, second.Message.ClaimFence));
+        var acknowledged = await NewMessageStore().AcknowledgeAsync(
+            recipient, delivered.MessageId, recovered.Owner, recovered.Message.ClaimFence);
+        Assert.Equal(AddressedMessageStatus.Acknowledged, acknowledged.Status);
+
+        var third = (await NewMessageStore().ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 4, owner: "worker-3"))!;
+        Assert.Equal(laterImmediateSameThread.Message.MessageId, third.Message.MessageId);
+
+        await using var verifyConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var verify = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{_schema}".outbox_events
+            WHERE event_type = 'sessions.addressed_message'
+            """, verifyConnection);
+        Assert.Equal(3L, await verify.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task AddressedMessageBoundaryRetryReturnsTheSameActiveClaimUntilAcknowledged()
+    {
+        await _journal.CreateSessionAsync(_owner, "session-2", _binding);
+        var recipient = new SessionIdentity("project-1", "run-1", "session-2");
+        var sent = await _messages.SendAsync(
+            _owner, Message("boundary-retry", AddressedMessageDeliveryMode.Immediate) with
+            {
+                Purpose = AddressedMessagePurpose.Handoff
+            });
+
+        var first = (await _messages.ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 4, owner: "same-owner"))!;
+        var retry = (await NewMessageStore().ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 4, owner: "same-owner"))!;
+        Assert.Equal(sent.Message.MessageId, first.Message.MessageId);
+        Assert.Equal(first.Message.ClaimFence, retry.Message.ClaimFence);
+
+        await _messages.PresentAsync(first);
+        var presentedRetry = (await NewMessageStore().ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 4, owner: "same-owner"))!;
+        Assert.Equal(AddressedMessageStatus.Delivered, presentedRetry.Message.Status);
+        Assert.Equal(first.Message.ClaimFence, presentedRetry.Message.ClaimFence);
+        await _messages.AcknowledgeAsync(
+            recipient, first.Message.MessageId, first.Owner, first.Message.ClaimFence);
+        Assert.Null(await NewMessageStore().ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 4, owner: "same-owner"));
+    }
+
+    [Fact]
+    public async Task AddressedMessageRepliesRequireAcknowledgedReverseParticipantAndCorrelation()
+    {
+        await _journal.CreateSessionAsync(_owner, "session-2", _binding);
+        var original = await _messages.SendAsync(
+            _owner, Message("question", AddressedMessageDeliveryMode.Enqueue) with
+            {
+                Purpose = AddressedMessagePurpose.NeedsInput,
+                Kind = AddressedMessageKind.Question,
+                RequestId = "gate-42"
+            });
+        var reverse = Message(
+            "reply", AddressedMessageDeliveryMode.Enqueue,
+            senderSession: "session-2",
+            recipientSession: "session-1") with
+        {
+            ReplyToId = original.Message.MessageId,
+            ReplyCorrelationId = "gate-42"
+        };
+        var premature = await Assert.ThrowsAsync<AddressedMessageException>(() =>
+            _messages.SendAsync(_owner, reverse));
+        Assert.Equal("reply_unavailable", premature.Code);
+
+        var recipient = new SessionIdentity("project-1", "run-1", "session-2");
+        var claim = (await _messages.ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 4, owner: "question-worker"))!;
+        await _messages.PresentAsync(claim);
+        await _messages.AcknowledgeAsync(
+            recipient, claim.Message.MessageId, claim.Owner, claim.Message.ClaimFence);
+
+        var reply = await NewMessageStore().SendAsync(_owner, reverse with
+        {
+            UserQuote = "The operator's exact question.",
+            CoordinatorInstructions = "Only answer that question."
+        });
+        Assert.False(reply.IsDuplicate);
+        Assert.Equal(original.Message.ThreadId, reply.Message.ThreadId);
+        Assert.Equal(2, reply.Message.ThreadSequence);
+        Assert.Equal(original.Message.MessageId, reply.Message.ReplyToId);
+        Assert.Equal("gate-42", reply.Message.ReplyCorrelationId);
+        Assert.Equal("The operator's exact question.", reply.Message.UserQuote);
+        Assert.Equal("Only answer that question.", reply.Message.CoordinatorInstructions);
+        Assert.Null(reply.Message.AcknowledgedAt);
+    }
+
+    [Fact]
+    public async Task AddressedMessageExpiryStaleFenceAndUndeliverableNeverForgeAcknowledgment()
+    {
+        await _journal.CreateSessionAsync(_owner, "session-2", _binding);
+        var recipient = new SessionIdentity("project-1", "run-1", "session-2");
+        var stale = await _messages.SendAsync(
+            _owner, Message("stale-fence", AddressedMessageDeliveryMode.Immediate));
+        var noClaim = await NewMessageStore().ClaimNextAtTurnBoundaryAsync(
+            recipient, currentFence: 5, owner: "new-generation");
+        Assert.Null(noClaim);
+        var staleStored = (await _messages.GetAsync("project-1", stale.Message.MessageId))!;
+        Assert.Equal(AddressedMessageStatus.Undeliverable, staleStored.Status);
+        Assert.Equal(AddressedMessageFailureReason.StaleFence, staleStored.FailureReason);
+        Assert.Null(staleStored.AcknowledgedAt);
+
+        var expiring = await _messages.SendAsync(
+            _owner, Message("expires", AddressedMessageDeliveryMode.Enqueue) with
+            {
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10)
+            });
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var expire = new NpgsqlCommand($"""
+            UPDATE "{_schema}".addressed_messages
+            SET expires_at = clock_timestamp() - interval '1 second'
+            WHERE project_id = 'project-1' AND message_id = @message
+            """, connection))
+        {
+            expire.Parameters.AddWithValue("message", NpgsqlDbType.Uuid, expiring.Message.MessageId);
+            Assert.Equal(1, await expire.ExecuteNonQueryAsync());
+        }
+        Assert.Equal(1, await NewMessageStore().ExpireDueAsync());
+        var expired = (await _messages.GetAsync("project-1", expiring.Message.MessageId))!;
+        Assert.Equal(AddressedMessageStatus.Expired, expired.Status);
+        Assert.Null(expired.AcknowledgedAt);
+
+        var pending = await _messages.SendAsync(
+            _owner, Message("undeliverable", AddressedMessageDeliveryMode.Enqueue));
+        var failed = await NewMessageStore().MarkUndeliverableAsync(
+            recipient, pending.Message.MessageId, AddressedMessageFailureReason.TargetCancelled);
+        Assert.Equal(AddressedMessageStatus.Undeliverable, failed.Status);
+        Assert.Equal(AddressedMessageFailureReason.TargetCancelled, failed.FailureReason);
+        Assert.Null(failed.AcknowledgedAt);
+    }
+
+    [Fact]
+    public async Task ConcurrentAddressedMessagesKeepContiguousThreadSequence()
+    {
+        await _journal.CreateSessionAsync(_owner, "session-2", _binding);
+        var first = await _messages.SendAsync(
+            _owner, Message("concurrent-base", AddressedMessageDeliveryMode.Enqueue));
+        var results = await Task.WhenAll(Enumerable.Range(0, 16).Select(index =>
+            NewMessageStore().SendAsync(
+                _owner,
+                Message(
+                    $"concurrent-{index}",
+                    index % 2 == 0 ? AddressedMessageDeliveryMode.Immediate : AddressedMessageDeliveryMode.Enqueue)
+                with { ThreadId = first.Message.ThreadId })));
+
+        Assert.Equal(Enumerable.Range(2, 16).Select(value => (long)value),
+            results.Select(result => result.Message.ThreadSequence).Order());
+        var replay = await _journal.ReplayRunAsync(
+            _owner, new SessionRunEventPageRequest("project-1", "run-1", Limit: 100));
+        Assert.Equal(17, replay.Events.Length);
+        Assert.Equal(Enumerable.Range(1, 17).Select(value => (long)value),
+            replay.Events.Select(item => item.Position));
     }
 
     [Fact]
@@ -644,6 +1013,37 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
     }
 
     private PostgresSessionsJournal NewJournal() => new(_fixture.DataSource, _options);
+
+    private PostgresAddressedMessageStore NewMessageStore() => new(
+        _fixture.DataSource,
+        _options,
+        _messagingOptions,
+        _messagingProvider,
+        _resolver,
+        NewJournal(),
+        "https://identity.example");
+
+    private static AddressedMessageDraft Message(
+        string idempotencyKey,
+        AddressedMessageDeliveryMode deliveryMode,
+        string senderSession = "session-1",
+        string recipientSession = "session-2") =>
+        new(
+            new SessionIdentity("project-1", "run-1", senderSession),
+            new SessionIdentity("project-1", "run-1", recipientSession),
+            idempotencyKey,
+            deliveryMode,
+            AddressedMessagePurpose.Progress,
+            AddressedMessageKind.Text,
+            Payload("""{"text":"status"}"""),
+            SenderFence: 4,
+            RecipientFence: 4);
+
+    private static System.Text.Json.JsonElement Payload(string json)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
 
     private static AppendSessionEvent Turn(Guid eventId, string key) =>
         new(eventId, SessionsContractVersions.CurrentSchemaVersion, SessionsContractVersions.CurrentEventVersion,

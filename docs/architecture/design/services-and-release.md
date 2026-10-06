@@ -142,11 +142,16 @@ message semantics](sessions-and-coordination.md) while removing 0.x cross-module
 Runs and coordinator decisions remain together inside the Orchestrator because separating their
 shared transitions would reproduce the transaction problem.
 
-The current v1 source includes `services/events-and-sessions/Agentweaver.EventsAndSessions`,
-an unpublished host candidate for the PostgreSQL run journal, ordered replay across sessions,
-and durable session-provider pins. It does not yet host the full Events & Sessions
-responsibilities in the table above; addressed message delivery, usage accounting, and product
-AgentHost/Gateway integration remain future work.
+The current v1 source includes unpublished `Agentweaver.EventsAndSessions` and
+`Agentweaver.Orchestrator` host candidates. Events & Sessions provides the PostgreSQL run
+journal, ordered replay across sessions, durable session-provider pins, and addressed-message
+delivery state. The Orchestrator owns root/child session relationships, current Projects &
+Config authorization checks, a durable owner message outbox, explicit turn-boundary
+operations, and parent notifications. Admission validates the exact owner outbox message and
+current session relationship and fences; admitting a valid correlated reply exposes input
+without approving a gate. The services connect through protected HTTP contracts, not a shared
+transaction. There is no background message relay or automatic AgentHost scheduler. Usage
+accounting and product AgentHost/Gateway integration remain future work.
 
 The Gateway and Identity boundary makes viewer authorization independent of the chosen [Application
 Hosting](applications-and-surfaces.md#application-hosting) provider. The first-party MCP server uses
@@ -324,8 +329,9 @@ An originating service commits its own state change and outbox entry in one loca
 transaction. The relay delivers at least once; consumers deduplicate by idempotency key. Per-thread
 sequence numbers preserve addressed-message order without claiming exactly-once transport
 ([R9](../decisions/0001-platform-architecture.md#risk-register)). A transport acknowledgment is not
-a workflow approval. The Sessions domain owns durable delivery and acknowledgment state; the
-Orchestrator owns the gates and run transitions that consume those messages.
+a workflow approval. In the target design, the Sessions domain owns durable delivery and
+acknowledgment state; the Orchestrator owns the gates and run transitions that consume
+those messages.
 
 The Postgres persistence library supplies a consumer-scoped receipt primitive for this
 deduplication: a consumer admits a stable message identity before its local domain work,

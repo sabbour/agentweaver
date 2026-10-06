@@ -39,6 +39,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
     }
 
     public HttpClient Client => _client;
+    public HttpMessageHandler CreateHandler() => _host.GetTestServer().CreateHandler();
     public NpgsqlDataSource RuntimeDataSource => _dataSource;
     public NpgsqlDataSource PrivilegedFixtureDataSource => _privilegedDataSource;
 
@@ -93,6 +94,14 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             web.ConfigureServices(services =>
             {
                 services.AddRouting();
+                services.ConfigureHttpJsonOptions(json =>
+                {
+                    json.SerializerOptions.UnmappedMemberHandling =
+                        System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow;
+                    json.SerializerOptions.Converters.Add(
+                        new System.Text.Json.Serialization.JsonStringEnumConverter(
+                            System.Text.Json.JsonNamingPolicy.CamelCase));
+                });
                 services.AddSingleton(dataSource);
                 services.AddDbContext<ProjectsConfigDbContext>((_, options) =>
                     options.UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(

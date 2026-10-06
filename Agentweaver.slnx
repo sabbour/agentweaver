@@ -3,6 +3,7 @@
   <Project Path="services\environment\Agentweaver.Environment\Agentweaver.Environment.csproj" />
   <Project Path="services\identity\Agentweaver.Identity.Broker\Agentweaver.Identity.Broker.csproj" />
   <Project Path="services\orchestrator\Agentweaver.Orchestrator.Core\Agentweaver.Orchestrator.Core.csproj" />
+  <Project Path="services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" />
   <Project Path="tests\Agentweaver.EventsAndSessions.Tests\Agentweaver.EventsAndSessions.Tests.csproj" />
   <Project Path="tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj" />
   <Project Path="services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" />

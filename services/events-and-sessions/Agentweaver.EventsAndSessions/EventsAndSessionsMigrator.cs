@@ -49,12 +49,13 @@ public static class EventsAndSessionsMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version != 1))
+        if (applied.Any(version => version is not (1 or 2)) ||
+            (applied.Contains(2) && !applied.Contains(1)))
             throw new InvalidOperationException("Unsupported Events & Sessions schema version.");
-        if (!applied.Contains(1))
+        foreach (var version in new[] { 1, 2 }.Where(version => !applied.Contains(version)))
         {
             await using var resource = typeof(EventsAndSessionsMigrator).Assembly.GetManifestResourceStream(
-                "Agentweaver.EventsAndSessions.Migrations.001_sessions_journal.sql")
+                $"Agentweaver.EventsAndSessions.Migrations.{version:000}_{(version == 1 ? "sessions_journal" : "addressed_messages")}.sql")
                 ?? throw new InvalidOperationException("The Sessions migration resource is missing.");
             using var text = new StreamReader(resource);
             var sql = (await text.ReadToEndAsync(cancellationToken))
@@ -62,7 +63,7 @@ public static class EventsAndSessionsMigrator
             await using (var migration = new NpgsqlCommand(sql, connection, transaction))
                 await migration.ExecuteNonQueryAsync(cancellationToken);
             await using (var record = new NpgsqlCommand(
-                $"INSERT INTO {quotedSchema}.sessions_schema_migrations (version) VALUES (1)",
+                $"INSERT INTO {quotedSchema}.sessions_schema_migrations (version) VALUES ({version})",
                 connection, transaction))
                 await record.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -82,6 +83,8 @@ public static class EventsAndSessionsMigrator
         await using var command = new NpgsqlCommand($"""
             SELECT
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 1),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 2),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -92,7 +95,10 @@ public static class EventsAndSessionsMigrator
                 to_regclass(@references) IS NOT NULL,
                 to_regclass(@outbox) IS NOT NULL,
                 to_regclass(@streams) IS NOT NULL,
-                to_regclass(@inbox) IS NOT NULL
+                to_regclass(@inbox) IS NOT NULL,
+                to_regclass(@messageThreads) IS NOT NULL,
+                to_regclass(@messages) IS NOT NULL,
+                to_regclass(@messageBindings) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.sessions");
         command.Parameters.AddWithValue("bindings", NpgsqlDbType.Text, $"{schema}.session_provider_bindings");
@@ -102,11 +108,14 @@ public static class EventsAndSessionsMigrator
         command.Parameters.AddWithValue("outbox", NpgsqlDbType.Text, $"{schema}.outbox_events");
         command.Parameters.AddWithValue("streams", NpgsqlDbType.Text, $"{schema}.outbox_streams");
         command.Parameters.AddWithValue("inbox", NpgsqlDbType.Text, $"{schema}.consumer_inbox_receipts");
+        command.Parameters.AddWithValue("messageThreads", NpgsqlDbType.Text, $"{schema}.addressed_message_threads");
+        command.Parameters.AddWithValue("messages", NpgsqlDbType.Text, $"{schema}.addressed_messages");
+        command.Parameters.AddWithValue("messageBindings", NpgsqlDbType.Text, $"{schema}.messaging_provider_bindings");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) ||
-            reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
-            reader.GetInt64(3) != 0 ||
-            Enumerable.Range(4, 8).Any(column => !reader.GetBoolean(column)))
+            reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 0 ||
+            reader.GetInt64(3) != 1 || reader.GetInt64(4) != 1 || reader.GetInt64(5) != 0 ||
+            Enumerable.Range(6, 11).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Events & Sessions schema is not current; run the explicit --migrate command.");
     }

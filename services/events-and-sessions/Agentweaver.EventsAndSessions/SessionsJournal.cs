@@ -290,6 +290,111 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return new SessionAppendResult(envelope, IsDuplicate: false);
     }
 
+    internal async Task<SessionEventEnvelope> AppendAddressedMessageAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        AddressedMessageEnvelope message,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(message);
+        if (connection.State != System.Data.ConnectionState.Open ||
+            !ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied open connection.", nameof(transaction));
+        if (message.Sender.ProjectId != message.Recipient.ProjectId ||
+            message.MessageId == Guid.Empty ||
+            message.ThreadSequence < 1)
+            throw new ArgumentException("The addressed message journal identity is invalid.", nameof(message));
+
+        var session = await ReadSessionAsync(
+            connection, transaction, message.Sender, lockRow: false, cancellationToken).ConfigureAwait(false);
+        RequireOwnedSession(session, message.Sender);
+
+        var payload = new AddressedMessageSessionPayload(
+            message.MessageId,
+            message.Sender,
+            message.Recipient,
+            message.ThreadId,
+            message.ThreadSequence,
+            message.Purpose);
+        var input = new AppendSessionEvent(
+            message.MessageId,
+            SessionsContractVersions.CurrentSchemaVersion,
+            SessionsContractVersions.CurrentEventVersion,
+            payload);
+        ValidateInput(input);
+        var canonicalInput = CreateCanonicalInput(message.Sender, input);
+        var admission = await _outbox.AdmitAsync(
+            connection,
+            transaction,
+            InboxConsumer,
+            CreateScopedEventIdentity(message.Sender, message.MessageId).MessageId,
+            cancellationToken).ConfigureAwait(false);
+        if (admission == InboxAdmission.Duplicate)
+        {
+            var duplicate = await ReadEventByIdAsync(
+                connection, transaction, message.Sender.ProjectId, message.Sender.RunId,
+                message.MessageId, cancellationToken).ConfigureAwait(false);
+            if (duplicate is null)
+                throw new InvalidOperationException("An inbox receipt exists without its addressed-message event.");
+            await using var compare = new NpgsqlCommand($"""
+                SELECT canonical_input = @input FROM {_events}
+                WHERE project_id = @project AND run_id = @run AND event_id = @event
+                """, connection, transaction);
+            compare.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, message.Sender.ProjectId);
+            compare.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, message.Sender.RunId);
+            compare.Parameters.AddWithValue("input", NpgsqlDbType.Jsonb, canonicalInput.GetRawText());
+            compare.Parameters.AddWithValue("event", NpgsqlDbType.Uuid, message.MessageId);
+            if (await compare.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                throw new SessionEventConflictException(
+                    "The addressed-message event identity was already used for different content.");
+            return duplicate;
+        }
+
+        var position = await AdvanceRunPositionAsync(
+            connection,
+            transaction,
+            message.Sender.ProjectId,
+            message.Sender.RunId,
+            cancellationToken).ConfigureAwait(false);
+        var occurredAt = NormalizeTimestamp(message.CreatedAt);
+        var envelope = new SessionEventEnvelope(
+            SessionsContractVersions.CurrentSchemaVersion,
+            SessionsContractVersions.CurrentEventVersion,
+            message.MessageId,
+            message.Sender,
+            position,
+            occurredAt,
+            payload,
+            []);
+        var payloadJson = JsonSerializer.SerializeToElement<SessionEventPayload>(payload, JsonOptions);
+        var referencesJson = JsonSerializer.SerializeToElement(
+            ImmutableArray<StoredSessionObjectReference>.Empty, JsonOptions);
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO {_events}
+                (event_id, project_id, run_id, session_id, position, schema_version, event_version,
+                 event_kind, occurred_at, payload, canonical_input, object_references)
+            VALUES
+                (@event, @project, @run, @session, @position, @schema_version, @event_version,
+                 @kind, @occurred, @payload, @canonical, @references)
+            """, connection, transaction))
+        {
+            AddIdentity(insert, message.Sender);
+            insert.Parameters.AddWithValue("event", NpgsqlDbType.Uuid, message.MessageId);
+            insert.Parameters.AddWithValue("position", NpgsqlDbType.Bigint, position);
+            insert.Parameters.AddWithValue("schema_version", NpgsqlDbType.Integer, envelope.SchemaVersion);
+            insert.Parameters.AddWithValue("event_version", NpgsqlDbType.Integer, envelope.EventVersion);
+            insert.Parameters.AddWithValue("kind", NpgsqlDbType.Varchar, SessionEventKind.AddressedMessage.ToString());
+            insert.Parameters.AddWithValue("occurred", NpgsqlDbType.TimestampTz, occurredAt);
+            insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, payloadJson.GetRawText());
+            insert.Parameters.AddWithValue("canonical", NpgsqlDbType.Jsonb, canonicalInput.GetRawText());
+            insert.Parameters.AddWithValue("references", NpgsqlDbType.Jsonb, referencesJson.GetRawText());
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        return envelope;
+    }
+
     public async Task<SessionEventPage> ReplayAsync(
         ClaimsPrincipal principal,
         SessionEventPageRequest request,
@@ -705,6 +810,12 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+    }
+
+    private static DateTimeOffset NormalizeTimestamp(DateTimeOffset timestamp)
+    {
+        var utc = timestamp.ToUniversalTime();
+        return new DateTimeOffset(utc.Ticks - utc.Ticks % 10, TimeSpan.Zero);
     }
 
     private sealed record CursorData(string ProjectId, string RunId, string? SessionId, long Position);

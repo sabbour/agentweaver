@@ -1,8 +1,8 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Native Sessions journal and provider pin",
-  "alt": "An authorized caller creates sessions; Events & Sessions pins the native PostgreSQL provider per run, assigns one ordered journal across its sessions, and serves replay and live events with reconnectable opaque cursors.",
+  "title": "Native Sessions journal and owner delivery",
+  "alt": "Projects & Config validates current permission and accepted run selection. The Orchestrator admits owner-outbox messages; Events & Sessions pins the native PostgreSQL journal and presents messages at fenced turn boundaries. Generic callers cannot write PolicyEvaluation without trusted Core provenance.",
   "autonumber": true,
   "participants": [
     {
@@ -233,17 +233,14 @@
       "arrow": "open"
     },
     {
-      "type": "message",
-      "from": "caller",
-      "to": "api",
-      "label": "Reconnect by passing nextCursor unchanged",
-      "line": "dashed",
-      "arrow": "filled"
-    },
-    {
       "type": "activation",
       "participant": "api",
       "action": "end"
+    },
+    {
+      "type": "note",
+      "over": ["caller", "api", "postgres"],
+      "label": "Orchestrator validates the owner outbox; Events presents at fenced turn boundaries. Receipt is not approval."
     }
   ]
 }
