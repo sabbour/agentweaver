@@ -2,7 +2,7 @@
 
 **Issue:** [#1784](https://github.com/sabbour/agentweaver/issues/1784).
 **Prerequisite:** [#1777 dedicated Azure P0 infrastructure](1777-azure-p0-infrastructure.md).
-**Status:** The corrected initial image keeps version `0.0.0`. A separately confirmed one-time replacement of the existing `0.0.0` tag must preserve the previous image by digest. Source and publication do not prove a successful runtime acceptance Job.
+**Status:** The corrected image keeps version `0.0.0`. The initial replacement and sampler-fixed replacement each require separate confirmation and a distinct permanent single-use claim. Each preserves the previous image by digest. Source and publication do not prove a successful runtime acceptance Job.
 
 ## Scope and boundaries
 
@@ -146,6 +146,12 @@ The image runs as numeric UID/GID 10001, matching the Job's `runAsUser` and
 Image digest, target ConfigMap, Monitor Secret, and egress host values remain
 deployment-specific placeholders. Rendering them locally is not deployment
 authorization or evidence.
+
+The existing Linux release workflow can prepare only the sampler-fixed Probe.
+Its replacement path accepts only the pinned previous `835d5b...` manifest and
+the final admitted source SHA. See the
+[release guide](../../releases/README.md) for its explicit options and single-use
+claim. Neither source validation nor this option grants publication permission.
 
 FQDN egress uses both Cilium `rules.dns` inspection for the exact allowed host
 names and matching `toFQDNs` destinations. AKS requires ACNS Container Network

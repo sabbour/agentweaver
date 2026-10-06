@@ -167,7 +167,7 @@ test('a Debug-only pin is forced into the actual Release build and container pub
 
 test('pack upload and download use the same attempt-independent source/run identity', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8');
-  assert.equal((workflow.match(/name: v1-release-pack-\$\{\{ github.sha \}\}-\$\{\{ github.run_id \}\}/g) ?? []).length, 2);
+  assert.equal((workflow.match(/name: v1-release-pack-\$\{\{ github.sha \}\}-\$\{\{ github.run_id \}\}/g) ?? []).length, 3);
   assert.doesNotMatch(workflow, /name: v1-release-pack-.*github\.run_attempt/);
   assert.match(workflow, /name: v1-release-pack-[^\n]+\n\s+overwrite: true/);
 });
@@ -255,16 +255,24 @@ const oldProbeAttestation = 'sha256:01c4362f57d59be166e15d1963ee285ca7cd46de2d53
 const probeTarget = 'ghcr.io/sabbour/agentweaver-foundation-probe:0.0.0';
 const replacementNamespace = 'agentweaver-publication/initial-foundation-probe-0.0.0-replacement';
 
-function initialProbeFixture(t) {
+const currentProbeDigest = 'sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969';
+const samplerReplacementNamespace = 'agentweaver-publication/foundation-probe-0.0.0-sampler-replacement';
+
+function initialProbeFixture(t, { sampler = false } = {}) {
   const f = fixture(t, { foundationProbe: true, probeVersion: '0.0.0' });
   execFileSync('git', ['update-ref', 'refs/remotes/origin/v1', f.sourceSha], { cwd: f.root });
   f.prepare({ foundationProbeOnly: true });
   const env = { ...f.env, GITHUB_REPOSITORY: 'sabbour/agentweaver', RELEASE_REGISTRY: 'ghcr.io/sabbour' };
   const source = resolveProbeImageSource({ repoRoot: f.root });
-  const options = { foundationProbeOnly: true, confirmFoundationProbeInitialReplacement: f.sourceSha, env };
+  const options = { foundationProbeOnly: true, env, ...(sampler
+    ? { confirmFoundationProbeSamplerReplacement: f.sourceSha, expectedFoundationProbeSamplerDigest: currentProbeDigest }
+    : { confirmFoundationProbeInitialReplacement: f.sourceSha }) };
   let pushed = false;
   let targetReads = 0;
-  const oldIndex = {
+  const oldIndex = sampler ? {
+    schemaVersion: 2, mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
+    digest: currentProbeDigest,
+  } : {
     schemaVersion: 2, mediaType: 'application/vnd.oci.image.index.v1+json', digest: oldProbeDigest,
     manifests: [{ digest: oldProbePlatform }, { digest: oldProbeAttestation }],
   };
@@ -273,6 +281,11 @@ function initialProbeFixture(t) {
     if (args[0] === 'push') pushed = true;
     if (args[0] === 'buildx') {
       const reference = args[3];
+      if (sampler && reference === `ghcr.io/sabbour/agentweaver-foundation-probe@${oldProbeDigest}`)
+        return JSON.stringify({
+          schemaVersion: 2, mediaType: 'application/vnd.oci.image.index.v1+json', digest: oldProbeDigest,
+          manifests: [{ digest: oldProbePlatform }, { digest: oldProbeAttestation }],
+        });
       if (reference === probeTarget) {
         targetReads++;
         return JSON.stringify(pushed ? { schemaVersion: 2, digest: `sha256:${'b'.repeat(64)}` } : oldIndex);
@@ -295,6 +308,143 @@ function initialProbeFixture(t) {
   };
   return { f, options, native, get targetReads() { return targetReads; } };
 }
+
+test('sampler replacement consumes its distinct permanent claim and preserves consumed initial history', t => {
+  const { f, options, native } = initialProbeFixture(t, { sampler: true });
+  const historical = new Map(['claim', 'result'].map(name => {
+    const ref = `refs/tags/${replacementNamespace}/${name}`;
+    return [ref, { ref, object: { type: 'tag', sha: 'd'.repeat(40) } }];
+  }));
+  for (const [ref, record] of historical) f.refs.set(ref, record);
+  const receipt = f.publish({ ...options, run: native });
+  assert.equal(receipt.status, 'published');
+  assert.equal(receipt.initialProbeReplacement, undefined);
+  assert.equal(receipt.samplerProbeReplacement.expectedCurrentDigest, currentProbeDigest);
+  assert.equal(receipt.samplerProbeReplacement.previousIndex.digest, currentProbeDigest);
+  assert.equal(receipt.samplerProbeReplacement.newDigest, `sha256:${'b'.repeat(64)}`);
+  assert.equal(receipt.samplerProbeReplacement.originalIndexAndPlatformsRetained, true);
+  assert.deepEqual(receipt.published.map(item => item.id), ['Agentweaver.FoundationProbe']);
+  for (const [ref, record] of historical) assert.equal(f.refs.get(ref), record);
+  for (const name of ['claim', 'result']) assert.ok(f.refs.has(`refs/tags/${samplerReplacementNamespace}/${name}`));
+  assert.equal(f.externalCalls.filter(call => call.args[0] === 'push').length, 1);
+  assert.ok(f.externalCalls.some(call => call.args[3] === `ghcr.io/sabbour/agentweaver-foundation-probe@${currentProbeDigest}`));
+  for (const digest of [oldProbeDigest, oldProbePlatform, oldProbeAttestation])
+    assert.ok(f.externalCalls.some(call => call.args[3] === `ghcr.io/sabbour/agentweaver-foundation-probe@${digest}`));
+  assert.ok(!f.externalCalls.some(call => call.bin === 'dotnet'));
+});
+
+test('sampler replacement rejects absent/wrong intent, arbitrary digest, source, composition, and target without writes', t => {
+  const { f, options } = initialProbeFixture(t, { sampler: true });
+  for (const change of [
+    { confirmed: false },
+    { confirmFoundationProbeSamplerReplacement: undefined },
+    { confirmFoundationProbeSamplerReplacement: 'e'.repeat(40) },
+    { expectedFoundationProbeSamplerDigest: undefined },
+    { expectedFoundationProbeSamplerDigest: oldProbeDigest },
+    { expectedFoundationProbeSamplerDigest: `sha256:${'f'.repeat(64)}` },
+    { confirmFoundationProbeInitialReplacement: f.sourceSha },
+    { foundationProbeOnly: false },
+    { packagesOnly: true },
+    { env: { ...options.env, GITHUB_REPOSITORY: 'other/repo' } },
+    { env: { ...options.env, RELEASE_REGISTRY: 'ghcr.io/other' } },
+  ]) {
+    assert.throws(() => f.publish({ ...options, ...change }),
+      /confirmation|replacement|Probe 0.0.0|mutually exclusive/);
+    assert.deepEqual(f.remoteCalls, []);
+    assert.deepEqual(f.externalCalls, []);
+  }
+  const future = fixture(t, { foundationProbe: true });
+  future.prepare({ foundationProbeOnly: true });
+  assert.throws(() => future.publish({ ...options, confirmFoundationProbeSamplerReplacement: future.sourceSha }),
+    /approved Probe 0.0.0/);
+  assert.deepEqual(future.remoteCalls, []);
+  assert.deepEqual(future.externalCalls, []);
+  const otherCommit = execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    'commit-tree', 'HEAD^{tree}', '-m', 'different admitted source'], { cwd: f.root, encoding: 'utf8' }).trim();
+  execFileSync('git', ['update-ref', 'refs/remotes/origin/v1', otherCommit], { cwd: f.root });
+  assert.throws(() => f.publish(options), /exact admitted origin\/v1 source/);
+  assert.deepEqual(f.remoteCalls, []);
+  assert.deepEqual(f.externalCalls, []);
+});
+
+test('sampler permanent claim blocks another source before any image or claim write', t => {
+  const { f, options, native } = initialProbeFixture(t, { sampler: true });
+  const ref = `refs/tags/${samplerReplacementNamespace}/claim`;
+  f.refs.set(ref, { ref, object: { type: 'tag', sha: 'e'.repeat(40) } });
+  assert.throws(() => f.publish({ ...options, run: native }), /already claimed/);
+  assert.deepEqual(f.externalCalls, []);
+  assert.ok(!f.remoteCalls.some(call => call.args.includes('POST')));
+});
+
+test('sampler replacement checks the exact current tag before claims and immediately before its sole push', t => {
+  for (const concurrent of [false, true]) {
+    const { f, options, native } = initialProbeFixture(t, { sampler: true });
+    let reads = 0;
+    assert.throws(() => f.publish({ ...options, run(bin, args) {
+      if (bin === 'docker' && args[0] === 'buildx' && args[3] === probeTarget &&
+          ++reads === (concurrent ? 2 : 1))
+        return JSON.stringify({ schemaVersion: 2, mediaType: 'application/vnd.docker.distribution.manifest.v2+json',
+          digest: `sha256:${'c'.repeat(64)}` });
+      return native(bin, args);
+    } }), /drifted|changed before push/);
+    assert.ok(!f.externalCalls.some(call => call.args[0] === 'push'));
+    if (!concurrent) assert.ok(!f.remoteCalls.some(call => call.args.includes('POST')));
+  }
+});
+
+test('sampler post-push verification failure preserves irreversible digest and blocks a second push', t => {
+  const { f, options, native } = initialProbeFixture(t, { sampler: true });
+  assert.throws(() => f.publish({ ...options, run(bin, args) {
+    if (bin === 'docker' && args[0] === 'buildx' &&
+        args[3] === `ghcr.io/sabbour/agentweaver-foundation-probe@${currentProbeDigest}`)
+      throw new Error('Native previous manifest read failed');
+    return native(bin, args);
+  } }), /Native previous manifest read failed/);
+  const receipt = JSON.parse(readFileSync(path.join(f.outDir, 'publication.json'), 'utf8'));
+  assert.equal(receipt.status, 'partial');
+  assert.equal(receipt.samplerProbeReplacement.newDigest, `sha256:${'b'.repeat(64)}`);
+  assert.equal(receipt.published[0].image, `ghcr.io/sabbour/agentweaver-foundation-probe@sha256:${'b'.repeat(64)}`);
+  assert.equal(receipt.samplerProbeReplacement.originalIndexAndPlatformsRetained, undefined);
+  assert.equal(f.externalCalls.filter(call => call.args[0] === 'push').length, 1);
+  assert.ok(f.refs.has(`refs/tags/${samplerReplacementNamespace}/claim`));
+  assert.throws(() => f.publish(options), /receipt already exists/);
+});
+
+test('sampler replacement rejects an unavailable preserved initial index before any claim or push', t => {
+  const { f, options, native } = initialProbeFixture(t, { sampler: true });
+  assert.throws(() => f.publish({ ...options, run(bin, args) {
+    if (bin === 'docker' && args[0] === 'buildx' &&
+        args[3] === `ghcr.io/sabbour/agentweaver-foundation-probe@${oldProbeDigest}`)
+      return JSON.stringify({ schemaVersion: 2, digest: oldProbeDigest });
+    return native(bin, args);
+  } }), /preserved initial Probe index is missing/);
+  assert.ok(!f.remoteCalls.some(call => call.args.includes('POST')));
+  assert.ok(!f.externalCalls.some(call => call.args[0] === 'push'));
+});
+
+test('existing Linux workflow defaults off and selects the same source-bound Probe-only pack and protected publisher', () => {
+  const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8');
+  assert.match(workflow, /foundation_probe_sampler_replacement:[\s\S]*?default: false/);
+  assert.match(workflow, /expected_probe_digest:[\s\S]*?default: ''/);
+  assert.match(workflow, /args\+=\(--foundation-probe-only\); fi/);
+  assert.match(workflow, /npm run release:pack -- "\$\{args\[@\]\}"/);
+  assert.match(workflow, /--confirm-foundation-probe-sampler-replacement "\$GITHUB_SHA" --expected-foundation-probe-sampler-digest "\$EXPECTED_PROBE_DIGEST"/);
+  assert.match(workflow, /environment: v1-publication/);
+  assert.match(workflow, /if: \$\{\{ inputs\.publish && inputs\.foundation_probe_sampler_replacement \}\}/);
+  assert.ok(workflow.includes(currentProbeDigest));
+  assert.equal((workflow.match(/fetch-depth: 0/g) ?? []).length, 3);
+  const ordinary = workflow.slice(workflow.indexOf('\n  publish:'), workflow.indexOf('\n  publish-probe-sampler:'));
+  const sampler = workflow.slice(workflow.indexOf('\n  publish-probe-sampler:'));
+  assert.doesNotMatch(ordinary, /packages: write/);
+  assert.match(ordinary, /inputs\.publish && !inputs\.foundation_probe_sampler_replacement/);
+  assert.match(ordinary, /RELEASE_REGISTRY_PASSWORD: \$\{\{ secrets\.RELEASE_REGISTRY_PASSWORD \}\}/);
+  assert.match(sampler, /packages: write/);
+  assert.match(sampler, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
+  assert.match(sampler, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
+  assert.match(sampler, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
+  assert.match(sampler, /environment: v1-publication/);
+  assert.doesNotMatch(sampler, /secrets\.|RELEASE_NUGET|console\.log|echo.*TOKEN/);
+});
 
 test('confirmed initial replacement updates only the approved tag and preserves old index/platforms and history', t => {
   const { f, options, native } = initialProbeFixture(t);

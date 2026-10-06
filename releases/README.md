@@ -50,6 +50,27 @@ The permanent claim continues to block a second push.
 The pending patch records future ordinary release intent. No release plan or
 version bump runs for this initial replacement.
 The Broker and eight NuGet baselines remain unchanged.
+
+The sampler-fixed Probe has a separate, default-off replacement path.
+It permits only the current `0.0.0` manifest
+`sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969`.
+Use `--foundation-probe-only`, `--confirm-publication`,
+`--confirm-foundation-probe-sampler-replacement <admitted-source-sha>`, and
+`--expected-foundation-probe-sampler-digest <exact-current-digest>`.
+The initial and sampler replacement options cannot combine.
+The permanent claim is
+`agentweaver-publication/foundation-probe-0.0.0-sampler-replacement/claim`.
+It blocks further attempts across source commits, including after partial publication.
+The publisher preserves the previous manifest by digest and all historical receipts.
+It records the pushed digest before later verification can fail.
+
+The existing `v1 release pack` workflow runs this path on Linux.
+Set `foundation_probe_sampler_replacement: true` and the exact `expected_probe_digest`.
+With `publish: false`, it prepares only the Probe archive and creates no claim.
+Publication requires separate user approval and the protected `v1-publication` job.
+Use the final admitted source SHA, not the earlier sampler-only commit.
+These options do not authorize publication, deployment, consent, or fixture creation.
+
 There is no repository-wide version authority, deployable image, local runtime,
 or persona/deployment evidence in this first foundation. The draft cannot be
 published as a platform release.

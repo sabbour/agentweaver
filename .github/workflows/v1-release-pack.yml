@@ -12,6 +12,16 @@ on:
         required: true
         default: false
         type: boolean
+      foundation_probe_sampler_replacement:
+        description: Select only the one-time sampler-fixed Probe 0.0.0 replacement (separate user approval required)
+        required: true
+        default: false
+        type: boolean
+      expected_probe_digest:
+        description: Exact approved current Probe digest, required only for sampler replacement
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -24,6 +34,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+          fetch-depth: 0
       - name: Require the v1 branch
         if: ${{ github.ref != 'refs/heads/v1' }}
         run: |
@@ -32,8 +43,15 @@ jobs:
       - name: Require exact dispatch source
         env:
           EXPECTED_SOURCE: ${{ inputs.expected_source }}
+          PROBE_SAMPLER_REPLACEMENT: ${{ inputs.foundation_probe_sampler_replacement }}
+          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
         run: |
           test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Dispatch source mismatch"; exit 1; }
+          if [ "$PROBE_SAMPLER_REPLACEMENT" = "true" ]; then
+            test "$EXPECTED_PROBE_DIGEST" = "sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969" || { echo "::error::Probe current digest mismatch"; exit 1; }
+          else
+            test -z "$EXPECTED_PROBE_DIGEST" || { echo "::error::Probe digest requires sampler replacement intent"; exit 1; }
+          fi
       - uses: actions/setup-dotnet@v4
         if: ${{ github.ref == 'refs/heads/v1' }}
         with:
@@ -47,7 +65,12 @@ jobs:
         run: npm run release:validate
       - name: Prepare locked package and image artifacts (no publish)
         if: ${{ github.ref == 'refs/heads/v1' }}
-        run: npm run release:pack
+        env:
+          PROBE_SAMPLER_REPLACEMENT: ${{ inputs.foundation_probe_sampler_replacement }}
+        run: |
+          args=()
+          if [ "$PROBE_SAMPLER_REPLACEMENT" = "true" ]; then args+=(--foundation-probe-only); fi
+          npm run release:pack -- "${args[@]}"
       - uses: actions/upload-artifact@v4
         if: ${{ github.ref == 'refs/heads/v1' && !cancelled() }}
         with:
@@ -58,7 +81,7 @@ jobs:
           retention-days: 30
   publish:
     needs: pack
-    if: ${{ inputs.publish }}
+    if: ${{ inputs.publish && !inputs.foundation_probe_sampler_replacement }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -68,6 +91,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+          fetch-depth: 0
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -88,6 +112,43 @@ jobs:
           RELEASE_REGISTRY_PASSWORD: ${{ secrets.RELEASE_REGISTRY_PASSWORD }}
           DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
         run: node scripts/release/publish.mjs releases/foundation.json artifacts/release/pack "$GITHUB_SHA" --confirm-publication
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: v1-publication-receipt-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/release/pack/publication.json
+          if-no-files-found: warn
+          retention-days: 30
+  publish-probe-sampler:
+    needs: pack
+    if: ${{ inputs.publish && inputs.foundation_probe_sampler_replacement }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    environment: v1-publication
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: v1-release-pack-${{ github.sha }}-${{ github.run_id }}
+          path: artifacts/release/pack/
+      - name: Publish only the separately approved sampler-fixed Probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_REGISTRY: ghcr.io/sabbour
+          RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
+          RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
+          DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
+          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
+        run: node scripts/release/publish.mjs releases/foundation.json artifacts/release/pack "$GITHUB_SHA" --confirm-publication --foundation-probe-only --confirm-foundation-probe-sampler-replacement "$GITHUB_SHA" --expected-foundation-probe-sampler-digest "$EXPECTED_PROBE_DIGEST"
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
