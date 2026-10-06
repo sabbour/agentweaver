@@ -24,6 +24,7 @@ const projectReferences = new Map([
   ]],
   ['Agentweaver.Orchestrator.Core', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
   ]],
   ['Agentweaver.EventsAndSessions', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',

@@ -9,10 +9,17 @@ public static class SessionIdentityClaims
     public const string ProjectId = "project_id";
     public const string RunId = "run_id";
 
-    public static bool TryGetScope(ClaimsPrincipal principal, out SessionRunScope? scope)
+    public static bool TryGetScope(ClaimsPrincipal principal, out SessionRunScope? scope) =>
+        TryGetScope(principal, out scope, out _);
+
+    public static bool TryGetScope(
+        ClaimsPrincipal principal,
+        out SessionRunScope? scope,
+        out string? actorId)
     {
         ArgumentNullException.ThrowIfNull(principal);
         scope = null;
+        actorId = null;
         // Identity Broker emits a GUID sub and adds the owner pair only for an active core run grant.
         var subjects = principal.FindAll(Subject).Take(2).ToArray();
         var projects = principal.FindAll(ProjectId).Take(2).ToArray();
@@ -24,11 +31,13 @@ public static class SessionIdentityClaims
 
         try
         {
+            actorId = subjects[0].Value;
             scope = new SessionRunScope(projects[0].Value, runs[0].Value);
             return true;
         }
         catch (ArgumentException)
         {
+            actorId = null;
             return false;
         }
     }

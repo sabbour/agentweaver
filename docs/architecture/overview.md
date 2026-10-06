@@ -1,6 +1,6 @@
 # Foundation architecture
 
-The v1 source builds independent .NET components, including an unpublished Events & Sessions journal service candidate. Contracts separate provider-neutral types from Azure and PostgreSQL adapters.
+The v1 source builds independent .NET components, including an unpublished Events & Sessions journal service candidate and an Orchestrator Core AGT YAML Policy adapter. The native journal includes a typed, redacted PolicyEvaluation event for durable decision evidence; the event and policy adapter are not action grants or a wired protected-effect guard. Contracts separate provider-neutral types from Azure, PostgreSQL, and AGT adapters.
 
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 
@@ -51,6 +51,7 @@ their external boundaries.
 | --- | --- | --- |
 | `Agentweaver.Abstractions` | Provider, secret, and object-store contracts. | — |
 | `Agentweaver.Providers` | In-memory provider catalog and resolver. | `Agentweaver.Abstractions` |
+| `Agentweaver.Orchestrator.Core` | Workflow validation and the platform-singleton AGT YAML Policy adapter. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Microsoft.AgentGovernance` |
 | `Agentweaver.Identity` | Trusted actor and exact run-grant authorization for secret redemption. | `Agentweaver.Abstractions` |
 | `Agentweaver.Secrets.AzureKeyVault` | Exact-version Azure Key Vault adapter. | `Agentweaver.Abstractions` |
 | `Agentweaver.Persistence.Postgres` | Service-schema outbox, consumer inbox, and relay library. | — |

@@ -21,6 +21,8 @@ image digests. The existing Identity Broker image `f989` remains separate from
 this package baseline. Package components use the 0.0.0 initial baseline. Their
 initial release notes come from the archived P0 changesets referenced by the prior
 release receipt.
+The Orchestrator Core compatibility entries include both Abstractions and Providers,
+matching its direct project references.
 
 Each product component change needs a fresh `.changeset` record. The record names the manifest component ID and semver intent. Documentation-only changes do not need a changeset.
 

@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "V1 services, contracts, and adapters",
-  "alt": "Structural component view of the unpublished Events & Sessions service candidate and its Agentweaver.Abstractions, Providers, PostgreSQL, and Telemetry project references, alongside two adapter chains. AzureBlobObjectStore implements IObjectStore and accesses an Azure Blob container; AzureKeyVaultSecretRedemption implements ISecretRedemption and accesses Azure Key Vault. This is source structure, not deployment topology.",
+  "alt": "Structural component view of the unpublished Events & Sessions service candidate and its Agentweaver.Abstractions, Providers, PostgreSQL, and Telemetry project references, including typed redacted PolicyEvaluation evidence in the native journal, alongside two adapter chains. AzureBlobObjectStore implements IObjectStore and accesses an Azure Blob container; AzureKeyVaultSecretRedemption implements ISecretRedemption and accesses Azure Key Vault. This is source structure, not deployment topology.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -102,7 +102,7 @@
     {
       "id": "events-and-sessions",
       "label": "Events & Sessions",
-      "subLabel": "Native PostgreSQL journal HTTP host candidate.",
+      "subLabel": "PostgreSQL journal with PolicyEvaluation evidence.",
       "meta": "Agentweaver.EventsAndSessions",
       "icon": "server",
       "fluentIcon": "api",

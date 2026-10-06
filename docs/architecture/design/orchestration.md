@@ -107,6 +107,19 @@ first-use confirmation. The library does not dispatch work, persist a
 journal/checkpoint, resolve Projects settings, or transport approvals; those
 runtime consumers are separate slices.
 
+The library also contains the source-only `AgtPolicyProvider`, an AGT 4.0.0
+platform-singleton adapter backed by YAML policies, and `ExecutableActionGuard`. The
+guard requires an injected current grant-owner lookup and matches its validated grant
+descriptor to the authenticated caller's HTTPS issuer and subject, project/run/session/step,
+action, purpose, and execution fence before applying AGT as an additional restriction.
+The caller's subject and project/run claims must share one authenticated identity and issuer.
+Missing, duplicate, cross-issuer, or invalid grant state denies; provider or journal errors
+prevent the protected callback. The
+current generic Sessions append path rejects PolicyEvaluation events because it does
+not establish trusted Core-writer provenance, and no current grant owner or trusted
+writer is wired. Therefore the source guard cannot authorize protected effects yet;
+call sites remain separate work.
+
 ### Outcome, selection, and confirmation
 
 1. The coordinator proposes an outcome specification with a typed tool. The schema

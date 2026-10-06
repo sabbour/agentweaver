@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
 using Agentweaver.Providers;
@@ -19,6 +20,7 @@ public sealed class SessionsContractTests
         {
             new TurnSessionPayload("user", Ref("turns/input")),
             new ToolCallSessionPayload("call-1", "search", "completed", Ref("calls/args"), Ref("calls/result")),
+            PolicyEvaluation(),
             new AcceptedDecisionSessionPayload("decision-1", "route", "approved", null, ["effect-1"]),
             new AcceptedEffectSessionPayload("effect-1", "publish", Ref("effects/receipt")),
             new ArtifactReferenceSessionPayload(Ref("artifacts/result")),
@@ -40,6 +42,46 @@ public sealed class SessionsContractTests
         Assert.Throws<ArgumentException>(() =>
             SessionEventPayloadValidation.ValidateAndGetReferences(
                 new AcceptedDecisionSessionPayload("d", "type", "choice", null, default)));
+        Assert.Throws<ArgumentException>(() =>
+            SessionEventPayloadValidation.ValidateAndGetReferences(
+                PolicyEvaluation() with { Fence = 0 }));
+        Assert.Throws<ArgumentException>(() =>
+            SessionEventPayloadValidation.ValidateAndGetReferences(
+                PolicyEvaluation() with
+                {
+                    Outcome = PolicyEvaluationOutcome.Error,
+                    ReasonCode = PolicyEvaluationReasonCode.Allowed
+                }));
+        Assert.Throws<ArgumentException>(() =>
+            SessionEventPayloadValidation.ValidateAndGetReferences(
+                PolicyEvaluation() with { ActionId = "action with user text" }));
+        Assert.Throws<ArgumentException>(() =>
+            SessionEventPayloadValidation.ValidateAndGetReferences(
+                PolicyEvaluation() with { GrantRevision = "revision with user text" }));
+        Assert.Throws<ArgumentException>(() =>
+            SessionEventPayloadValidation.ValidateAndGetReferences(
+                PolicyEvaluation() with { TenantId = "" }));
+    }
+
+    [Fact]
+    public void PolicyEvaluationPayloadIsTypedAndContainsNoFreeFormEvidence()
+    {
+        SessionEventPayload payload = PolicyEvaluation();
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new JsonStringEnumConverter());
+
+        var json = JsonSerializer.Serialize(payload, options);
+        var decoded = Assert.IsType<PolicyEvaluationSessionPayload>(
+            JsonSerializer.Deserialize<SessionEventPayload>(json, options));
+
+        Assert.Equal(payload, decoded);
+        Assert.Contains("\"kind\":\"policy_evaluation\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("credential", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("arguments", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("message", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ruleText", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"grantId\":\"grant-1\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"grantRevision\":\"revision-1\"", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -102,6 +144,9 @@ public sealed class SessionsContractTests
         Assert.Equal(ProviderSeam.Sessions, registration.Descriptor.Seam);
         Assert.Equal(NativePostgresSessionsProvider.ProviderId, registration.Descriptor.Id);
         Assert.Equal(SessionsCapabilities.All, registration.Descriptor.AdvertisedCapabilities);
+        Assert.DoesNotContain(
+            SessionsCapabilities.PolicyEvaluations,
+            registration.Descriptor.AdvertisedCapabilities);
         Assert.Equal("options-2026-10", registration.OptionsRevision);
 
         var catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
@@ -154,6 +199,23 @@ public sealed class SessionsContractTests
 
     private static SessionObjectReference Ref(string key) =>
         new(new ObjectKey(key), "transcript", 10);
+
+    private static PolicyEvaluationSessionPayload PolicyEvaluation() =>
+        new(
+            "33333333-3333-3333-3333-333333333333",
+            "tenant-1",
+            "step-1",
+            "grant-1",
+            "revision-1",
+            "coordination.decision",
+            "coordinator.question.respond",
+            PolicyEvaluationOutcome.Allow,
+            PolicyEvaluationReasonCode.Allowed,
+            1,
+            "agt.default",
+            "1.0.0",
+            1,
+            "options-2026-10");
 
     private static ClaimsPrincipal IdentityBrokerPrincipal(params (string Type, string Value)[] claims)
     {
