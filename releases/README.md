@@ -9,6 +9,8 @@ It pins eight independently versioned .NET foundation NuGet packages:
 The current package baseline for all eight is `0.0.0`.
 `Agentweaver.Identity.Broker` uses service baseline `0.0.0`; it is not one
 of the NuGet packages.
+`Agentweaver.Orchestrator` is also an unpublished service at baseline `0.0.0`;
+its `Agentweaver.Orchestrator.Core` dependency remains a separately versioned library.
 `Agentweaver.FoundationProbe` has a separate initial image component at `0.0.0`.
 The manifest uses the `service` artifact kind for its executable container.
 The Probe remains acceptance-only, not a product service.
