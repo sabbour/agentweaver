@@ -64,6 +64,8 @@ internal static class EventsAndSessionsPostgresDataSource
             new TokenRequestContext([TokenScope]), cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(token.Token))
             throw new InvalidOperationException("Events & Sessions PostgreSQL Entra token acquisition returned an empty token.");
+        if (token.ExpiresOn <= DateTimeOffset.UtcNow)
+            throw new InvalidOperationException("Events & Sessions PostgreSQL Entra token acquisition returned an expired token.");
         return token.Token;
     }
 
