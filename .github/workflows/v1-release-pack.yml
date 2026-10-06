@@ -4,16 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       expected_source:
-        description: Exact full v1 commit SHA to prepare (and optionally publish)
+        description: Exact v1 workflow source SHA (diagnostics reuse the pinned original image)
         required: true
         type: string
       publish:
-        description: Publish packages/images manually after environment approval (never deploy)
+        description: Publish packages/images manually after approval (false with sampler=true runs only the frozen diagnostic)
         required: true
         default: false
         type: boolean
       foundation_probe_sampler_replacement:
-        description: Select only the one-time sampler-fixed Probe 0.0.0 replacement (separate user approval required)
+        description: Select only the Probe sampler path (publish=false diagnoses the frozen image; separate approval required)
         required: true
         default: false
         type: boolean
@@ -28,6 +28,7 @@ permissions:
 
 jobs:
   pack:
+    if: ${{ inputs.publish || !inputs.foundation_probe_sampler_replacement }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -79,6 +80,46 @@ jobs:
           path: artifacts/release/pack/
           if-no-files-found: error
           retention-days: 30
+  diagnose-probe-sampler:
+    if: ${{ !inputs.publish && inputs.foundation_probe_sampler_replacement }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Require exact v1 diagnostic source and frozen target
+        env:
+          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/v1" || { echo "::error::Diagnostic requires v1"; exit 1; }
+          test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Diagnostic source mismatch"; exit 1; }
+          test "$EXPECTED_PROBE_DIGEST" = "sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969" || { echo "::error::Diagnostic target mismatch"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37409181340
+          name: v1-release-pack-f46cff3c65a97b76b78c9ea717ec8b2068d56de5-37409181340
+          path: artifacts/release/frozen-probe/
+      - name: Diagnose only login, load, config and current manifest
+        env:
+          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
+          PUBLISH: 'false'
+          PROBE_SAMPLER_REPLACEMENT: 'true'
+          RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
+          RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
+        run: node scripts/release/probe-publication-diagnostic.mjs artifacts/release/frozen-probe
   publish:
     needs: pack
     if: ${{ inputs.publish && !inputs.foundation_probe_sampler_replacement }}

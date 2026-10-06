@@ -1,12 +1,13 @@
 // Only the manually confirmed publication workflow invokes this script.
 import { createHash } from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateFile } from './validate.mjs';
 import { componentImageRepository } from './pack.mjs';
 import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
+import { runPublicationCommand as command } from './command.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (message) => { throw new Error(`manual publication: ${message}`); };
@@ -16,13 +17,6 @@ const initialProbeDigest = 'sha256:452be7e284ee6c33814fcedcf1d7c98f98384d09ea723
 const initialProbeClaim = 'agentweaver-publication/initial-foundation-probe-0.0.0-replacement';
 const samplerProbeDigest = 'sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969';
 const samplerProbeClaim = 'agentweaver-publication/foundation-probe-0.0.0-sampler-replacement';
-
-function command(bin, args, input) {
-  const result = spawnSync(bin, args, { input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-  // Subprocess output can contain credentials. Never relay it, even on failure.
-  if (result.error || result.status !== 0) fail(`${bin} failed; inspect the target independently before retrying`);
-  return args.includes('--raw') ? result.stdout : result.stdout.trim();
-}
 
 function parseRegistry(value) {
   if (typeof value !== 'string' || value.trim() !== value) return undefined;

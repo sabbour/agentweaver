@@ -79,7 +79,7 @@
       "type": "message",
       "from": "verifier",
       "to": "registry",
-      "label": "Verify source-bound digest; replacement keeps 452/835 history with distinct claims",
+      "label": "Verify digest; retain 452/835; diagnostic reuses f46 artifact without claims/push",
       "line": "solid",
       "arrow": "filled"
     },

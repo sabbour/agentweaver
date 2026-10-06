@@ -431,7 +431,7 @@ test('existing Linux workflow defaults off and isolates the approved sampler rou
   assert.match(workflow, /--confirm-foundation-probe-sampler-replacement "\$GITHUB_SHA" --expected-foundation-probe-sampler-digest "\$EXPECTED_PROBE_DIGEST"/);
   assert.match(workflow, /if: \$\{\{ inputs\.publish && inputs\.foundation_probe_sampler_replacement \}\}/);
   assert.ok(workflow.includes(currentProbeDigest));
-  assert.equal((workflow.match(/fetch-depth: 0/g) ?? []).length, 3);
+  assert.equal((workflow.match(/fetch-depth: 0/g) ?? []).length, 4);
   const ordinary = workflow.slice(workflow.indexOf('\n  publish:'), workflow.indexOf('\n  publish-probe-sampler:'));
   const sampler = workflow.slice(workflow.indexOf('\n  publish-probe-sampler:'));
   assert.doesNotMatch(ordinary, /packages: write/);
