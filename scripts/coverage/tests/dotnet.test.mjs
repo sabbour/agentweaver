@@ -17,6 +17,9 @@ const environmentProject = readFileSync(resolve(
   root, 'services', 'environment', 'Agentweaver.Environment', 'Agentweaver.Environment.csproj'), 'utf8');
 const knowledgeTestProject = readFileSync(resolve(
   root, 'tests', 'Agentweaver.Knowledge.Tests', 'Agentweaver.Knowledge.Tests.csproj'), 'utf8');
+const azureFilesTestProject = readFileSync(resolve(
+  root, 'tests', 'Agentweaver.Providers.Storage.AzureFiles.Tests',
+  'Agentweaver.Providers.Storage.AzureFiles.Tests.csproj'), 'utf8');
 
 test('the explicit .NET coverage runner registers the Events & Sessions suite and assembly', () => {
   assert.match(runner, /\['events-and-sessions', 'Agentweaver\.EventsAndSessions\.Tests'\]/);
@@ -42,4 +45,13 @@ test('the explicit .NET coverage runner registers the Knowledge suite and assemb
   assert.match(runsettings, /\[Agentweaver\.Knowledge\]\*/);
   assert.match(solution, /tests\\Agentweaver\.Knowledge\.Tests\\Agentweaver\.Knowledge\.Tests\.csproj/);
   assert.match(knowledgeTestProject, /coverlet\.collector/);
+});
+
+test('the explicit .NET coverage runner registers the Azure Files suite and assembly', () => {
+  assert.match(environmentRunner, /\['azure-files', 'Agentweaver\.Providers\.Storage\.AzureFiles\.Tests'\]/);
+  assert.match(environmentRunner, /'Agentweaver\.Providers\.Storage\.AzureFiles',/);
+  assert.match(runsettings, /\[Agentweaver\.Providers\.Storage\.AzureFiles\]\*/);
+  assert.match(solution,
+    /tests\\Agentweaver\.Providers\.Storage\.AzureFiles\.Tests\\Agentweaver\.Providers\.Storage\.AzureFiles\.Tests\.csproj/);
+  assert.match(azureFilesTestProject, /coverlet\.collector/);
 });

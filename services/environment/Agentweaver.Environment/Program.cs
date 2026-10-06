@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography.X509Certificates;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Agentweaver.Providers.Storage.AzureFiles;
 using Azure.Core;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -60,6 +61,7 @@ var serviceAccountToken = builder.Configuration["Kubernetes:ServiceAccountTokenF
 var serviceAccountCa = builder.Configuration["Kubernetes:CertificateAuthorityFile"] ??
     "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
 var ciliumOptions = ReadCiliumOptions(builder.Configuration);
+var azureFilesOptions = ReadAzureFilesOptions(builder.Configuration);
 
 builder.Services.AddSingleton<TokenCredential>(_ =>
     EnvironmentPostgresDataSource.CreateCredential(runtime));
@@ -94,6 +96,11 @@ builder.Services.AddScoped<ICiliumPolicyResourceStore>(services =>
     services.GetRequiredService<KubernetesCiliumPolicyResourceStore>());
 builder.Services.AddScoped<CiliumEgressPolicyAdapter>();
 builder.Services.AddScoped<EnvironmentEgressManager>();
+builder.Services.AddAgentweaverWorkspaceVolumeService(
+    azureFilesOptions,
+    kubernetesBaseAddress,
+    serviceAccountToken,
+    serviceAccountCa);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -165,6 +172,19 @@ static CiliumEgressProviderOptions ReadCiliumOptions(IConfiguration configuratio
             pair => pair.Key,
             pair => pair.Value.ToImmutableDictionary(StringComparer.Ordinal),
             StringComparer.Ordinal)).Validate();
+}
+
+static AzureFilesCsiOptions ReadAzureFilesOptions(IConfiguration configuration)
+{
+    var section = configuration.GetSection("Environment:Storage:AzureFiles");
+    return new AzureFilesCsiOptions(
+        section.GetValue("OptionsSchemaVersion", 0),
+        Required(section["OptionsRevision"], "Environment:Storage:AzureFiles:OptionsRevision"),
+        Required(section["Namespace"], "Environment:Storage:AzureFiles:Namespace"),
+        Required(section["StorageClassName"], "Environment:Storage:AzureFiles:StorageClassName"),
+        section.GetValue("MaximumCapacityGiB", 0L),
+        section.GetValue("ProvisioningTimeoutSeconds", 0),
+        section.GetValue("PollIntervalMilliseconds", 0)).Validate();
 }
 
 static string Required(string? value, string name) =>

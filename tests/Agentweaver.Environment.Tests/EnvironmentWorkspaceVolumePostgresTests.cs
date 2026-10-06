@@ -45,6 +45,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             fence,
             effectMayHaveApplied: true,
             resource1,
+            Binding(resource1),
             effectVerified: true,
             CancellationToken.None);
         Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, provisioned.TransitionState);
@@ -66,6 +67,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             fence,
             effectMayHaveApplied: true,
             resource2,
+            Binding(resource2),
             effectVerified: true,
             CancellationToken.None);
         Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, replaced.TransitionState);
@@ -129,6 +131,194 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
     }
 
     [Fact]
+    public async Task ReplacementCleanupIsAtomicallyQueuedFromTheExactPreviousBinding()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var fence = (await RegisterAsync(store, owner)).Snapshot.Fence;
+        const string volumeId = "workspace-volume";
+        var specification = CreateSpecification(owner, volumeId);
+        var oldResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "old-resource", 1);
+        var newResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "new-resource", 2);
+        var oldBinding = Binding(oldResource);
+        await store.CreateWorkspaceVolumeAsync(
+            fence, volumeId, specification, "create", CancellationToken.None);
+        var provision = await store.ReserveWorkspaceVolumeProvisionAsync(
+            fence, volumeId, 1, 0, 0, "provision", CancellationToken.None);
+        await store.CompleteWorkspaceVolumeProvisionAsync(
+            provision.OperationId,
+            fence,
+            effectMayHaveApplied: true,
+            oldResource,
+            oldBinding,
+            effectVerified: true,
+            CancellationToken.None);
+        var replacement = await store.ReserveWorkspaceVolumeReplaceAsync(
+            fence, volumeId, 2, 1, 0, "replace", CancellationToken.None);
+
+        Assert.Null(await store.ClaimWorkspaceVolumeCleanupAsync(
+            fence, replacement.OperationId, TimeSpan.FromSeconds(30), CancellationToken.None));
+        var completed = await store.CompleteWorkspaceVolumeReplaceAsync(
+            replacement.OperationId,
+            fence,
+            effectMayHaveApplied: true,
+            newResource,
+            Binding(newResource),
+            effectVerified: true,
+            CancellationToken.None);
+
+        Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, completed.TransitionState);
+        var cleanup = await store.ClaimWorkspaceVolumeCleanupAsync(
+            fence, replacement.OperationId, TimeSpan.FromSeconds(30), CancellationToken.None);
+        Assert.NotNull(cleanup);
+        Assert.Equal(replacement.OperationId, cleanup.SourceReplaceOperationId);
+        Assert.Equal(1, cleanup.ResourceGeneration);
+        Assert.Equal(oldResource, cleanup.ReleaseRequest.Resource);
+        Assert.Equal(1, cleanup.ReleaseRequest.Volume.ResourceGeneration);
+        Assert.Equal(oldBinding.ProviderId, cleanup.ReleaseRequest.ProviderBinding.ProviderId);
+        Assert.Equal(oldBinding.AdapterVersion, cleanup.ReleaseRequest.ProviderBinding.AdapterVersion);
+        Assert.Equal(oldBinding.OptionsSchemaVersion, cleanup.ReleaseRequest.ProviderBinding.OptionsSchemaVersion);
+        Assert.Equal(oldBinding.OptionsRevision, cleanup.ReleaseRequest.ProviderBinding.OptionsRevision);
+        Assert.Equal(WorkspaceVolumeBindingMode.Environment, cleanup.ReleaseRequest.BindingMode);
+        Assert.Equal(WorkspaceVolumeOwnerDeletionPolicy.Retain, cleanup.ReleaseRequest.OwnerDeletionPolicy);
+        Assert.Equal(WorkspaceVolumeReclaimPolicy.Retain, cleanup.ReleaseRequest.ReclaimPolicy);
+        Assert.True(JsonElement.DeepEquals(
+            oldBinding.OptionsSnapshot,
+            cleanup.ReleaseRequest.ProviderBinding.OptionsSnapshot));
+        Assert.True(JsonElement.DeepEquals(
+            oldBinding.ReleaseDescriptor,
+            cleanup.ReleaseRequest.ProviderBinding.ReleaseDescriptor));
+
+        var absent = new WorkspaceVolumeReleaseReceipt(
+            oldResource,
+            cleanup.ReleaseRequest.IdempotencyKey,
+            WorkspaceVolumeReleaseDisposition.AlreadyAbsent);
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.CompleteWorkspaceVolumeCleanupAsync(cleanup, absent, CancellationToken.None));
+        var completedCleanup = await store.CompleteWorkspaceVolumeCleanupAsync(
+            cleanup,
+            new WorkspaceVolumeReleaseReceipt(
+                oldResource,
+                cleanup.ReleaseRequest.IdempotencyKey,
+                WorkspaceVolumeReleaseDisposition.Retained),
+            CancellationToken.None);
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Blocked, completedCleanup.State);
+    }
+
+    [Fact]
+    public async Task SharedRetainReceiptPersistsBlockedCleanupAndGatesEnvironmentRelease()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var fence = (await RegisterAsync(store, owner)).Snapshot.Fence;
+        const string volumeId = "shared-workspace-volume";
+        var specification = CreateSpecification(
+            owner,
+            volumeId,
+            WorkspaceVolumeBindingMode.Shared,
+            WorkspaceVolumeReclaimPolicy.Retain);
+        var oldResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "old-shared", 1);
+        var newResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "new-shared", 2);
+        await store.CreateWorkspaceVolumeAsync(fence, volumeId, specification, "create", CancellationToken.None);
+        var provision = await store.ReserveWorkspaceVolumeProvisionAsync(
+            fence, volumeId, 1, 0, 0, "provision", CancellationToken.None);
+        await store.CompleteWorkspaceVolumeProvisionAsync(
+            provision.OperationId, fence, true, oldResource, Binding(oldResource), true, CancellationToken.None);
+        var replacement = await store.ReserveWorkspaceVolumeReplaceAsync(
+            fence, volumeId, 2, 1, 0, "replace-shared", CancellationToken.None);
+        await store.CompleteWorkspaceVolumeReplaceAsync(
+            replacement.OperationId, fence, true, newResource, Binding(newResource), true, CancellationToken.None);
+
+        var cleanup = await store.ClaimWorkspaceVolumeCleanupAsync(
+            fence, replacement.OperationId, TimeSpan.FromSeconds(30), CancellationToken.None);
+        Assert.NotNull(cleanup);
+        Assert.Equal(WorkspaceVolumeBindingMode.Shared, cleanup.ReleaseRequest.BindingMode);
+        Assert.Equal(WorkspaceVolumeReclaimPolicy.Retain, cleanup.ReleaseRequest.ReclaimPolicy);
+        var blocked = await store.CompleteWorkspaceVolumeCleanupAsync(
+            cleanup,
+            new WorkspaceVolumeReleaseReceipt(
+                oldResource,
+                cleanup.ReleaseRequest.IdempotencyKey,
+                WorkspaceVolumeReleaseDisposition.Retained),
+            CancellationToken.None);
+        var persisted = await store.GetWorkspaceVolumeCleanupStatusAsync(
+            fence, replacement.OperationId, CancellationToken.None);
+
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Blocked, blocked.State);
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Blocked, persisted!.State);
+        Assert.Null(await store.ClaimWorkspaceVolumeCleanupAsync(
+            fence, replacement.OperationId, TimeSpan.FromSeconds(30), CancellationToken.None));
+        var release = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            store.TransitionAsync(
+                new(owner, fence.LifecycleGeneration, EnvironmentLifecycleState.Released, "release-owner"),
+                CancellationToken.None));
+        Assert.Equal("environment_resources_not_released", release.Code);
+    }
+
+    [Fact]
+    public async Task ExpiredCleanupLeaseCannotCompleteAfterANewerLeaseIsClaimed()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var fence = (await RegisterAsync(store, owner)).Snapshot.Fence;
+        const string volumeId = "workspace-volume";
+        var oldResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "old-resource", 1);
+        var newResource = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "new-resource", 2);
+        await store.CreateWorkspaceVolumeAsync(
+            fence, volumeId, CreateSpecification(owner, volumeId), "create", CancellationToken.None);
+        var provision = await store.ReserveWorkspaceVolumeProvisionAsync(
+            fence, volumeId, 1, 0, 0, "provision", CancellationToken.None);
+        await store.CompleteWorkspaceVolumeProvisionAsync(
+            provision.OperationId,
+            fence,
+            effectMayHaveApplied: true,
+            oldResource,
+            Binding(oldResource),
+            effectVerified: true,
+            CancellationToken.None);
+        var replacement = await store.ReserveWorkspaceVolumeReplaceAsync(
+            fence, volumeId, 2, 1, 0, "replace", CancellationToken.None);
+        await store.CompleteWorkspaceVolumeReplaceAsync(
+            replacement.OperationId,
+            fence,
+            effectMayHaveApplied: true,
+            newResource,
+            Binding(newResource),
+            effectVerified: true,
+            CancellationToken.None);
+
+        var firstLease = await store.ClaimWorkspaceVolumeCleanupAsync(
+            fence, replacement.OperationId, TimeSpan.FromMilliseconds(1), CancellationToken.None);
+        Assert.NotNull(firstLease);
+        await Task.Delay(TimeSpan.FromMilliseconds(25));
+        var secondLease = await store.ClaimWorkspaceVolumeCleanupAsync(
+            fence, replacement.OperationId, TimeSpan.FromSeconds(30), CancellationToken.None);
+        Assert.NotNull(secondLease);
+        Assert.Equal(firstLease.LeaseRevision + 1, secondLease.LeaseRevision);
+        Assert.NotEqual(firstLease.LeaseId, secondLease.LeaseId);
+
+        var staleCompletion = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            store.CompleteWorkspaceVolumeCleanupAsync(
+                firstLease,
+                new WorkspaceVolumeReleaseReceipt(
+                    oldResource,
+                    firstLease.ReleaseRequest.IdempotencyKey,
+                    WorkspaceVolumeReleaseDisposition.Retained),
+                CancellationToken.None));
+        Assert.Equal("environment_volume_cleanup_lease_stale", staleCompletion.Code);
+
+        var completed = await store.CompleteWorkspaceVolumeCleanupAsync(
+            secondLease,
+            new WorkspaceVolumeReleaseReceipt(
+                oldResource,
+                secondLease.ReleaseRequest.IdempotencyKey,
+                WorkspaceVolumeReleaseDisposition.Retained),
+            CancellationToken.None);
+        Assert.Equal(EnvironmentWorkspaceVolumeCleanupState.Blocked, completed.State);
+        Assert.Equal(secondLease.LeaseRevision, completed.LeaseRevision);
+    }
+
+    [Fact]
     public async Task ReleasePreservesLastResourceAndDataGenerations()
     {
         var store = fixture.CreateStore();
@@ -145,6 +335,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             fence,
             effectMayHaveApplied: true,
             resource,
+            Binding(resource),
             effectVerified: true,
             CancellationToken.None);
 
@@ -190,6 +381,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             fence,
             effectMayHaveApplied: true,
             resource,
+            Binding(resource),
             effectVerified: true,
             CancellationToken.None);
 
@@ -252,6 +444,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             fence,
             effectMayHaveApplied: true,
             new(ProviderSeam.Storage, "azure-files", "resource-1", 2),
+            null,
             effectVerified: true,
             CancellationToken.None);
         Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired, mismatched.TransitionState);
@@ -279,6 +472,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             fence,
             effectMayHaveApplied: true,
             new(ProviderSeam.Storage, "azure-files", "resource-1", 1),
+            Binding(new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "resource-1", 1)),
             effectVerified: true,
             CancellationToken.None);
 
@@ -308,6 +502,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             fence,
             effectMayHaveApplied: true,
             resource,
+            Binding(resource),
             effectVerified: true,
             CancellationToken.None);
 
@@ -351,6 +546,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             fence,
             effectMayHaveApplied: true,
             resource,
+            Binding(resource),
             effectVerified: true,
             CancellationToken.None);
 
@@ -441,6 +637,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             fence,
             effectMayHaveApplied: true,
             resource,
+            Binding(resource),
             effectVerified: true,
             CancellationToken.None);
 
@@ -496,15 +693,36 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
         return new("tenant-" + suffix, "project-" + suffix, "run-" + suffix, "environment-" + suffix);
     }
 
-    private static JsonElement CreateSpecification(EnvironmentOwnerIdentity owner, string volumeId) =>
-        JsonSerializer.SerializeToElement(new
-        {
-            VolumeId = volumeId,
-            ProjectId = owner.ProjectId,
-            EnvironmentId = owner.EnvironmentId,
-            BindingMode = "Environment",
-            AccessMode = "ReadWrite"
-        });
+    private static JsonElement CreateSpecification(
+        EnvironmentOwnerIdentity owner,
+        string volumeId,
+        WorkspaceVolumeBindingMode bindingMode = WorkspaceVolumeBindingMode.Environment,
+        WorkspaceVolumeReclaimPolicy reclaimPolicy = WorkspaceVolumeReclaimPolicy.Delete) =>
+        JsonSerializer.SerializeToElement(new WorkspaceVolumeSpec(
+            volumeId,
+            owner.ProjectId,
+            bindingMode == WorkspaceVolumeBindingMode.Environment
+                ? new WorkspaceVolumeOwner(WorkspaceVolumeOwnerKind.Run, owner.RunId)
+                : new WorkspaceVolumeOwner(WorkspaceVolumeOwnerKind.Team, "workspace-team"),
+            bindingMode == WorkspaceVolumeBindingMode.Environment ? owner.EnvironmentId : null,
+            bindingMode,
+            WorkspaceVolumeAccessMode.ReadWriteMany,
+            8,
+            "azure-files",
+            WorkspaceVolumeConsistency.Strict,
+            reclaimPolicy,
+            WorkspaceVolumeOwnerDeletionPolicy.Retain,
+            bindingMode == WorkspaceVolumeBindingMode.Shared ? [owner.EnvironmentId] : []));
+
+    private static WorkspaceVolumeProviderBindingSnapshot Binding(ProviderResourceRef resource) =>
+        new WorkspaceVolumeProviderBindingSnapshot(
+            resource.ProviderId,
+            "1.0.0",
+            1,
+            "test-options-1",
+            JsonSerializer.SerializeToElement(new { endpoint = "test" }),
+            JsonSerializer.SerializeToElement(new { resourceId = resource.ResourceId }))
+            .ValidateFor(resource);
 
     private static Task<EnvironmentLifecycleTransitionResult> RegisterAsync(
         EnvironmentLifecycleStore store,

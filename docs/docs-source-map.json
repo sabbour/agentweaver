@@ -14,6 +14,7 @@
     "docs/architecture/identity-secrets.md",
     "docs/architecture/persistence-objects.md",
     "docs/architecture/telemetry.md",
+    "docs/architecture/design/provider-seams.md",
     "docs/architecture/azure.md",
     "docs/reference/contracts.md",
     "docs/reference/releases.md"
@@ -92,6 +93,32 @@
       "required": [
         "docs/architecture/providers-models.md",
         "docs/diagrams/src/flagship/v1-provider-resolution.json"
+      ]
+    },
+    {
+      "name": "Workspace volumes and Azure Files CSI",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/StorageContracts.cs",
+        "packages/Agentweaver.Providers.Storage.AzureFiles/",
+        "tests/Agentweaver.Providers.Storage.AzureFiles.Tests/",
+        "tests/Agentweaver.Providers.Tests/WorkspaceVolumeContractsTests.cs",
+        "packages/Agentweaver.Abstractions/EnvironmentContracts.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentDbContext.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentEndpoints.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentLifecycleStore.cs",
+        "services/environment/Agentweaver.Environment/Migrations/20261006160000_WorkspaceVolumeCleanup.cs",
+        "services/environment/Agentweaver.Environment/Program.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentWorkspaceVolumeManager.cs",
+        "services/environment/Agentweaver.Environment/WorkspaceVolumeService.cs",
+        "services/environment/Agentweaver.Environment/WorkspaceVolumeServiceCollectionExtensions.cs",
+        "tests/Agentweaver.Environment.Tests/EnvironmentWorkspaceVolumeApiTests.cs",
+        "tests/Agentweaver.Environment.Tests/EnvironmentWorkspaceVolumePostgresTests.cs",
+        "tests/Agentweaver.Environment.Tests/WorkspaceVolumeServiceTests.cs"
+      ],
+      "required": [
+        "docs/architecture/design/provider-seams.md",
+        "docs/guide/testing.md",
+        "docs/diagrams/src/flagship/v1-storage-volume-provisioning.json"
       ]
     },
     {
