@@ -254,6 +254,27 @@
       "group": "azure-resources"
     }
   ],
+  "layoutSnapshot": {
+    "canvasWidth": 1838.96,
+    "canvasHeight": 2345.6,
+    "nodes": [
+      { "id": "iobjectstore", "type": "card", "position": { "x": 199.04, "y": 144 }, "data": { "label": "Agentweaver.Abstractions.IObjectStore", "subLabel": "Generic object-storage contract." } },
+      { "id": "isecretredemption", "type": "card", "position": { "x": 698, "y": 144 }, "data": { "label": "Agentweaver.Abstractions.ISecretRedemption", "subLabel": "Generic secret-redemption contract." } },
+      { "id": "iworkspacevolumeprovider", "type": "card", "position": { "x": 1196.96, "y": 144 }, "data": { "label": "IWorkspaceVolumeProvider", "subLabel": "Generation-scoped Storage contract." } },
+      { "id": "sessions-dependencies", "type": "card", "position": { "x": 396.4064, "y": 492.8 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry" } },
+      { "id": "events-and-sessions", "type": "card", "position": { "x": 999.5936, "y": 492.8 }, "data": { "label": "Events & Sessions", "subLabel": "PostgreSQL journal + addressed-message delivery.", "meta": "Agentweaver.EventsAndSessions" } },
+      { "id": "environment-dependencies", "type": "card", "position": { "x": 396.4064, "y": 804.8 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nAzure Files Storage" } },
+      { "id": "agentweaver-environment", "type": "card", "position": { "x": 999.5936, "y": 790.8 }, "data": { "label": "Environment", "subLabel": "Owner lifecycle, egress, and workspace volumes.", "meta": "Agentweaver.Environment" } },
+      { "id": "knowledge-dependencies", "type": "card", "position": { "x": 396.4064, "y": 1099.2 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry" } },
+      { "id": "knowledge-service", "type": "card", "position": { "x": 999.5936, "y": 1099.2 }, "data": { "label": "Knowledge", "subLabel": "Memory API and native PostgreSQL adapter candidate.", "meta": "Agentweaver.Knowledge" } },
+      { "id": "azure-blob-object-store", "type": "card", "position": { "x": 199.04, "y": 1488.4 }, "data": { "label": "AzureBlobObjectStore", "subLabel": "Concrete object-store adapter.", "meta": "Library: Agentweaver.ObjectStore.AzureBlob" } },
+      { "id": "azure-key-vault-secret-redemption", "type": "card", "position": { "x": 698, "y": 1488.4 }, "data": { "label": "Key Vault\nadapter", "subLabel": "Does not authorize callers.", "meta": "Agentweaver.Secrets.AzureKeyVault" } },
+      { "id": "azure-files-volume-provider", "type": "card", "position": { "x": 1196.96, "y": 1488.4 }, "data": { "label": "Azure Files CSI", "subLabel": "Generation-pinned workspace volume adapter.", "meta": "Agentweaver.Providers.Storage.AzureFiles" } },
+      { "id": "azure-blob-container", "type": "card", "position": { "x": 448.52, "y": 1837.2 }, "data": { "label": "Azure Blob container", "subLabel": "External object-storage resource." } },
+      { "id": "azure-key-vault", "type": "card", "position": { "x": 947.48, "y": 1837.2 }, "data": { "label": "Azure Key Vault", "subLabel": "External secret store." } },
+      { "id": "kubernetes-storage-api", "type": "card", "position": { "x": 698, "y": 2117.6 }, "data": { "label": "Kubernetes API", "subLabel": "StorageClass, PVC, and PV control plane." } }
+    ]
+  },
   "edges": [
     {
       "from": "events-and-sessions",
