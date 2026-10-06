@@ -6,7 +6,7 @@ The broker accepts an external OIDC provider. It validates the upstream issuer, 
 
 OAuth authorization codes require registered clients, exact redirect URIs, registered scopes, and S256 PKCE. Consent requires the local cookie and antiforgery token. Refresh-token replay revokes the authorization and token family.
 
-After upstream OIDC validation, the broker creates a local subject and issues access tokens with registered OAuth scopes and resources. It does not forward upstream tenant or role claims and does not assign application roles. Resource services resolve the validated issuer and local `sub` against their own active membership and role records; token claims and tenant selectors cannot create authority. Grant-validated `project_id` and `run_id` are included only for tokens bound to that exact project and run.
+After upstream OIDC validation, the broker creates a local subject and issues access tokens with registered OAuth scopes and resources. It does not forward upstream tenant or role claims and does not assign application roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Other resource services obtain current authorization context through its versioned owner contract instead of keeping duplicate membership or role records; token claims and tenant selectors cannot create authority. Grant-validated `project_id` and `run_id` are included only for tokens bound to that exact project and run.
 
 ```mermaid
 sequenceDiagram
@@ -14,13 +14,17 @@ sequenceDiagram
     participant IdP as Configured OIDC provider
     participant Broker as Identity Broker
     participant API as Resource API
+    participant Projects as Projects & Config authorization owner
     User->>IdP: Authenticate
     IdP-->>Broker: Validated upstream identity
     Broker->>Broker: Replace upstream subject with local broker subject
     Broker->>Broker: Apply registered scopes and resource audience
     Broker-->>API: Signed access token (sub, scope, audience, optional project/run binding)
     API->>API: Validate issuer, signature, lifetime, and audience
-    API->>API: Resolve current membership and roles in its owned authority store
+    API->>Projects: Read current authorization context through versioned owner contract
+    Projects-->>API: Current membership and role context
+    API->>API: Authorize without duplicate membership or role records
+    Note over API,Projects: Logical contract boundary; no transport or endpoint is specified here.
 ```
 
 <figure class="aw-diagram" tabindex="0">

@@ -89,7 +89,7 @@ These routes belong to the unpublished Identity broker candidate. They are servi
 
 The service has no grant-administration HTTP endpoint. The browser consent UI is not implemented.
 
-Broker access tokens contain the local broker `sub`, registered OAuth scopes, and resource audience. They do not forward upstream tenant or role claims and do not assign Projects roles. Projects & Config resolves the validated issuer and local subject against its own active membership and role records; OAuth scopes and signed project/run bindings constrain requests but do not create authority.
+Broker access tokens contain the local broker `sub`, registered OAuth scopes, and resource audience. They do not forward upstream tenant or role claims and do not assign Projects roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Downstream resource services obtain current authorization context through its versioned owner contract rather than maintain duplicate membership or role records; OAuth scopes and signed project/run bindings constrain requests but do not create authority.
 
 ## Identity host configuration
 
