@@ -96,12 +96,13 @@ public sealed class EventsAndSessionsPostgresDataSourceTests(SessionsPostgresFix
         var testPassword = connection.Password
             ?? throw new InvalidOperationException("Testcontainers did not provide a PostgreSQL password.");
         connection.Remove("Password");
+        var firstTokenExpiresOn = DateTimeOffset.UtcNow.AddMinutes(1);
         var tokenRequest = 0;
         var credential = new FakeTokenCredential((_, _) =>
             ValueTask.FromResult(new AccessToken(
                 testPassword,
                 Interlocked.Increment(ref tokenRequest) == 1
-                    ? DateTimeOffset.UtcNow.AddMinutes(-5)
+                    ? firstTokenExpiresOn
                     : DateTimeOffset.UtcNow.AddMinutes(5))));
         await using var dataSource = EventsAndSessionsPostgresDataSource.Create(
             connection.ConnectionString, credential, SslMode.Disable);
@@ -126,12 +127,34 @@ public sealed class EventsAndSessionsPostgresDataSourceTests(SessionsPostgresFix
                     Assert.Single(request.Scopes)));
             var tokens = credential.Tokens.ToArray();
             Assert.Equal(2, tokens.Length);
-            Assert.True(tokens[0].ExpiresOn <= DateTimeOffset.UtcNow);
-            Assert.True(tokens[1].ExpiresOn > DateTimeOffset.UtcNow);
+            Assert.All(tokens, token => Assert.True(token.ExpiresOn > DateTimeOffset.UtcNow));
+            Assert.True(tokens[1].ExpiresOn > tokens[0].ExpiresOn);
         }
 
         await using var pooled = await dataSource.OpenConnectionAsync();
         Assert.Equal(2, credential.Requests.ToArray().Length);
+    }
+
+    [Fact]
+    public async Task RejectsExpiredTokenFromAsyncPasswordCallback()
+    {
+        var connection = new NpgsqlConnectionStringBuilder(postgres.ConnectionString) { Pooling = false };
+        var testPassword = connection.Password
+            ?? throw new InvalidOperationException("Testcontainers did not provide a PostgreSQL password.");
+        connection.Remove("Password");
+        var credential = new FakeTokenCredential((_, _) =>
+            ValueTask.FromResult(new AccessToken(testPassword, DateTimeOffset.UtcNow.AddMinutes(-5))));
+        await using var dataSource = EventsAndSessionsPostgresDataSource.Create(
+            connection.ConnectionString, credential, SslMode.Disable);
+
+        var exception = await Assert.ThrowsAsync<NpgsqlException>(async () =>
+        {
+            await using var expired = await dataSource.OpenConnectionAsync();
+        });
+        Assert.Contains("expired token", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.NotEmpty(credential.Requests);
+        Assert.All(credential.Tokens, token =>
+            Assert.True(token.ExpiresOn <= DateTimeOffset.UtcNow));
     }
 
     [Fact]
@@ -196,17 +219,18 @@ public sealed class EventsAndSessionsPostgresDataSourceTests(SessionsPostgresFix
     }
 
     [Fact]
-    public async Task RefreshFailureDoesNotReuseAnExpiredTokenForANewConnection()
+    public async Task ExpiredTokenRefreshFailureDoesNotReuseTokenForANewConnection()
     {
         var connection = new NpgsqlConnectionStringBuilder(postgres.ConnectionString) { Pooling = false };
         var testPassword = connection.Password
             ?? throw new InvalidOperationException("Testcontainers did not provide a PostgreSQL password.");
         connection.Remove("Password");
         var failure = new InvalidOperationException("token refresh failed");
+        var firstTokenExpiresOn = DateTimeOffset.UtcNow.AddSeconds(1);
         var tokenRequest = 0;
         var credential = new FakeTokenCredential((_, _) =>
             Interlocked.Increment(ref tokenRequest) == 1
-                ? ValueTask.FromResult(new AccessToken(testPassword, DateTimeOffset.UtcNow.AddMinutes(-5)))
+                ? ValueTask.FromResult(new AccessToken(testPassword, firstTokenExpiresOn))
                 : ValueTask.FromException<AccessToken>(failure));
         await using var dataSource = EventsAndSessionsPostgresDataSource.Create(
             connection.ConnectionString, credential, SslMode.Disable);
@@ -215,13 +239,15 @@ public sealed class EventsAndSessionsPostgresDataSourceTests(SessionsPostgresFix
         await using (var query = new NpgsqlCommand("SELECT 1", initial))
             Assert.Equal(1, await query.ExecuteScalarAsync());
 
+        await Task.Delay(TimeSpan.FromSeconds(1.1));
+        Assert.True(Assert.Single(credential.Tokens).ExpiresOn <= DateTimeOffset.UtcNow);
         var exception = await Assert.ThrowsAsync<NpgsqlException>(async () =>
         {
             await using var refreshed = await dataSource.OpenConnectionAsync();
         });
         Assert.Contains("token refresh failed", exception.ToString(), StringComparison.Ordinal);
         Assert.True(credential.Requests.Count > 1);
-        Assert.True(Assert.Single(credential.Tokens).ExpiresOn <= DateTimeOffset.UtcNow);
+        Assert.Single(credential.Tokens);
     }
 
     private sealed class FakeTokenCredential(
