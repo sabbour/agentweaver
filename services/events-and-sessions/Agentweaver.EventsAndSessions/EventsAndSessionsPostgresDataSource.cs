@@ -35,10 +35,12 @@ internal static class EventsAndSessionsPostgresDataSource
     public static NpgsqlDataSource Create(
         string connectionString,
         TokenCredential credential,
-        SslMode sslMode = SslMode.VerifyFull)
+        SslMode sslMode = SslMode.VerifyFull,
+        TimeProvider? timeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         ArgumentNullException.ThrowIfNull(credential);
+        timeProvider ??= TimeProvider.System;
         var connection = new NpgsqlConnectionStringBuilder(connectionString);
         if (string.IsNullOrWhiteSpace(connection.Username))
             throw new InvalidOperationException("The Events & Sessions PostgreSQL Entra role is required.");
@@ -51,20 +53,22 @@ internal static class EventsAndSessionsPostgresDataSource
         builder.UsePasswordProvider(
             _ => throw new InvalidOperationException("Synchronous PostgreSQL token acquisition is disabled."),
             async (_, cancellationToken) =>
-                await GetPostgresTokenAsync(credential, cancellationToken).ConfigureAwait(false));
+                await GetPostgresTokenAsync(credential, cancellationToken, timeProvider).ConfigureAwait(false));
         return builder.Build();
     }
 
     internal static async ValueTask<string> GetPostgresTokenAsync(
         TokenCredential credential,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(credential);
+        timeProvider ??= TimeProvider.System;
         var token = await credential.GetTokenAsync(
             new TokenRequestContext([TokenScope]), cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(token.Token))
             throw new InvalidOperationException("Events & Sessions PostgreSQL Entra token acquisition returned an empty token.");
-        if (token.ExpiresOn <= DateTimeOffset.UtcNow)
+        if (token.ExpiresOn <= timeProvider.GetUtcNow())
             throw new InvalidOperationException("Events & Sessions PostgreSQL Entra token acquisition returned an expired token.");
         return token.Token;
     }

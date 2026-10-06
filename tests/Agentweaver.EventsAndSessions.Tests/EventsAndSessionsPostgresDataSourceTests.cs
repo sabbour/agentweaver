@@ -158,6 +158,34 @@ public sealed class EventsAndSessionsPostgresDataSourceTests(SessionsPostgresFix
     }
 
     [Fact]
+    public async Task RejectsSameTokenAfterTestClockAdvancesPastExpiry()
+    {
+        var connection = new NpgsqlConnectionStringBuilder(postgres.ConnectionString) { Pooling = false };
+        var testPassword = connection.Password
+            ?? throw new InvalidOperationException("Testcontainers did not provide a PostgreSQL password.");
+        connection.Remove("Password");
+        var clock = new TestClock(DateTimeOffset.UtcNow);
+        var expiresOn = clock.GetUtcNow().AddMinutes(1);
+        var token = new AccessToken(testPassword, expiresOn);
+        var credential = new FakeTokenCredential((_, _) => ValueTask.FromResult(token));
+        await using var dataSource = EventsAndSessionsPostgresDataSource.Create(
+            connection.ConnectionString, credential, SslMode.Disable, clock);
+
+        await using (var initial = await dataSource.OpenConnectionAsync())
+        await using (var query = new NpgsqlCommand("SELECT 1", initial))
+            Assert.Equal(1, await query.ExecuteScalarAsync());
+
+        clock.Advance(TimeSpan.FromMinutes(2));
+        var exception = await Assert.ThrowsAsync<NpgsqlException>(async () =>
+        {
+            await using var expired = await dataSource.OpenConnectionAsync();
+        });
+        Assert.Contains("expired token", exception.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.True(credential.Requests.Count > 1);
+        Assert.All(credential.Tokens, issued => Assert.Equal(expiresOn, issued.ExpiresOn));
+    }
+
+    [Fact]
     public async Task RejectsPasswordsAndSynchronousTokenAcquisition()
     {
         var credential = new FakeTokenCredential((_, _) =>
@@ -266,5 +294,14 @@ public sealed class EventsAndSessionsPostgresDataSourceTests(SessionsPostgresFix
             Tokens.Enqueue(token);
             return token;
         }
+    }
+
+    private sealed class TestClock(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan elapsed) => _utcNow = _utcNow.Add(elapsed);
     }
 }
