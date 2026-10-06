@@ -40,7 +40,7 @@ jobs:
         run: node scripts/azure/build-foundation-probe-image.mjs
       - name: Render Foundation Probe acceptance Job and egress policy
         run: kubectl kustomize deploy/k8s/acceptance/foundation-probe
-      - name: Test .NET foundations, Identity broker, and Foundation Probe with coverage
+      - name: Test .NET foundations, Identity broker, Projects & Config, and Foundation Probe with coverage
         run: npm run coverage:dotnet
       - name: Build unpublished Identity broker image
         run: |
