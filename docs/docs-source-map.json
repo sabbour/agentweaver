@@ -6,6 +6,7 @@
     "docs/guide/azure-acceptance.md",
     "docs/diagrams/README.md",
     "docs/architecture/overview.md",
+    "docs/architecture/events-sessions.md",
     "docs/architecture/providers-models.md",
     "docs/architecture/identity-secrets.md",
     "docs/architecture/persistence-objects.md",
@@ -38,11 +39,26 @@
         "packages/Agentweaver.Telemetry/",
         "packages/Agentweaver.Telemetry.AzureMonitor/",
         "services/identity/Agentweaver.Identity.Broker/",
+        "services/events-and-sessions/",
         "tools/Agentweaver.FoundationProbe/"
       ],
       "required": [
         "docs/architecture/overview.md",
         "docs/diagrams/src/flagship/v1-foundation-dependencies.json"
+      ]
+    },
+    {
+      "name": "Events & Sessions journal",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/SessionsContracts.cs",
+        "services/events-and-sessions/"
+      ],
+      "required": [
+        "docs/architecture/events-sessions.md",
+        "docs/architecture/providers-models.md",
+        "docs/reference/contracts.md",
+        "docs/guide/testing.md",
+        "docs/diagrams/src/flagship/v1-sessions-journal.json"
       ]
     },
     {

@@ -64,6 +64,12 @@
       "project": "services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj"
     },
     {
+      "id": "Agentweaver.EventsAndSessions",
+      "kind": "service",
+      "version": "0.0.0",
+      "project": "services/events-and-sessions/Agentweaver.EventsAndSessions/Agentweaver.EventsAndSessions.csproj"
+    },
+    {
       "id": "Agentweaver.FoundationProbe",
       "kind": "service",
       "version": "0.0.0",
@@ -156,6 +162,26 @@
       "versions": [
         "0.0.0"
       ]
+    },
+    {
+      "consumer": "Agentweaver.EventsAndSessions",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.EventsAndSessions",
+      "dependency": "Agentweaver.Providers",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.EventsAndSessions",
+      "dependency": "Agentweaver.Persistence.Postgres",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.EventsAndSessions",
+      "dependency": "Agentweaver.Telemetry",
+      "versions": ["0.0.0"]
     }
   ]
 }

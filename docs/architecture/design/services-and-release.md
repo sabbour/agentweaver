@@ -137,6 +137,12 @@ message semantics](sessions-and-coordination.md) while removing 0.x cross-module
 Runs and coordinator decisions remain together inside the Orchestrator because separating their
 shared transitions would reproduce the transaction problem.
 
+The current v1 source includes `services/events-and-sessions/Agentweaver.EventsAndSessions`,
+an unpublished host candidate for the PostgreSQL run journal, ordered replay across sessions,
+and durable session-provider pins. It does not yet host the full Events & Sessions
+responsibilities in the table above; addressed message delivery, usage accounting, and product
+AgentHost/Gateway integration remain future work.
+
 The Gateway and Identity boundary makes viewer authorization independent of the chosen [Application
 Hosting](applications-and-surfaces.md#application-hosting) provider. The first-party MCP server uses
 core APIs for the same authorization path as web and CLI callers. MCP catalog and remote MCP

@@ -2,6 +2,13 @@
 
 `Agentweaver.Persistence.Postgres` stores outbox events and consumer inbox receipts in a service-owned schema. It does not create domain tables or a relay service.
 
+The separate `Agentweaver.EventsAndSessions` service owns its `events_sessions` schema
+by default, including the journal, session/provider bindings, and object-reference
+retention records. Its explicit migration composes the outbox/inbox schema with those
+domain tables; ordinary service startup verifies the schema and does not migrate it.
+The journal reference describes append, replay, live cursors, and the migration
+boundary in detail.
+
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-outbox-inbox.png'">
     <img :src="'/agentweaver/v1/diagrams/flagship/v1-outbox-inbox.png'" alt="Independent caller-owned producer and consumer transactions using PostgresOutbox. EnqueueAsync stores the event with producer state; AdmitAsync applies effects only for Admitted, skips duplicates, and acknowledges consumer delivery after commit. The shared caller lane does not imply one product host." />
@@ -31,3 +38,8 @@ Delivery remains at least once. The inbox prevents duplicate committed local eff
 `Agentweaver.ObjectStore.AzureBlob` implements `IObjectStore` for opaque platform objects. It does not provide agent workspace storage, create a container, authorize callers, or fall back to disk.
 
 The Blob container exists before adapter use. The caller owns authorization, authoritative references, retention, and upload-stream lifetime. Blob writes do not commit PostgreSQL references.
+
+Session event payloads store large content as typed opaque `ObjectKey` references with
+purpose and optional byte length; the journal stores and returns references and
+retention metadata, not the referenced bytes. Object upload, authorization, and blob
+deletion are outside this service slice. See [Events & Sessions](events-sessions.md).

@@ -17,6 +17,7 @@ const suites = [
   ['azure-monitor', 'Agentweaver.Telemetry.AzureMonitor.Tests'],
   ['azure-blob', 'Agentweaver.ObjectStore.AzureBlob.Tests'],
   ['foundation-probe', 'Agentweaver.FoundationProbe.Tests'],
+  ['events-and-sessions', 'Agentweaver.EventsAndSessions.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
@@ -30,6 +31,7 @@ const expectedAssemblies = [
   'Agentweaver.Telemetry.AzureMonitor',
   'Agentweaver.ObjectStore.AzureBlob',
   'Agentweaver.FoundationProbe',
+  'Agentweaver.EventsAndSessions',
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 
@@ -113,7 +115,8 @@ if (reports.length) {
     try {
       const { summary: totals, coverage } = JSON.parse(readFileSync(summary, 'utf8'));
       const assemblies = new Map(coverage.assemblies.map((assembly) => [assembly.name, assembly]));
-      if (totals.coverablelines <= 0 || totals.totalmethods <= 0 || totals.assemblies !== expectedAssemblies.length ||
+      if (totals.coverablelines <= 0 || totals.totalmethods <= 0 ||
+          totals.assemblies !== expectedAssemblies.length ||
           expectedAssemblies.some((name) => !assemblies.get(name)?.coverablelines)) {
         console.error('Combined summary does not contain all measurable production libraries');
         failed = true;

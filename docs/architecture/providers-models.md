@@ -25,6 +25,16 @@
 
 Pinning records provider identity, adapter version, options revision, resource generation, and negotiated capabilities. It does not provision a resource or enforce policy.
 
+The current Events & Sessions host resolves the exclusive native PostgreSQL Sessions
+provider through this catalog/resolver, negotiates the configured database, then pins
+the effective binding when a run's first session is created. It stores the exact provider
+ID, adapter version, options schema and revision, resource ID and generation, and
+capabilities against the project/run. Later append, replay, and live-subscription
+requests verify that exact binding; a changed or missing provider fails closed instead
+of falling back to a new default. The service emits bounded pin evidence through the
+existing telemetry helper without recording option values, credentials, or raw resource
+IDs. See the [journal service reference](events-sessions.md).
+
 The Foundation Probe registers `azure-key-vault`, `azure-blob`, and `azure-monitor` descriptors for its checks. These registrations do not form a product provider catalog.
 
 Model is not a provider seam. The v1 source contains no AgentHost, model resolver, or model adapter. It does not declare support for a model vendor.

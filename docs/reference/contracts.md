@@ -8,6 +8,64 @@
 
 These records contain no credentials or option values. See [providers and models](../architecture/providers-models) for resolver limits.
 
+## Events & Sessions journal
+
+The `Agentweaver.EventsAndSessions` service is an unpublished .NET 10 host candidate.
+Its protected routes require an OpenIddict-validated bearer token with a GUID `sub`
+and exactly one `project_id` and `run_id` pair issued for an active core grant. They
+are service-internal contracts, not public product API routes; tenant and platform
+role claims are not required.
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /health/live` | Process liveness. |
+| `GET /health/ready` | PostgreSQL and current owned-schema readiness; returns `503` when the schema is absent or outdated. |
+| `POST /internal/sessions/{sessionId}` | Resolve and pin the run's native Sessions provider, then create the session. A run reuses its immutable provider binding; a different binding returns `409`. |
+| `POST /internal/sessions/{sessionId}/events` | Append a versioned typed event to the project/run journal. Returns `201` for a new event, `200` for an identical run-scoped event-ID retry, and `409` if the ID is reused with different event content in that run. |
+| `GET /internal/sessions/{sessionId}/events?cursor={cursor}&limit={limit}` | Read an ordered page for one session after an optional opaque cursor. Positions are run-wide and may have gaps in a session-only page. |
+| `GET /internal/sessions/{sessionId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll durable journal state and stream NDJSON `SessionEventDelivery` records, each containing the event and a reconnectable `nextCursor`. |
+| `GET /internal/projects/{projectId}/runs/{runId}/events?cursor={cursor}&limit={limit}` | Read a bounded, run-ordered page across all sessions in the authorized project/run. |
+| `GET /internal/projects/{projectId}/runs/{runId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll and stream run-ordered NDJSON deliveries across sessions; each delivery includes a reconnectable `nextCursor`. |
+
+The version-1 abstraction contract provides `SessionIdentity`, `AppendSessionEvent`,
+and a discriminated `SessionEventPayload` for turns, tool calls, accepted decisions and
+effects, artifact references, and cache references. Payload content is represented by
+opaque `ObjectKey` references. The journal does not accept credentials or store large
+payload bytes.
+
+The run-level provider pin records provider ID, adapter version, options schema version
+and revision, negotiated resource ID and generation, and capabilities. It is inserted
+with the first session for a project/run and cannot be replaced by another create
+request. Append, replay, and subscription verify the stored pin against the exact
+registered provider and resource before proceeding; there is no provider fallback.
+Run cursors are opaque and bound to the project/run; session cursors are additionally
+bound to the session. Callers should return either token unchanged on replay or
+reconnect.
+
+Configuration:
+
+| Key | Requirement |
+| --- | --- |
+| `ConnectionStrings:EventsAndSessions` | PostgreSQL connection for the service-owned schema and transactional outbox/inbox. |
+| `Identity:Issuer` | Absolute HTTPS OpenIddict issuer used to validate caller tokens. |
+| `Identity:Audience` | Required token audience for the service. |
+| `EventsAndSessions:Provider:ResourceId` | Stable opaque resource identity used in the Sessions provider pin. |
+| `EventsAndSessions:Provider:DatabaseName` | Expected live PostgreSQL database name; negotiation compares it with `current_database()`. |
+| `EventsAndSessions:Provider:ResourceGeneration` | Positive generation recorded in the immutable provider pin. |
+| `EventsAndSessions:Provider:Schema` | Optional owned schema name; defaults to `events_sessions`. |
+| `EventsAndSessions:Provider:OptionsRevision` | Optional provider options revision; defaults to `native-postgres-v1`. |
+| `EventsAndSessions:Provider:OptionsSchemaVersion` | Optional options schema version; defaults to `1`. |
+| `EventsAndSessions:Provider:PollIntervalMilliseconds` | Optional live-poll interval from 50 to 30,000 ms. |
+| `EventsAndSessions:Provider:ReferenceRetentionDays` | Optional object-reference retention from 1 to 3,650 days. |
+| `EventsAndSessions:ProjectOverrides:{projectId}` | Optional project-level provider IDs permitted by the host catalog. |
+
+Run the executable with only `--migrate` to apply the embedded migration explicitly.
+Ordinary startup verifies the service and outbox schema, fails if a migration is
+pending, and does not create or alter database objects. The service is source-only:
+the repository does not include its deployment, a Gateway route, AgentHost integration,
+message delivery, usage ledger, or consistency-manifest workflow. See the
+[Events & Sessions journal reference](../architecture/events-sessions).
+
 ## Identity broker endpoints
 
 These routes belong to the unpublished Identity broker candidate. They are service contracts in source, not deployed product endpoints.

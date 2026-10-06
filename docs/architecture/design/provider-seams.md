@@ -287,6 +287,12 @@ rebuilding consume this journal. An optional agentsessions sidecar may mirror en
 and play them back. It does not mediate model calls or claim deterministic re-execution; it ships only if it
 adds value over the native journal ([R1](../decisions/0001-platform-architecture.md#risk-register)).
 
+The initial native host candidate resolves and negotiates the PostgreSQL Sessions provider
+through the shared provider catalog, then persists the exact pin for the project/run when
+its first session is created. Later journal operations verify that same provider,
+options revision, resource generation, and capabilities instead of resolving a replacement.
+This source slice is not a deployed service; see the [journal reference](../../architecture/events-sessions.md).
+
 The Copilot SDK session snapshot is a **disposable conversation cache**, stored as an opaque blob in Object
 Store at turn boundaries. The MAF workflow checkpoint tracks steps, children, and gates and references that
 cache. If a cache is missing or incompatible with the harness version or pinned model binding, AgentHost

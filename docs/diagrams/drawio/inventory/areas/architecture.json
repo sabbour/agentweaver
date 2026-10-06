@@ -71,6 +71,20 @@
         "png": "docs/diagrams/flagship/v1-provider-resolution.png",
         "hash": "docs/diagrams/flagship/v1-provider-resolution.hash.txt"
       }
+    },
+    {
+      "name": "v1-sessions-journal",
+      "area": "architecture",
+      "disposition": "retain",
+      "owner": null,
+      "replacement": null,
+      "notes": "Current Events & Sessions host candidate: resolve and persist the native provider pin, append durably, and return reconnectable cursors.",
+      "paths": {
+        "input": "docs/diagrams/src/flagship/v1-sessions-journal.json",
+        "drawio": "docs/diagrams/drawio/generated/flagship/v1-sessions-journal.drawio",
+        "png": "docs/diagrams/flagship/v1-sessions-journal.png",
+        "hash": "docs/diagrams/flagship/v1-sessions-journal.hash.txt"
+      }
     }
   ]
 }

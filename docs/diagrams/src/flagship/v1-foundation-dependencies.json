@@ -1,8 +1,8 @@
 {
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
-  "title": "V1 contract and adapter components",
-  "alt": "Structural component view of two adapter chains. Agentweaver.Abstractions.IObjectStore is implemented by AzureBlobObjectStore in the Agentweaver.ObjectStore.AzureBlob library, which accesses an Azure Blob container. Agentweaver.Abstractions.ISecretRedemption is implemented by AzureKeyVaultSecretRedemption in the Agentweaver.Secrets.AzureKeyVault library, which accesses Azure Key Vault. The adjacent composition and registration table documents the Identity Broker, AuthorizedSecretRedemption, Foundation Probe, and provider IDs.",
+  "title": "V1 services, contracts, and adapters",
+  "alt": "Structural component view of the unpublished Events & Sessions service candidate and its Agentweaver.Abstractions, Providers, PostgreSQL, and Telemetry project references, alongside two adapter chains. AzureBlobObjectStore implements IObjectStore and accesses an Azure Blob container; AzureKeyVaultSecretRedemption implements ISecretRedemption and accesses Azure Key Vault. This is source structure, not deployment topology.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -22,6 +22,12 @@
       "id": "azure-resources",
       "label": "External Azure resources",
       "subLabel": "Accessed by concrete adapters only.",
+      "tier": 1
+    },
+    {
+      "id": "journal-composition",
+      "label": "Events & Sessions candidate",
+      "subLabel": "Host and direct project references.",
       "tier": 1
     }
   ],
@@ -81,6 +87,33 @@
       "group": "contracts"
     },
     {
+      "id": "sessions-dependencies",
+      "label": "Refs",
+      "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "contracts + libraries",
+        "tone": "lavender",
+        "visible": true
+      },
+      "group": "journal-composition"
+    },
+    {
+      "id": "events-and-sessions",
+      "label": "Events & Sessions",
+      "subLabel": "Native PostgreSQL journal HTTP host candidate.",
+      "meta": "Agentweaver.EventsAndSessions",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": {
+        "text": "service",
+        "tone": "teal",
+        "visible": true
+      },
+      "group": "journal-composition"
+    },
+    {
       "id": "azure-blob-container",
       "label": "Azure Blob container",
       "subLabel": "External object-storage resource.",
@@ -110,6 +143,11 @@
     }
   ],
   "edges": [
+    {
+      "from": "events-and-sessions",
+      "to": "sessions-dependencies",
+      "label": "references"
+    },
     {
       "from": "iobjectstore",
       "to": "azure-blob-object-store",
