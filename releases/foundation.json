@@ -70,6 +70,12 @@
       "project": "services/events-and-sessions/Agentweaver.EventsAndSessions/Agentweaver.EventsAndSessions.csproj"
     },
     {
+      "id": "Agentweaver.Environment",
+      "kind": "library",
+      "version": "0.0.0",
+      "project": "services/environment/Agentweaver.Environment/Agentweaver.Environment.csproj"
+    },
+    {
       "id": "Agentweaver.Projects.Config",
       "kind": "service",
       "version": "0.0.0",
@@ -205,6 +211,20 @@
     },
     {
       "consumer": "Agentweaver.Projects.Config",
+      "dependency": "Agentweaver.Providers",
+      "versions": [
+        "0.0.0"
+      ]
+    },
+    {
+      "consumer": "Agentweaver.Environment",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": [
+        "0.0.0"
+      ]
+    },
+    {
+      "consumer": "Agentweaver.Environment",
       "dependency": "Agentweaver.Providers",
       "versions": [
         "0.0.0"

@@ -10,6 +10,7 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 | Identity broker tests | OpenIddict validation, external login, consent, S256 PKCE, refresh replay, PostgreSQL grants, redemption HTTP, and real broker-issued tokens against Projects API source-owned memberships/roles, including forged-claim rejection and revocation. | Deployed OAuth, Azure RBAC, or Azure acceptance. |
 | PostgreSQL tests | Outbox and inbox transactions, duplicates, concurrency, leases, relay outcomes, and recovery across restart. | A broker, relay daemon, exactly-once delivery, or cross-service transaction. |
 | Events & Sessions tests | Provider-neutral contracts and the P0 Identity Broker principal profile; explicit runtime/migration Entra configuration with no identity fallback; PostgreSQL token scope, expired-token refresh, callback failure without stale-token fallback, and password rejection; project/run-scoped IDs; ordinary append, deduplication/conflicts, redacted PolicyEvaluation serialization, rejection of generic PolicyEvaluation appends without trusted Core-writer provenance, event-version compatibility, contiguous ordering across sessions, replay, reconnectable cursors, provider-pin immutability, migration, and transaction rollback. PostgreSQL coverage uses disposable containers. | A deployed service, trusted Orchestrator Core PolicyEvaluation writer, workload-identity federation, production Entra grants, live cloud migration, AgentHost integration, cross-service workflow, or production-scale replica behavior. |
+| Environment egress tests | Purpose-aware FQDN/CIDR intersection, Projects authorization freshness, Cilium options and policy rendering, resource-version/generation fencing, object readback, and provider pinning with fake Kubernetes resources. | Sandbox claim/template labels, Kubernetes RBAC/workload identity, a deployed Cilium datapath, actual network reachability, or public HTTPS/Remote MCP L7 mediation. |
 | Key Vault tests | Azure SDK authentication and secret requests through in-memory HTTP transports. Workload identity tests use generated token files and fake OAuth and Key Vault endpoints. | Live token exchange, Key Vault RBAC, or an Azure deployment. |
 | Blob tests | Azure SDK requests, streamed data, create-only writes, and missing-object results through a fake HTTP transport. | Live credentials, permissions, durability, or cloud access. |
 | Telemetry tests | In-process OpenTelemetry setup and Azure Monitor exporter behavior through an injected transport. | Azure Monitor ingestion. |
@@ -26,6 +27,7 @@ Run these commands from the repository root:
 dotnet restore Agentweaver.slnx --locked-mode
 dotnet build Agentweaver.slnx --no-restore --configuration Release
 dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --no-build --no-restore --configuration Release
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj --no-build --no-restore --configuration Release
 npm run coverage:dotnet
 npm run coverage:node
 node --test scripts\coverage\tests\*.test.mjs

@@ -19,6 +19,7 @@ const suites = [
   ['azure-blob', 'Agentweaver.ObjectStore.AzureBlob.Tests'],
   ['foundation-probe', 'Agentweaver.FoundationProbe.Tests'],
   ['events-and-sessions', 'Agentweaver.EventsAndSessions.Tests'],
+  ['environment', 'Agentweaver.Environment.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
@@ -34,6 +35,7 @@ const expectedAssemblies = [
   'Agentweaver.ObjectStore.AzureBlob',
   'Agentweaver.FoundationProbe',
   'Agentweaver.EventsAndSessions',
+  'Agentweaver.Environment',
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 

@@ -1,6 +1,6 @@
 # Foundation architecture
 
-The v1 source builds independent .NET components, including an unpublished Events & Sessions journal service candidate and an Orchestrator Core AGT YAML Policy adapter. The native journal includes a typed, redacted PolicyEvaluation event for durable decision evidence; the event and policy adapter are not action grants or a wired protected-effect guard. Contracts separate provider-neutral types from Azure, PostgreSQL, and AGT adapters.
+The v1 source builds independent .NET components, including unpublished Events & Sessions, Environment, and Orchestrator Core AGT YAML Policy adapter candidates. The native journal includes a typed, redacted PolicyEvaluation event for durable decision evidence; the event and policy adapter are not action grants or a wired protected-effect guard. Contracts separate provider-neutral types from Azure, PostgreSQL, and AGT adapters and services.
 
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 
@@ -23,7 +23,9 @@ negotiation, a pricing adapter, or usage ingestion.
 
 The figure is a structural component view, not runtime request order or deployment topology.
 `Agentweaver.EventsAndSessions` references the shared contracts, provider catalog/resolver,
-PostgreSQL outbox/inbox library, and telemetry helper. `AzureBlobObjectStore` implements
+PostgreSQL outbox/inbox library, and telemetry helper. The Environment egress candidate
+references the shared contracts and provider catalog/resolver; its flow and evidence boundary
+are described in [Environment egress](./environment-egress.md). `AzureBlobObjectStore` implements
 `IObjectStore` in the `Agentweaver.ObjectStore.AzureBlob` library.
 `AzureKeyVaultSecretRedemption` implements `ISecretRedemption` in the
 `Agentweaver.Secrets.AzureKeyVault` library. The table names the concrete types and
@@ -60,6 +62,7 @@ their external boundaries.
 | `Agentweaver.Telemetry.AzureMonitor` | Opt-in Azure Monitor exporters. | `Agentweaver.Telemetry` |
 | `Agentweaver.Identity.Broker` | OAuth and secret-redemption host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault` |
 | `Agentweaver.EventsAndSessions` | PostgreSQL-backed native Sessions journal and HTTP host candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
+| `Agentweaver.Environment` | Environment-owned egress intent compiler and Cilium adapter library; not a running host. | `Agentweaver.Abstractions`, `Agentweaver.Providers` |
 | `Agentweaver.FoundationProbe` | Acceptance-only infrastructure probe executable. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.ObjectStore.AzureBlob`, `Agentweaver.Telemetry.AzureMonitor` |
 
 The Events & Sessions project and its contracts are described in the [journal service

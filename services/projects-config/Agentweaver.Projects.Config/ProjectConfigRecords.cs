@@ -1,3 +1,5 @@
+using Agentweaver.Abstractions;
+
 namespace Agentweaver.Projects.Config;
 
 public enum ProjectLifecycleState
@@ -23,13 +25,6 @@ public enum ProjectAuthorityRecordState
 {
     Active,
     Revoked
-}
-
-public enum ProjectAuthorityResourceType
-{
-    Platform,
-    Tenant,
-    Project
 }
 
 public enum ProjectAuthorityRole
