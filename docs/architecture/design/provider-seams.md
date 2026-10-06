@@ -419,6 +419,11 @@ suspension and relocation.
 idempotency keys. Attach may mount a volume or materialize files when the sandbox permits it. `Flush`
 returns the workspace generation for the consistency manifest. Bind compatibility is checked against the
 Sandbox capabilities and pinned protocol/driver version; an unsupported attach fails before dispatch.
+Environment persists the exact Storage provider reference beside separate transition, resource, and data
+generations. Provision and replacement advance the resource generation only after verifying the returned
+provider reference; bind, attach, flush, and their inverse operations must continue using that same reference.
+Only a verified durable flush advances the data generation. Release clears the active provider reference but
+retains the last resource generation in its tombstone.
 
 ### Defaults, optional features, and limits
 
@@ -527,6 +532,13 @@ FQDN support where a deployment's requirements permit it. Sandbox-native egress 
 Sandbox adapters, not trusted as tenancy boundaries. No environment becomes ready until policy generation is
 confirmed; resume re-applies and verifies it before AgentHost dispatch. The verified generation enters the
 consistency manifest.
+
+The unpublished `Agentweaver.Environment` candidate compiles typed purpose-grouped rules from the
+platform/project/run intersection, rechecks Projects & Config authorization on each operation, and uses
+Kubernetes resource-version and intent-generation fences before pinning the verified L3/L4 binding. Its
+readback proves the exact Cilium policy object only, not enforcement in the datapath. It does not yet wire
+selector labels into Sandbox claims/templates or include deployed Kubernetes identity/RBAC. See
+[Environment egress](../environment-egress.md) for the source and test boundary.
 
 The platform's own **Tool & MCP gateway** fills the default L7 data-plane slot at cutover. It handles
 credential injection, permitted routes, rate limits, and audit for MCP, A2A, and model egress; agentgateway

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Security.Claims;
+using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Projects.Config;
@@ -13,39 +14,9 @@ public sealed record ProjectAuthorizationGrant(
     ProjectAuthorityRole Role,
     long Revision);
 
-public enum ProjectAuthorizationPermission
-{
-    ReadProjects,
-    WriteProjects,
-    CreateProjects,
-    ReadRunSelection,
-    AcceptRunSelection,
-    ReadPlatformRuntimeDefaults,
-    WritePlatformRuntimeDefaults
-}
-
-public sealed record ProjectAuthorizationPermissionGrant(
-    ProjectAuthorizationPermission Permission,
-    long RoleRevision);
-
-public sealed record EffectiveProjectAuthorization(
-    ProjectAuthorityResourceType ResourceType,
-    string ResourceId,
-    ImmutableArray<ProjectAuthorizationPermissionGrant> Permissions);
-
-public sealed record ProjectAuthorizationContextResponse(
-    int ContractVersion,
-    string Issuer,
-    string ActorId,
-    string TenantId,
-    long MembershipRevision,
-    string? BoundProjectId,
-    string? BoundRunId,
-    ImmutableArray<EffectiveProjectAuthorization> EffectiveAuthority);
-
 public sealed class ProjectAuthorizationContext
 {
-    public const int CurrentContractVersion = 1;
+    public const int CurrentContractVersion = ProjectAuthorizationContextContract.CurrentVersion;
 
     internal ProjectAuthorizationContext(
         string issuer,
@@ -245,7 +216,7 @@ public sealed class ProjectAuthorizationOwner(
     ProjectsConfigDbContext db,
     ProjectsConfigIdentityOptions identityOptions)
 {
-    public const string TenantSelectorHeader = "X-Agentweaver-Tenant";
+    public const string TenantSelectorHeader = ProjectAuthorizationContextContract.TenantSelectorHeader;
     public const string ApiReadScope = "api.read";
     public const string ProjectAdminScope = "projects.admin";
     public const string OrchestratorScope = "projects.orchestrator";

@@ -52,6 +52,7 @@ The authorization-context route requires `api.read`, accepts the existing option
 - `SecretRef` values may be persisted as references. Credential values are not part of configuration or run-selection snapshots.
 - Project provider overrides only select provider IDs permitted by the platform catalog. Exclusive, ordered-composite, platform-singleton, layered and meter-keyed Cost seams use the existing `ProviderResolver`; Application Hosting remains unsupported. Cost requirements name a source explicitly, and multiple distinct meter sources may appear in one selection. The snapshot preserves source keys, adapter/options versions and advertised/required capabilities.
 - The service requires project egress rules to be a subset of the platform baseline and checks each run's required destinations. Project run limits may only reduce configured platform limits.
+- The immutable run-selection snapshot carries typed platform egress baseline, optional project narrowing, admitted run needs, the effective allowlist, and each layered Network Policy provider's layer, options revision, and required/advertised capabilities. The Environment consumer rechecks the current authorization context before reading this snapshot and compiles the final intent.
 - Project configuration revisions, platform runtime revisions, and run-selection snapshots are append-only at the database boundary. Project metadata and revision heads remain mutable under optimistic revision checks.
 - Memberships and role assignments live in this service's schema and are provisioned or revoked only through a privileged source path; public APIs cannot self-grant roles. Revocation uses expected revisions, records an immutable audit event, and cannot remove the last explicit project Owner. Runtime database credentials have SELECT-only access to membership, assignment, and audit tables.
 - Run-selection acceptance serializes a run ID and rechecks the current Orchestrator assignment before committing. Replays return the originally stored snapshot, but still require current authorization; snapshots never pin membership or roles.
@@ -64,6 +65,13 @@ reference plus a selected meter key does not prove the effective SDK model/sourc
 That proof belongs to the canonical model/producer owners. Existing selection GET
 still requires current Orchestrator `ReadRunSelection` authority, not project-admin
 write permission; adding Cost cardinality does not widen authorization.
+
+Run-selection accept and read responses are `no-store`. The current
+authorization-context GET also uses `no-store`; it returns grouped permissions
+and membership/role revisions, not assignment rows or transferable credentials.
+See [Environment egress](./environment-egress.md) for how a privileged consumer
+uses both current authorization and the immutable selection without a separate
+membership or role cache.
 
 ## Validation
 

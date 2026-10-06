@@ -9,6 +9,7 @@
     "docs/architecture/events-sessions.md",
     "docs/architecture/providers-models.md",
     "docs/architecture/projects-config.md",
+    "docs/architecture/environment-egress.md",
     "docs/architecture/identity-secrets.md",
     "docs/architecture/persistence-objects.md",
     "docs/architecture/telemetry.md",
@@ -31,7 +32,10 @@
     {
       "name": "foundation architecture",
       "sourcePrefixes": [
-        "packages/Agentweaver.Abstractions/",
+        "packages/Agentweaver.Abstractions/ProviderContracts.cs",
+        "packages/Agentweaver.Abstractions/SessionsContracts.cs",
+        "packages/Agentweaver.Abstractions/SecretContracts.cs",
+        "packages/Agentweaver.Abstractions/ObjectStore.cs",
         "packages/Agentweaver.Providers/",
         "packages/Agentweaver.Identity/",
         "packages/Agentweaver.Secrets.AzureKeyVault/",
@@ -80,6 +84,19 @@
       ],
       "required": [
         "docs/architecture/projects-config.md"
+      ]
+    },
+    {
+      "name": "Environment egress intent",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/NetworkPolicyContracts.cs",
+        "services/environment/"
+      ],
+      "required": [
+        "docs/architecture/environment-egress.md",
+        "docs/architecture/overview.md",
+        "docs/architecture/design/provider-seams.md",
+        "docs/guide/testing.md"
       ]
     },
     {

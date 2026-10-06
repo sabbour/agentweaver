@@ -22,6 +22,7 @@ This site documents code and procedures that exist in the `v1` source. Proposed 
 | [Events & Sessions journal](./architecture/events-sessions) | Current journal API, durable PostgreSQL behavior, provider pinning, and implementation limits. |
 | [Providers and models](./architecture/providers-models) | Provider resolution, pinning, and model support. |
 | [Projects & Config](./architecture/projects-config) | Project APIs, revisioned settings, and immutable run-selection snapshots. |
+| [Environment egress](./architecture/environment-egress) | The unpublished, generation-fenced Cilium egress-intent candidate and its enforcement limits. |
 | [Identity and secrets](./architecture/identity-secrets) | OAuth, run grants, Key Vault, and workload identity. |
 | [PostgreSQL and Blob](./architecture/persistence-objects) | Outbox, inbox, relay, and object storage. |
 | [Telemetry](./architecture/telemetry) | OpenTelemetry and Azure Monitor adapters. |

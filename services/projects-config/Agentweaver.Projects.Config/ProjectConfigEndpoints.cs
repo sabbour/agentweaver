@@ -196,6 +196,7 @@ public static class ProjectConfigEndpoints
         {
             try
             {
+                context.Response.Headers.CacheControl = "no-store";
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
                     .ConfigureAwait(false);
                 return Results.Ok(await service.AcceptRunSelectionAsync(
@@ -217,6 +218,7 @@ public static class ProjectConfigEndpoints
         {
             try
             {
+                context.Response.Headers.CacheControl = "no-store";
                 var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
                     .ConfigureAwait(false);
                 return Results.Ok(await service.GetRunSelectionAsync(

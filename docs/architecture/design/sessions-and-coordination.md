@@ -159,7 +159,8 @@ stateDiagram-v2
 | Copilot-cache reference, SDK version, and pinned model binding | Use only a compatible cache; otherwise rebuild conversation context from the journal |
 | MAF checkpoint reference and workflow position | Continue at the recorded step, child join, or gate |
 | Flushed journal position | Establish which turns and decisions are durable before recovery |
-| Workspace storage generation and tree hash, or a provider checkpoint identifier | Pair the volume with the recorded run state independently of guest snapshots |
+| Pinned workspace resource generation and provider reference | Identify the exact backing volume independently of guest snapshots |
+| Flushed workspace data generation and tree hash, or a provider checkpoint identifier | Pair durable workspace contents with the recorded run state |
 | Optional explicit guest snapshot reference and lifecycle generation | Restore only the intended environment version, not a latest-looking template |
 | Network-intent generation | Reapply and verify the intended egress rules before dispatch |
 | Fencing generation and lifecycle state | Reject an obsolete worker or provider lifecycle report |

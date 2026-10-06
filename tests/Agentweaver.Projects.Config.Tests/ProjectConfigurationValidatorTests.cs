@@ -11,7 +11,7 @@ public sealed class ProjectConfigurationValidatorTests
 {
     private static PlatformRuntimeDefaults PlatformDefaults() => new()
     {
-        EgressBaseline = [new ProjectEgressRule("API.Example.com.", 443, EgressProtocol.Tcp)],
+        EgressBaseline = [Fqdn("API.Example.com.")],
         RunLimits = new CopilotRunLimits
         {
             MaxModelTurns = 12,
@@ -23,22 +23,26 @@ public sealed class ProjectConfigurationValidatorTests
         },
     };
 
+    private static NetworkEgressRule Fqdn(string host, int port = 443) =>
+        new(NetworkEgressPurpose.ModelEndpoint, NetworkEgressDestinationKind.Fqdn,
+            host, port, EgressProtocol.Tcp);
+
     [Fact]
     public void NormalizesEgressAndAllowsOnlySubsetWithRequiredDestinations()
     {
         var baseline = ProjectConfigurationValidator.Validate(PlatformDefaults()).EgressBaseline;
-        Assert.Equal("api.example.com", Assert.Single(baseline).Host);
+        Assert.Equal("api.example.com", Assert.Single(baseline).Destination);
 
         var narrowed = ProjectConfigurationValidator.ResolveEgress(
             baseline,
-            [new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp)],
-            [new ProjectEgressRule("API.EXAMPLE.COM.", 443, EgressProtocol.Tcp)]);
+            [Fqdn("api.example.com")],
+            [Fqdn("API.EXAMPLE.COM.")]);
         Assert.Equal(baseline.ToArray(), narrowed.ToArray());
 
         var widened = Assert.Throws<ProjectConfigException>(() =>
             ProjectConfigurationValidator.ResolveEgress(
                 baseline,
-                [new ProjectEgressRule("other.example.com", 443, EgressProtocol.Tcp)],
+                [Fqdn("other.example.com")],
                 []));
         Assert.Equal(StatusCodes.Status400BadRequest, widened.StatusCode);
 
@@ -46,7 +50,7 @@ public sealed class ProjectConfigurationValidatorTests
             ProjectConfigurationValidator.ResolveEgress(
                 baseline,
                 [],
-                [new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp)]));
+                [Fqdn("api.example.com")]));
         Assert.Equal(StatusCodes.Status400BadRequest, missingRequired.StatusCode);
     }
 

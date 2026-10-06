@@ -221,7 +221,7 @@ sequenceDiagram
     Config-->>Orch: Compatible, pinned bindings
     Orch->>Env: Provision environment with fencing generation
     Env->>Env: Apply and verify egress intent
-    Env->>Env: Bind and attach workspace volume
+    Env->>Env: Bind and attach pinned Storage reference
     Env->>Id: Obtain purpose-bound configure credentials
     Id-->>Env: Scoped configure material
     Env->>Host: Authenticated versioned configure

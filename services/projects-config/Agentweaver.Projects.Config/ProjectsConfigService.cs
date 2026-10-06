@@ -34,22 +34,6 @@ public sealed record VersionedPlatformRuntimeDefaults(
     string? UpdatedByActorId,
     DateTimeOffset? CreatedAt);
 
-public sealed record EffectiveProviderCandidate(
-    ProviderSeam Seam,
-    string ProviderId,
-    string AdapterVersion,
-    int OptionsSchemaVersion,
-    string OptionsRevision,
-    ProviderHostingPattern Hosting,
-    ImmutableArray<string> AdvertisedCapabilities,
-    ImmutableArray<string> RequiredCapabilities);
-
-public sealed record EffectiveProviderSelection(
-    ProviderCardinality Cardinality,
-    ProviderSeam Seam,
-    ImmutableArray<EffectiveProviderCandidate> Candidates,
-    string? MeterSource = null);
-
 public sealed record EffectiveRunSelection(
     string ProjectId,
     string RunId,
@@ -59,9 +43,12 @@ public sealed record EffectiveRunSelection(
     string ContextRevision,
     ModelSelectionSettings ModelSelection,
     ImmutableArray<EffectiveProviderSelection> Providers,
-    ImmutableArray<ProjectEgressRule> EgressAllowlist,
+    ImmutableArray<NetworkEgressRule> EgressAllowlist,
     CopilotRunLimits RunLimits,
-    ProjectConfiguration ProjectConfiguration);
+    ProjectConfiguration ProjectConfiguration,
+    ImmutableArray<NetworkEgressRule> EgressBaseline,
+    ImmutableArray<NetworkEgressRule>? ProjectEgressNarrowing,
+    ImmutableArray<NetworkEgressRule> RequiredEgress);
 
 public sealed class ProjectsConfigService(
     ProjectsConfigDbContext db,
@@ -382,7 +369,10 @@ public sealed class ProjectsConfigService(
             providers,
             egress,
             limits,
-            projectConfiguration);
+            projectConfiguration,
+            defaults.EgressBaseline,
+            projectConfiguration.EgressNarrowing,
+            ProjectConfigurationValidator.ValidateEgressRules(request.Context.RequiredEgress));
         var record = new ProjectRunSelectionRecord
         {
             RunId = runId,
@@ -662,7 +652,7 @@ public sealed class ProjectsConfigService(
                     selections.Add(new EffectiveProviderSelection(
                         cardinality,
                         requirement.Seam,
-                        resolution.Candidates.Select(ToEffective).ToImmutableArray()));
+                        resolution.Candidates.Select(candidate => ToEffective(candidate)).ToImmutableArray()));
                     break;
                 }
                 case ProviderCardinality.Layered:
@@ -676,7 +666,9 @@ public sealed class ProjectsConfigService(
                     selections.Add(new EffectiveProviderSelection(
                         cardinality,
                         requirement.Seam,
-                        resolution.Layers.Select(layer => ToEffective(layer.Candidate)).ToImmutableArray()));
+                        resolution.Layers
+                            .Select(layer => ToEffective(layer.Candidate, layer.Layer))
+                            .ToImmutableArray()));
                     break;
                 }
                 case ProviderCardinality.KeyedByMeterSource:
@@ -719,7 +711,9 @@ public sealed class ProjectsConfigService(
             StatusCodes.Status422UnprocessableEntity);
     }
 
-    private static EffectiveProviderCandidate ToEffective(ProviderCandidate candidate) =>
+    private static EffectiveProviderCandidate ToEffective(
+        ProviderCandidate candidate,
+        NetworkPolicyLayer? layer = null) =>
         new(
             candidate.Seam,
             candidate.ProviderId,
@@ -728,7 +722,8 @@ public sealed class ProjectsConfigService(
             candidate.OptionsRevision,
             candidate.Hosting,
             candidate.AdvertisedCapabilities.Order(StringComparer.Ordinal).ToImmutableArray(),
-            candidate.RequiredCapabilities.Order(StringComparer.Ordinal).ToImmutableArray());
+            candidate.RequiredCapabilities.Order(StringComparer.Ordinal).ToImmutableArray(),
+            layer);
 
     private static void ValidateSelectionContext(RunSelectionContext context)
     {
@@ -825,8 +820,12 @@ public sealed class ProjectsConfigService(
                     item.MeterSource)).ToArray(),
             RequiredEgress = ProjectConfigurationValidator
                 .ValidateEgressRules(request.Context.RequiredEgress)
-                .OrderBy(rule => rule.Host, StringComparer.Ordinal)
-                .ThenBy(rule => rule.Port).ThenBy(rule => rule.Protocol).ToArray(),
+                .OrderBy(rule => rule.Purpose)
+                .ThenBy(rule => rule.DestinationKind)
+                .ThenBy(rule => rule.Destination, StringComparer.Ordinal)
+                .ThenBy(rule => rule.Port)
+                .ThenBy(rule => rule.Protocol)
+                .ToArray(),
         };
         var bytes = JsonSerializer.SerializeToUtf8Bytes(canonical, JsonOptions);
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();

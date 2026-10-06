@@ -310,7 +310,7 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
                 {
                     Context = request.Context with
                     {
-                        RequiredEgress = ImmutableArray.CreateRange(new ProjectEgressRule[] { null! }),
+                        RequiredEgress = ImmutableArray.CreateRange(new NetworkEgressRule[] { null! }),
                     },
                 },
                 CancellationToken.None));
@@ -319,10 +319,18 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         var selection = await service.AcceptRunSelectionAsync(
             orchestrator, project.ProjectId, "run-immutable-1", request, CancellationToken.None);
         Assert.Equal("project-model", selection.ModelSelection.Reference);
-        Assert.Equal("sandbox-project", Assert.Single(Assert.Single(selection.Providers).Candidates).ProviderId);
-        Assert.Equal("options-v3", Assert.Single(Assert.Single(selection.Providers).Candidates).OptionsRevision);
+        var sandboxSelection = Assert.Single(selection.Providers.Where(provider =>
+            provider.Seam == ProviderSeam.Sandbox));
+        Assert.Equal("sandbox-project", Assert.Single(sandboxSelection.Candidates).ProviderId);
+        Assert.Equal("options-v3", Assert.Single(sandboxSelection.Candidates).OptionsRevision);
         Assert.Equal(6, selection.RunLimits.MaxModelTurns);
-        Assert.Equal("api.example.com", Assert.Single(selection.EgressAllowlist).Host);
+        Assert.Equal("api.example.com", Assert.Single(selection.EgressAllowlist).Destination);
+        Assert.Equal(2, selection.EgressBaseline.Length);
+        Assert.Equal(NetworkEgressPurpose.ModelEndpoint, Assert.Single(selection.RequiredEgress).Purpose);
+        var networkSelection = Assert.Single(selection.Providers.Where(provider =>
+            provider.Seam == ProviderSeam.NetworkPolicy));
+        Assert.Equal(NetworkPolicyLayer.L3L4, Assert.Single(networkSelection.Candidates).Layer);
+        Assert.Equal("cilium", Assert.Single(networkSelection.Candidates).ProviderId);
 
         var unavailableRequest = RunRequest(configuration.Revision, platformRevision.Revision) with
         {
@@ -373,7 +381,9 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             orchestrator, project.ProjectId, "run-immutable-1", request, CancellationToken.None);
         Assert.Equal(selection.ProjectConfigurationRevision, replayed.ProjectConfigurationRevision);
         Assert.Equal(selection.ModelSelection.Reference, replayed.ModelSelection.Reference);
-        Assert.Equal("sandbox-project", Assert.Single(Assert.Single(replayed.Providers).Candidates).ProviderId);
+        Assert.Equal("sandbox-project", Assert.Single(
+            Assert.Single(replayed.Providers.Where(provider => provider.Seam == ProviderSeam.Sandbox))
+                .Candidates).ProviderId);
         var stored = await service.GetRunSelectionAsync(
             orchestrator, project.ProjectId, "run-immutable-1", CancellationToken.None);
         Assert.Equal(selection.ProjectConfigurationRevision, stored.ProjectConfigurationRevision);
@@ -751,10 +761,31 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             revision,
             1);
 
+        var networkCapabilities = ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            "networkpolicy.l3l4",
+            "networkpolicy.fqdn",
+            "networkpolicy.cidr",
+            "networkpolicy.dns");
         return Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
-            [Registration("sandbox-platform", "options-v1"), Registration("sandbox-project", "options-v3")],
+            [
+                Registration("sandbox-platform", "options-v1"),
+                Registration("sandbox-project", "options-v3"),
+                new ProviderRegistration(
+                    new ProviderDescriptor(
+                        ProviderSeam.NetworkPolicy,
+                        "cilium",
+                        new Version(1, 0, 0),
+                        1,
+                        ProviderHostingPattern.KubernetesController,
+                        networkCapabilities),
+                    true,
+                    "cilium-options-v1",
+                    1)
+            ],
             [new ProviderSelection(ProviderSeam.Sandbox, "sandbox-platform")],
-            [new ProviderOverridePermission(ProviderSeam.Sandbox, "sandbox-project")]).Value);
+            [new ProviderOverridePermission(ProviderSeam.Sandbox, "sandbox-project")],
+            layerSelections: [new ProviderLayerSelection(NetworkPolicyLayer.L3L4, "cilium")]).Value);
     }
 
     private static PlatformRuntimeDefaults PlatformDefaults() => new()
@@ -762,8 +793,8 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         ModelSelection = new ModelSelectionSettings("platform-model"),
         EgressBaseline =
         [
-            new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp),
-            new ProjectEgressRule("storage.example.com", 443, EgressProtocol.Tcp),
+            Fqdn(NetworkEgressPurpose.ModelEndpoint, "api.example.com"),
+            Fqdn(NetworkEgressPurpose.PackageRegistry, "storage.example.com"),
         ],
         RunLimits = new CopilotRunLimits
         {
@@ -780,7 +811,7 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
     {
         ModelSelection = new ModelSelectionSettings("project-model"),
         ProviderOverrides = [new ProjectProviderOverride(ProviderSeam.Sandbox, "sandbox-project")],
-        EgressNarrowing = [new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp)],
+        EgressNarrowing = [Fqdn(NetworkEgressPurpose.ModelEndpoint, "api.example.com")],
         RunLimits = new CopilotRunLimitOverrides
         {
             MaxModelTurns = 6,
@@ -847,10 +878,25 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
                     RequiredOptionsSchemaVersion = 1,
                     RequiredCapabilities = ImmutableHashSet.Create(StringComparer.Ordinal, "container.create"),
                 },
+                new ProviderRequirement
+                {
+                    Seam = ProviderSeam.NetworkPolicy,
+                    RequiredAdapterVersion = "1.0.0",
+                    RequiredOptionsSchemaVersion = 1,
+                    RequiredL3L4Capabilities = ImmutableHashSet.Create(
+                        StringComparer.Ordinal,
+                        "networkpolicy.l3l4",
+                        "networkpolicy.fqdn",
+                        "networkpolicy.cidr",
+                        "networkpolicy.dns"),
+                },
             ],
-            RequiredEgress = [new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp)],
+            RequiredEgress = [Fqdn(NetworkEgressPurpose.ModelEndpoint, "api.example.com")],
         },
     };
+
+    private static NetworkEgressRule Fqdn(NetworkEgressPurpose purpose, string host) =>
+        new(purpose, NetworkEgressDestinationKind.Fqdn, host, 443, EgressProtocol.Tcp);
 }
 
 public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
