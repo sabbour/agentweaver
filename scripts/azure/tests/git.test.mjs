@@ -31,12 +31,15 @@ function sourceFixture(overrides = {}) {
       postgresEntraAdminPrincipalName: { value: source.postgresEntraAdminPrincipalName },
       postgresEntraAdminPrincipalType: { value: source.postgresEntraAdminPrincipalType } };
   Object.assign(parameterValues, overrides.parameterValues);
+  parameterValues.nodePoolMinCount ??= { value: 2 };
+  parameterValues.nodePoolMaxCount ??= { value: 3 };
   if (!overrides.omitZones) parameterValues.appRoutingDnsZoneResourceIds = { value: overrides.zoneIds ?? [] };
   const parameters = JSON.stringify({ parameters: parameterValues });
   const files = { [template]: 'targetScope = \'resourceGroup\'\n', [parameterPath]: parameters };
   if (aksOnly) {
     files['infra/bicep/parameters/p0-integration.approved.json'] = JSON.stringify({
       parameters: {
+        nodePoolMinCount: { value: 2 }, nodePoolMaxCount: { value: 3 },
         namePrefix: { value: 'aw-v1-p0' },
         tenantId: { value: ids.tenantId },
         owner: { value: 'team' },
@@ -98,6 +101,23 @@ test('exact source hashes tracked reviewed inputs and binds JSON parameters to t
   assert.equal(receipt.postgresEntraAdminPrincipalType, 'User');
   assert.equal(receipt.operatorObjectId, fixture.operatorObjectId);
   assert.deepEqual(receipt.appRoutingDnsZoneResourceIds, []);
+  assert.equal(receipt.nodePoolMinCount, 2);
+  assert.equal(receipt.nodePoolMaxCount, 3);
+});
+
+test('source rejects autoscaler bounds outside approval and tracked current-count overrides', () => {
+  for (const parameterValues of [
+    { nodePoolMinCount: { value: 1 } }, { nodePoolMaxCount: { value: 4 } },
+    { nodePoolMaxCount: { value: '3' } }, { nodePoolCount: { value: 2 } },
+  ]) {
+    const { config, deps } = sourceFixture({ parameterValues });
+    assert.throws(() => resolveSource(config, deps), /autoscaling parameters/);
+  }
+  const { config, deps } = sourceFixture({
+    config: { template: 'infra/bicep/aks-redeploy.bicep' },
+    foundationValues: { nodePoolMaxCount: { value: 5 } },
+  });
+  assert.throws(() => resolveSource(config, deps), /autoscaling parameters/);
 });
 
 test('AKS-only source accepts only its reviewed template and parameter file', () => {

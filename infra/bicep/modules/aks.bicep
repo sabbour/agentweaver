@@ -29,8 +29,15 @@ param kubernetesVersion string = ''
 @description('System node pool VM size.')
 param nodePoolVmSize string = 'Standard_D2s_v5'
 
-@description('System node pool node count. Kept small and fixed for the P0 smoke environment.')
+@allowed([2, 3])
+@description('Initial or observed system node pool count. Deployment tooling preserves the current count within the approved bounds.')
 param nodePoolCount int = 2
+
+@allowed([2])
+param nodePoolMinCount int = 2
+
+@allowed([3])
+param nodePoolMaxCount int = 3
 
 @description('Optional existing application DNS zone resource IDs for custom routing domains.')
 param appRoutingDnsZoneResourceIds array = []
@@ -126,6 +133,9 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' = {
         name: 'system'
         mode: 'System'
         count: nodePoolCount
+        enableAutoScaling: true
+        minCount: nodePoolMinCount
+        maxCount: nodePoolMaxCount
         vmSize: nodePoolVmSize
         vnetSubnetID: nodeSubnetId
         osType: 'Linux'

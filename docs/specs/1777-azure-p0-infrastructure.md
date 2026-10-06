@@ -142,6 +142,12 @@ Digest format checks alone cannot prove a running pod.
 
 ## Network definitions
 
+The shared AKS module enables system-pool autoscaling between two and three
+`Standard_D2s_v5` nodes. Full and AKS-only parameters declare the same bounds.
+The initial count is two. AKS-only deployment preserves an observed count of
+two or three and rejects changes after what-if.
+Native receipts report the pool configuration, not proof of scale-up or regional capacity.
+
 AKS exposes a public API endpoint and uses managed Entra authentication with
 Azure RBAC; local accounts are disabled. A public FQDN on a private API does
 not meet this requirement. The tenant comes from the exact reviewed parameters. The operator object ID

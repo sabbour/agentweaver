@@ -9,6 +9,7 @@ import { alignExistingP0BrokerHostname, assertIdentityRoutingPlacement, bootstra
 import { bootstrapIdentityBrokerState } from './lib/identity-broker-state.mjs';
 import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime } from './lib/identity-broker-runtime.mjs';
 import { bootstrapFoundationProbeInputs } from './lib/foundation-probe-inputs.mjs';
+import { readSystemNodePool } from './lib/aks-autoscaling.mjs';
 import {
   AKS_RBAC_CLUSTER_ADMIN_ROLE_ID,
   armGuid,
@@ -28,16 +29,18 @@ const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 export function buildDeployArgs({
   resourceGroup, template, parametersFile, deploymentName, subscription, sourceSha, sourceTree, sourceHash,
   operatorObjectId, operatorRoleAssignmentName,
+  nodePoolCount = 2,
 }) {
   assertDedicatedTarget(resourceGroup);
   if (!subscription || !/^[0-9a-f]{40}$/.test(sourceSha ?? '') || !/^[0-9a-f]{40}$/.test(sourceTree ?? '') ||
       !/^[0-9a-f]{64}$/.test(sourceHash ?? '') || !GUID_PATTERN.test(operatorObjectId ?? '') ||
-      !GUID_PATTERN.test(operatorRoleAssignmentName ?? '')) {
+      !GUID_PATTERN.test(operatorRoleAssignmentName ?? '') || ![2, 3].includes(nodePoolCount)) {
     throw new Error('Exact source receipt, operator, role-assignment name and explicit subscription are required.');
   }
   return ['deployment', 'group', 'create', '--resource-group', resourceGroup, '--template-file', template,
     '--parameters', `@${parametersFile}`, `sourceSha=${sourceSha}`, `sourceTree=${sourceTree}`, `sourceHash=${sourceHash}`,
     `operatorObjectId=${operatorObjectId}`, `operatorRoleAssignmentName=${operatorRoleAssignmentName}`,
+    `nodePoolCount=${nodePoolCount}`,
     '--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json'];
 }
 
@@ -75,6 +78,9 @@ export async function deploy(config, {
     throw new Error('Identity routing inputs require the separate --bootstrap-identity-routing option.');
   }
   const source = sourceResolver(config);
+  if (source.nodePoolMinCount !== 2 || source.nodePoolMaxCount !== 3) {
+    throw new Error('Reviewed deployment source must bind the approved system autoscaler bounds 2-3.');
+  }
   const deploymentName = `${config.resourceGroup}-${source.scope === 'aks-only' ? 'aks-' : ''}${source.sha.slice(0, 12)}`;
   const clusterId = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${config.resourceGroup}-aks`;
   let operatorRoleAssignmentName = armGuid(clusterId, source.operatorObjectId, AKS_RBAC_CLUSTER_ADMIN_ROLE_ID);
@@ -109,14 +115,18 @@ export async function deploy(config, {
     ? readExistingIdentityPostgresMetadata({ ...config, ...source }, boundAz)
     : undefined;
   operatorRoleAssignmentName = resolveClusterAdminRoleAssignmentName({ ...config, ...source }, boundAz);
+  const autoscalerTarget = { ...config, ...source };
+  const poolBefore = source.scope === 'aks-only' ? readSystemNodePool(autoscalerTarget, boundAz) : undefined;
+  const nodePoolCount = poolBefore?.count ?? source.nodePoolMinCount;
   args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source, operatorRoleAssignmentName,
-    subscription: config.subscriptionId, sourceSha: source.sha, deploymentName });
+    subscription: config.subscriptionId, sourceSha: source.sha, deploymentName, nodePoolCount });
   summary.args = args;
   // A guarded what-if precedes create. Failure never admits a mutation.
   const whatIfArgs = ['deployment', 'group', 'what-if', '--resource-group', config.resourceGroup,
     '--template-file', source.template, '--parameters', `@${source.parametersFile}`, `sourceSha=${source.sha}`,
     `sourceTree=${source.sourceTree}`, `sourceHash=${source.sourceHash}`,
     `operatorObjectId=${source.operatorObjectId}`, `operatorRoleAssignmentName=${operatorRoleAssignmentName}`,
+    `nodePoolCount=${nodePoolCount}`,
     '--no-pretty-print'];
   function runWhatIf() {
     const result = boundAz(whatIfArgs, { check: false });
@@ -127,7 +137,9 @@ export async function deploy(config, {
     if (confirmed.sha !== source.sha || confirmed.sourceTree !== source.sourceTree ||
         confirmed.sourceHash !== source.sourceHash || confirmed.template !== source.template ||
         confirmed.parametersFile !== source.parametersFile ||
-        confirmed.operatorObjectId !== source.operatorObjectId) {
+        confirmed.operatorObjectId !== source.operatorObjectId ||
+        confirmed.nodePoolMinCount !== source.nodePoolMinCount ||
+        confirmed.nodePoolMaxCount !== source.nodePoolMaxCount) {
       throw new Error('Source inputs changed after what-if; refusing deployment.');
     }
   }
@@ -144,6 +156,14 @@ export async function deploy(config, {
     runWhatIf();
     assertSourceUnchanged();
   }
+  if (poolBefore) {
+    const poolAtCreate = readSystemNodePool(autoscalerTarget, boundAz);
+    if (poolAtCreate.count !== nodePoolCount ||
+        poolAtCreate.enableAutoScaling !== poolBefore.enableAutoScaling ||
+        poolAtCreate.minCount !== poolBefore.minCount || poolAtCreate.maxCount !== poolBefore.maxCount) {
+      throw new Error('System node pool changed after what-if; refusing to reset autoscaler state or count.');
+    }
+  }
   const result = execAz(args, { check: false });
   if (result.status !== 0) throw new Error(`Infrastructure deployment failed: ${result.stderr}`);
   const deployment = JSON.parse(result.stdout);
@@ -159,6 +179,11 @@ export async function deploy(config, {
   }
   const verifiedOperatorRoleAssignmentId =
     verifyClusterAdminRoleAssignment({ ...config, ...source }, operatorRoleAssignmentName, boundAz);
+  const poolAfter = readSystemNodePool(autoscalerTarget, boundAz, { requireAutoscaling: true });
+  const autoscaling = { poolName: poolAfter.name, vmSize: poolAfter.vmSize,
+    enabled: poolAfter.enableAutoScaling, minCount: poolAfter.minCount, maxCount: poolAfter.maxCount,
+    countBefore: poolBefore?.count ?? null, countSubmitted: nodePoolCount, countAfter: poolAfter.count,
+    provisioningState: poolAfter.provisioningState, scaleUpProven: false };
   let deploymentReceipt;
   if (source.scope === 'aks-only') {
     const issuer = outputs?.oidcIssuerUrl?.value;
@@ -346,7 +371,7 @@ export async function deploy(config, {
     ...(identityPostgresRuntimeBootstrap ? { identityPostgresRuntimeBootstrap } : {}),
     ...(foundationProbeInputs ? { foundationProbeInputs } : {}),
     ...(foundationProbePostgresBootstrap ? { foundationProbePostgresBootstrap } : {}),
-    ...deploymentReceipt } };
+    ...deploymentReceipt, autoscaling } };
 }
 
 export function cliConfig(values) {

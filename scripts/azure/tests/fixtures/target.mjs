@@ -12,6 +12,7 @@ export const tags = { 'agentweaver:environment': 'v1-p0', 'agentweaver:managed-b
 export const source = { sha: 'a'.repeat(40), sourceTree: 'c'.repeat(40), sourceHash: 'b'.repeat(64), branch: 'candidate',
   template: 'infra/bicep/main.bicep', parametersFile: 'infra/bicep/parameters/approved.json',
   operatorObjectId: ids.operatorObjectId,
+  nodePoolMinCount: 2, nodePoolMaxCount: 3,
   owner: 'team', costCenter: 'p0', scope: 'infrastructure-only',
   location: 'eastus2euap', monitorLocation: 'eastus2',
   postgresEntraAdminObjectId: '33333333-3333-3333-3333-333333333333',
@@ -172,6 +173,12 @@ export function fakeAzure(overrides = {}, calls = []) {
     }
     if (args[0] === 'role' && args[1] === 'assignment' && args[2] === 'delete') {
       return overrides.roleAssignmentDelete ?? ok({});
+    }
+    if (args[0] === 'aks' && args[1] === 'nodepool' && args[2] === 'show') {
+      return overrides.nodePoolResult ?? ok({
+        id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System', vmSize: 'Standard_D2s_v5',
+        count: 2, enableAutoScaling: true, minCount: 2, maxCount: 3, provisioningState: 'Succeeded',
+      });
     }
     if (args[0] === 'rest') return overrides.clusterResult ?? ok(observedCluster);
     if (args[0] === 'account') return overrides.accountResult ?? ok(overrides.account ??

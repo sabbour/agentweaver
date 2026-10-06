@@ -71,6 +71,15 @@ param sourceHash string
 @description('Optional IDs of existing application DNS zones for custom routing domains.')
 param appRoutingDnsZoneResourceIds array = []
 
+@allowed([2, 3])
+param nodePoolCount int = 2
+
+@allowed([2])
+param nodePoolMinCount int
+
+@allowed([3])
+param nodePoolMaxCount int
+
 var tags = {
   'agentweaver:environment': 'v1-p0'
   'agentweaver:managed-by': 'bicep'
@@ -99,6 +108,9 @@ module aks 'modules/aks.bicep' = {
     operatorObjectId: operatorObjectId
     operatorRoleAssignmentName: operatorRoleAssignmentName
     appRoutingDnsZoneResourceIds: appRoutingDnsZoneResourceIds
+    nodePoolCount: nodePoolCount
+    nodePoolMinCount: nodePoolMinCount
+    nodePoolMaxCount: nodePoolMaxCount
   }
 }
 

@@ -7,6 +7,7 @@ import { resolve, relative, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
 import { validateFile } from '../../release/validate.mjs';
 import { validateAppRoutingDnsZoneResourceIds } from './app-routing-dns.mjs';
+import { assertAutoscalerBounds } from './aks-autoscaling.mjs';
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -97,6 +98,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   }
   const document = JSON.parse(readFile(parameters.absolute, 'utf8'));
   const values = document.parameters;
+  const { minCount: nodePoolMinCount, maxCount: nodePoolMaxCount } = assertAutoscalerBounds(values);
   if (!GUID_PATTERN.test(rawOperatorObjectId ?? '')) {
     throw new Error('An explicit Kubernetes operator object ID is required.');
   }
@@ -136,6 +138,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
     }
     const approvedFoundation = trackedPath('infra/bicep/parameters/p0-integration.approved.json');
     const foundationValues = JSON.parse(readFile(approvedFoundation.absolute, 'utf8')).parameters;
+    assertAutoscalerBounds(foundationValues);
     postgresEntraAdminObjectId = foundationValues?.postgresEntraAdminObjectId?.value;
     postgresEntraAdminPrincipalName = foundationValues?.postgresEntraAdminPrincipalName?.value;
     postgresEntraAdminPrincipalType = foundationValues?.postgresEntraAdminPrincipalType?.value;
@@ -157,6 +160,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   return { sha, verifierSha: headSha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
     parametersFile: parameters.absolute, owner, costCenter, operatorObjectId,
     location, monitorLocation, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
+    nodePoolMinCount, nodePoolMaxCount,
     postgresEntraAdminPrincipalType,
     appRoutingDnsZoneResourceIds,
     scope };
