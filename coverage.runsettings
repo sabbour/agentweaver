@@ -5,7 +5,7 @@
       <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
           <Format>cobertura</Format>
-          <Include>[Agentweaver.Abstractions]*,[Agentweaver.Orchestrator.Core]*,[Agentweaver.Providers]*,[Agentweaver.Persistence.Postgres]*,[Agentweaver.Secrets.AzureKeyVault]*,[Agentweaver.Identity]*,[Agentweaver.Identity.Broker]*,[Agentweaver.Projects.Config]*,[Agentweaver.Telemetry]*,[Agentweaver.Telemetry.AzureMonitor]*,[Agentweaver.ObjectStore.AzureBlob]*,[Agentweaver.FoundationProbe]*,[Agentweaver.EventsAndSessions]*,[Agentweaver.Environment]*</Include>
+          <Include>[Agentweaver.Abstractions]*,[Agentweaver.Orchestrator.Core]*,[Agentweaver.Providers]*,[Agentweaver.Persistence.Postgres]*,[Agentweaver.Secrets.AzureKeyVault]*,[Agentweaver.Identity]*,[Agentweaver.Identity.Broker]*,[Agentweaver.Projects.Config]*,[Agentweaver.Telemetry]*,[Agentweaver.Telemetry.AzureMonitor]*,[Agentweaver.ObjectStore.AzureBlob]*,[Agentweaver.FoundationProbe]*,[Agentweaver.EventsAndSessions]*,[Agentweaver.Environment]*,[Agentweaver.Knowledge]*</Include>
           <Exclude>[*.Tests]*</Exclude>
         </Configuration>
       </DataCollector>

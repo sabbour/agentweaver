@@ -1,26 +1,27 @@
 # Events & Sessions journal
 
 The v1 source contains an unpublished `Agentweaver.EventsAndSessions` service
-candidate. It implements the initial native Sessions journal slice; it is not a
-deployed platform service.
+candidate. It implements the native Sessions journal and a separate project-scoped
+accepted-effect fact stream; it is not a deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="An authorized caller creates a session; the Events & Sessions host resolves and negotiates the native PostgreSQL Sessions provider, stores an immutable project/run provider pin, rejects PolicyEvaluation writes without trusted Core-writer provenance, and serves ordinary events through ordered replay or live subscriptions." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="An authorized caller creates a session; Events & Sessions pins the native PostgreSQL Sessions provider, rejects PolicyEvaluation writes without trusted Core-writer provenance, and serves ordered run-event replay. Separately, it fetches Knowledge-owned accepted-effect receipts and atomically appends project facts with sequence and inbox receipt." />
   </a>
-  <figcaption>The current host validates project/run scope, pins one native Sessions provider per run, and uses PostgreSQL as the journal authority. Generic run-scoped append does not establish Orchestrator Core writer provenance, so it rejects PolicyEvaluation events. The figure describes source behavior, not a deployment topology.</figcaption>
+  <figcaption>Run-bound session events and project-scoped facts have separate addresses and storage. The host rejects PolicyEvaluation writes without trusted Core-writer provenance. The figure describes source behavior, not a deployment topology.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
 
 ## Ownership and scope
 
-`Agentweaver.EventsAndSessions` owns the event journal, session records, immutable
-Sessions-provider bindings, and object-reference retention metadata in its PostgreSQL
-schema. The shared `Agentweaver.Persistence.Postgres` library supplies the
-transactional outbox and inbox; it does not own these domain tables. The service uses
-the existing provider catalog/resolver and telemetry helper. The provider-neutral
-`ISessionsJournal` interface and `SessionSubscriptionRequest` contract live in
-`Agentweaver.Abstractions`; this service owns their PostgreSQL implementation.
+`Agentweaver.EventsAndSessions` owns the run event journal, separate project-scoped
+accepted-effect facts, session records, immutable Sessions-provider bindings, and
+object-reference retention metadata in its PostgreSQL schema. The shared
+`Agentweaver.Persistence.Postgres` library supplies the transactional outbox and inbox;
+it does not own these domain tables. The service uses the existing provider
+catalog/resolver and telemetry helper. The provider-neutral `ISessionsJournal`
+interface and `SessionSubscriptionRequest` contract live in `Agentweaver.Abstractions`;
+this service owns their PostgreSQL implementation.
 
 This slice does not implement the rest of the proposed service responsibilities:
 session-tree transitions, addressed-message delivery, usage accounting, consistency
@@ -88,6 +89,35 @@ subscriptions poll durable journal state across service instances and emit NDJSO
 reconnects by passing that cursor unchanged; the numeric position alone is not the
 cursor contract.
 
+## Project accepted-effect facts
+
+`POST /internal/project-facts/accepted-effects` is separate from all session and run
+journal routes. Its request contains only the receipt ID, schema version, and event
+version. Events fetches the immutable committed receipt from the configured fixed
+HTTPS Knowledge address; callers cannot supply a source URL, payload, or accepted
+marker. Redirects are disabled.
+
+Events requires the caller's validated issuer and subject to match the original
+receipt, checks project/run bounds and rejects purpose-bound tokens. It forwards the
+caller bearer and optional tenant selector to Knowledge and Projects & Config, then
+requires fresh effective project `WriteProjects` permission. If a caller uses
+separate existing audience-correct tokens, the Knowledge token is forwarded only in
+the protected request to the fixed Knowledge owner; neither token is stored or
+logged.
+
+After validation, Events constructs the accepted-effect fact itself. In one
+PostgreSQL transaction it admits the receipt ID through the shared inbox, assigns a
+project-scoped sequence, and persists the immutable fact and acknowledgment. An
+identical retry returns the same acknowledgment; changed receipt content for the
+same ID conflicts. The acknowledgment binds the receipt ID and versions to the
+native fact ID, project, and sequence. No fact or inbox receipt is committed alone.
+
+These facts do not enter `session_events`, require or modify a Sessions provider pin,
+or claim a run/session transition. Knowledge uses a caller-driven relay and marks its
+outbox event delivered only after validating this durable acknowledgment. Failures
+leave delivery pending for a fresh authorized caller retry; there is no unattended
+relay worker.
+
 ## Schema and validation boundary
 
 The host defaults to the service-owned `events_sessions` schema. Run the executable
@@ -111,6 +141,8 @@ Use these separate settings:
 | --- | --- |
 | `ConnectionStrings:EventsAndSessions` | Runtime PostgreSQL endpoint, database, and least-privilege Entra role. |
 | `EventsAndSessions:Database:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Explicit workload identity for runtime database access. |
+| `EventsAndSessions:Knowledge:BaseAddress` | Required fixed absolute HTTPS Knowledge owner URI used to fetch committed accepted-effect receipts; redirects are rejected. |
+| `ProjectsConfig:BaseAddress` | Required fixed absolute HTTPS Projects & Config URI used to recheck current project authority; redirects are rejected. |
 | `ConnectionStrings:EventsAndSessionsMigration` | Migration PostgreSQL endpoint, database, and separately granted schema-owner role. |
 | `EventsAndSessions:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Explicit workload identity for the migration command only. |
 

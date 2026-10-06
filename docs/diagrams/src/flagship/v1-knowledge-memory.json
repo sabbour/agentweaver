@@ -1,0 +1,152 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Knowledge accepted project facts",
+  "alt": "Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and outbox intent together. It relays only receipt ID and versions to Events, which fetches the committed receipt and appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. Sessions events and provider pins are unchanged.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "knowledge",
+      "label": "Knowledge\nHTTP service",
+      "subLabel": "Receipt and local outbox",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": {
+        "text": "service",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "database",
+      "label": "Knowledge\nPostgreSQL",
+      "subLabel": "Records, revisions, receipt, outbox",
+      "icon": "database",
+      "fluentIcon": "state",
+      "badge": {
+        "text": "service-owned",
+        "tone": "green"
+      }
+    },
+    {
+      "id": "events",
+      "label": "Events & Sessions\nproject-fact API",
+      "subLabel": "Trusted receipt and current auth",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": {
+        "text": "native owner",
+        "tone": "teal"
+      }
+    },
+    {
+      "id": "eventDatabase",
+      "label": "Events PostgreSQL\nproject fact stream",
+      "subLabel": "Sequence, fact, inbox, ack",
+      "icon": "database",
+      "fluentIcon": "state",
+      "badge": {
+        "text": "durable authority",
+        "tone": "green"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": ["knowledge", "database"],
+      "label": "Caller bearer stays in memory. Check exact agent owner, source run, pending state, expected revisions, and fresh effective WriteProjects."
+    },
+    {
+      "type": "message",
+      "from": "knowledge",
+      "to": "database",
+      "label": "One transaction: promote record; create decision/revisions, redacted receipt, outbox intent, idempotency result",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "database",
+      "to": "knowledge",
+      "label": "Commit; return stable receipt ID",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "knowledge",
+      "to": "events",
+      "label": "POST accepted-effects: receipt ID, versions, existing same-actor bearer(s)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "events",
+      "to": "knowledge",
+      "label": "GET /internal/accepted-effects/{receiptId} from fixed HTTPS origin; redirects disabled",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["knowledge", "events"],
+      "label": "Receipt GET requires original issuer/subject, matching bounds, no purpose token, fresh WriteProjects; response is no-store."
+    },
+    {
+      "type": "message",
+      "from": "knowledge",
+      "to": "events",
+      "label": "Committed immutable receipt; never forward proposal content",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": ["events", "eventDatabase"],
+      "label": "Events rechecks receipt actor and project/run bounds against the same caller, rejects purpose tokens, and fetches fresh WriteProjects."
+    },
+    {
+      "type": "message",
+      "from": "events",
+      "to": "eventDatabase",
+      "label": "One transaction: derive project fact, assign sequence, dedupe inbox ID, persist exact ack",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "eventDatabase",
+      "to": "events",
+      "label": "Commit; return receipt-bound acknowledgment",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "events",
+      "to": "knowledge",
+      "label": "Return persisted acknowledgment",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "knowledge",
+      "to": "database",
+      "label": "Acknowledge outbox only after exact receipt-bound ack validation",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["knowledge", "events"],
+      "label": "Failure stays PENDING; caller retry uses fresh same-actor bearer(s). No background worker or token acquisition."
+    },
+    {
+      "type": "note",
+      "over": ["knowledge", "events", "eventDatabase"],
+      "label": "Project facts have their own sequence and inbox; they never become session/run events or change Sessions provider pins."
+    }
+  ]
+}

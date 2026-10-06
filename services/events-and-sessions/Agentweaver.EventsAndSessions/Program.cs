@@ -49,6 +49,7 @@ var issuer = Required(builder.Configuration, "Identity:Issuer");
 if (!Uri.TryCreate(issuer, UriKind.Absolute, out var issuerUri) || issuerUri.Scheme != Uri.UriSchemeHttps)
     throw new InvalidOperationException("Identity issuer must be an absolute HTTPS URI.");
 var audience = Required(builder.Configuration, "Identity:Audience");
+var acceptedEffectOptions = AcceptedEffectRuntimeOptions.Read(builder.Configuration, options.Schema);
 
 builder.Logging.AddFilter("OpenIddict", LogLevel.Warning);
 builder.Logging.AddFilter("OpenIddict.Validation.OpenIddictValidationDispatcher", LogLevel.Warning);
@@ -62,6 +63,7 @@ builder.Services.AddSingleton<NpgsqlDataSource>(services =>
     EventsAndSessionsPostgresDataSource.Create(
         runtimeConnection.ConnectionString, services.GetRequiredService<TokenCredential>()));
 builder.Services.AddSingleton(options);
+builder.Services.AddSingleton(acceptedEffectOptions);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddAgentweaverTelemetry("agentweaver.events");
 builder.Services.ConfigureHttpJsonOptions(json =>
@@ -72,6 +74,15 @@ builder.Services.ConfigureHttpJsonOptions(json =>
         System.Text.Json.JsonNamingPolicy.CamelCase));
 });
 builder.Services.AddSingleton<ISessionsJournal, PostgresSessionsJournal>();
+builder.Services.AddSingleton<IProjectFactJournal, PostgresProjectFactJournal>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient<KnowledgeAcceptedEffectReceiptClient>(client =>
+    client.BaseAddress = acceptedEffectOptions.KnowledgeBaseAddress)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient<ProjectsConfigAuthorizationClient>(client =>
+    client.BaseAddress = acceptedEffectOptions.ProjectsConfigBaseAddress)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddScoped<AcceptedEffectApplicationService>();
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
 {
@@ -128,6 +139,7 @@ app.MapGet("/health/ready", async (CancellationToken ct) =>
     }
 });
 app.MapEventsAndSessionsEndpoints();
+app.MapAcceptedEffectEndpoints();
 app.Run();
 
 static string Required(IConfiguration configuration, string key) =>

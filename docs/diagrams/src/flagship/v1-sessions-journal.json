@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Sessions journal and provider pin",
-  "alt": "An authorized caller creates sessions; Events & Sessions pins the native PostgreSQL provider per run, assigns one ordered journal across its sessions, and serves replay and live events with reconnectable opaque cursors.",
+  "alt": "Events & Sessions persists a run-bound Sessions provider pin and ordered event journal with reconnectable cursors. A separate Knowledge receipt relay appends project facts without creating session events or changing provider pins.",
   "autonumber": true,
   "participants": [
     {
@@ -17,6 +17,17 @@
       }
     },
     {
+      "id": "knowledge",
+      "label": "Knowledge\nservice",
+      "subLabel": "Committed receipt owner",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": {
+        "text": "service",
+        "tone": "lavender"
+      }
+    },
+    {
       "id": "api",
       "label": "Events & Sessions\nHTTP host",
       "subLabel": "Unpublished service candidate",
@@ -28,20 +39,9 @@
       }
     },
     {
-      "id": "provider",
-      "label": "Provider catalog +\nNative Sessions adapter",
-      "subLabel": "Resolve, negotiate, pin, verify",
-      "icon": "box",
-      "fluentIcon": "package",
-      "badge": {
-        "text": "in-process",
-        "tone": "lavender"
-      }
-    },
-    {
       "id": "postgres",
       "label": "Events & Sessions\nPostgreSQL schema",
-      "subLabel": "Journal, immutable run pin, outbox/inbox",
+      "subLabel": "Journal, project facts, run pin, inbox",
       "icon": "database",
       "fluentIcon": "state",
       "badge": {
@@ -60,67 +60,15 @@
       "arrow": "filled"
     },
     {
-      "type": "activation",
-      "participant": "api",
-      "action": "start"
-    },
-    {
       "type": "note",
-      "over": ["caller", "api"],
-      "label": "OpenIddict validates issuer/audience; host requires GUID sub and one active-grant project_id/run_id pair."
-    },
-    {
-      "type": "note",
-      "over": ["api", "postgres"],
-      "label": "Runtime uses password-free workload identity and verifies schema only; --migrate uses a separate privileged connection and identity."
-    },
-    {
-      "type": "message",
-      "from": "api",
-      "to": "provider",
-      "label": "Resolve default or permitted project override",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "activation",
-      "participant": "provider",
-      "action": "start"
-    },
-    {
-      "type": "message",
-      "from": "provider",
-      "to": "postgres",
-      "label": "Verify owned schema and negotiate live database identity",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "postgres",
-      "to": "provider",
-      "label": "Confirmed database and resource generation",
-      "line": "dashed",
-      "arrow": "open"
-    },
-    {
-      "type": "message",
-      "from": "provider",
-      "to": "api",
-      "label": "Return pinned provider, options revision, resource, and capabilities",
-      "line": "dashed",
-      "arrow": "open"
-    },
-    {
-      "type": "activation",
-      "participant": "provider",
-      "action": "end"
+      "over": ["caller", "api", "postgres"],
+      "label": "Caller uses GUID sub and one active project/run grant. Resolve an allowed provider and persist its exact run pin; mismatches fail closed."
     },
     {
       "type": "message",
       "from": "api",
       "to": "postgres",
-      "label": "Persist immutable project/run pin and session",
+      "label": "Persist immutable project/run provider pin and session",
       "line": "solid",
       "arrow": "filled"
     },
@@ -141,16 +89,6 @@
       "arrow": "open"
     },
     {
-      "type": "activation",
-      "participant": "api",
-      "action": "end"
-    },
-    {
-      "type": "note",
-      "over": ["api", "provider", "postgres"],
-      "label": "Later append, replay, and subscribe verify the stored exact pin. A changed/missing binding fails closed; a different create binding conflicts."
-    },
-    {
       "type": "message",
       "from": "caller",
       "to": "api",
@@ -159,28 +97,10 @@
       "arrow": "filled"
     },
     {
-      "type": "note",
-      "over": ["caller", "api"],
-      "label": "Reject PolicyEvaluation here: run scope and actor=sub do not prove Core provenance; no trusted writer is wired, so guarded effects fail closed."
-    },
-    {
-      "type": "activation",
-      "participant": "api",
-      "action": "start"
-    },
-    {
       "type": "message",
       "from": "api",
       "to": "postgres",
-      "label": "Verify run pin; admit run-scoped event ID",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "api",
-      "to": "postgres",
-      "label": "Advance run sequence; atomically write event, refs, and outbox",
+      "label": "Verify run pin; reject PolicyEvaluation without Core provenance; atomically write event, refs, sequence, and outbox",
       "line": "solid",
       "arrow": "filled"
     },
@@ -188,7 +108,7 @@
       "type": "message",
       "from": "postgres",
       "to": "api",
-      "label": "Commit before returning durable event",
+      "label": "Commit durable event",
       "line": "dashed",
       "arrow": "open"
     },
@@ -212,7 +132,7 @@
       "type": "message",
       "from": "api",
       "to": "postgres",
-      "label": "Read durable events after cursor; poll for live subscription",
+      "label": "Read run-ordered events after cursor; poll for live delivery",
       "line": "solid",
       "arrow": "filled"
     },
@@ -220,7 +140,7 @@
       "type": "message",
       "from": "postgres",
       "to": "api",
-      "label": "Run-ordered rows retaining session identity",
+      "label": "Rows retain session identity",
       "line": "dashed",
       "arrow": "open"
     },
@@ -228,7 +148,7 @@
       "type": "message",
       "from": "api",
       "to": "caller",
-      "label": "Page or NDJSON delivery: event + nextCursor",
+      "label": "Page or NDJSON: event + opaque nextCursor",
       "line": "dashed",
       "arrow": "open"
     },
@@ -236,14 +156,64 @@
       "type": "message",
       "from": "caller",
       "to": "api",
-      "label": "Reconnect by passing nextCursor unchanged",
-      "line": "dashed",
+      "label": "Reconnect with nextCursor unchanged",
+      "line": "solid",
       "arrow": "filled"
     },
     {
-      "type": "activation",
-      "participant": "api",
-      "action": "end"
+      "type": "note",
+      "over": ["knowledge", "api", "postgres"],
+      "label": "Project facts are separate from session/run events; they never create sessions or change provider pins."
+    },
+    {
+      "type": "message",
+      "from": "knowledge",
+      "to": "api",
+      "label": "POST /internal/project-facts/accepted-effects: receipt ID, versions, existing same-actor bearer(s)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "knowledge",
+      "label": "GET receipt from fixed configured HTTPS origin; redirects disabled",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "knowledge",
+      "to": "api",
+      "label": "No-store receipt; original actor/bounds, no purpose, current effective WriteProjects",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": ["knowledge", "api"],
+      "label": "Events rechecks issuer, subject, bounds, purpose, and fresh effective WriteProjects."
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "postgres",
+      "label": "One transaction: append receipt-derived project fact, sequence, inbox dedupe, and durable ack",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "knowledge",
+      "label": "Return persisted receipt-bound ack; Knowledge validates it before outbox ack",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "note",
+      "over": ["knowledge", "api"],
+      "label": "Delivery failure stays PENDING; retry needs fresh same-actor bearer(s). No background worker or token acquisition."
     }
   ]
 }

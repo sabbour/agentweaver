@@ -15,6 +15,8 @@ const environmentTestProject = readFileSync(resolve(
   root, 'tests', 'Agentweaver.Environment.Tests', 'Agentweaver.Environment.Tests.csproj'), 'utf8');
 const environmentProject = readFileSync(resolve(
   root, 'services', 'environment', 'Agentweaver.Environment', 'Agentweaver.Environment.csproj'), 'utf8');
+const knowledgeTestProject = readFileSync(resolve(
+  root, 'tests', 'Agentweaver.Knowledge.Tests', 'Agentweaver.Knowledge.Tests.csproj'), 'utf8');
 
 test('the explicit .NET coverage runner registers the Events & Sessions suite and assembly', () => {
   assert.match(runner, /\['events-and-sessions', 'Agentweaver\.EventsAndSessions\.Tests'\]/);
@@ -32,4 +34,12 @@ test('the explicit .NET coverage runner registers the Environment egress suite a
   assert.match(environmentTestProject, /coverlet\.collector/);
   assert.match(environmentProject, /Agentweaver\.Abstractions\.csproj/);
   assert.match(environmentProject, /Agentweaver\.Providers\.csproj/);
+});
+
+test('the explicit .NET coverage runner registers the Knowledge suite and assembly', () => {
+  assert.match(runner, /\['knowledge', 'Agentweaver\.Knowledge\.Tests'\]/);
+  assert.match(runner, /'Agentweaver\.Knowledge',/);
+  assert.match(runsettings, /\[Agentweaver\.Knowledge\]\*/);
+  assert.match(solution, /tests\\Agentweaver\.Knowledge\.Tests\\Agentweaver\.Knowledge\.Tests\.csproj/);
+  assert.match(knowledgeTestProject, /coverlet\.collector/);
 });

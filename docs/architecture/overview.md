@@ -1,6 +1,11 @@
 # Foundation architecture
 
-The v1 source builds independent .NET components, including unpublished Events & Sessions, Environment, and Orchestrator Core AGT YAML Policy adapter candidates. The native journal includes a typed, redacted PolicyEvaluation event for durable decision evidence; the event and policy adapter are not action grants or a wired protected-effect guard. Contracts separate provider-neutral types from Azure, PostgreSQL, and AGT adapters and services.
+The v1 source builds independent .NET components, including unpublished Knowledge and
+Events & Sessions service candidates, an Environment egress adapter, and an Orchestrator
+Core AGT YAML Policy adapter. The native journal defines typed, redacted PolicyEvaluation
+evidence but rejects generic writes without trusted Core-writer provenance. The Policy
+adapter is not an action grant or a wired protected-effect guard. Contracts separate
+provider-neutral types from Azure, PostgreSQL, and AGT adapters and services.
 
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 
@@ -15,9 +20,9 @@ negotiation, a pricing adapter, or usage ingestion.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'" alt="Structural view of the unpublished Events & Sessions host candidate and its in-process Abstractions, Providers, PostgreSQL, and Telemetry references, alongside the Azure Blob object-store and Key Vault secret-redemption adapter chains." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'" alt="Structural view of the unpublished Knowledge and Events & Sessions service candidates, Environment egress and Orchestrator Core Policy adapters, and direct project references, alongside Azure Blob and Key Vault adapter chains." />
   </a>
-  <figcaption>Direct project references and adapter/resource relationships in the v1 source; the Events & Sessions node is a service candidate, not a deployed topology. Host composition and Foundation Probe registration IDs are listed below.</figcaption>
+  <figcaption>Direct project references and adapter/resource relationships in the v1 source; service candidates and adapter libraries are not a deployed topology. Host composition and Foundation Probe registration IDs are listed below.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.drawio'">Open editable draw.io source</a></p>
 
@@ -51,7 +56,7 @@ their external boundaries.
 
 | Component | Current boundary | Direct project references |
 | --- | --- | --- |
-| `Agentweaver.Abstractions` | Provider, secret, and object-store contracts. | — |
+| `Agentweaver.Abstractions` | Provider, secret, object-store, environment/network-policy, authorization-context, run-selection, and Memory contracts. | — |
 | `Agentweaver.Providers` | In-memory provider catalog and resolver. | `Agentweaver.Abstractions` |
 | `Agentweaver.Orchestrator.Core` | Workflow validation and the platform-singleton AGT YAML Policy adapter. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Microsoft.AgentGovernance` |
 | `Agentweaver.Identity` | Trusted actor and exact run-grant authorization for secret redemption. | `Agentweaver.Abstractions` |
@@ -63,11 +68,15 @@ their external boundaries.
 | `Agentweaver.Identity.Broker` | OAuth and secret-redemption host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault` |
 | `Agentweaver.EventsAndSessions` | PostgreSQL-backed native Sessions journal and HTTP host candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Environment` | Environment-owned egress intent compiler and Cilium adapter library; not a running host. | `Agentweaver.Abstractions`, `Agentweaver.Providers` |
+| `Agentweaver.Knowledge` | Project-scoped Memory API, context compiler, and native PostgreSQL adapter candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.FoundationProbe` | Acceptance-only infrastructure probe executable. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.ObjectStore.AzureBlob`, `Agentweaver.Telemetry.AzureMonitor` |
 
 The Events & Sessions project and its contracts are described in the [journal service
 reference](events-sessions.md). The repository does not contain the AgentHost, product
 API, web UI, product MCP server, or application router. It does not contain a published
 platform image.
+
+The Knowledge source candidate and its current native Memory boundary are described in
+the [Knowledge and Memory reference](knowledge-memory.md).
 
 The [proposed platform architecture](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0001-platform-architecture.md) remains a Proposed source document.

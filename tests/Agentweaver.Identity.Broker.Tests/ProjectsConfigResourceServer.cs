@@ -2,6 +2,7 @@ extern alias ProjectsConfig;
 
 using System.Security.Cryptography;
 using Agentweaver.Identity;
+using Agentweaver.Providers;
 using ProjectsConfig::Agentweaver.Projects.Config;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Authentication.JwtBearer;

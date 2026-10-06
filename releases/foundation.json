@@ -76,6 +76,12 @@
       "project": "services/environment/Agentweaver.Environment/Agentweaver.Environment.csproj"
     },
     {
+      "id": "Agentweaver.Knowledge",
+      "kind": "service",
+      "version": "0.0.0",
+      "project": "services/knowledge/Agentweaver.Knowledge/Agentweaver.Knowledge.csproj"
+    },
+    {
       "id": "Agentweaver.Projects.Config",
       "kind": "service",
       "version": "0.0.0",
@@ -229,6 +235,26 @@
       "versions": [
         "0.0.0"
       ]
+    },
+    {
+      "consumer": "Agentweaver.Knowledge",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Knowledge",
+      "dependency": "Agentweaver.Providers",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Knowledge",
+      "dependency": "Agentweaver.Persistence.Postgres",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Knowledge",
+      "dependency": "Agentweaver.Telemetry",
+      "versions": ["0.0.0"]
     }
   ]
 }

@@ -16,6 +16,7 @@
 | `Agentweaver.Identity.Broker` | Service | `0.0.0` |
 | `Agentweaver.EventsAndSessions` | Service | `0.0.0` |
 | `Agentweaver.Environment` | Library | `0.0.0` |
+| `Agentweaver.Knowledge` | Service | `0.0.0` |
 
 The manifest pins exact project-reference compatibility but does not pin container
 image digests. The existing Identity Broker image `f989` remains separate from
