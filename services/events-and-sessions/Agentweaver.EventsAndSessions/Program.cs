@@ -56,6 +56,7 @@ var issuer = Required(builder.Configuration, "Identity:Issuer");
 if (!Uri.TryCreate(issuer, UriKind.Absolute, out var issuerUri) || issuerUri.Scheme != Uri.UriSchemeHttps)
     throw new InvalidOperationException("Identity issuer must be an absolute HTTPS URI.");
 var audience = Required(builder.Configuration, "Identity:Audience");
+var acceptedEffectOptions = AcceptedEffectRuntimeOptions.Read(builder.Configuration, options.Schema);
 
 builder.Logging.AddFilter("OpenIddict", LogLevel.Warning);
 builder.Logging.AddFilter("OpenIddict.Validation.OpenIddictValidationDispatcher", LogLevel.Warning);
@@ -69,6 +70,7 @@ builder.Services.AddSingleton<NpgsqlDataSource>(services =>
     EventsAndSessionsPostgresDataSource.Create(
         runtimeConnection.ConnectionString, services.GetRequiredService<TokenCredential>()));
 builder.Services.AddSingleton(options);
+builder.Services.AddSingleton(acceptedEffectOptions);
 builder.Services.AddSingleton(messagingOptions);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddAgentweaverTelemetry("agentweaver.events");
@@ -82,6 +84,15 @@ builder.Services.ConfigureHttpJsonOptions(json =>
 builder.Services.AddSingleton<PostgresSessionsJournal>();
 builder.Services.AddSingleton<ISessionsJournal>(services =>
     services.GetRequiredService<PostgresSessionsJournal>());
+builder.Services.AddSingleton<IProjectFactJournal, PostgresProjectFactJournal>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient<KnowledgeAcceptedEffectReceiptClient>(client =>
+    client.BaseAddress = acceptedEffectOptions.KnowledgeBaseAddress)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient<ProjectsConfigAuthorizationClient>(client =>
+    client.BaseAddress = acceptedEffectOptions.ProjectsConfigBaseAddress)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddScoped<AcceptedEffectApplicationService>();
 var projectsAuthorization = builder.Configuration.GetSection("ProjectsConfig:AuthorizationContext");
 builder.Services.AddSingleton(new ProjectsAuthorizationContextOptions(
     projectsAuthorization["OwnerBaseAddress"],
@@ -168,6 +179,7 @@ app.MapGet("/health/ready", async (CancellationToken ct) =>
     }
 });
 app.MapEventsAndSessionsEndpoints();
+app.MapAcceptedEffectEndpoints();
 app.MapAddressedMessageEndpoints();
 app.Run();
 

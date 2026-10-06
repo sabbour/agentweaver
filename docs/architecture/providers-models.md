@@ -8,9 +8,9 @@
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'" alt="Foundation Probe flow: ProbeProviderBindings supplies existing target resource IDs and generation. ProviderCatalog.Create builds the catalog; ProviderResolver resolves candidates and pins immutable bindings against supplied ResourceNegotiation. No provisioning, live negotiation, adapter construction, or product AgentHost is shown." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'" alt="Provider resolution flow: the Foundation Probe supplies existing target IDs and ResourceNegotiation; Knowledge resolves and negotiates one selected Memory candidate per run. ProviderResolver pins immutable bindings; no resources are provisioned and no model AgentHost is shown." />
   </a>
-  <figcaption>The Probe supplies existing target IDs, generation, and ResourceNegotiation. The resolver selects and pins against those values; it does not provision or live-negotiate a resource.</figcaption>
+  <figcaption>The Probe supplies existing target IDs, generation, and ResourceNegotiation; Knowledge negotiates its selected Memory provider. ProviderResolver pins both bindings but does not provision resources.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-provider-resolution.drawio'">Open editable draw.io source</a></p>
 
@@ -45,6 +45,16 @@ It requires a deny-by-default platform policy, rejects unsupported AGT actions, 
 requires every document in the platform and project sets to allow. It uses the existing
 platform-singleton catalog/resolver/pinning path; this adapter does not authorize a
 protected action or imply that runtime call sites are wired.
+
+Knowledge uses the same exclusive Memory seam. Its run-selection request must contain
+exactly one Memory candidate; the service resolves that candidate through
+`ProviderCatalog` and `ProviderResolver`, negotiates the live database identity, then
+persists an immutable project/run binding with the project, configuration, and context
+revisions. A missing adapter, capability mismatch, or different later binding fails
+closed without falling back to another provider. The current `postgres.native-memory`
+adapter implements the read, write, search, revision, proposal-promotion, and context
+composition capabilities. See [Knowledge and Memory](knowledge-memory.md) for the
+service and its integration limits.
 
 The host also registers `postgres.native-messaging` as the platform-singleton Messaging
 provider, with no project override. It negotiates the configured PostgreSQL resource

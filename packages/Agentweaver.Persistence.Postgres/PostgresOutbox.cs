@@ -243,6 +243,13 @@ public sealed class PostgresOutbox
         return deliveries;
     }
 
+    public Task<OutboxDelivery?> ClaimAsync(
+        string workerId,
+        Guid eventId,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default) =>
+        ClaimOneAsync(workerId, eventId, leaseDuration, cancellationToken);
+
     public async Task<OutboxDelivery?> ClaimOneAsync(
         string workerId,
         Guid eventId,
@@ -302,6 +309,44 @@ public sealed class PostgresOutbox
         await reader.DisposeAsync();
         await transaction.CommitAsync(cancellationToken);
         return delivery;
+    }
+
+    public async Task<(StoredOutboxEvent Event, bool IsDelivered)?> ReadAsync(
+        Guid eventId,
+        CancellationToken cancellationToken = default)
+    {
+        if (eventId == Guid.Empty)
+            throw new ArgumentException("An event ID is required.", nameof(eventId));
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            SELECT id, stream_id, idempotency_key, event_type, event_version, payload,
+                occurred_at, sequence, delivered_at IS NOT NULL
+            FROM {_events}
+            WHERE id = @id
+            """, connection);
+        command.Parameters.AddWithValue("id", NpgsqlDbType.Uuid, eventId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? (ReadStored(reader), reader.GetBoolean(8))
+            : null;
+    }
+
+    public async Task<bool> ReleaseAsync(
+        Guid eventId,
+        Guid leaseToken,
+        CancellationToken cancellationToken = default)
+    {
+        if (eventId == Guid.Empty) throw new ArgumentException("An event ID is required.", nameof(eventId));
+        if (leaseToken == Guid.Empty) throw new ArgumentException("A lease token is required.", nameof(leaseToken));
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            UPDATE {_events}
+            SET lease_token = NULL, worker_id = NULL, leased_until = NULL
+            WHERE id = @id AND lease_token = @token AND delivered_at IS NULL
+            """, connection);
+        command.Parameters.AddWithValue("id", NpgsqlDbType.Uuid, eventId);
+        command.Parameters.AddWithValue("token", NpgsqlDbType.Uuid, leaseToken);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 
     public async Task<bool> AcknowledgeAsync(

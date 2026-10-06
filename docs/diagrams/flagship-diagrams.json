@@ -18,6 +18,11 @@
       "docs": ["docs/architecture/events-sessions.md"]
     },
     {
+      "name": "v1-knowledge-memory",
+      "concept": "Knowledge authority, Memory provider binding, and bounded context",
+      "docs": ["docs/architecture/knowledge-memory.md"]
+    },
+    {
       "name": "v1-identity-redemption",
       "concept": "Identity and secret redemption",
       "docs": ["docs/architecture/identity-secrets.md"]

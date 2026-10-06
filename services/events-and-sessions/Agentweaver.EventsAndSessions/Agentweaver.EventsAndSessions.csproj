@@ -20,5 +20,6 @@
   <ItemGroup>
     <EmbeddedResource Include="Migrations\001_sessions_journal.sql" />
     <EmbeddedResource Include="Migrations\002_addressed_messages.sql" />
+    <EmbeddedResource Include="Migrations\003_project_facts.sql" />
   </ItemGroup>
 </Project>

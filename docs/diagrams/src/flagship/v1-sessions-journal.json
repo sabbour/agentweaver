@@ -1,8 +1,8 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Native Sessions journal and owner delivery",
-  "alt": "Projects & Config validates current permission and accepted run selection. The Orchestrator admits owner-outbox messages; Events & Sessions pins the native PostgreSQL journal and presents messages at fenced turn boundaries. Generic callers cannot write PolicyEvaluation without trusted Core provenance.",
+  "title": "Native Sessions journal, accepted facts, and owner delivery",
+  "alt": "Events & Sessions negotiates and pins the native PostgreSQL provider, persists sessions, and serves ordered event replay. Knowledge receipts append separate project facts. Orchestrator owner messages are presented at fenced turn boundaries. Generic callers cannot write PolicyEvaluation without trusted Core provenance.",
   "autonumber": true,
   "participants": [
     {
@@ -41,7 +41,7 @@
     {
       "id": "postgres",
       "label": "Events & Sessions\nPostgreSQL schema",
-      "subLabel": "Journal, immutable run pin, outbox/inbox",
+      "subLabel": "Journal, facts, run pins, inbox",
       "icon": "database",
       "fluentIcon": "state",
       "badge": {
@@ -60,19 +60,9 @@
       "arrow": "filled"
     },
     {
-      "type": "activation",
-      "participant": "api",
-      "action": "start"
-    },
-    {
       "type": "note",
-      "over": ["caller", "api"],
-      "label": "OpenIddict validates issuer/audience; host requires GUID sub and one active-grant project_id/run_id pair."
-    },
-    {
-      "type": "note",
-      "over": ["api", "postgres"],
-      "label": "Runtime uses password-free workload identity and verifies schema only; --migrate uses a separate privileged connection and identity."
+      "over": ["caller", "api", "postgres"],
+      "label": "OpenIddict validates issuer/audience; host requires GUID sub and one active project/run grant."
     },
     {
       "type": "message",
@@ -83,15 +73,15 @@
       "arrow": "filled"
     },
     {
-      "type": "activation",
-      "participant": "provider",
-      "action": "start"
+      "type": "note",
+      "over": ["api", "postgres"],
+      "label": "Runtime uses password-free workload identity and verifies schema only; --migrate uses a separate privileged identity."
     },
     {
       "type": "message",
       "from": "provider",
       "to": "postgres",
-      "label": "Verify owned schema and negotiate live database identity",
+      "label": "Verify owned schema; negotiate live database identity",
       "line": "solid",
       "arrow": "filled"
     },
@@ -99,7 +89,7 @@
       "type": "message",
       "from": "postgres",
       "to": "provider",
-      "label": "Confirmed database and resource generation",
+      "label": "Confirm database and resource generation",
       "line": "dashed",
       "arrow": "open"
     },
@@ -107,14 +97,9 @@
       "type": "message",
       "from": "provider",
       "to": "api",
-      "label": "Return pinned provider, options revision, resource, and capabilities",
+      "label": "Return exact provider, options revision, resource, and capabilities",
       "line": "dashed",
       "arrow": "open"
-    },
-    {
-      "type": "activation",
-      "participant": "provider",
-      "action": "end"
     },
     {
       "type": "message",
@@ -141,14 +126,9 @@
       "arrow": "open"
     },
     {
-      "type": "activation",
-      "participant": "api",
-      "action": "end"
-    },
-    {
       "type": "note",
-      "over": ["api", "provider", "postgres"],
-      "label": "Later append, replay, and subscribe verify the stored exact pin. A changed/missing binding fails closed; a different create binding conflicts."
+      "over": ["caller", "api", "postgres"],
+      "label": "Later append, replay, and subscribe verify the exact stored pin; changed or missing bindings fail closed."
     },
     {
       "type": "message",
@@ -160,27 +140,14 @@
     },
     {
       "type": "note",
-      "over": ["caller", "api"],
-      "label": "Reject PolicyEvaluation here: run scope and actor=sub do not prove Core provenance; no trusted writer is wired, so guarded effects fail closed."
-    },
-    {
-      "type": "activation",
-      "participant": "api",
-      "action": "start"
+      "over": ["caller", "api", "postgres"],
+      "label": "Reject PolicyEvaluation: run scope and actor=sub do not prove trusted Core-writer provenance."
     },
     {
       "type": "message",
       "from": "api",
       "to": "postgres",
-      "label": "Verify run pin; admit run-scoped event ID",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "api",
-      "to": "postgres",
-      "label": "Advance run sequence; atomically write event, refs, and outbox",
+      "label": "Verify run pin; atomically write event, refs, sequence, and outbox",
       "line": "solid",
       "arrow": "filled"
     },
@@ -220,7 +187,7 @@
       "type": "message",
       "from": "postgres",
       "to": "api",
-      "label": "Run-ordered rows retaining session identity",
+      "label": "Rows retain session identity",
       "line": "dashed",
       "arrow": "open"
     },
@@ -228,7 +195,7 @@
       "type": "message",
       "from": "api",
       "to": "caller",
-      "label": "Page or NDJSON delivery: event + nextCursor",
+      "label": "Page or NDJSON: event + opaque nextCursor",
       "line": "dashed",
       "arrow": "open"
     },
@@ -240,7 +207,7 @@
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
-      "label": "Orchestrator validates the owner outbox; Events presents at fenced turn boundaries. Receipt is not approval."
+      "label": "Knowledge receipts are project facts, not session events. Orchestrator validates its owner outbox before fenced turn-boundary delivery; receipt is not approval."
     }
   ]
 }
