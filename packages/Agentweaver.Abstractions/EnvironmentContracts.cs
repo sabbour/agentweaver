@@ -124,45 +124,253 @@ public enum EnvironmentWorkspaceVolumeTransitionState
     Stale
 }
 
-public sealed record EnvironmentWorkspaceVolumeSnapshot(
-    EnvironmentGenerationFence EnvironmentFence,
-    string VolumeId,
-    long TransitionRevision,
-    long ResourceGeneration,
-    long DataGeneration,
-    EnvironmentWorkspaceVolumeState Phase,
-    EnvironmentWorkspaceVolumeOperation LastOperation,
-    JsonElement Specification);
+public sealed record EnvironmentWorkspaceVolumeSnapshot
+{
+    public EnvironmentWorkspaceVolumeSnapshot(
+        EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        long transitionRevision,
+        long resourceGeneration,
+        long dataGeneration,
+        EnvironmentWorkspaceVolumeState phase,
+        EnvironmentWorkspaceVolumeOperation lastOperation,
+        JsonElement specification,
+        ProviderResourceRef? resource)
+    {
+        ArgumentNullException.ThrowIfNull(environmentFence);
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumeId);
+        if (transitionRevision < 1)
+            throw new ArgumentOutOfRangeException(nameof(transitionRevision));
+        if (resourceGeneration < 0)
+            throw new ArgumentOutOfRangeException(nameof(resourceGeneration));
+        if (dataGeneration < 0)
+            throw new ArgumentOutOfRangeException(nameof(dataGeneration));
+        if (!Enum.IsDefined(phase))
+            throw new ArgumentOutOfRangeException(nameof(phase));
+        if (!Enum.IsDefined(lastOperation))
+            throw new ArgumentOutOfRangeException(nameof(lastOperation));
+        if (specification.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("Workspace-volume specifications must be JSON objects.", nameof(specification));
+        if ((phase is EnvironmentWorkspaceVolumeState.Ready or
+            EnvironmentWorkspaceVolumeState.Bound or
+            EnvironmentWorkspaceVolumeState.Attached) &&
+            resourceGeneration == 0)
+            throw new ArgumentException(
+                "A provider-backed workspace-volume phase requires a positive resource generation.",
+                nameof(resourceGeneration));
+        ValidateStorageResource(resource, resourceGeneration, "resource");
+        if ((resourceGeneration == 0 || phase == EnvironmentWorkspaceVolumeState.Released) && resource is not null)
+            throw new ArgumentException(
+                "A requested or released volume cannot expose a provider resource.",
+                nameof(resource));
+        if (resourceGeneration > 0 && phase != EnvironmentWorkspaceVolumeState.Released && resource is null)
+            throw new ArgumentException(
+                "An active provider-backed volume must expose its pinned resource.",
+                nameof(resource));
 
-public sealed record EnvironmentWorkspaceVolumeTransitionReservation(
-    Guid OperationId,
-    EnvironmentGenerationFence EnvironmentFence,
-    string VolumeId,
-    long ExpectedTransitionRevision,
-    long ExpectedResourceGeneration,
-    long ExpectedDataGeneration,
-    long TargetTransitionRevision,
-    long TargetResourceGeneration,
-    long TargetDataGeneration,
-    EnvironmentWorkspaceVolumeState TargetPhase,
-    EnvironmentWorkspaceVolumeOperation Operation,
-    EnvironmentWorkspaceVolumeTransitionState TransitionState,
-    bool Replayed);
+        EnvironmentFence = environmentFence;
+        VolumeId = volumeId;
+        TransitionRevision = transitionRevision;
+        ResourceGeneration = resourceGeneration;
+        DataGeneration = dataGeneration;
+        Phase = phase;
+        LastOperation = lastOperation;
+        Specification = specification.Clone();
+        Resource = resource;
+    }
 
-public sealed record EnvironmentWorkspaceVolumeTransitionResult(
-    Guid OperationId,
-    EnvironmentGenerationFence EnvironmentFence,
-    string VolumeId,
-    long ExpectedTransitionRevision,
-    long ExpectedResourceGeneration,
-    long ExpectedDataGeneration,
-    long TargetTransitionRevision,
-    long TargetResourceGeneration,
-    long TargetDataGeneration,
-    EnvironmentWorkspaceVolumeState TargetPhase,
-    EnvironmentWorkspaceVolumeOperation Operation,
-    EnvironmentWorkspaceVolumeTransitionState TransitionState,
-    bool Replayed);
+    public EnvironmentGenerationFence EnvironmentFence { get; }
+    public string VolumeId { get; }
+    public long TransitionRevision { get; }
+    public long ResourceGeneration { get; }
+    public long DataGeneration { get; }
+    public EnvironmentWorkspaceVolumeState Phase { get; }
+    public EnvironmentWorkspaceVolumeOperation LastOperation { get; }
+    public JsonElement Specification { get; }
+    public ProviderResourceRef? Resource { get; }
+
+    internal static void ValidateStorageResource(
+        ProviderResourceRef? resource,
+        long generation,
+        string parameterName)
+    {
+        if (resource is null)
+            return;
+        if (resource.Seam != ProviderSeam.Storage || resource.Generation != generation)
+            throw new ArgumentException(
+                "A workspace-volume provider resource must use the Storage seam and match ResourceGeneration.",
+                parameterName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(resource.ProviderId, parameterName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(resource.ResourceId, parameterName);
+        if (resource.ProviderId.Length > 256 || resource.ResourceId.Length > 512 ||
+            resource.ProviderId.Any(char.IsControl) || resource.ResourceId.Any(char.IsControl))
+            throw new ArgumentException(
+                "Workspace-volume provider resource identifiers must be bounded and contain no control characters.",
+                parameterName);
+    }
+}
+
+public sealed record EnvironmentWorkspaceVolumeTransitionReservation
+{
+    public EnvironmentWorkspaceVolumeTransitionReservation(
+        Guid operationId,
+        EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        long expectedTransitionRevision,
+        long expectedResourceGeneration,
+        long expectedDataGeneration,
+        ProviderResourceRef? currentResource,
+        long targetTransitionRevision,
+        long targetResourceGeneration,
+        long targetDataGeneration,
+        EnvironmentWorkspaceVolumeState targetPhase,
+        EnvironmentWorkspaceVolumeOperation operation,
+        EnvironmentWorkspaceVolumeTransitionState transitionState,
+        bool replayed)
+    {
+        ArgumentNullException.ThrowIfNull(environmentFence);
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumeId);
+        if (expectedTransitionRevision < 0 ||
+            targetTransitionRevision != expectedTransitionRevision + 1 ||
+            (expectedTransitionRevision == 0) != (operation == EnvironmentWorkspaceVolumeOperation.Create))
+            throw new ArgumentOutOfRangeException(nameof(expectedTransitionRevision));
+        if (expectedResourceGeneration < 0 || targetResourceGeneration < 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedResourceGeneration));
+        if (expectedDataGeneration < 0 || targetDataGeneration < 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedDataGeneration));
+        if (!Enum.IsDefined(targetPhase))
+            throw new ArgumentOutOfRangeException(nameof(targetPhase));
+        if (!Enum.IsDefined(operation))
+            throw new ArgumentOutOfRangeException(nameof(operation));
+        if (!Enum.IsDefined(transitionState))
+            throw new ArgumentOutOfRangeException(nameof(transitionState));
+        EnvironmentWorkspaceVolumeSnapshot.ValidateStorageResource(
+            currentResource,
+            expectedResourceGeneration,
+            nameof(currentResource));
+        if ((expectedResourceGeneration == 0) != (currentResource is null))
+            throw new ArgumentException(
+                "CurrentResource must be present exactly when the volume has a provider resource generation.",
+                nameof(currentResource));
+
+        OperationId = operationId;
+        EnvironmentFence = environmentFence;
+        VolumeId = volumeId;
+        ExpectedTransitionRevision = expectedTransitionRevision;
+        ExpectedResourceGeneration = expectedResourceGeneration;
+        ExpectedDataGeneration = expectedDataGeneration;
+        CurrentResource = currentResource;
+        TargetTransitionRevision = targetTransitionRevision;
+        TargetResourceGeneration = targetResourceGeneration;
+        TargetDataGeneration = targetDataGeneration;
+        TargetPhase = targetPhase;
+        Operation = operation;
+        TransitionState = transitionState;
+        Replayed = replayed;
+    }
+
+    public Guid OperationId { get; }
+    public EnvironmentGenerationFence EnvironmentFence { get; }
+    public string VolumeId { get; }
+    public long ExpectedTransitionRevision { get; }
+    public long ExpectedResourceGeneration { get; }
+    public long ExpectedDataGeneration { get; }
+    public ProviderResourceRef? CurrentResource { get; }
+    public long TargetTransitionRevision { get; }
+    public long TargetResourceGeneration { get; }
+    public long TargetDataGeneration { get; }
+    public EnvironmentWorkspaceVolumeState TargetPhase { get; }
+    public EnvironmentWorkspaceVolumeOperation Operation { get; }
+    public EnvironmentWorkspaceVolumeTransitionState TransitionState { get; }
+    public bool Replayed { get; }
+}
+
+public sealed record EnvironmentWorkspaceVolumeTransitionResult
+{
+    public EnvironmentWorkspaceVolumeTransitionResult(
+        Guid operationId,
+        EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        long expectedTransitionRevision,
+        long expectedResourceGeneration,
+        long expectedDataGeneration,
+        ProviderResourceRef? expectedResource,
+        long targetTransitionRevision,
+        long targetResourceGeneration,
+        long targetDataGeneration,
+        ProviderResourceRef? targetResource,
+        EnvironmentWorkspaceVolumeState targetPhase,
+        EnvironmentWorkspaceVolumeOperation operation,
+        EnvironmentWorkspaceVolumeTransitionState transitionState,
+        bool replayed)
+    {
+        ArgumentNullException.ThrowIfNull(environmentFence);
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumeId);
+        if (expectedTransitionRevision < 0 || targetTransitionRevision != expectedTransitionRevision + 1)
+            throw new ArgumentOutOfRangeException(nameof(expectedTransitionRevision));
+        if (expectedResourceGeneration < 0 || targetResourceGeneration < 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedResourceGeneration));
+        if (expectedDataGeneration < 0 || targetDataGeneration < 0)
+            throw new ArgumentOutOfRangeException(nameof(expectedDataGeneration));
+        if (!Enum.IsDefined(targetPhase))
+            throw new ArgumentOutOfRangeException(nameof(targetPhase));
+        if (!Enum.IsDefined(operation))
+            throw new ArgumentOutOfRangeException(nameof(operation));
+        if (!Enum.IsDefined(transitionState))
+            throw new ArgumentOutOfRangeException(nameof(transitionState));
+        EnvironmentWorkspaceVolumeSnapshot.ValidateStorageResource(
+            expectedResource,
+            expectedResourceGeneration,
+            nameof(expectedResource));
+        EnvironmentWorkspaceVolumeSnapshot.ValidateStorageResource(
+            targetResource,
+            targetResourceGeneration,
+            nameof(targetResource));
+        if ((expectedResourceGeneration == 0) != (expectedResource is null))
+            throw new ArgumentException(
+                "ExpectedResource must be present exactly when the volume has a provider resource generation.",
+                nameof(expectedResource));
+        if (transitionState == EnvironmentWorkspaceVolumeTransitionState.Completed &&
+            ((targetResourceGeneration == 0 || targetPhase == EnvironmentWorkspaceVolumeState.Released)
+                ? targetResource is not null
+                : targetResource is null))
+            throw new ArgumentException(
+                "A completed volume transition must expose exactly its committed provider resource, if any.",
+                nameof(targetResource));
+
+        OperationId = operationId;
+        EnvironmentFence = environmentFence;
+        VolumeId = volumeId;
+        ExpectedTransitionRevision = expectedTransitionRevision;
+        ExpectedResourceGeneration = expectedResourceGeneration;
+        ExpectedDataGeneration = expectedDataGeneration;
+        ExpectedResource = expectedResource;
+        TargetTransitionRevision = targetTransitionRevision;
+        TargetResourceGeneration = targetResourceGeneration;
+        TargetDataGeneration = targetDataGeneration;
+        TargetResource = targetResource;
+        TargetPhase = targetPhase;
+        Operation = operation;
+        TransitionState = transitionState;
+        Replayed = replayed;
+    }
+
+    public Guid OperationId { get; }
+    public EnvironmentGenerationFence EnvironmentFence { get; }
+    public string VolumeId { get; }
+    public long ExpectedTransitionRevision { get; }
+    public long ExpectedResourceGeneration { get; }
+    public long ExpectedDataGeneration { get; }
+    public ProviderResourceRef? ExpectedResource { get; }
+    public long TargetTransitionRevision { get; }
+    public long TargetResourceGeneration { get; }
+    public long TargetDataGeneration { get; }
+    public ProviderResourceRef? TargetResource { get; }
+    public EnvironmentWorkspaceVolumeState TargetPhase { get; }
+    public EnvironmentWorkspaceVolumeOperation Operation { get; }
+    public EnvironmentWorkspaceVolumeTransitionState TransitionState { get; }
+    public bool Replayed { get; }
+}
 
 public enum EnvironmentNetworkEffectKind
 {
