@@ -2,8 +2,28 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
+      "Microsoft.AgentGovernance": {
+        "type": "Direct",
+        "requested": "[4.0.0, )",
+        "resolved": "4.0.0",
+        "contentHash": "+KFzoPekc2xJIrwyXvgul7l42ubb3E3YLgkVHR6B9QCvNO0v95t2Ww8S4sF0YV2cBTSAZHBrbKLipCLx98Mc8A==",
+        "dependencies": {
+          "YamlDotNet": "18.0.0"
+        }
+      },
+      "YamlDotNet": {
+        "type": "Transitive",
+        "resolved": "18.0.0",
+        "contentHash": "ptHVgcYmLejGuWXV7RMFoEqFKYMXnieOlWLPzEslfDtzZ9ngMhjYwykfqjBN2+fMEAEyobozkj07lKEpR4dssA=="
+      },
       "agentweaver.abstractions": {
         "type": "Project"
+      },
+      "agentweaver.providers": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )"
+        }
       }
     }
   }

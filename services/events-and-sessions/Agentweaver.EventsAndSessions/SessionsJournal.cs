@@ -12,45 +12,6 @@ using NpgsqlTypes;
 
 namespace Agentweaver.EventsAndSessions;
 
-public sealed record SessionSubscriptionRequest(
-    string SessionId,
-    string? Cursor = null,
-    int MaximumEvents = 1000,
-    int MaximumDurationSeconds = 300);
-
-public interface ISessionsJournal
-{
-    Task<SessionRecord> CreateSessionAsync(
-        ClaimsPrincipal principal, string sessionId, SessionProviderBinding binding,
-        CancellationToken cancellationToken = default);
-
-    Task<SessionProviderBinding> GetProviderBindingAsync(
-        ClaimsPrincipal principal, string sessionId, CancellationToken cancellationToken = default);
-
-    Task<SessionProviderBinding> GetRunProviderBindingAsync(
-        ClaimsPrincipal principal, string projectId, string runId, CancellationToken cancellationToken = default);
-
-    Task<SessionAppendResult> AppendAsync(
-        ClaimsPrincipal principal, string sessionId, AppendSessionEvent input,
-        CancellationToken cancellationToken = default);
-
-    Task<SessionEventPage> ReplayAsync(
-        ClaimsPrincipal principal, SessionEventPageRequest request,
-        CancellationToken cancellationToken = default);
-
-    Task<SessionEventPage> ReplayRunAsync(
-        ClaimsPrincipal principal, SessionRunEventPageRequest request,
-        CancellationToken cancellationToken = default);
-
-    IAsyncEnumerable<SessionEventDelivery> SubscribeAsync(
-        ClaimsPrincipal principal, SessionSubscriptionRequest request,
-        CancellationToken cancellationToken = default);
-
-    IAsyncEnumerable<SessionEventDelivery> SubscribeRunAsync(
-        ClaimsPrincipal principal, SessionRunSubscriptionRequest request,
-        CancellationToken cancellationToken = default);
-}
-
 public sealed class PostgresSessionsJournal : ISessionsJournal
 {
     public const int MaximumPageSize = 200;
@@ -220,6 +181,9 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         var scope = RequireScope(principal);
         var identity = scope.ForSession(sessionId);
         ValidateInput(input);
+        if (input.Payload is PolicyEvaluationSessionPayload)
+            throw new SessionAccessDeniedException(
+                "Policy evaluation events require trusted Orchestrator Core writer provenance.");
         var canonicalInput = CreateCanonicalInput(identity, input);
         var payload = JsonSerializer.SerializeToElement<SessionEventPayload>(input.Payload, JsonOptions);
         var references = SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload);
@@ -613,7 +577,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         if (input.EventId == Guid.Empty)
             throw new ArgumentException("A stable non-empty event identity is required.", nameof(input));
         if (input.SchemaVersion != SessionsContractVersions.CurrentSchemaVersion ||
-            input.EventVersion != SessionsContractVersions.CurrentEventVersion)
+            !SessionEventPayloadValidation.SupportsEventVersion(input.EventVersion, input.Payload))
             throw new SessionContractVersionException("The event contract version is not supported.");
         _ = SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload);
     }
@@ -706,7 +670,12 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
 
     private static SessionRunScope RequireScope(ClaimsPrincipal principal)
     {
-        if (!SessionIdentityClaims.TryGetScope(principal, out var scope) || scope is null)
+        return RequireScope(principal, out _);
+    }
+
+    private static SessionRunScope RequireScope(ClaimsPrincipal principal, out string? actorId)
+    {
+        if (!SessionIdentityClaims.TryGetScope(principal, out var scope, out actorId) || scope is null)
             throw new SessionAuthenticationException();
         return scope.Value;
     }

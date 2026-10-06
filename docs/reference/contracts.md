@@ -20,6 +20,26 @@ entries containing `MeterSource` and `ProviderId`. Native
 stored `EffectiveProviderSelection`. Both retain current owner authorization.
 No new usage-writing endpoint, model-source authority, or pricing API is introduced.
 
+## Orchestrator AGT Policy provider
+
+`AgtPolicyProviderOptions` supplies an opaque resource ID and generation, an options revision and schema
+version, and one or more platform AGT YAML policy documents. Every platform document must parse, default
+to deny, and use only `allow` or `deny` actions. The provider is enabled as the platform singleton
+`agt.dotnet-yaml`; project provider overrides are rejected by the shared resolver.
+
+`AgtPolicyEvaluationRequest` carries a bounded opaque actor ID and action ID, primitive policy context,
+and optional project policy documents. Each configured document is evaluated independently; every
+document in both policy sets must allow, so project policy can only narrow. The adapter returns typed allow, deny, or error
+evidence plus provider/options metadata; it does not consume grants, append journal events, or authorize
+effects. The source-only `ExecutableActionGuard` validates an injected current grant descriptor and delegates
+current grant ownership to `IExecutableActionGrantOwnerLookup`; no grant owner is wired in this slice. It
+returns structured deny/error results for missing, stale, mismatched, expired, or unavailable grants and does
+not invoke its protected callback unless the evidence append succeeds.
+Caller bindings require one authenticated identity whose `sub`, `project_id`, and `run_id` claims share one
+validated HTTPS issuer. The current grant descriptor must match that issuer and subject; a missing, duplicate,
+or cross-issuer binding is denied before journal append or protected effects. The grant owner lookup remains
+responsible for resolving fresh tenant membership and current grant authority; a tenant claim is not required.
+
 ## Events & Sessions journal
 
 The `Agentweaver.EventsAndSessions` service is an unpublished .NET 10 host candidate.
@@ -33,17 +53,25 @@ role claims are not required.
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL and current owned-schema readiness; returns `503` when the schema is absent or outdated. |
 | `POST /internal/sessions/{sessionId}` | Resolve and pin the run's native Sessions provider, then create the session. A run reuses its immutable provider binding; a different binding returns `409`. |
-| `POST /internal/sessions/{sessionId}/events` | Append a versioned typed event to the project/run journal. Returns `201` for a new event, `200` for an identical run-scoped event-ID retry, and `409` if the ID is reused with different event content in that run. |
+| `POST /internal/sessions/{sessionId}/events` | Append an ordinary versioned typed event to the project/run journal. Returns `403` for every `PolicyEvaluation` payload until a trusted Orchestrator Core writer path is wired; ordinary appends return `201` for a new event, `200` for an identical run-scoped event-ID retry, and `409` if the ID is reused with different event content in that run. |
 | `GET /internal/sessions/{sessionId}/events?cursor={cursor}&limit={limit}` | Read an ordered page for one session after an optional opaque cursor. Positions are run-wide and may have gaps in a session-only page. |
 | `GET /internal/sessions/{sessionId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll durable journal state and stream NDJSON `SessionEventDelivery` records, each containing the event and a reconnectable `nextCursor`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events?cursor={cursor}&limit={limit}` | Read a bounded, run-ordered page across all sessions in the authorized project/run. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll and stream run-ordered NDJSON deliveries across sessions; each delivery includes a reconnectable `nextCursor`. |
 
-The version-1 abstraction contract provides `SessionIdentity`, `AppendSessionEvent`,
-and a discriminated `SessionEventPayload` for turns, tool calls, accepted decisions and
-effects, artifact references, and cache references. Payload content is represented by
-opaque `ObjectKey` references. The journal does not accept credentials or store large
-payload bytes.
+The `Agentweaver.Abstractions` contract provides `ISessionsJournal`,
+`SessionSubscriptionRequest`, `SessionIdentity`, `AppendSessionEvent`, and a
+discriminated `SessionEventPayload`; `Agentweaver.EventsAndSessions` supplies the
+PostgreSQL implementation. Event version 1 supports turns, tool calls,
+accepted decisions and effects, artifact references, and cache references. Event
+version 2 adds a typed `PolicyEvaluation` payload; existing version-1 payloads remain
+appendable and replayable. The generic run-scoped append route rejects every
+`PolicyEvaluation` payload because actor equality does not establish trusted Orchestrator
+Core writer provenance. The envelope binds project/run/session; the payload contains
+bounded actor/tenant/step, grant reference/revision, purpose/action/fence,
+outcome/reason, and provider/options identity metadata, with no arbitrary message or
+credential fields. Other large payload content is represented by opaque
+`ObjectKey` references; the journal does not store referenced bytes.
 
 The run-level provider pin records provider ID, adapter version, options schema version
 and revision, negotiated resource ID and generation, and capabilities. It is inserted

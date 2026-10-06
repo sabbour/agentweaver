@@ -16,6 +16,7 @@ public static class SessionsCapabilities
     public const string Subscribe = "sessions.events.subscribe";
     public const string ObjectReferences = "sessions.objects.reference";
     public const string ToolCalls = "sessions.tool_calls";
+    public const string PolicyEvaluations = "sessions.policy.evaluations";
     public const string AcceptedDecisions = "sessions.decisions.accepted";
     public const string AcceptedEffects = "sessions.effects.accepted";
 

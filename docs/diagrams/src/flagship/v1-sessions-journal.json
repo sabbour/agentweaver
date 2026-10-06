@@ -159,6 +159,11 @@
       "arrow": "filled"
     },
     {
+      "type": "note",
+      "over": ["caller", "api"],
+      "label": "Reject PolicyEvaluation here: run scope and actor=sub do not prove Core provenance; no trusted writer is wired, so guarded effects fail closed."
+    },
+    {
       "type": "activation",
       "participant": "api",
       "action": "start"

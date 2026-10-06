@@ -35,6 +35,14 @@
         "resolved": "3.1.4",
         "contentHash": "5mj99LvCqrq3CNi06xYdyIAXOEh+5b33F2nErCzI5zWiDdLHXiPXEWFSUAF8zlIv0ZWqjZNCwHTQeAPYbF3pCg=="
       },
+      "Microsoft.AgentGovernance": {
+        "type": "Transitive",
+        "resolved": "4.0.0",
+        "contentHash": "+KFzoPekc2xJIrwyXvgul7l42ubb3E3YLgkVHR6B9QCvNO0v95t2Ww8S4sF0YV2cBTSAZHBrbKLipCLx98Mc8A==",
+        "dependencies": {
+          "YamlDotNet": "18.0.0"
+        }
+      },
       "Microsoft.CodeCoverage": {
         "type": "Transitive",
         "resolved": "17.14.1",
@@ -99,13 +107,20 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "YamlDotNet": {
+        "type": "Transitive",
+        "resolved": "18.0.0",
+        "contentHash": "ptHVgcYmLejGuWXV7RMFoEqFKYMXnieOlWLPzEslfDtzZ9ngMhjYwykfqjBN2+fMEAEyobozkj07lKEpR4dssA=="
+      },
       "agentweaver.abstractions": {
         "type": "Project"
       },
       "agentweaver.orchestrator.core": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )"
+          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Providers": "[0.0.0, )",
+          "Microsoft.AgentGovernance": "[4.0.0, )"
         }
       },
       "agentweaver.providers": {

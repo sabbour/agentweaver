@@ -6,9 +6,9 @@ deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="An authorized caller creates a session; the Events & Sessions host resolves and negotiates the native PostgreSQL Sessions provider, stores an immutable project/run provider pin with the session, then appends events transactionally and serves ordered replay or live events with reconnectable opaque cursors." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="An authorized caller creates a session; the Events & Sessions host resolves and negotiates the native PostgreSQL Sessions provider, stores an immutable project/run provider pin, rejects PolicyEvaluation writes without trusted Core-writer provenance, and serves ordinary events through ordered replay or live subscriptions." />
   </a>
-  <figcaption>The current host validates project/run scope, pins one native Sessions provider per run, and uses PostgreSQL as the journal authority. The figure describes source behavior, not a deployment topology.</figcaption>
+  <figcaption>The current host validates project/run scope, pins one native Sessions provider per run, and uses PostgreSQL as the journal authority. Generic run-scoped append does not establish Orchestrator Core writer provenance, so it rejects PolicyEvaluation events. The figure describes source behavior, not a deployment topology.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
 
@@ -18,7 +18,9 @@ deployed platform service.
 Sessions-provider bindings, and object-reference retention metadata in its PostgreSQL
 schema. The shared `Agentweaver.Persistence.Postgres` library supplies the
 transactional outbox and inbox; it does not own these domain tables. The service uses
-the existing provider catalog/resolver and telemetry helper.
+the existing provider catalog/resolver and telemetry helper. The provider-neutral
+`ISessionsJournal` interface and `SessionSubscriptionRequest` contract live in
+`Agentweaver.Abstractions`; this service owns their PostgreSQL implementation.
 
 This slice does not implement the rest of the proposed service responsibilities:
 session-tree transitions, addressed-message delivery, usage accounting, consistency
@@ -49,11 +51,20 @@ hashed resource ID, not option values, credentials, payloads, or raw resource ID
 
 ## Journal durability and replay
 
-Event contracts are versioned independently by schema and event version. Version 1
-supports typed turn, tool-call, accepted-decision, accepted-effect, artifact-reference,
-and cache-reference payloads. Large content is represented by opaque `ObjectKey`
-references with a purpose, optional byte length, and retention metadata; the service
-does not store referenced bytes or credentials.
+Event contracts are versioned independently by schema and event version. Event
+version 1 supports typed turn, tool-call, accepted-decision, accepted-effect,
+artifact-reference, and cache-reference payloads. Event version 2 adds the
+purpose-built `PolicyEvaluation` payload; existing version-1 payloads remain
+appendable and replayable. The generic run-scoped append path rejects every
+`PolicyEvaluation` event: matching the authenticated actor does not prove that
+Orchestrator Core wrote the decision, and no trusted writer path is wired yet. The
+event envelope binds project/run/session; its payload stores only bounded actor,
+tenant/step, grant reference/revision, purpose/action/fence, typed
+outcome/reason, and provider/options identity metadata. It has no free-form error
+field or space for rule text, tool arguments, prompts, or credentials. Large
+content in other event kinds is represented by opaque `ObjectKey` references with a
+purpose, optional byte length, and retention metadata; the service does not store
+referenced bytes or credentials.
 
 Append serializes access to the project/run stream position in PostgreSQL, admits a
 run-scoped stable event identity through the inbox, and writes the event,
@@ -63,6 +74,11 @@ their originating session identity. It commits before returning the event. A ret
 with identical canonical event content returns the original event; reusing its
 identity with different content in the same run is a conflict. PostgreSQL, not an
 in-process counter or channel, assigns the authoritative ordered position.
+
+When the trusted Orchestrator Core writer path is implemented, the action guard must
+await a successful durable append before performing a protected effect. An append
+failure is an error, never an allow; the event is evidence only and cannot grant
+authority by itself. Until then, a missing or unwired writer path must fail closed.
 
 Run replay returns a bounded, run-ordered page spanning all sessions; session replay
 returns only that session's events at their run positions. Run cursors are bound to a

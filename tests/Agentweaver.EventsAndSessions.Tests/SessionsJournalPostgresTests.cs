@@ -1,12 +1,26 @@
-using System.Security.Claims;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
 using Agentweaver.Providers;
 using Agentweaver.Telemetry;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http.Json;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using NpgsqlTypes;
 using OpenIddict.Abstractions;
+using OpenIddict.Validation.AspNetCore;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 using Xunit;
 
@@ -79,6 +93,196 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         Assert.Single(page2.Events);
         Assert.Equal(second.Event.EventId, page2.Events[0].EventId);
         Assert.False(page2.HasMore);
+    }
+
+    [Fact]
+    public async Task PolicyEvaluationCannotBeAppendedByAGenericRunScopedCaller()
+    {
+        var payload = PolicyEvaluation(
+            PolicyEvaluationOutcome.Deny,
+            PolicyEvaluationReasonCode.ProjectRuleNarrowed);
+        var input = PolicyEvaluationEvent(Guid.NewGuid(), payload);
+        await Assert.ThrowsAsync<SessionAccessDeniedException>(() =>
+            _journal.AppendAsync(_owner, "session-1", input));
+
+        var replay = await NewJournal().ReplayRunAsync(
+            _owner, new SessionRunEventPageRequest("project-1", "run-1"));
+        Assert.Empty(replay.Events);
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var query = new NpgsqlCommand($"""
+            SELECT
+                (SELECT last_position FROM "{_schema}".session_run_streams
+                    WHERE project_id = 'project-1' AND run_id = 'run-1'),
+                (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts),
+                (SELECT count(*) FROM "{_schema}".outbox_events)
+            """, connection);
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(0, reader.GetInt64(0));
+        Assert.Equal(0, reader.GetInt64(1));
+        Assert.Equal(0, reader.GetInt64(2));
+    }
+
+    [Fact]
+    public async Task AuthenticatedRunTokenCannotAppendReservedPolicyOutcomesThroughHttpRoute()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var issuer = new Uri("https://identity.test");
+        const string audience = "https://events.test";
+        var token = CreateRunToken(rsa, issuer.ToString(), audience);
+        string[] validatedBindingIssuers = [];
+
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
+        builder.Services.AddOpenIddict().AddValidation(validation =>
+        {
+            validation.SetIssuer(issuer);
+            validation.AddAudiences(audience);
+            validation.Configure(configuration => configuration.Configuration = new OpenIddictConfiguration
+            {
+                Issuer = issuer,
+                SigningKeys = { signingKey }
+            });
+            validation.UseAspNetCore();
+        });
+        builder.Services.AddAuthorization();
+        builder.Services.ConfigureHttpJsonOptions(json =>
+        {
+            json.SerializerOptions.UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow;
+            json.SerializerOptions.MaxDepth = 16;
+            json.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        });
+        builder.Services.AddSingleton<ISessionsJournal>(_journal);
+        builder.Services.AddSingleton<ISessionsProviderBinder>(_bindingService);
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.Use(async (context, next) =>
+        {
+            if (context.Request.Path == "/internal/sessions/session-1/events")
+            {
+                validatedBindingIssuers = context.User.Identities
+                    .Where(identity => identity.IsAuthenticated)
+                    .SelectMany(identity => identity.Claims)
+                    .Where(claim => claim.Type is "sub" or "project_id" or "run_id")
+                    .Select(claim => claim.Issuer)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+            }
+            await next();
+        });
+        app.MapEventsAndSessionsEndpoints();
+        await app.StartAsync();
+
+        using var client = app.GetTestClient();
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        jsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        foreach (var (outcome, reason) in new[]
+        {
+            (PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed),
+            (PolicyEvaluationOutcome.Deny, PolicyEvaluationReasonCode.NoEffectiveGrant),
+            (PolicyEvaluationOutcome.Error, PolicyEvaluationReasonCode.ProviderUnavailable)
+        })
+        {
+            await AssertRejectedAsync(
+                PolicyEvaluationEvent(Guid.NewGuid(), PolicyEvaluation(outcome, reason)));
+        }
+        var authenticatedIssuer = Assert.Single(validatedBindingIssuers);
+        Assert.Equal(issuer.AbsoluteUri, new Uri(authenticatedIssuer).AbsoluteUri);
+
+        var duplicateInput = PolicyEvaluationEvent(
+            Guid.NewGuid(),
+            PolicyEvaluation(PolicyEvaluationOutcome.Deny, PolicyEvaluationReasonCode.NoEffectiveGrant));
+        await AssertRejectedAsync(duplicateInput);
+        await AssertRejectedAsync(duplicateInput);
+
+        var replay = await _journal.ReplayRunAsync(
+            _owner, new SessionRunEventPageRequest("project-1", "run-1"));
+        Assert.Empty(replay.Events);
+
+        using (var ordinaryRequest = new HttpRequestMessage(
+                   HttpMethod.Post, "/internal/sessions/session-1/events")
+               {
+                   Content = JsonContent.Create(Turn(Guid.NewGuid(), "turns/ordinary"), options: jsonOptions)
+               })
+        {
+            ordinaryRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var ordinaryResponse = await client.SendAsync(ordinaryRequest);
+            Assert.Equal(HttpStatusCode.Created, ordinaryResponse.StatusCode);
+        }
+
+        var afterOrdinaryAppend = await _journal.ReplayRunAsync(
+            _owner, new SessionRunEventPageRequest("project-1", "run-1"));
+        Assert.Single(afterOrdinaryAppend.Events);
+        Assert.Equal(1, afterOrdinaryAppend.Events[0].Position);
+        Assert.Equal(SessionEventKind.Turn, afterOrdinaryAppend.Events[0].Kind);
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var query = new NpgsqlCommand($"""
+            SELECT
+                (SELECT last_position FROM "{_schema}".session_run_streams
+                    WHERE project_id = 'project-1' AND run_id = 'run-1'),
+                (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts),
+                (SELECT count(*) FROM "{_schema}".outbox_events)
+            """, connection);
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1, reader.GetInt64(0));
+        Assert.Equal(1, reader.GetInt64(1));
+        Assert.Equal(1, reader.GetInt64(2));
+
+        async Task AssertRejectedAsync(AppendSessionEvent input)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/internal/sessions/session-1/events")
+            {
+                Content = JsonContent.Create(input, options: jsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var response = await client.SendAsync(request);
+            var responseBody = await response.Content.ReadAsStringAsync();
+            Assert.True(response.StatusCode == HttpStatusCode.Forbidden,
+                $"Expected forbidden but received {(int)response.StatusCode}: {responseBody}");
+            Assert.Contains("session_access_denied", responseBody, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task PolicyEvaluationWithMismatchedActorIsNotAppendableByGenericCaller()
+    {
+        var forgedActor = PolicyEvaluationEvent(
+            Guid.NewGuid(),
+            PolicyEvaluation(PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed)
+                with { ActorId = "44444444-4444-4444-4444-444444444444" });
+
+        await Assert.ThrowsAsync<SessionAccessDeniedException>(() =>
+            _journal.AppendAsync(_owner, "session-1", forgedActor));
+
+        var replay = await _journal.ReplayRunAsync(
+            _owner, new SessionRunEventPageRequest("project-1", "run-1"));
+        Assert.Empty(replay.Events);
+    }
+
+    [Fact]
+    public async Task PolicyEvaluationsRequireEventVersionTwoAndExistingEventsStillAcceptVersionOne()
+    {
+        var legacy = Turn(Guid.NewGuid(), "turns/legacy") with { EventVersion = SessionsContractVersions.InitialEventVersion };
+        var accepted = await _journal.AppendAsync(_owner, "session-1", legacy);
+        Assert.Equal(SessionsContractVersions.InitialEventVersion, accepted.Event.EventVersion);
+
+        var unsupportedPolicy = PolicyEvaluationEvent(
+            Guid.NewGuid(),
+            PolicyEvaluation(PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed))
+            with { EventVersion = SessionsContractVersions.InitialEventVersion };
+        await Assert.ThrowsAsync<SessionContractVersionException>(() =>
+            _journal.AppendAsync(_owner, "session-1", unsupportedPolicy));
+
+        var replay = await _journal.ReplayRunAsync(
+            _owner, new SessionRunEventPageRequest("project-1", "run-1"));
+        Assert.Equal(SessionsContractVersions.InitialEventVersion, Assert.Single(replay.Events).EventVersion);
     }
 
     [Fact]
@@ -343,14 +547,17 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PersistenceFailureRollsBackReceiptAndPositionAndIsNotReturnedAsSuccess()
+    public async Task EventPersistenceFailureRollsBackReceiptAndPositionAndIsNotReturnedAsSuccess()
     {
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand($"DROP TABLE \"{_schema}\".session_events CASCADE", connection))
             await command.ExecuteNonQueryAsync();
 
         await Assert.ThrowsAsync<PostgresException>(() =>
-            _journal.AppendAsync(_owner, "session-1", Turn(Guid.NewGuid(), "turns/failed")));
+            _journal.AppendAsync(
+                _owner,
+                "session-1",
+                Turn(Guid.NewGuid(), "turns/persistence-failure")));
 
         await using var verify = await _fixture.DataSource.OpenConnectionAsync();
         await using var query = new NpgsqlCommand($"""
@@ -441,6 +648,57 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
     private static AppendSessionEvent Turn(Guid eventId, string key) =>
         new(eventId, SessionsContractVersions.CurrentSchemaVersion, SessionsContractVersions.CurrentEventVersion,
             new TurnSessionPayload("user", Ref(key)));
+
+    private static AppendSessionEvent PolicyEvaluationEvent(
+        Guid eventId,
+        PolicyEvaluationSessionPayload payload) =>
+        new(eventId, SessionsContractVersions.CurrentSchemaVersion,
+            SessionsContractVersions.PolicyEvaluationEventVersion, payload);
+
+    private static PolicyEvaluationSessionPayload PolicyEvaluation(
+        PolicyEvaluationOutcome outcome,
+        PolicyEvaluationReasonCode reasonCode) =>
+        new(
+            "33333333-3333-3333-3333-333333333333",
+            "tenant-1",
+            "step-1",
+            "grant-1",
+            "revision-1",
+            "coordination.decision",
+            "coordinator.question.respond",
+            outcome,
+            reasonCode,
+            1,
+            "agt.default",
+            "1.0.0",
+            1,
+            "options-2026-10");
+
+    private static string CreateRunToken(RSA signingKey, string issuer, string audience)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var header = Base64Url(JsonSerializer.SerializeToUtf8Bytes(new { alg = "RS256", typ = "at+jwt" }));
+        var payload = Base64Url(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            iss = issuer,
+            aud = audience,
+            sub = "33333333-3333-3333-3333-333333333333",
+            project_id = "project-1",
+            run_id = "run-1",
+            scope = "openid",
+            nbf = now - 60,
+            exp = now + 300
+        }));
+        var unsignedToken = $"{header}.{payload}";
+        var signature = signingKey.SignData(
+            Encoding.ASCII.GetBytes(unsignedToken),
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        return $"{unsignedToken}.{Base64Url(signature)}";
+    }
+
+    private static string Base64Url(byte[] value) =>
+        Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private static SessionObjectReference Ref(string key) => new(new ObjectKey(key), "transcript", 128);
 

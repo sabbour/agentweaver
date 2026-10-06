@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Provider resolution and run pinning",
-  "alt": "Sequence from the Foundation Probe host through ProviderCatalog and ProviderResolver to resolve probe registrations and pin immutable bindings from supplied target resource IDs and generation. It does not provision resources, perform live negotiation, or construct adapters.",
+  "alt": "Sequence from the Foundation Probe host through ProviderCatalog and ProviderResolver to resolve probe registrations and pin immutable bindings from supplied target resource IDs and generation. The Orchestrator Core separately resolves and pins its platform-singleton AGT YAML Policy adapter through the same catalog and resolver; that adapter path is not part of the probe sequence.",
   "autonumber": true,
   "participants": [
     {
@@ -175,7 +175,7 @@
             {
               "type": "note",
               "over": ["probe-host", "provider-resolver"],
-              "label": "ProbeProviderBindings supplies ResourceNegotiation; Pin validates it. Azure adapters are composed separately in AzureProbeOperations."
+              "label": "Foundation Probe and Orchestrator Core use this resolver. Core pins AGT Policy; that provider is not part of probe operations."
             }
           ]
         },

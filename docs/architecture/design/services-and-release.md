@@ -60,6 +60,9 @@ code depends on the versioned .NET contracts in `Agentweaver.Abstractions`; adap
 contracts and may communicate with managed services, sidecars, or Kubernetes resources. Clients do
 not pick a provider by reaching directly into an adapter. See [Provider
 seams](provider-seams.md#boundaries-and-layering).
+The Orchestrator Core source includes the platform-singleton AGT YAML Policy adapter;
+it uses the shared catalog and resolver but remains separate from trusted grant
+issuance and the still-distinct protected-effect guard.
 
 This topology separates owned Postgres schemas from data-plane environments. HTTP and server-sent
 events (SSE) serve the edge, gRPC handles internal requests, and an outbox carries durable events.

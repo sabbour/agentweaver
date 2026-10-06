@@ -35,6 +35,17 @@ of falling back to a new default. The service emits bounded pin evidence through
 existing telemetry helper without recording option values, credentials, or raw resource
 IDs. See the [journal service reference](events-sessions.md).
 
+Event version 2 defines a typed PolicyEvaluation payload, but the native journal does not
+advertise `sessions.policy.evaluations` or accept these events from generic run-scoped
+callers. Actor equality does not prove Orchestrator Core writer provenance. The capability
+must remain unavailable until that trusted writer path is implemented.
+
+The Orchestrator Core also contains the source-only `agt.dotnet-yaml` Policy provider.
+It requires a deny-by-default platform policy, rejects unsupported AGT actions, and
+requires every document in the platform and project sets to allow. It uses the existing
+platform-singleton catalog/resolver/pinning path; this adapter does not authorize a
+protected action or imply that runtime call sites are wired.
+
 The Foundation Probe registers `azure-key-vault`, `azure-blob`, and `azure-monitor` descriptors for its checks. These registrations do not form a product provider catalog.
 
 Model is not a provider seam. The v1 source contains no AgentHost, model resolver, or model adapter. It does not declare support for a model vendor.

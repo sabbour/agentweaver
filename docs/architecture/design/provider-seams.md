@@ -455,16 +455,39 @@ optional adapter is post-cutover because its upstream is not a cutover dependenc
 ## Policy
 
 **Owner:** Orchestrator, with gates in every calling core service. **Cardinality:** platform-singleton.
-AGT's .NET kernel evaluates agent actions against platform rules and project rules that may only narrow the
-result. YAML rules are the 1.0 baseline. Other rule languages are configuration of the same kernel only
-after verified .NET parity, not an independent Policy provider
+The Orchestrator Core source includes the in-process `agt.dotnet-yaml` adapter, which resolves and pins
+through the shared provider catalog. AGT's .NET kernel evaluates agent actions against platform rules and
+project rules that may only narrow the result. YAML rules are the 1.0 baseline. Other rule languages are
+configuration of the same kernel only after verified .NET parity, not an independent Policy provider
 ([R6](../decisions/0001-platform-architecture.md#risk-register)).
 
-Decisions are checked at model invocation, tool registration and invocation, MCP invocation, sandbox exec,
-secret redemption, and control-plane mutation. The core records the decision and rejects an action when
-evaluation fails. Identity and tenancy permissions stay core-owned; admission controls for Kubernetes are
-infrastructure, not agent-action policy. Tool permission metadata replaces a literal tool-name classifier,
-and untrusted MCP tool annotations alone never grant authority.
+The adapter requires at least one valid platform policy with `default_action: deny`, and accepts only
+unambiguous `allow` and `deny` rules. Deny-overrides applies to matching rules within each document, and
+every configured document must independently allow. Platform and project document sets are evaluated
+separately, and both sets must allow; a project rule can never broaden the platform decision. AGT receives
+a fixed service identity while the bounded, authenticated Agentweaver actor is passed as `actor_id`
+context. Invalid policy, context, or evaluation returns a typed error; the adapter does not itself grant
+action authority or wire protected-effect call sites.
+
+The source-only `ExecutableActionGuard` requires an injected current grant-owner lookup and compares its
+validated descriptor against the authenticated HTTPS issuer and subject, project/run/session/step, exact
+action catalog ID, purpose, grant reference/revision, expiry, and execution fence. The subject and
+project/run claims must come from one authenticated identity and share the same issuer; missing, duplicate,
+or cross-issuer bindings deny. Unknown, revoked, expired, stale, mismatched, or unavailable grants fail
+closed. The owner lookup remains responsible for current tenant membership and grant authority; a tenant
+claim in the bearer token is not required. AGT is an additional narrowing decision; it cannot supply a grant.
+Identity and tenancy permissions stay core-owned; admission controls for Kubernetes are infrastructure, not
+agent-action policy. Tool permission metadata replaces a literal tool-name classifier, and untrusted MCP
+tool annotations alone never grant authority.
+
+Before a protected effect, the guard requires a durable append through the native Sessions journal. The
+typed, redacted `PolicyEvaluation` evidence binds the action, actor/tenant/project/run/session/step, purpose,
+grant reference/revision, fence, and policy/provider/options identities and versions. It excludes rule
+text, tool arguments, credentials, and free-form error details. The generic run-scoped append endpoint
+currently rejects every `PolicyEvaluation` payload because actor equality does not establish trusted
+Orchestrator Core writer provenance. No trusted grant owner or writer is wired in this source slice, so a
+missing dependency or append rejection prevents the callback; this is not a positive protected-effect path
+or an authorization grant.
 
 ## Guardrails
 

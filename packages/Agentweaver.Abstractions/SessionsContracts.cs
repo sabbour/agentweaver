@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -9,17 +10,39 @@ namespace Agentweaver.Abstractions;
 public static class SessionsContractVersions
 {
     public const int CurrentSchemaVersion = 1;
-    public const int CurrentEventVersion = 1;
+    public const int InitialEventVersion = 1;
+    public const int CurrentEventVersion = 2;
+    public const int PolicyEvaluationEventVersion = 2;
 }
 
 public enum SessionEventKind
 {
     Turn,
     ToolCall,
+    PolicyEvaluation,
     DecisionAccepted,
     EffectAccepted,
     ArtifactReference,
     CacheReference
+}
+
+public enum PolicyEvaluationOutcome
+{
+    Allow,
+    Deny,
+    Error
+}
+
+public enum PolicyEvaluationReasonCode
+{
+    Allowed,
+    DefaultDeny,
+    NoEffectiveGrant,
+    PlatformRuleDenied,
+    ProjectRuleNarrowed,
+    StaleFence,
+    ProviderUnavailable,
+    EvaluationFailed
 }
 
 public readonly record struct SessionIdentity
@@ -79,6 +102,7 @@ public sealed record StoredSessionObjectReference(
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(TurnSessionPayload), "turn")]
 [JsonDerivedType(typeof(ToolCallSessionPayload), "tool_call")]
+[JsonDerivedType(typeof(PolicyEvaluationSessionPayload), "policy_evaluation")]
 [JsonDerivedType(typeof(AcceptedDecisionSessionPayload), "decision_accepted")]
 [JsonDerivedType(typeof(AcceptedEffectSessionPayload), "effect_accepted")]
 [JsonDerivedType(typeof(ArtifactReferenceSessionPayload), "artifact_reference")]
@@ -93,6 +117,22 @@ public sealed record ToolCallSessionPayload(
     string State,
     SessionObjectReference? Arguments,
     SessionObjectReference? Result) : SessionEventPayload;
+
+public sealed record PolicyEvaluationSessionPayload(
+    string ActorId,
+    string TenantId,
+    string StepId,
+    string GrantId,
+    string GrantRevision,
+    string Purpose,
+    string ActionId,
+    PolicyEvaluationOutcome Outcome,
+    PolicyEvaluationReasonCode ReasonCode,
+    long Fence,
+    string ProviderId,
+    string AdapterVersion,
+    int OptionsSchemaVersion,
+    string OptionsRevision) : SessionEventPayload;
 
 public sealed record AcceptedDecisionSessionPayload(
     string DecisionId,
@@ -248,6 +288,45 @@ public sealed record SessionEventDelivery
 
 public sealed record SessionAppendResult(SessionEventEnvelope Event, bool IsDuplicate);
 
+public sealed record SessionSubscriptionRequest(
+    string SessionId,
+    string? Cursor = null,
+    int MaximumEvents = 1000,
+    int MaximumDurationSeconds = 300);
+
+public interface ISessionsJournal
+{
+    Task<SessionRecord> CreateSessionAsync(
+        ClaimsPrincipal principal, string sessionId, SessionProviderBinding binding,
+        CancellationToken cancellationToken = default);
+
+    Task<SessionProviderBinding> GetProviderBindingAsync(
+        ClaimsPrincipal principal, string sessionId, CancellationToken cancellationToken = default);
+
+    Task<SessionProviderBinding> GetRunProviderBindingAsync(
+        ClaimsPrincipal principal, string projectId, string runId, CancellationToken cancellationToken = default);
+
+    Task<SessionAppendResult> AppendAsync(
+        ClaimsPrincipal principal, string sessionId, AppendSessionEvent input,
+        CancellationToken cancellationToken = default);
+
+    Task<SessionEventPage> ReplayAsync(
+        ClaimsPrincipal principal, SessionEventPageRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<SessionEventPage> ReplayRunAsync(
+        ClaimsPrincipal principal, SessionRunEventPageRequest request,
+        CancellationToken cancellationToken = default);
+
+    IAsyncEnumerable<SessionEventDelivery> SubscribeAsync(
+        ClaimsPrincipal principal, SessionSubscriptionRequest request,
+        CancellationToken cancellationToken = default);
+
+    IAsyncEnumerable<SessionEventDelivery> SubscribeRunAsync(
+        ClaimsPrincipal principal, SessionRunSubscriptionRequest request,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed class SessionEventConflictException(string message) : Exception(message);
 
 public sealed class SessionProviderBindingConflictException(string message) : Exception(message);
@@ -266,12 +345,24 @@ public static class SessionEventPayloadValidation
     {
         TurnSessionPayload => SessionEventKind.Turn,
         ToolCallSessionPayload => SessionEventKind.ToolCall,
+        PolicyEvaluationSessionPayload => SessionEventKind.PolicyEvaluation,
         AcceptedDecisionSessionPayload => SessionEventKind.DecisionAccepted,
         AcceptedEffectSessionPayload => SessionEventKind.EffectAccepted,
         ArtifactReferenceSessionPayload => SessionEventKind.ArtifactReference,
         CacheReferenceSessionPayload => SessionEventKind.CacheReference,
         _ => throw new ArgumentException("The session event kind is not supported.", nameof(payload))
     };
+
+    public static bool SupportsEventVersion(int eventVersion, SessionEventPayload payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        return eventVersion switch
+        {
+            SessionsContractVersions.InitialEventVersion => payload is not PolicyEvaluationSessionPayload,
+            SessionsContractVersions.CurrentEventVersion => true,
+            _ => false
+        };
+    }
 
     public static ImmutableArray<SessionObjectReference> ValidateAndGetReferences(SessionEventPayload payload)
     {
@@ -286,6 +377,9 @@ public static class SessionEventPayloadValidation
                 RequireToken(toolCall.ToolName, nameof(toolCall.ToolName));
                 RequireChoice(toolCall.State, "requested", "accepted", "completed", "failed");
                 return References(toolCall.Arguments, toolCall.Result);
+            case PolicyEvaluationSessionPayload policy:
+                ValidatePolicyEvaluation(policy);
+                return [];
             case AcceptedDecisionSessionPayload decision:
                 RequireToken(decision.DecisionId, nameof(decision.DecisionId));
                 RequireToken(decision.DecisionType, nameof(decision.DecisionType));
@@ -309,6 +403,44 @@ public static class SessionEventPayloadValidation
                 throw new ArgumentException("The session event kind is not supported.", nameof(payload));
         }
     }
+
+    private static void ValidatePolicyEvaluation(PolicyEvaluationSessionPayload policy)
+    {
+        if (        !IsOpaqueIdentifier(policy.ActorId) ||
+        !IsOpaqueIdentifier(policy.TenantId) ||
+        !IsToken(policy.StepId) ||
+        !IsOpaqueIdentifier(policy.GrantId) ||
+            !IsRevision(policy.GrantRevision) ||
+            !IsToken(policy.Purpose) ||
+            !IsToken(policy.ActionId) ||
+            !Enum.IsDefined(policy.Outcome) ||
+            !Enum.IsDefined(policy.ReasonCode) ||
+            policy.Fence < 1 ||
+            !IsToken(policy.ProviderId) ||
+            !Version.TryParse(policy.AdapterVersion, out _) ||
+            policy.OptionsSchemaVersion < 1 ||
+            !IsRevision(policy.OptionsRevision) ||
+            !IsValidOutcomeReason(policy.Outcome, policy.ReasonCode))
+            throw new ArgumentException("Policy evaluation evidence is invalid.", nameof(policy));
+    }
+
+    private static bool IsValidOutcomeReason(
+        PolicyEvaluationOutcome outcome,
+        PolicyEvaluationReasonCode reasonCode) =>
+        (outcome, reasonCode) switch
+        {
+            (PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed) => true,
+            (PolicyEvaluationOutcome.Deny,
+                PolicyEvaluationReasonCode.DefaultDeny or
+                PolicyEvaluationReasonCode.NoEffectiveGrant or
+                PolicyEvaluationReasonCode.PlatformRuleDenied or
+                PolicyEvaluationReasonCode.ProjectRuleNarrowed or
+                PolicyEvaluationReasonCode.StaleFence) => true,
+            (PolicyEvaluationOutcome.Error,
+                PolicyEvaluationReasonCode.ProviderUnavailable or
+                PolicyEvaluationReasonCode.EvaluationFailed) => true,
+            _ => false
+        };
 
     private static ImmutableArray<SessionObjectReference> References(params SessionObjectReference?[] values)
     {
@@ -343,6 +475,16 @@ public static class SessionEventPayloadValidation
         if (!IsToken(value))
             throw new ArgumentException("A bounded session event identifier is required.", name);
     }
+
+    private static bool IsOpaqueIdentifier(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) ||
+            character is '.' or '_' or '-' or ':');
+
+    private static bool IsRevision(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 128 &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) ||
+            character is '.' or '_' or '-' or ':');
 
     private static bool IsToken(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&

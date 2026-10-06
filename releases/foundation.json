@@ -128,6 +128,13 @@
       ]
     },
     {
+      "consumer": "Agentweaver.Orchestrator.Core",
+      "dependency": "Agentweaver.Providers",
+      "versions": [
+        "0.0.0"
+      ]
+    },
+    {
       "consumer": "Agentweaver.Secrets.AzureKeyVault",
       "dependency": "Agentweaver.Abstractions",
       "versions": [
