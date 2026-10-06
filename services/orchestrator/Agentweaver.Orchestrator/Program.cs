@@ -1,6 +1,8 @@
 extern alias AzureIdentity;
 
 using Agentweaver.Orchestrator;
+using Agentweaver.Abstractions;
+using Agentweaver.Orchestrator.Core;
 using Azure.Core;
 using Npgsql;
 using OpenIddict.Validation.AspNetCore;
@@ -52,11 +54,25 @@ builder.Services.AddSingleton<TokenCredential>(credential);
 builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
     CoordinationPostgresDataSource.Create(runtime.ConnectionString, credential));
 builder.Services.AddSingleton(options);
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(services => new CoordinationOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
     services.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(services => new CoordinatorDecisionOwnerStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema,
+    services.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton<ExecutableActionGrantOwnerStore>();
+builder.Services.AddSingleton<IExecutableActionGrantOwnerLookup>(services =>
+    services.GetRequiredService<ExecutableActionGrantOwnerStore>());
+builder.Services.AddSingleton<IExecutableActionSourceReceiptWriter>(services =>
+    services.GetRequiredService<ExecutableActionGrantOwnerStore>());
+builder.Services.AddSingleton(services => new PostgresMafCheckpointStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema,
+    services.GetService<IObjectStore>()));
 builder.Services.AddHttpClient<ProjectsRunSelectionClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient<EventsAddressedMessageClient>()

@@ -153,7 +153,22 @@ public enum WorkflowValidationCode
     DependencyStepOrderViolation,
     MissingJoinDependency,
     OutputConflictWithFixedWork,
-    OutputLimitExceeded
+    OutputLimitExceeded,
+    InvalidOutcomeSpecification,
+    InvalidDecisionGate,
+    InvalidDecisionAnswer,
+    InvalidDecisionRequestId,
+    StaleDecisionRequest,
+    UnauthorizedDecisionActor,
+    InvalidDecisionFence,
+    FreeformDecisionNotAllowed,
+    OutcomeConfirmationRequired,
+    WorkflowSelectionNotAuthorized,
+    InvalidWorkflowSelection,
+    WorkflowConfirmationRequired,
+    WorkPlanConfirmationRequired,
+    InvalidAssemblyRequest,
+    CoordinatorTransitionBlocked
 }
 
 public sealed record WorkflowValidationIssue(
@@ -192,6 +207,8 @@ public static class WorkflowDomainLimits
     public const int MaximumOutputPathLength = 1024;
     public const int MaximumIdentifierLength = 128;
     public const int MaximumWorkTextLength = 16_384;
+    public const int MaximumOutcomeQuestions = 32;
+    public const int MaximumDecisionReceipts = 256;
 }
 
 public sealed class WorkflowDefinitionSnapshot

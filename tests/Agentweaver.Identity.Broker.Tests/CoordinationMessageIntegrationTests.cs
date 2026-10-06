@@ -11,10 +11,13 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Orchestrator.Core;
+using Agentweaver.Providers;
 using EventsHost::Agentweaver.EventsAndSessions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -24,12 +27,27 @@ using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using OrchestratorHost::Agentweaver.Orchestrator;
 using ProjectsConfig::Agentweaver.Projects.Config;
+using MAFCheckpointing = Microsoft.Agents.AI.Workflows.Checkpointing;
 using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
+    private const string ReceiptActionId = "coordinator.shell.execute";
+    private const string ReceiptAllowPolicy = """
+        apiVersion: governance.toolkit/v1
+        version: "1.0"
+        name: platform-policy
+        scope: global
+        default_action: deny
+        rules:
+          - name: allow-coordinator-action
+            condition: "action_id == 'coordinator.shell.execute'"
+            action: allow
+            priority: 100
+        """;
+
     private static readonly JsonSerializerOptions CoordinationJsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
@@ -102,6 +120,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             RunId,
             ["platform_admin"]);
         var claims = new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims.ToArray();
+        var currentRunnerSubject = SingleClaim(claims, "sub");
         Assert.Contains(claims, claim => claim.Type == "aud" && claim.Value == "https://api.test");
         Assert.Contains(claims, claim => claim.Type == "project_id" && claim.Value == project.ProjectId);
         Assert.Contains(claims, claim => claim.Type == "run_id" && claim.Value == RunId);
@@ -187,6 +206,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         EventsIntegrationFactory? eventsFactoryReference = null;
         var admissions = new List<(HttpStatusCode Status, bool NoStore, string Body)>();
+        var cacheObjectStore = new InMemoryObjectStore();
         await using var orchestratorFactory = new OrchestratorIntegrationFactory(
             _connectionString,
             ownerSchema,
@@ -194,7 +214,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             projects.CreateHandler,
             () => new CapturingHandler(
                 eventsFactoryReference!.Server.CreateHandler(),
-                (status, noStore, body) => admissions.Add((status, noStore, body))));
+                (status, noStore, body) => admissions.Add((status, noStore, body))),
+            cacheObjectStore);
         await using var eventsFactory = new EventsIntegrationFactory(
             _connectionString,
             eventsSchema,
@@ -217,6 +238,353 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(rootResponse, HttpStatusCode.Created);
         var root = await ReadJsonAsync<AcceptedRoot>(rootResponse);
         Assert.Equal("root", root.RootSessionId);
+
+        var outcomeProposal = new ProposeCoordinatorOutcomeRequest(
+            0,
+            "outcome-proposal-1",
+            "outcome-gate-1",
+            new CoordinatorOutcomeSpecification(
+                "outcome-1",
+                "Deliver the approved change",
+                "A validated implementation is ready",
+                "Keep the change within the accepted work plan",
+                "Use only the accepted project configuration",
+                []));
+        using var proposedOutcome = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/outcome",
+            runToken,
+            outcomeProposal);
+        await AssertStatusAsync(proposedOutcome, HttpStatusCode.OK);
+        var proposedOutcomeResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(proposedOutcome);
+        Assert.True(proposedOutcomeResult.Accepted);
+        Assert.Equal(1, proposedOutcomeResult.StateVersion);
+        Assert.Equal("outcome-gate-1", proposedOutcomeResult.PendingGate?.RequestId);
+        Assert.Equal(CoordinatorGateKind.OutcomeConfirmation, proposedOutcomeResult.PendingGate?.Kind);
+
+        using var currentDecisionState = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions",
+            runToken,
+            [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, currentDecisionState.StatusCode);
+        Assert.True(currentDecisionState.Headers.CacheControl?.NoStore);
+        var decisionStateView =
+            await currentDecisionState.Content.ReadFromJsonAsync<CoordinatorDecisionStateView>(
+                CoordinationJsonOptions);
+        Assert.NotNull(decisionStateView);
+        Assert.Equal(1, decisionStateView.StateVersion);
+        Assert.Equal("outcome-gate-1", decisionStateView.PendingGate?.RequestId);
+        Assert.False(decisionStateView.CanDecompose);
+
+        using var outcomeProposalRetry = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/outcome",
+            runToken,
+            outcomeProposal);
+        Assert.Equal(HttpStatusCode.OK, outcomeProposalRetry.StatusCode);
+        var retriedOutcomeResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(outcomeProposalRetry);
+        Assert.Equal(proposedOutcomeResult.DecisionId, retriedOutcomeResult.DecisionId);
+        Assert.Equal(1, retriedOutcomeResult.StateVersion);
+
+        using var gateAcknowledgment = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/outcome-gate-1/acknowledge",
+            runToken,
+            new AcknowledgeCoordinatorGateRequest(1, "outcome-ack-1"));
+        Assert.Equal(HttpStatusCode.OK, gateAcknowledgment.StatusCode);
+        var acknowledgedGate =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(gateAcknowledgment);
+        Assert.True(acknowledgedGate.Accepted);
+        Assert.Equal(2, acknowledgedGate.StateVersion);
+        Assert.Equal("outcome-gate-1", acknowledgedGate.PendingGate?.RequestId);
+
+        using var invalidGateAnswer = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/outcome-gate-1/answer",
+            runToken,
+            new AnswerCoordinatorGateRequest(2, "outcome-answer-invalid", "not-allowed", null));
+        Assert.Equal(HttpStatusCode.OK, invalidGateAnswer.StatusCode);
+        var rejectedGateAnswer =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(invalidGateAnswer);
+        Assert.False(rejectedGateAnswer.Accepted);
+        Assert.Equal(3, rejectedGateAnswer.StateVersion);
+        Assert.Equal("outcome-gate-1", rejectedGateAnswer.PendingGate?.RequestId);
+
+        using var answeredGate = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/outcome-gate-1/answer",
+            runToken,
+            new AnswerCoordinatorGateRequest(3, "outcome-answer-1", "approve", null));
+        Assert.Equal(HttpStatusCode.OK, answeredGate.StatusCode);
+        var answeredGateResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(answeredGate);
+        Assert.True(answeredGateResult.Accepted);
+        Assert.Equal(4, answeredGateResult.StateVersion);
+        Assert.Null(answeredGateResult.PendingGate);
+
+        using var askedQuestion = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/questions",
+            runToken,
+            new AskCoordinatorQuestionRequest(
+                4,
+                "question-ask-1",
+                "question-gate-1",
+                "execution-detail",
+                "Which controlled runner should execute the validated tests?",
+                ["runner-a", "runner-b"],
+                true));
+        Assert.Equal(HttpStatusCode.OK, askedQuestion.StatusCode);
+        var askedQuestionResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(askedQuestion);
+        Assert.True(askedQuestionResult.Accepted);
+        Assert.Equal(5, askedQuestionResult.StateVersion);
+        Assert.Equal("question-gate-1", askedQuestionResult.PendingGate?.RequestId);
+
+        using var answeredQuestion = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/question-gate-1/answer",
+            runToken,
+            new AnswerCoordinatorGateRequest(
+                5,
+                "question-answer-1",
+                null,
+                "runner-a is provisioned for this run"));
+        Assert.Equal(HttpStatusCode.OK, answeredQuestion.StatusCode);
+        var answeredQuestionResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(answeredQuestion);
+        Assert.True(answeredQuestionResult.Accepted);
+        Assert.Equal(6, answeredQuestionResult.StateVersion);
+        Assert.Null(answeredQuestionResult.PendingGate);
+
+        await using (var database = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await database.OpenConnectionAsync())
+        await using (var query = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{ownerSchema}".coordinator_decisions),
+                (SELECT count(*) FROM "{ownerSchema}".coordinator_gates
+                    WHERE request_id = 'outcome-gate-1' AND gate_state = 'approved'),
+                (SELECT count(*) FROM "{ownerSchema}".coordinator_gates
+                    WHERE request_id = 'question-gate-1' AND gate_state = 'answered'),
+                (SELECT count(*) FROM "{ownerSchema}".coordinator_decision_outbox)
+            """, connection))
+        await using (var reader = await query.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(6, reader.GetInt64(0));
+            Assert.Equal(1, reader.GetInt64(1));
+            Assert.Equal(1, reader.GetInt64(2));
+            Assert.Equal(6, reader.GetInt64(3));
+        }
+
+        var cacheKey = new ObjectKey($"runs/{project.ProjectId}/{RunId}/root/copilot-cache");
+        using (var cacheBytes = new MemoryStream(Encoding.UTF8.GetBytes("opaque SDK session bytes")))
+            await cacheObjectStore.WriteAsync(cacheKey, cacheBytes);
+        var checkpointStore = orchestratorFactory.Services
+            .GetRequiredService<PostgresMafCheckpointStore>()
+            .ForRun(new MafCheckpointBinding(
+                new SessionIdentity(project.ProjectId, RunId, root.RootSessionId),
+                new CoordinationActor(
+                    new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+                    currentRunnerSubject),
+                root.ExecutionFence,
+                "Microsoft.Agents.AI.Workflows/1.19.0",
+                "platform-model",
+                cacheKey));
+        MAFCheckpointing.ICheckpointStore<JsonElement> mafStore = checkpointStore;
+        var checkpoint = await mafStore.CreateCheckpointAsync(
+            root.RootSessionId,
+            Payload("""{"workflow":{"$type":1,"state":"pending","$id":"wf"},"step":"one"}"""));
+
+        Assert.Contains(
+            (await mafStore.RetrieveIndexAsync(root.RootSessionId))
+                .Select(item => item.CheckpointId),
+            item => item == checkpoint.CheckpointId);
+        var restoredCheckpoint = await mafStore.RetrieveCheckpointAsync(root.RootSessionId, checkpoint);
+        Assert.Equal(
+            "$id",
+            restoredCheckpoint.GetProperty("workflow").EnumerateObject().First().Name);
+
+        var incompatibleCache = await checkpointStore.GetRecoveryDecisionAsync(
+            new MafCheckpointBinding(
+                new SessionIdentity(project.ProjectId, RunId, root.RootSessionId),
+                new CoordinationActor(
+                    new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+                    currentRunnerSubject),
+                root.ExecutionFence,
+                "Microsoft.Agents.AI.Workflows/2.0.0",
+                "platform-model",
+                cacheKey),
+            checkpoint.CheckpointId,
+            "Microsoft.Agents.AI.Workflows/2.0.0",
+            "platform-model",
+            CancellationToken.None);
+        Assert.Equal(CheckpointCacheRecovery.RebuildFromJournal, incompatibleCache.Recovery);
+        Assert.Equal("sdk_cache_binding_incompatible", incompatibleCache.Reason);
+        _ = await cacheObjectStore.DeleteAsync(cacheKey);
+        var missingCache = await checkpointStore.GetRecoveryDecisionAsync(
+            new MafCheckpointBinding(
+                new SessionIdentity(project.ProjectId, RunId, root.RootSessionId),
+                new CoordinationActor(
+                    new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+                    currentRunnerSubject),
+                root.ExecutionFence,
+                "Microsoft.Agents.AI.Workflows/1.19.0",
+                "platform-model",
+                cacheKey),
+            checkpoint.CheckpointId,
+            "Microsoft.Agents.AI.Workflows/1.19.0",
+            "platform-model",
+            CancellationToken.None);
+        Assert.Equal(CheckpointCacheRecovery.RebuildFromJournal, missingCache.Recovery);
+        Assert.Equal("sdk_cache_object_missing", missingCache.Reason);
+        await Assert.ThrowsAsync<CheckpointJournalRebuildRequiredException>(async () =>
+            await mafStore.RetrieveCheckpointAsync(root.RootSessionId, checkpoint));
+
+        using (var cacheBytes = new MemoryStream(Encoding.UTF8.GetBytes("opaque SDK session bytes")))
+            await cacheObjectStore.WriteAsync(cacheKey, cacheBytes);
+        var staleCheckpointStore = checkpointStore.ForRun(new MafCheckpointBinding(
+            new SessionIdentity(project.ProjectId, RunId, root.RootSessionId),
+            new CoordinationActor(
+                new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+                currentRunnerSubject),
+            root.ExecutionFence + 1,
+            "Microsoft.Agents.AI.Workflows/1.19.0",
+            "platform-model",
+            cacheKey));
+        await Assert.ThrowsAsync<CoordinationException>(async () =>
+            await staleCheckpointStore.CreateCheckpointAsync(
+                root.RootSessionId, Payload("""{"state":"stale"}""")));
+
+        using var missingReceipt = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/policy-evaluations/{Guid.NewGuid():D}",
+            runToken,
+            [TenantId]);
+        Assert.Equal(HttpStatusCode.NotFound, missingReceipt.StatusCode);
+        Assert.True(missingReceipt.Headers.CacheControl?.NoStore);
+
+        var receiptId = Guid.NewGuid();
+        const string receiptGrantId = "integration-receipt-grant";
+        const string receiptGrantRevision = "revision-1";
+        const string receiptGateRequestId = "integration-receipt-gate";
+        var receiptIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
+        await SeedReceiptGrantAsync(
+            _connectionString,
+            ownerSchema,
+            project.ProjectId,
+            RunId,
+            root.RootSessionId,
+            receiptIssuer,
+            currentRunnerSubject,
+            TenantId,
+            runnerMembership.Revision,
+            runnerRole.Revision,
+            root.ExecutionFence,
+            receiptGrantId,
+            receiptGrantRevision,
+            receiptGateRequestId);
+        var policyProvider = new AgtPolicyProvider();
+        var policyOptions = ReceiptPolicyOptions();
+        var policyBinding = await ResolveReceiptPolicyBindingAsync(policyProvider, policyOptions, RunId);
+        var receiptPrincipal = new System.Security.Claims.ClaimsPrincipal(
+            new System.Security.Claims.ClaimsIdentity(
+                new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims,
+                "integration-jwt"));
+        var receiptStore = orchestratorFactory.Services.GetRequiredService<ExecutableActionGrantOwnerStore>();
+        var denyingJournal = new DenyingSessionsJournal();
+        var sourceReceiptGuard = new ExecutableActionGuard(
+            policyProvider,
+            policyOptions,
+            denyingJournal,
+            receiptStore,
+            sourceReceiptWriter: receiptStore);
+        var effectInvoked = false;
+        var receiptInvocation = new ExecutableActionInvocation(
+            receiptPrincipal,
+            root.RootSessionId,
+            "step-one",
+            ReceiptActionId,
+            "coordination.action",
+            new ExecutableActionGrantReference(receiptGrantId, receiptGrantRevision),
+            root.ExecutionFence,
+            policyBinding,
+            receiptId);
+        var httpContextAccessor = orchestratorFactory.Services.GetRequiredService<IHttpContextAccessor>();
+        var previousHttpContext = httpContextAccessor.HttpContext;
+        var authorityContext = new DefaultHttpContext
+        {
+            User = receiptPrincipal
+        };
+        authorityContext.Request.Headers.Authorization = $"Bearer {runToken}";
+        authorityContext.Request.Headers["X-Agentweaver-Tenant"] = TenantId;
+        httpContextAccessor.HttpContext = authorityContext;
+        ExecutableActionGuardResult<string> receiptAttempt;
+        ExecutableActionGuardResult<string> duplicateReceiptAttempt;
+        try
+        {
+            receiptAttempt = await sourceReceiptGuard.ExecuteAsync(
+                receiptInvocation,
+                _ =>
+                {
+                    effectInvoked = true;
+                    return Task.FromResult("unexpected");
+                });
+            duplicateReceiptAttempt = await sourceReceiptGuard.ExecuteAsync(
+                receiptInvocation,
+                _ =>
+                {
+                    effectInvoked = true;
+                    return Task.FromResult("unexpected");
+                });
+        }
+        finally
+        {
+            httpContextAccessor.HttpContext = previousHttpContext;
+        }
+        Assert.Equal(PolicyEvaluationOutcome.Error, receiptAttempt.Outcome);
+        Assert.Equal(PolicyEvaluationReasonCode.EvaluationFailed, receiptAttempt.ReasonCode);
+        Assert.False(receiptAttempt.EffectInvoked);
+        Assert.False(effectInvoked);
+        Assert.Equal(PolicyEvaluationReasonCode.EvaluationFailed, duplicateReceiptAttempt.ReasonCode);
+        Assert.False(duplicateReceiptAttempt.EffectInvoked);
+        Assert.False(effectInvoked);
+        Assert.Equal(1, denyingJournal.AppendCalls);
+
+        using var storedReceiptResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/policy-evaluations/{receiptId:D}",
+            runToken,
+            [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, storedReceiptResponse.StatusCode);
+        Assert.True(storedReceiptResponse.Headers.CacheControl?.NoStore);
+        var storedReceipt = await storedReceiptResponse.Content.ReadFromJsonAsync<PolicyEvaluationReceiptView>(
+            CoordinationJsonOptions);
+        Assert.NotNull(storedReceipt);
+        Assert.Equal(receiptId, storedReceipt.ReceiptId);
+        Assert.Equal(receiptGrantId, storedReceipt.Evidence.GrantId);
+        Assert.Equal(ReceiptActionId, storedReceipt.Evidence.ActionId);
+        Assert.Equal(PolicyEvaluationOutcome.Allow, storedReceipt.Evidence.Outcome);
+        using var callerReceiptWrite = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/policy-evaluations/{Guid.NewGuid():D}",
+            runToken,
+            new { accepted = true, actorId = currentRunnerSubject });
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, callerReceiptWrite.StatusCode);
 
         using var childResponse = await SendJsonAsync(
             orchestrator,
@@ -445,6 +813,132 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             runToken,
             [TenantId]);
         Assert.Equal(HttpStatusCode.Forbidden, revokedBinding.StatusCode);
+
+        using var revokedReceiptRead = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/policy-evaluations/{Guid.NewGuid():D}",
+            runToken,
+            [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, revokedReceiptRead.StatusCode);
+    }
+
+    private static AgtPolicyProviderOptions ReceiptPolicyOptions() =>
+        new("agt-policy-resource", 3, "agt-policy-receipt-v1", [ReceiptAllowPolicy]);
+
+    private static async Task<PinnedProviderBinding> ResolveReceiptPolicyBindingAsync(
+        AgtPolicyProvider provider,
+        AgtPolicyProviderOptions options,
+        string runId)
+    {
+        var catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [provider.CreateRegistration(options)],
+            [new ProviderSelection(ProviderSeam.Policy, AgtPolicyProvider.ProviderId)],
+            []).Value);
+        var resolved = await provider.ResolveNegotiateAndPinAsync(
+            new ProviderResolver(catalog), options, runId);
+        return Assert.IsType<PinnedProviderBinding>(resolved.Value);
+    }
+
+    private static async Task SeedReceiptGrantAsync(
+        string connectionString,
+        string schema,
+        string projectId,
+        string runId,
+        string sessionId,
+        string issuer,
+        string subject,
+        string tenantId,
+        long membershipRevision,
+        long roleRevision,
+        long fence,
+        string grantId,
+        string grantRevision,
+        string requestId)
+    {
+        var decisionId = Guid.NewGuid();
+        var quotedSchema = $"\"{schema}\"";
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var decision = new NpgsqlCommand($"""
+            INSERT INTO {quotedSchema}.coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id, actor_issuer, actor_subject,
+                 execution_fence, state_version, action_kind, idempotency_key, command_hash,
+                 decision_state, decision)
+            VALUES
+                (@project, @run, @session, @request, @decision, @issuer, @subject,
+                 @fence, 7, 'test_source_receipt', 'test-source-receipt',
+                 '0000000000000000000000000000000000000000000000000000000000000000',
+                 'accepted', @decisionPayload)
+            """, connection, transaction))
+        {
+            decision.Parameters.AddWithValue("project", projectId);
+            decision.Parameters.AddWithValue("run", runId);
+            decision.Parameters.AddWithValue("session", sessionId);
+            decision.Parameters.AddWithValue("request", requestId);
+            decision.Parameters.AddWithValue("decision", decisionId);
+            decision.Parameters.AddWithValue("issuer", issuer);
+            decision.Parameters.AddWithValue("subject", subject);
+            decision.Parameters.AddWithValue("fence", fence);
+            decision.Parameters.AddWithValue("decisionPayload", NpgsqlTypes.NpgsqlDbType.Jsonb, "{}");
+            await decision.ExecuteNonQueryAsync();
+        }
+        await using (var gate = new NpgsqlCommand($"""
+            INSERT INTO {quotedSchema}.coordinator_gates
+                (project_id, run_id, session_id, request_id, gate_kind, gate_state, gate, allowed_choices,
+                 allow_free_form, created_by_issuer, created_by_subject, resolved_by_issuer,
+                 resolved_by_subject, execution_fence, state_version, response, idempotency_key)
+            VALUES
+                (@project, @run, @session, @request, 'outcome', 'approved', @gate,
+                 @choices, false, @issuer, @subject, @issuer, @subject,
+                 @fence, 1, @response, 'test-source-receipt')
+            """, connection, transaction))
+        {
+            gate.Parameters.AddWithValue("project", projectId);
+            gate.Parameters.AddWithValue("run", runId);
+            gate.Parameters.AddWithValue("session", sessionId);
+            gate.Parameters.AddWithValue("request", requestId);
+            gate.Parameters.AddWithValue("gate", NpgsqlTypes.NpgsqlDbType.Jsonb, "{}");
+            gate.Parameters.AddWithValue(
+                "choices", NpgsqlTypes.NpgsqlDbType.Jsonb, """["approve","reject"]""");
+            gate.Parameters.AddWithValue("issuer", issuer);
+            gate.Parameters.AddWithValue("subject", subject);
+            gate.Parameters.AddWithValue("fence", fence);
+            gate.Parameters.AddWithValue(
+                "response", NpgsqlTypes.NpgsqlDbType.Jsonb, """{"choiceId":"approve"}""");
+            await gate.ExecuteNonQueryAsync();
+        }
+        await using (var grant = new NpgsqlCommand($"""
+            INSERT INTO {quotedSchema}.executable_action_grants
+                (project_id, run_id, grant_id, revision, grant_state, issuer, actor_id, tenant_id,
+                 session_id, step_id, action_ids, purpose, membership_revision, role_revision,
+                 execution_fence, expires_at, source_decision_id, source_request_id)
+            VALUES
+                (@project, @run, @grant, @revision, 'active', @issuer, @subject, @tenant,
+                 @session, 'step-one', @actions, 'coordination.action', @membershipRevision, @roleRevision,
+                 @fence, @expires, @decision, @request)
+            """, connection, transaction))
+        {
+            grant.Parameters.AddWithValue("project", projectId);
+            grant.Parameters.AddWithValue("run", runId);
+            grant.Parameters.AddWithValue("grant", grantId);
+            grant.Parameters.AddWithValue("revision", grantRevision);
+            grant.Parameters.AddWithValue("issuer", issuer);
+            grant.Parameters.AddWithValue("subject", subject);
+            grant.Parameters.AddWithValue("tenant", tenantId);
+            grant.Parameters.AddWithValue("session", sessionId);
+            grant.Parameters.AddWithValue(
+                "actions", NpgsqlTypes.NpgsqlDbType.Jsonb, $$"""["{{ReceiptActionId}}"]""");
+            grant.Parameters.AddWithValue("membershipRevision", membershipRevision);
+            grant.Parameters.AddWithValue("roleRevision", roleRevision);
+            grant.Parameters.AddWithValue("fence", fence);
+            grant.Parameters.AddWithValue("expires", DateTimeOffset.UtcNow.AddMinutes(5));
+            grant.Parameters.AddWithValue("decision", decisionId);
+            grant.Parameters.AddWithValue("request", requestId);
+            await grant.ExecuteNonQueryAsync();
+        }
+        await transaction.CommitAsync();
     }
 
     private static async Task<string> ReadGateStateAsync(
@@ -543,7 +1037,103 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     response.Headers.CacheControl?.NoStore == true,
                     Encoding.UTF8.GetString(bytes));
             }
+
             return response;
+        }
+    }
+
+    private sealed class DenyingSessionsJournal : ISessionsJournal
+    {
+        public int AppendCalls { get; private set; }
+
+        public Task<SessionRecord> CreateSessionAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string sessionId,
+            SessionProviderBinding binding,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionProviderBinding> GetProviderBindingAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string sessionId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionProviderBinding> GetRunProviderBindingAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string projectId,
+            string runId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionAppendResult> AppendAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string sessionId,
+            AppendSessionEvent input,
+            CancellationToken cancellationToken = default)
+        {
+            AppendCalls++;
+            return Task.FromException<SessionAppendResult>(
+                new SessionAccessDeniedException("PolicyEvaluation append remains fail-closed."));
+        }
+
+        public Task<SessionEventPage> ReplayAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            SessionEventPageRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionEventPage> ReplayRunAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            SessionRunEventPageRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public IAsyncEnumerable<SessionEventDelivery> SubscribeAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            SessionSubscriptionRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public IAsyncEnumerable<SessionEventDelivery> SubscribeRunAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            SessionRunSubscriptionRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class InMemoryObjectStore : IObjectStore
+    {
+        private readonly Dictionary<ObjectKey, byte[]> _objects = [];
+
+        public async Task WriteAsync(
+            ObjectKey key,
+            Stream content,
+            CancellationToken cancellationToken = default)
+        {
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, cancellationToken);
+            if (!_objects.TryAdd(key, buffer.ToArray()))
+                throw new IOException("Object keys are create-only.");
+        }
+
+        public Task<ObjectRead?> ReadAsync(
+            ObjectKey key,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_objects.TryGetValue(key, out var bytes))
+                return Task.FromResult<ObjectRead?>(null);
+            var stream = new MemoryStream(bytes, writable: false);
+            return Task.FromResult<ObjectRead?>(new ObjectRead(stream, bytes.Length, stream.Dispose));
+        }
+
+        public Task<bool> DeleteAsync(
+            ObjectKey key,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_objects.Remove(key));
         }
     }
 
@@ -580,7 +1170,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         string schema,
         SecurityKey signingKey,
         Func<HttpMessageHandler> projectsHandler,
-        Func<HttpMessageHandler> eventsHandler)
+        Func<HttpMessageHandler> eventsHandler,
+        IObjectStore? objectStore = null)
         : WebApplicationFactory<OrchestratorHost::Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -609,6 +1200,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     .ConfigurePrimaryHttpMessageHandler(projectsHandler);
                 services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.EventsAddressedMessageClient>()
                     .ConfigurePrimaryHttpMessageHandler(eventsHandler);
+                if (objectStore is not null)
+                    services.AddSingleton<IObjectStore>(objectStore);
             });
         }
     }

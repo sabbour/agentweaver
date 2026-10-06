@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Orchestrator.Core;
 
 namespace Agentweaver.Orchestrator;
 
@@ -42,7 +43,107 @@ public sealed record EffectiveRunSelection(
     string ContextRevision,
     JsonElement Snapshot);
 
+public sealed record AuthorizedRunSelection(
+    EffectiveRunSelection Selection,
+    ProjectsAuthorizationContext Authorization);
+
 public sealed record AcceptRootRequest(string SessionId);
+
+public sealed record ProposeCoordinatorOutcomeRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey,
+    string RequestId,
+    CoordinatorOutcomeSpecification Specification);
+
+public sealed record SelectCoordinatorWorkflowRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey,
+    string RequestId,
+    string? WorkflowId);
+
+public sealed record ProposeCoordinatorWorkPlanRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey,
+    string RequestId,
+    WorkPlan Plan);
+
+public sealed record ReviseCoordinatorWorkPlanRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey,
+    string RequestId,
+    WorkPlan RevisedPlan);
+
+public sealed record RequestCoordinatorAssemblyRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey,
+    CoordinatorAssemblyRequest Request);
+
+public sealed record AnswerCoordinatorGateRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey,
+    string? ChoiceId,
+    string? FreeformAnswer);
+
+public sealed record AskCoordinatorQuestionRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey,
+    string RequestId,
+    string QuestionId,
+    string Prompt,
+    ImmutableArray<string> AllowedChoices,
+    bool AllowsFreeform);
+
+public sealed record AskNextOutcomeClarifyingQuestionRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey,
+    string RequestId);
+
+public sealed record RequestCoordinatorApprovalRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey,
+    string RequestId,
+    string SubjectId,
+    string? Prompt);
+
+public sealed record AcknowledgeCoordinatorGateRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey);
+
+public sealed record CoordinatorDecisionOperationResponse(
+    Guid DecisionId,
+    long StateVersion,
+    bool Accepted,
+    long ExecutionFence,
+    CoordinatorGateRequest? PendingGate,
+    ImmutableArray<WorkflowValidationIssue> Issues,
+    JsonElement? TransitionValue = null);
+
+public sealed record CoordinatorDecisionStateView(
+    long StateVersion,
+    long ExecutionFence,
+    bool OutcomeConfirmed,
+    bool WorkflowConfirmed,
+    bool CanDecompose,
+    bool CanDispatch,
+    CoordinatorGateRequest? PendingGate);
+
+internal static class CoordinatorTypedActionIds
+{
+    public const string ProposeOutcomeSpec = "propose_outcome_spec";
+    public const string SelectWorkflow = "select_workflow";
+    public const string ProposeWorkPlan = "propose_work_plan";
+    public const string ReviseWorkPlan = "revise_work_plan";
+    public const string RequestAssembly = "request_assembly";
+
+    public static ImmutableHashSet<string> All { get; } =
+        ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            ProposeOutcomeSpec,
+            SelectWorkflow,
+            ProposeWorkPlan,
+            ReviseWorkPlan,
+            RequestAssembly);
+}
 
 public sealed record AcceptedRoot(
     string ProjectId,

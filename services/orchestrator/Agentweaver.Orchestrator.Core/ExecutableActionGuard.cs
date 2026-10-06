@@ -54,6 +54,55 @@ public interface IExecutableActionGrantOwnerLookup
         CancellationToken cancellationToken = default);
 }
 
+public enum ExecutableActionSourceReceiptWriteStatus
+{
+    Unavailable,
+    Stored,
+    Duplicate,
+    Rejected
+}
+
+public sealed record ExecutableActionSourceReceiptWriteResult(
+    ExecutableActionSourceReceiptWriteStatus Status);
+
+public sealed class ExecutableActionSourceReceipt
+{
+    internal ExecutableActionSourceReceipt(
+        Guid receiptId,
+        ValidatedExecutableActionGrant grant,
+        PinnedProviderBinding policyBinding,
+        string sessionId,
+        string stepId,
+        string actionId,
+        string purpose,
+        long fence,
+        DateTimeOffset createdAt) =>
+        (ReceiptId, Grant, PolicyBinding, SessionId, StepId, ActionId, Purpose, Fence, CreatedAt) =
+        (receiptId, grant, policyBinding, sessionId, stepId, actionId, purpose, fence, createdAt);
+
+    public Guid ReceiptId { get; }
+    public ValidatedExecutableActionGrant Grant { get; }
+    public PinnedProviderBinding PolicyBinding { get; }
+    public string SessionId { get; }
+    public string StepId { get; }
+    public string ActionId { get; }
+    public string Purpose { get; }
+    public long Fence { get; }
+    public DateTimeOffset CreatedAt { get; }
+}
+
+/// <summary>
+/// Owner-local immutable source-receipt store. It is not an Events &amp; Sessions writer, and a
+/// <see cref="ExecutableActionSourceReceiptWriteStatus.Stored"/> result never replaces the existing
+/// Sessions append guard or the guard's fresh grant and fence checks before an effect.
+/// </summary>
+public interface IExecutableActionSourceReceiptWriter
+{
+    Task<ExecutableActionSourceReceiptWriteResult> StoreAsync(
+        ExecutableActionSourceReceipt receipt,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record ExecutableActionInvocation(
     ClaimsPrincipal Caller,
     string SessionId,
@@ -76,7 +125,8 @@ public sealed class ExecutableActionGuard(
     AgtPolicyProviderOptions? policyOptions,
     ISessionsJournal? sessionsJournal,
     IExecutableActionGrantOwnerLookup? grantOwnerLookup = null,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    IExecutableActionSourceReceiptWriter? sourceReceiptWriter = null)
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
@@ -88,7 +138,9 @@ public sealed class ExecutableActionGuard(
         ArgumentNullException.ThrowIfNull(invocation);
         ArgumentNullException.ThrowIfNull(protectedEffect);
 
-        if (policyProvider is null || policyOptions is null || sessionsJournal is null)
+        if (policyProvider is null ||
+            policyOptions is null ||
+            sessionsJournal is null)
             return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
         if (grantOwnerLookup is null)
             return Deny<T>(PolicyEvaluationReasonCode.NoEffectiveGrant);
@@ -102,8 +154,20 @@ public sealed class ExecutableActionGuard(
             !IsValidInvocation(invocation))
             return Deny<T>(PolicyEvaluationReasonCode.NoEffectiveGrant);
 
-        var lookup = await grantOwnerLookup.GetCurrentAsync(
-            invocation.GrantReference, cancellationToken).ConfigureAwait(false);
+        ExecutableActionGrantLookupResult? lookup;
+        try
+        {
+            lookup = await grantOwnerLookup.GetCurrentAsync(
+                invocation.GrantReference, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
+        }
         if (lookup is null)
             return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
         switch (lookup.Status)
@@ -123,28 +187,11 @@ public sealed class ExecutableActionGuard(
         }
 
         var grant = lookup.Grant!;
-        if (grant is null || !IsValidGrant(grant))
-            return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
-        if (grant.State != ExecutableActionGrantState.Active ||
-            grant.ExpiresAt <= _timeProvider.GetUtcNow())
-            return Deny<T>(PolicyEvaluationReasonCode.NoEffectiveGrant);
-        if (grant.Fence != invocation.Fence)
-            return Deny<T>(PolicyEvaluationReasonCode.StaleFence);
-        if (grant.Reference != invocation.GrantReference)
-            return Deny<T>(PolicyEvaluationReasonCode.NoEffectiveGrant);
-        if (!TryNormalizeIssuer(grant.Issuer, out var grantIssuer) ||
-            !string.Equals(grantIssuer, issuer, StringComparison.Ordinal) ||
-            !string.Equals(grant.ActorId, actorId, StringComparison.Ordinal) ||
-            !string.Equals(grant.ProjectId, projectId, StringComparison.Ordinal) ||
-            !string.Equals(grant.RunId, runId, StringComparison.Ordinal) ||
-            !string.Equals(grant.SessionId, invocation.SessionId, StringComparison.Ordinal) ||
-            !string.Equals(grant.StepId, invocation.StepId, StringComparison.Ordinal) ||
-            !string.Equals(grant.Purpose, invocation.Purpose, StringComparison.Ordinal) ||
-            !grant.ActionIds.Any(actionId =>
-                string.Equals(actionId, invocation.ActionId, StringComparison.Ordinal)))
-            return Deny<T>(PolicyEvaluationReasonCode.NoEffectiveGrant);
-        if (!IsMatchingPolicyBinding(invocation.PolicyBinding, grant, policyOptions))
-            return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
+        var grantError = ValidateGrant(
+            invocation, grant, issuer, actorId, projectId, runId,
+            expectedGrant: null, options: policyOptions);
+        if (grantError is not null)
+            return AuthorizationResult<T>(grantError.Value);
 
         var decision = policyProvider.Evaluate(
             policyOptions,
@@ -166,6 +213,47 @@ public sealed class ExecutableActionGuard(
         if (decision.Outcome != PolicyEvaluationOutcome.Allow)
             return new ExecutableActionGuardResult<T>(
                 decision.Outcome, decision.ReasonCode, EffectInvoked: false, default);
+
+        if (sourceReceiptWriter is null)
+            return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
+
+        ExecutableActionSourceReceiptWriteResult? receiptWrite;
+        try
+        {
+            receiptWrite = await sourceReceiptWriter.StoreAsync(
+                new ExecutableActionSourceReceipt(
+                    invocation.EventId,
+                    grant,
+                    invocation.PolicyBinding!,
+                    invocation.SessionId,
+                    invocation.StepId,
+                    invocation.ActionId,
+                    invocation.Purpose,
+                    invocation.Fence,
+                    _timeProvider.GetUtcNow()),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return Error<T>(PolicyEvaluationReasonCode.EvaluationFailed);
+        }
+
+        if (receiptWrite is null)
+            return Error<T>(PolicyEvaluationReasonCode.EvaluationFailed);
+        if (receiptWrite.Status != ExecutableActionSourceReceiptWriteStatus.Stored)
+            return Error<T>(receiptWrite.Status == ExecutableActionSourceReceiptWriteStatus.Unavailable
+                ? PolicyEvaluationReasonCode.ProviderUnavailable
+                : PolicyEvaluationReasonCode.EvaluationFailed);
+
+        var authorityError = await RevalidateCurrentGrantAsync(
+            invocation, issuer, actorId, projectId, runId, grant, policyOptions, cancellationToken)
+            .ConfigureAwait(false);
+        if (authorityError is not null)
+            return AuthorizationResult<T>(authorityError.Value);
 
         var evidence = new PolicyEvaluationSessionPayload(
             grant.ActorId,
@@ -214,6 +302,12 @@ public sealed class ExecutableActionGuard(
         if (appended.IsDuplicate)
             return Error<T>(PolicyEvaluationReasonCode.EvaluationFailed);
 
+        authorityError = await RevalidateCurrentGrantAsync(
+            invocation, issuer, actorId, projectId, runId, grant, policyOptions, cancellationToken)
+            .ConfigureAwait(false);
+        if (authorityError is not null)
+            return AuthorizationResult<T>(authorityError.Value);
+
         var effectResult = await protectedEffect(cancellationToken).ConfigureAwait(false);
         return new ExecutableActionGuardResult<T>(
             PolicyEvaluationOutcome.Allow,
@@ -232,6 +326,124 @@ public sealed class ExecutableActionGuard(
         AgtPolicyProvider.IsIdentifier(reference.Revision) &&
         invocation.Fence > 0 &&
         invocation.EventId != Guid.Empty;
+
+    private async Task<PolicyEvaluationReasonCode?> RevalidateCurrentGrantAsync(
+        ExecutableActionInvocation invocation,
+        string issuer,
+        string actorId,
+        string projectId,
+        string runId,
+        ValidatedExecutableActionGrant expectedGrant,
+        AgtPolicyProviderOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCallerBindings(
+                invocation.Caller, out var currentIssuer, out var currentActorId,
+                out var currentProjectId, out var currentRunId) ||
+            !string.Equals(currentIssuer, issuer, StringComparison.Ordinal) ||
+            !string.Equals(currentActorId, actorId, StringComparison.Ordinal) ||
+            !string.Equals(currentProjectId, projectId, StringComparison.Ordinal) ||
+            !string.Equals(currentRunId, runId, StringComparison.Ordinal))
+            return PolicyEvaluationReasonCode.NoEffectiveGrant;
+
+        ExecutableActionGrantLookupResult? lookup;
+        try
+        {
+            lookup = await grantOwnerLookup!.GetCurrentAsync(
+                invocation.GrantReference, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return PolicyEvaluationReasonCode.ProviderUnavailable;
+        }
+
+        if (lookup is null)
+            return PolicyEvaluationReasonCode.ProviderUnavailable;
+
+        switch (lookup.Status)
+        {
+            case ExecutableActionGrantLookupStatus.Unknown:
+            case ExecutableActionGrantLookupStatus.Revoked:
+            case ExecutableActionGrantLookupStatus.Expired:
+                return PolicyEvaluationReasonCode.NoEffectiveGrant;
+            case ExecutableActionGrantLookupStatus.Stale:
+                return PolicyEvaluationReasonCode.StaleFence;
+            case ExecutableActionGrantLookupStatus.Error:
+                return PolicyEvaluationReasonCode.ProviderUnavailable;
+            case ExecutableActionGrantLookupStatus.Current when lookup.Grant is not null:
+                return ValidateGrant(
+                    invocation, lookup.Grant, issuer, actorId, projectId, runId, expectedGrant, options);
+            default:
+                return PolicyEvaluationReasonCode.ProviderUnavailable;
+        }
+    }
+
+    private PolicyEvaluationReasonCode? ValidateGrant(
+        ExecutableActionInvocation invocation,
+        ValidatedExecutableActionGrant? grant,
+        string issuer,
+        string actorId,
+        string projectId,
+        string runId,
+        ValidatedExecutableActionGrant? expectedGrant,
+        AgtPolicyProviderOptions? options = null)
+    {
+        if (grant is null || !IsValidGrant(grant))
+            return PolicyEvaluationReasonCode.ProviderUnavailable;
+        if (grant.State != ExecutableActionGrantState.Active ||
+            grant.ExpiresAt <= _timeProvider.GetUtcNow())
+            return PolicyEvaluationReasonCode.NoEffectiveGrant;
+        if (grant.Fence != invocation.Fence)
+            return PolicyEvaluationReasonCode.StaleFence;
+
+        if (!TryNormalizeIssuer(grant.Issuer, out var grantIssuer) ||
+            !string.Equals(grantIssuer, issuer, StringComparison.Ordinal) ||
+            !string.Equals(grant.ActorId, actorId, StringComparison.Ordinal) ||
+            !string.Equals(grant.ProjectId, projectId, StringComparison.Ordinal) ||
+            !string.Equals(grant.RunId, runId, StringComparison.Ordinal) ||
+            !string.Equals(grant.SessionId, invocation.SessionId, StringComparison.Ordinal) ||
+            !string.Equals(grant.StepId, invocation.StepId, StringComparison.Ordinal) ||
+            !string.Equals(grant.Purpose, invocation.Purpose, StringComparison.Ordinal) ||
+            grant.Reference != invocation.GrantReference ||
+            !grant.ActionIds.Contains(invocation.ActionId))
+            return PolicyEvaluationReasonCode.NoEffectiveGrant;
+
+        if (options is not null &&
+            !IsMatchingPolicyBinding(invocation.PolicyBinding, grant, options))
+            return PolicyEvaluationReasonCode.ProviderUnavailable;
+
+        if (expectedGrant is not null && !SameGrant(grant, expectedGrant))
+            return PolicyEvaluationReasonCode.NoEffectiveGrant;
+
+        return null;
+    }
+
+    private static bool SameGrant(
+        ValidatedExecutableActionGrant current,
+        ValidatedExecutableActionGrant expected) =>
+        current.Reference == expected.Reference &&
+        current.State == expected.State &&
+        string.Equals(current.Issuer, expected.Issuer, StringComparison.Ordinal) &&
+        string.Equals(current.ActorId, expected.ActorId, StringComparison.Ordinal) &&
+        string.Equals(current.TenantId, expected.TenantId, StringComparison.Ordinal) &&
+        string.Equals(current.ProjectId, expected.ProjectId, StringComparison.Ordinal) &&
+        string.Equals(current.RunId, expected.RunId, StringComparison.Ordinal) &&
+        string.Equals(current.SessionId, expected.SessionId, StringComparison.Ordinal) &&
+        string.Equals(current.StepId, expected.StepId, StringComparison.Ordinal) &&
+        current.ActionIds.SetEquals(expected.ActionIds) &&
+        string.Equals(current.Purpose, expected.Purpose, StringComparison.Ordinal) &&
+        current.Fence == expected.Fence &&
+        current.ExpiresAt == expected.ExpiresAt;
+
+    private static ExecutableActionGuardResult<T> AuthorizationResult<T>(
+        PolicyEvaluationReasonCode reason) =>
+        reason is PolicyEvaluationReasonCode.NoEffectiveGrant or PolicyEvaluationReasonCode.StaleFence
+            ? Deny<T>(reason)
+            : Error<T>(reason);
 
     private static bool IsValidGrant(ValidatedExecutableActionGrant grant) =>
         grant.Reference is { } reference &&

@@ -703,17 +703,10 @@
       "agentweaver.abstractions": {
         "type": "Project"
       },
-      "agentweaver.identity": {
-        "type": "Project",
-        "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )"
-        }
-      },
       "agentweaver.projects.config": {
         "type": "Project",
         "dependencies": {
           "Agentweaver.Abstractions": "[0.0.0, )",
-          "Agentweaver.Identity": "[0.0.0, )",
           "Agentweaver.Providers": "[0.0.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",

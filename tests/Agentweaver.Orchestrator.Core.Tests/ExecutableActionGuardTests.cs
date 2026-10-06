@@ -65,7 +65,8 @@ public sealed class ExecutableActionGuardTests
         })
         {
             var journal = new RecordingJournal();
-            var guard = CreateGuard(journal, new GrantLookup(new(status)));
+            var guard = CreateGuard(
+                journal, new GrantLookup(new ExecutableActionGrantLookupResult(status)));
             var effectInvoked = false;
 
             var result = await guard.ExecuteAsync(
@@ -221,7 +222,7 @@ public sealed class ExecutableActionGuardTests
         Assert.False(result.EffectInvoked);
         Assert.False(effectInvoked);
         Assert.Equal(1, journal.AppendCalls);
-        Assert.Equal(1, lookup.CallCount);
+        Assert.Equal(2, lookup.CallCount);
         Assert.Equal(new ExecutableActionGrantReference("grant-1", "revision-1"), lookup.LastReference);
         var payload = Assert.IsType<PolicyEvaluationSessionPayload>(journal.LastAppend!.Payload);
         Assert.Equal("tenant-1", payload.TenantId);
@@ -231,12 +232,101 @@ public sealed class ExecutableActionGuardTests
         Assert.Equal(7, payload.Fence);
     }
 
+    [Theory]
+    [InlineData(ExecutableActionSourceReceiptWriteStatus.Duplicate, PolicyEvaluationReasonCode.EvaluationFailed)]
+    [InlineData(ExecutableActionSourceReceiptWriteStatus.Rejected, PolicyEvaluationReasonCode.EvaluationFailed)]
+    [InlineData(ExecutableActionSourceReceiptWriteStatus.Unavailable, PolicyEvaluationReasonCode.ProviderUnavailable)]
+    public async Task SourceReceiptWriterMustStoreItsTypedReceiptBeforeTheEventsAppend(
+        ExecutableActionSourceReceiptWriteStatus status,
+        PolicyEvaluationReasonCode expectedReason)
+    {
+        var journal = new RecordingJournal();
+        var writer = new SourceReceiptWriter(
+            new ExecutableActionSourceReceiptWriteResult(status));
+        var invocation = Invocation();
+        var guard = CreateGuard(
+            journal,
+            new GrantLookup(ExecutableActionGrantLookupResult.Current(Grant())),
+            sourceReceiptWriter: writer);
+        var effectInvoked = false;
+
+        var result = await guard.ExecuteAsync(invocation, _ =>
+        {
+            effectInvoked = true;
+            return Task.FromResult("unexpected");
+        });
+
+        Assert.Equal(PolicyEvaluationOutcome.Error, result.Outcome);
+        Assert.Equal(expectedReason, result.ReasonCode);
+        Assert.False(result.EffectInvoked);
+        Assert.False(effectInvoked);
+        Assert.Equal(1, writer.CallCount);
+        Assert.NotNull(writer.LastReceipt);
+        Assert.Equal("session-1", writer.LastReceipt!.SessionId);
+        Assert.Equal(invocation.GrantReference, writer.LastReceipt.Grant.Reference);
+        Assert.Equal(invocation.Fence, writer.LastReceipt.Grant.Fence);
+        Assert.Equal(invocation.EventId, writer.LastReceipt.ReceiptId);
+        Assert.Equal(invocation.ActionId, writer.LastReceipt.ActionId);
+        Assert.Equal(0, journal.AppendCalls);
+    }
+
+    [Fact]
+    public async Task SourceReceiptWriterFailureDoesNotFallBackToOrBypassEventsAppend()
+    {
+        var journal = new RecordingJournal();
+        var writer = new SourceReceiptWriter(exception: new InvalidOperationException("owner unavailable"));
+        var guard = CreateGuard(
+            journal,
+            new GrantLookup(ExecutableActionGrantLookupResult.Current(Grant())),
+            sourceReceiptWriter: writer);
+        var effectInvoked = false;
+
+        var result = await guard.ExecuteAsync(Invocation(), _ =>
+        {
+            effectInvoked = true;
+            return Task.FromResult("unexpected");
+        });
+
+        Assert.Equal(PolicyEvaluationOutcome.Error, result.Outcome);
+        Assert.Equal(PolicyEvaluationReasonCode.EvaluationFailed, result.ReasonCode);
+        Assert.False(result.EffectInvoked);
+        Assert.False(effectInvoked);
+        Assert.Equal(1, writer.CallCount);
+        Assert.Equal(0, journal.AppendCalls);
+    }
+
+    [Fact]
+    public async Task GrantRevocationAfterSourceReceiptStoragePreventsEventsAppendAndEffect()
+    {
+        var journal = new RecordingJournal();
+        var lookup = new GrantLookup(
+            ExecutableActionGrantLookupResult.Current(Grant()),
+            new(ExecutableActionGrantLookupStatus.Revoked));
+        var writer = new SourceReceiptWriter();
+        var effectInvoked = false;
+
+        var result = await CreateGuard(journal, lookup, sourceReceiptWriter: writer)
+            .ExecuteAsync(Invocation(), _ =>
+            {
+                effectInvoked = true;
+                return Task.FromResult("unexpected");
+            });
+
+        Assert.Equal(PolicyEvaluationOutcome.Deny, result.Outcome);
+        Assert.Equal(PolicyEvaluationReasonCode.NoEffectiveGrant, result.ReasonCode);
+        Assert.False(result.EffectInvoked);
+        Assert.False(effectInvoked);
+        Assert.Equal(1, writer.CallCount);
+        Assert.Equal(0, journal.AppendCalls);
+        Assert.Equal(2, lookup.CallCount);
+    }
+
     [Fact]
     public async Task GrantLookupErrorAndMissingPolicyOrJournalFailClosed()
     {
         var lookupError = await CreateGuard(
                 new RecordingJournal(),
-                new GrantLookup(new(ExecutableActionGrantLookupStatus.Error)))
+                new GrantLookup(new ExecutableActionGrantLookupResult(ExecutableActionGrantLookupStatus.Error)))
             .ExecuteAsync(Invocation(), _ => Task.FromResult("unexpected"));
         var missingPolicy = await new ExecutableActionGuard(
                 policyProvider: null,
@@ -283,12 +373,14 @@ public sealed class ExecutableActionGuardTests
     private static ExecutableActionGuard CreateGuard(
         RecordingJournal journal,
         IExecutableActionGrantOwnerLookup? grantOwnerLookup,
-        string policy = AllowPolicy) =>
+        string policy = AllowPolicy,
+        IExecutableActionSourceReceiptWriter? sourceReceiptWriter = null) =>
         new(
             new AgtPolicyProvider(),
             Options(policy),
             journal,
-            grantOwnerLookup);
+            grantOwnerLookup,
+            sourceReceiptWriter: sourceReceiptWriter ?? new SourceReceiptWriter());
 
     private static AgtPolicyProviderOptions Options(string policy) =>
         new("agt-policy-resource", 3,
@@ -366,7 +458,7 @@ public sealed class ExecutableActionGuardTests
         return Assert.IsType<PinnedProviderBinding>(result.Value);
     }
 
-    private sealed class GrantLookup(ExecutableActionGrantLookupResult result)
+    private sealed class GrantLookup(params ExecutableActionGrantLookupResult[] results)
         : IExecutableActionGrantOwnerLookup
     {
         public int CallCount { get; private set; }
@@ -378,7 +470,27 @@ public sealed class ExecutableActionGuardTests
         {
             CallCount++;
             LastReference = reference;
-            return Task.FromResult(result);
+            return Task.FromResult(results[Math.Min(CallCount - 1, results.Length - 1)]);
+        }
+    }
+
+    private sealed class SourceReceiptWriter(
+        ExecutableActionSourceReceiptWriteResult? result = null,
+        Exception? exception = null)
+        : IExecutableActionSourceReceiptWriter
+    {
+        public int CallCount { get; private set; }
+        public ExecutableActionSourceReceipt? LastReceipt { get; private set; }
+
+        public Task<ExecutableActionSourceReceiptWriteResult> StoreAsync(
+            ExecutableActionSourceReceipt receipt,
+            CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            LastReceipt = receipt;
+            return exception is not null
+                ? Task.FromException<ExecutableActionSourceReceiptWriteResult>(exception)
+                : Task.FromResult(result ?? new(ExecutableActionSourceReceiptWriteStatus.Stored));
         }
     }
 

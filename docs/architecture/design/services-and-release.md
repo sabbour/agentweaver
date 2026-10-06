@@ -147,11 +147,14 @@ The current v1 source includes unpublished `Agentweaver.EventsAndSessions` and
 journal, ordered replay across sessions, durable session-provider pins, and addressed-message
 delivery state. The Orchestrator owns root/child session relationships, current Projects &
 Config authorization checks, a durable owner message outbox, explicit turn-boundary
-operations, and parent notifications. Admission validates the exact owner outbox message and
-current session relationship and fences; admitting a valid correlated reply exposes input
-without approving a gate. The services connect through protected HTTP contracts, not a shared
-transaction. There is no background message relay or automatic AgentHost scheduler. Usage
-accounting and product AgentHost/Gateway integration remain future work.
+operations, parent notifications, typed decision/gate persistence, and MAF checkpoints.
+It also owns current executable-grant lookup and redacted PolicyEvaluation receipt
+production. Admission validates the exact owner outbox message and current session
+relationship and fences; acknowledging a correlated reply exposes input without approving
+a gate. The services connect through protected HTTP contracts, not a shared transaction.
+The reserved positive Events receipt consumer remains #1846 work after #1848 admission.
+There is no background message relay, automatic AgentHost scheduler, or full dispatch engine.
+Usage accounting and product AgentHost/Gateway integration remain future work.
 
 The Gateway and Identity boundary makes viewer authorization independent of the chosen [Application
 Hosting](applications-and-surfaces.md#application-hosting) provider. The first-party MCP server uses
@@ -375,10 +378,11 @@ service, with its Dockerfile, chart, and service version. Shared .NET contracts 
 CI path filters limit unrelated builds without weakening integration checks on the tested release
 set.
 
-The initial `services/orchestrator/Agentweaver.Orchestrator.Core` component is a
-pure domain library for workflow catalog and WorkPlan validation, not an executable
-service. The typed decision API, Projects resolution, journal, checkpoint host, and
-dispatch runtime remain owned integration work.
+The `services/orchestrator/Agentweaver.Orchestrator.Core` component remains a pure
+domain library for typed decision and workflow validation, not an executable service.
+The Orchestrator host now supplies typed decision/gate APIs, current grant and receipt
+ownership, and durable MAF checkpoints. The full dispatch runtime remains owned
+integration work.
 
 The AgentHost, Tool & MCP gateway, app router, and other versioned data-plane images participate in
 the same release composition. A hosted application is output of a workflow, not a platform release

@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Sessions journal and owner delivery",
-  "alt": "Projects & Config validates current permission and accepted run selection. The Orchestrator admits owner-outbox messages; Events & Sessions pins the native PostgreSQL journal and presents messages at fenced turn boundaries. Generic callers cannot write PolicyEvaluation without trusted Core provenance.",
+  "alt": "Projects & Config validates current permission and accepted run selection. The Orchestrator persists typed gates, current grants and redacted PolicyEvaluation receipts; Events & Sessions pins the native PostgreSQL journal and presents messages at fenced turn boundaries. Its generic append still rejects PolicyEvaluation until the retained #1846 receipt consumer is implemented.",
   "autonumber": true,
   "participants": [
     {
@@ -161,7 +161,7 @@
     {
       "type": "note",
       "over": ["caller", "api"],
-      "label": "Reject PolicyEvaluation here: run scope and actor=sub do not prove Core provenance; no trusted writer is wired, so guarded effects fail closed."
+      "label": "PolicyEvaluation append denied; Orchestrator receipt consumer remains #1846 work."
     },
     {
       "type": "activation",
