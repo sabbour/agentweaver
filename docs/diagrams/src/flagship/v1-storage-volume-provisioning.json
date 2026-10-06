@@ -1,0 +1,167 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Storage volume provisioning and attachment negotiation",
+  "alt": "The Storage caller provisions an Azure Files PVC, verifies its real claim and PV identities, receives the actual Storage resource, negotiates it with an actual Sandbox attachment profile and declared mount, then pins the resource. Negotiation does not mount or dispatch the volume, and the Azure Files adapter does not claim durable flush.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "storage-caller",
+      "label": "Environment Core",
+      "subLabel": "Storage lifecycle role",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Core", "tone": "neutral" }
+    },
+    {
+      "id": "azure-files",
+      "label": "Azure Files CSI",
+      "subLabel": "Storage provider",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": { "text": "Provider", "tone": "teal" }
+    },
+    {
+      "id": "kubernetes",
+      "label": "Kubernetes API",
+      "subLabel": "StorageClass, PVC, PV",
+      "icon": "box",
+      "fluentIcon": "container",
+      "library": "kubernetes",
+      "badge": { "text": "Cluster", "tone": "marigold" }
+    },
+    {
+      "id": "sandbox",
+      "label": "Sandbox provider",
+      "subLabel": "Actual resource and profile",
+      "icon": "bot",
+      "fluentIcon": "window",
+      "badge": { "text": "Provider", "tone": "teal" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": ["storage-caller", "azure-files"],
+      "label": "The provider selection and options contain identities and revision IDs, never credentials."
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "azure-files",
+      "label": "ProvisionAsync(spec, resourceGeneration, idempotencyKey)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "azure-files",
+      "to": "kubernetes",
+      "label": "Read StorageClass; ensure resourceGeneration-specific PVC",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "PVC provisioning",
+      "sections": [
+        {
+          "label": "Pending, failed, or timeout",
+          "steps": [
+            {
+              "type": "message",
+              "from": "kubernetes",
+              "to": "azure-files",
+              "label": "Pending claim or operation failure",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "azure-files",
+              "to": "storage-caller",
+              "label": "Wait, then return an explicit condition/error",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "Bound",
+          "steps": [
+            {
+              "type": "message",
+              "from": "kubernetes",
+              "to": "azure-files",
+              "label": "Bound PVC with actual UID and PV name",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "azure-files",
+              "to": "kubernetes",
+              "label": "Read PV; verify claim UID; apply reclaim policy with UID test",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "kubernetes",
+              "to": "azure-files",
+              "label": "PV claim identity and reclaim-policy readback",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "azure-files",
+              "to": "storage-caller",
+              "label": "WorkspaceVolumeResource(actual PVC UID, resourceGeneration, capabilities)",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "sandbox",
+      "label": "Get actual Sandbox resource and profile",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "sandbox",
+      "to": "storage-caller",
+      "label": "Actual Sandbox ID, generation, and capabilities",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "storage-caller",
+      "label": "Negotiate mount, actual resources, fence, and data generation",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "storage-caller",
+      "label": "Pin candidate to actual PVC UID, resourceGeneration, capabilities",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["azure-files", "storage-caller"],
+      "label": "Environment owner completes or reconciles the effect under its fence. CSI does not mount a Sandbox volume or promise durable flush."
+    }
+  ]
+}
