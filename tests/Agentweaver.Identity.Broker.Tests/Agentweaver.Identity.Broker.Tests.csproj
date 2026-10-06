@@ -17,5 +17,6 @@
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
     <ProjectReference Include="..\..\services\identity\Agentweaver.Identity.Broker\Agentweaver.Identity.Broker.csproj" />
+    <ProjectReference Include="..\..\services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" Aliases="ProjectsConfig" />
   </ItemGroup>
 </Project>

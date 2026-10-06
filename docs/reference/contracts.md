@@ -89,6 +89,8 @@ These routes belong to the unpublished Identity broker candidate. They are servi
 
 The service has no grant-administration HTTP endpoint. The browser consent UI is not implemented.
 
+Broker access tokens may carry `tenant_id` and `role` claims derived from the configured, validated upstream OIDC identity. Only one valid `tid` and the exact recognized `platform_admin`/`orchestrator` role values are forwarded; missing or ambiguous tenant context and unknown roles fail closed. OAuth scopes/resources control client permissions and audiences, not tenant or role authority.
+
 ## Identity host configuration
 
 | Key | Requirement |
