@@ -8,6 +8,7 @@
     "docs/architecture/overview.md",
     "docs/architecture/events-sessions.md",
     "docs/architecture/providers-models.md",
+    "docs/architecture/projects-config.md",
     "docs/architecture/identity-secrets.md",
     "docs/architecture/persistence-objects.md",
     "docs/architecture/telemetry.md",
@@ -70,6 +71,15 @@
       "required": [
         "docs/architecture/providers-models.md",
         "docs/diagrams/src/flagship/v1-provider-resolution.json"
+      ]
+    },
+    {
+      "name": "Projects and Config",
+      "sourcePrefixes": [
+        "services/projects-config/"
+      ],
+      "required": [
+        "docs/architecture/projects-config.md"
       ]
     },
     {

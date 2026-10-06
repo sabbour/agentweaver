@@ -11,10 +11,10 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
 - **Retain the existing UI.** Future P1 frontend work keeps most of the existing
   Agentweaver UI and adapts its API wiring to the new services. Redesign requires
   an explicit user request; no UI work is included in P0.
-- **Status:** P0 foundations are under development. The architecture remains Proposed;
-  the first implementation slice supplies libraries and validation tooling, not a
-  deployable platform. [Phase progress](docs/architecture/decisions/0001-platform-architecture.md#phases)
-  distinguishes merged libraries, in-progress candidates, and remaining work.
+- **Status:** P0 foundations are accepted. The source also contains an unpublished
+  Projects & Config service candidate; the architecture remains Proposed and the
+  repository does not yet represent a deployed platform. [Phase progress](docs/architecture/decisions/0001-platform-architecture.md#phases)
+  distinguishes accepted foundations, in-progress candidates, and remaining work.
 
 ## Start here
 
@@ -26,6 +26,7 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
 | [Orchestration](docs/architecture/design/orchestration.md) | Thin coordinator, workflow step catalogs, typed decision tools, rules in code |
 | [Applications and surfaces](docs/architecture/design/applications-and-surfaces.md) | One application model (`live` → `preview` → `published`), Application Hosting, the surface panel |
 | [Services and release](docs/architecture/design/services-and-release.md) | Service decomposition, data plane, per-service versioning and release |
+| [Projects & Config service](docs/architecture/projects-config.md) | Implemented candidate API, revisioned records, and immutable run-selection semantics |
 
 ## What 1.0 changes
 
@@ -63,7 +64,7 @@ The P1 Orchestrator Core library adds pure, deterministic workflow-catalog and
 step-bound WorkPlan validation. It validates pinned run selections, output bounds,
 joins, snapshots, and scope diffs; it does not dispatch children or persist run state.
 
-The release manifest describes independently versioned libraries and the unpublished Identity broker candidate.
+The release manifest describes independently versioned libraries (including Orchestrator Core) and unpublished service candidates such as Identity Broker and Projects & Config.
 It is a draft composition, not evidence of deployment or a released platform.
 
 The [P0 Azure infrastructure story](docs/specs/1777-azure-p0-infrastructure.md) adds
@@ -143,6 +144,13 @@ The endpoint composes `AuthorizedSecretRedemption` with the existing exact-versi
 Key Vault adapter and explicit workload identity. The draft service entry has no
 image digest because it remains unpublished. Azure publication/proof (#1790) is
 still separate.
+
+The [Projects & Config service candidate](docs/architecture/projects-config.md)
+adds revisioned project and platform runtime settings, provider/model selection
+inputs, and immutable per-run snapshots backed by an owned PostgreSQL schema.
+Provider registrations remain owned by the provider catalog; model selection
+fails closed when the requested reference is unavailable. The service source is
+not a published image or deployment.
 
 The Postgres P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
 transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced

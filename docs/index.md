@@ -2,7 +2,7 @@
 
 Agentweaver 1.x is a rebuild on the `v1` branch. The current source contains provider contracts, foundation libraries, an Identity broker candidate, an Events & Sessions journal service candidate, and Azure infrastructure definitions.
 
-The foundation source does not provide a deployed product platform. It does not publish packages or images. The dedicated Azure environment has not been provisioned.
+The source includes accepted P0 foundations and unpublished Identity Broker and Projects & Config service candidates. It does not provide a deployed product platform, publish packages or images, or prove that the dedicated Azure environment has been provisioned.
 
 This site documents code and procedures that exist in the `v1` source. Proposed architecture records stay in the repository and do not describe implemented capabilities.
 
@@ -21,6 +21,7 @@ This site documents code and procedures that exist in the `v1` source. Proposed 
 | [Foundation overview](./architecture/overview) | Compiled components and their dependencies. |
 | [Events & Sessions journal](./architecture/events-sessions) | Current journal API, durable PostgreSQL behavior, provider pinning, and implementation limits. |
 | [Providers and models](./architecture/providers-models) | Provider resolution, pinning, and model support. |
+| [Projects & Config](./architecture/projects-config) | Project APIs, revisioned settings, and immutable run-selection snapshots. |
 | [Identity and secrets](./architecture/identity-secrets) | OAuth, run grants, Key Vault, and workload identity. |
 | [PostgreSQL and Blob](./architecture/persistence-objects) | Outbox, inbox, relay, and object storage. |
 | [Telemetry](./architecture/telemetry) | OpenTelemetry and Azure Monitor adapters. |

@@ -74,7 +74,7 @@ flowchart LR
         Web["Agentweaver web"]
         Bff["Gateway / BFF"]
         Identity["Identity"]
-        Config["Projects & Config"]
+        Config["Projects & Config (project settings and run selections)"]
         Orch["Orchestrator"]
         Env["Environment manager"]
         Source["Source Control & Merge"]
@@ -98,7 +98,7 @@ flowchart LR
     Mcp -->|"HTTP"| Bff
     Bff -->|"internal gRPC"| Orch
     Bff -->|"authentication"| Identity
-    Orch -->|"gRPC"| Config
+    Orch -->|"run-selection API"| Config
     Orch -->|"gRPC"| Knowledge
     Orch -->|"gRPC"| Source
     Orch -->|"gRPC"| Env
@@ -121,7 +121,7 @@ flowchart LR
 | --- | --- | --- |
 | Gateway/BFF | HTTP REST and server-sent events (SSE) for web and CLI; authentication entry, route dispatch, and authorized projections. | Agent execution or an application provider's viewer identity decisions. |
 | Identity | OpenIddict broker, MCP OAuth, purpose-bound run tokens, `SecretRef` redemption, and scoped gateway credential injection. This is the trust boundary. | Long-lived agent secrets in a run database or image. |
-| Projects & Config | Projects, casting and blueprints, skills catalog, provider catalog and platform/project bindings, model settings, project egress narrowing, and budgets. | The choice of an unapproved provider mid-run. |
+| Projects & Config | Project lifecycle and revisioned configuration, casting/charters, blueprint/workflow references, skill settings, model-selection references, project provider overrides, platform runtime defaults, egress narrowing, and validated run limits. | Provider catalog registrations, repository/workflow materialization, raw credentials, or final provisioned-resource pins. |
 | Orchestrator | Runs, Microsoft Agent Framework (MAF) workflows, session tree and coordination verbs, typed coordinator decisions, OutcomeSpec and WorkPlan, approval and question gates, checkpoints, recovery, consistency manifest, and run-limit budget enforcement. | The run journal's storage or direct cross-schema updates. |
 | Environment manager | Sandbox, Snapshots, Storage, Network Policy, and Application Hosting adapters; leases and fencing; egress verification; startup phases; retention, reclaim, application deployments, and control-plane image publication. | Viewer authentication or a workflow's publish decision. |
 | Source Control & Merge | Git workspace preparation, diff and assembly, merge locks, pull requests, webhooks, backlog intake, and the Source Control provider seam. | Platform-wide project identity. |
@@ -129,6 +129,8 @@ flowchart LR
 | Events & Sessions | Run journal, message contents and delivery state, SSE fan-out, Sessions adapters, durable usage ledger, and Cost adapters. | Orchestrator workflow transitions or approval policy. |
 | First-party MCP server | Agentweaver MCP operations, including `surface_*` discovery and actions. | Independent authorization or a second orchestration state machine. |
 | Web frontend | Agentweaver's own run/chat interface and surface panel, A2UI renderer, and MCP Apps host bridge. | Durable backend authority or a copied Copilot application UX. |
+
+Projects & Config owns a PostgreSQL schema and immutable configuration-revision and run-selection records. The Orchestrator supplies a trusted, revisioned run-selection context; the service checks project and platform revisions, resolves project model settings before platform defaults without fallback from an unavailable explicit setting, resolves provider candidates through the provider catalog contract, and enforces egress and run-limit narrowing. The returned snapshot records candidates and selection revisions, not provisioned resources. Consumers pin final resource identity and negotiated capabilities only after provisioning.
 
 The Orchestrator owns the session tree, coordination verbs, and gates; Events & Sessions owns
 journal append, addressed-message records, and delivery state. Their collaboration uses versioned
