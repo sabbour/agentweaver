@@ -73,6 +73,20 @@
       }
     },
     {
+      "name": "v1-storage-volume-provisioning",
+      "area": "architecture",
+      "disposition": "retain",
+      "owner": null,
+      "replacement": null,
+      "notes": "Generation-scoped Azure Files PVC provisioning, actual resource verification, and separate Sandbox attachment negotiation.",
+      "paths": {
+        "input": "docs/diagrams/src/flagship/v1-storage-volume-provisioning.json",
+        "drawio": "docs/diagrams/drawio/generated/flagship/v1-storage-volume-provisioning.drawio",
+        "png": "docs/diagrams/flagship/v1-storage-volume-provisioning.png",
+        "hash": "docs/diagrams/flagship/v1-storage-volume-provisioning.hash.txt"
+      }
+    },
+    {
       "name": "v1-sessions-journal",
       "area": "architecture",
       "disposition": "retain",
