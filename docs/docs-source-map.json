@@ -31,6 +31,20 @@
       ]
     },
     {
+      "name": "Orchestrator coordination owner",
+      "sourcePrefixes": [
+        "services/orchestrator/Agentweaver.Orchestrator/"
+      ],
+      "required": [
+        "docs/architecture/design/sessions-and-coordination.md",
+        "docs/architecture/design/services-and-release.md",
+        "docs/architecture/events-sessions.md",
+        "docs/reference/contracts.md",
+        "docs/guide/testing.md",
+        "docs/diagrams/src/flagship/v1-sessions-journal.json"
+      ]
+    },
+    {
       "name": "foundation architecture",
       "sourcePrefixes": [
         "packages/Agentweaver.Abstractions/ProviderContracts.cs",
@@ -46,6 +60,7 @@
         "packages/Agentweaver.Telemetry.AzureMonitor/",
         "services/identity/Agentweaver.Identity.Broker/",
         "services/events-and-sessions/",
+        "services/orchestrator/Agentweaver.Orchestrator/",
         "tools/Agentweaver.FoundationProbe/"
       ],
       "required": [
@@ -56,6 +71,7 @@
     {
       "name": "Events & Sessions journal",
       "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/AddressedMessageContracts.cs",
         "packages/Agentweaver.Abstractions/SessionsContracts.cs",
         "services/events-and-sessions/"
       ],

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mxfile host="Agentweaver" version="31.4.5" compressed="false" fluentProfile="react-optical-v1">
-<diagram id="v1-outbox-relay" name="Outbox relay lease and acknowledgment"><mxGraphModel page="1" pageScale="2.926654740608229" pageWidth="559" pageHeight="794" background="#efeae7" grid="0"><root>
+<diagram id="v1-outbox-relay" name="Outbox ClaimOneAsync and relay"><mxGraphModel page="1" pageScale="2.926654740608229" pageWidth="559" pageHeight="794" background="#efeae7" grid="0"><root>
 <mxCell id="0"/><mxCell id="1" parent="0"/>
 <mxCell id="fluent-paper" fluentRole="canvas" value="" style="rounded=1;absoluteArcSize=1;arcSize=32;fillColor=#efeae7;strokeColor=none;strokeWidth=1;shadow=0;" parent="1" vertex="1"><mxGeometry x="0" y="250.88193202146704" width="1636" height="1822" as="geometry"/></mxCell>
 <mxCell id="fluent-content" fluentRole="layout" value="" style="group;connectable=0;" parent="1" vertex="1"><mxGeometry x="0" y="250.88193202146704" width="1636" height="1822" as="geometry"/></mxCell>

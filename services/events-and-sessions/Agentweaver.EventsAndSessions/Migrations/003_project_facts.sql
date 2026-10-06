@@ -1,3 +1,4 @@
+-- Migration 3 adds receipt-backed accepted-effect facts.
 CREATE TABLE IF NOT EXISTS {schema}.project_fact_streams (
     project_id varchar(256) PRIMARY KEY,
     last_position bigint NOT NULL CHECK (last_position > 0)

@@ -2,11 +2,11 @@
   "version": 2,
   "source": {
     "file": "v1-outbox-inbox.json",
-    "sha256": "a6eed6d51874c02c856a70e169135b715253449a7cf00e6c4e079fcb09490dcb"
+    "sha256": "1278d7a68476f6ffae9efde4eefd44350b50346258f9fad08712f086e4535bc6"
   },
   "drawio": {
     "file": "v1-outbox-inbox.drawio",
-    "sha256": "85fe303e9b86c72cd4255fb4d3680f77685b030dbd4b01393771b4888e2e6bb3"
+    "sha256": "9089bc23e251341721c9be7353529f5c8389cbd9565d6eeb6daa7ea15d115ee7"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-outbox-inbox.png",
-    "sha256": "15489789ccf593c2fe92dc3b5d9d4bef24a1f84579f965027984893c90c09694"
+    "sha256": "8cf879b4fcfc4846a9e3891b5c1959fe8cd49875bede9e9f33b5e71253460709"
   }
 }

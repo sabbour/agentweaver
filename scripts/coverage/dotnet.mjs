@@ -24,6 +24,7 @@ const suites = [
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
+  'Agentweaver.Orchestrator',
   'Agentweaver.Orchestrator.Core',
   'Agentweaver.Providers',
   'Agentweaver.Persistence.Postgres',

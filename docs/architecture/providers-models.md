@@ -56,6 +56,14 @@ adapter implements the read, write, search, revision, proposal-promotion, and co
 composition capabilities. See [Knowledge and Memory](knowledge-memory.md) for the
 service and its integration limits.
 
+The host also registers `postgres.native-messaging` as the platform-singleton Messaging
+provider, with no project override. It negotiates the configured PostgreSQL resource
+and persists an immutable Messaging provider binding per run. The Orchestrator uses the
+internal addressed-message routes to validate durable owner outbox records and request
+delivery at explicit turn boundaries. There is no background delivery relay or
+automatic AgentHost scheduler. These are source-host integrations, not a deployed
+cross-service messaging endpoint.
+
 The Foundation Probe registers `azure-key-vault`, `azure-blob`, and `azure-monitor` descriptors for its checks. These registrations do not form a product provider catalog.
 
 Model is not a provider seam. The v1 source contains no AgentHost, model resolver, or model adapter. It does not declare support for a model vendor.

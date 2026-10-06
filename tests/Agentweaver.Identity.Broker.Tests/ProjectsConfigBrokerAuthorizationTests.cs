@@ -25,7 +25,7 @@ using Xunit;
 namespace Agentweaver.Identity.Broker.Tests;
 
 [Collection("IdentityBrokerPostgres")]
-public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixture postgres)
+public sealed partial class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixture postgres)
     : IAsyncLifetime
 {
     private static readonly JsonSerializerOptions AuthorizationJsonOptions = new(JsonSerializerDefaults.Web)
@@ -126,7 +126,7 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         AddBearerAndTenant(createRequest, ownerToken, TenantId);
         using var created = await projects.Client.SendAsync(createRequest);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
-        var project = await created.Content.ReadFromJsonAsync<ProjectSummary>();
+        var project = await created.Content.ReadFromJsonAsync<ProjectSummary>(AuthorizationJsonOptions);
         Assert.NotNull(project);
 
         var ownerAssignment = await AssignRoleAsync(

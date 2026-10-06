@@ -20,14 +20,26 @@
 
 ## Current v1 source slice
 
-The repository now contains an unpublished Events & Sessions service candidate for the
-first journal slice. It supplies provider-neutral versioned event contracts, an
+The repository now contains unpublished Events & Sessions and Orchestrator service
+candidates. Events & Sessions supplies provider-neutral versioned event contracts, an
 authoritative PostgreSQL run journal with transactional append, one ordered position
-across every session in a project/run, bounded run or session replay, and reconnectable
-live cursors. It also persists immutable native Sessions provider pins. This does not
-implement the entire P1 design: session trees, MAF checkpoints, consistency manifests,
-addressed messages, Knowledge records, and product UI/MCP integration remain outside
-this service. See the [implemented journal contract and limits](../../architecture/events-sessions.md).
+across every session in a project/run, bounded run or session replay, reconnectable
+live cursors, immutable native Sessions provider pins, and addressed-message storage.
+The Orchestrator owns root/child session relationships, execution fences, request
+state, parent notifications, turn-boundary operations, and the durable owner outbox.
+It checks current Projects & Config authority and accepted run selection; Events
+validates message admission against the exact owner outbox record and rechecks owner
+bindings for claim, presentation, and acknowledgment.
+
+This is a limited source slice, not the entire P1 design. The owner can synchronously
+admit and present messages at an explicit turn boundary, and a valid correlated reply
+makes request input available on admission without approving its gate. The boundary
+response is replayable for its original state version; a blocked session resumes only
+when a pending wake exists. Progress stays in sender history and is not presented as
+recipient input. Automatic AgentHost scheduling, a background delivery relay, gate
+approval decisions, MAF checkpoints, consistency manifests, Knowledge records, and
+product UI/MCP integration remain outside this slice. See the
+[implemented journal and owner contract](../../architecture/events-sessions.md).
 
 ## Today in 0.x
 
@@ -53,13 +65,15 @@ continues to ship while 1.0 is built.
 
 ## Durable history and resume aids
 
-The Events & Sessions service owns the journal and message delivery state. The
-Orchestrator owns workflow and session-tree transitions; its MAF checkpoint records where
-execution can continue. A sandbox never writes directly to the checkpoint store.
+The Events & Sessions service owns the journal and the current internal addressed-message
+storage primitive. The Orchestrator owns workflow and session-tree transitions; its MAF
+checkpoint records where execution can continue. A sandbox never writes directly to
+the checkpoint store.
 
 | Record | Purpose | Durability and owner |
 | --- | --- | --- |
 | Run journal | Ordered run events and decisions for playback, audit, cost attribution, UI, and context rebuilding | Authoritative native Postgres Sessions record, owned by Events & Sessions |
+| Addressed message | Idempotent, sequenced message, journal reference, owner and Events outbox records | Events & Sessions stores delivery state; the Orchestrator validates the owner outbox, session relationship, current permission, and fences. Admission is synchronous; there is no background relay. |
 | Copilot conversation cache | Opaque SDK serialization to continue the next agent turn without resending history | Disposable Object Store blob referenced by run/session; captured at turn boundaries |
 | MAF workflow checkpoint | Current step, pending child work, gates, and the conversation-cache reference | Durable Orchestrator state; checkpoint payload may use Object Store, with identity and references in Postgres |
 | Consistency manifest | Pairing and generations that authorize resuming an environment and its workspace | Atomically committed control-plane record, owned by the Orchestrator |
@@ -251,7 +265,7 @@ belong to the Orchestrator and Events & Sessions.
 | Request id and reply correlation | Bind an answer or approval to the exact pending gate; never infer a decision from receipt |
 | User quote and coordinator instructions | Keep user-directed changes distinguishable from a coordinator's own directions |
 
-Delivery progresses through claim, presentation at the recipient's turn boundary,
+The proposed delivery protocol progresses through claim, presentation at the recipient's turn boundary,
 delivery, and acknowledgment. `immediate` is admitted at the next turn boundary ahead
 of queued messages and can interrupt a blocking wait, but never a running command.
 `enqueue` waits until current work finishes. The originating service commits an outbox
@@ -262,6 +276,16 @@ Acknowledgment means "received", not "approved" or "completed". The plan gate ac
 an explicit approve/reject verb; the question gate accepts an explicit answer. This
 preserves the addressed-message distinction from
 [#1406](https://github.com/sabbour/agentweaver/issues/1406).
+
+The current v1 source implements a minimal Orchestrator owner for accepted root and
+child sessions, fenced turn state, pending requests, parent notifications, and a
+durable owner outbox. It synchronously validates owner messages before Events
+admission; Events commits the message, journal reference, and its outbox atomically.
+Claim and presentation require the owner's `presenting` turn state. Delivery is
+at-least-once with sender-run/session idempotency, and an omitted reply thread resolves
+from the correlated message. This source slice does not include the wider AgentHost
+scheduler, a background delivery relay, gate approval decisions, MAF checkpoints,
+consistency manifests, Knowledge records, or product UI/MCP integration.
 
 A `progress` message remains in the child's history. A `handoff` is retained and shown
 in the parent's group without waking the parent model. `needs_input` and `error` wake
@@ -345,8 +369,11 @@ mirroring (`WorktreeOperationsAdapter.CommitChanges`), and automatic post-run ex
 (`PostRunScribeService`) do not carry forward. Removing those writable mirrors also
 removes their merge-conflict class.
 
-The Orchestrator owns session-tree and gate transitions. Events & Sessions owns the
-journal and message delivery state. Knowledge owns durable memory and decisions.
+The Orchestrator owns session-tree and gate-request transitions. Events & Sessions owns
+the journal and addressed-message delivery state; the two services are connected by
+owner-validated internal routes. Admitting a valid correlated reply can expose request
+input, but receipt acknowledgment does not decide or approve a gate. Knowledge owns
+durable memory and decisions.
 Agentweaver's run page, topology, approvals, chat, and [surface
 panel](applications-and-surfaces.md) are views and typed actions over this state.
 A user action in a surface arrives as a typed message, not as an untracked UI command.

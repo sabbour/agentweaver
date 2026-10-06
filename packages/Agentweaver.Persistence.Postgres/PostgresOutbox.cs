@@ -243,7 +243,14 @@ public sealed class PostgresOutbox
         return deliveries;
     }
 
-    public async Task<OutboxDelivery?> ClaimAsync(
+    public Task<OutboxDelivery?> ClaimAsync(
+        string workerId,
+        Guid eventId,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default) =>
+        ClaimOneAsync(workerId, eventId, leaseDuration, cancellationToken);
+
+    public async Task<OutboxDelivery?> ClaimOneAsync(
         string workerId,
         Guid eventId,
         TimeSpan leaseDuration,
@@ -253,22 +260,24 @@ public sealed class PostgresOutbox
         if (eventId == Guid.Empty)
             throw new ArgumentException("An event ID is required.", nameof(eventId));
         if (leaseDuration <= TimeSpan.Zero || leaseDuration > TimeSpan.FromHours(1))
-            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "Lease duration must be positive and at most one hour.");
+            throw new ArgumentOutOfRangeException(
+                nameof(leaseDuration), "Lease duration must be positive and at most one hour.");
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var command = new NpgsqlCommand($"""
             WITH candidate AS (
                 SELECT o.id
                 FROM {_events} AS o
                 WHERE o.id = @id
-                  AND o.delivered_at IS NULL
-                  AND (o.leased_until IS NULL OR o.leased_until <= clock_timestamp())
-                  AND NOT EXISTS (
-                      SELECT 1 FROM {_events} AS previous
-                      WHERE previous.stream_id = o.stream_id
-                        AND previous.sequence < o.sequence
-                        AND previous.delivered_at IS NULL
-                  )
+                    AND o.delivered_at IS NULL
+                    AND (o.leased_until IS NULL OR o.leased_until <= clock_timestamp())
+                    AND NOT EXISTS (
+                        SELECT 1 FROM {_events} AS previous
+                        WHERE previous.stream_id = o.stream_id
+                            AND previous.sequence < o.sequence
+                            AND previous.delivered_at IS NULL
+                    )
                 FOR UPDATE OF o SKIP LOCKED
             )
             UPDATE {_events} AS e
@@ -280,18 +289,26 @@ public sealed class PostgresOutbox
             RETURNING e.id, e.stream_id, e.idempotency_key, e.event_type,
                 e.event_version, e.payload, e.occurred_at, e.sequence,
                 e.lease_token, e.worker_id, e.leased_until
-            """, connection);
+            """, connection, transaction);
         command.Parameters.AddWithValue("id", NpgsqlDbType.Uuid, eventId);
         command.Parameters.AddWithValue("worker", NpgsqlDbType.Text, workerId);
         command.Parameters.AddWithValue("duration", NpgsqlDbType.Interval, leaseDuration);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
+        {
+            await reader.DisposeAsync();
+            await transaction.CommitAsync(cancellationToken);
             return null;
-        return new OutboxDelivery(
+        }
+
+        var delivery = new OutboxDelivery(
             ReadStored(reader),
             reader.GetGuid(8),
             reader.GetString(9),
             reader.GetFieldValue<DateTimeOffset>(10));
+        await reader.DisposeAsync();
+        await transaction.CommitAsync(cancellationToken);
+        return delivery;
     }
 
     public async Task<(StoredOutboxEvent Event, bool IsDelivered)?> ReadAsync(

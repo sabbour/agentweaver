@@ -70,6 +70,12 @@
       "project": "services/events-and-sessions/Agentweaver.EventsAndSessions/Agentweaver.EventsAndSessions.csproj"
     },
     {
+      "id": "Agentweaver.Orchestrator",
+      "kind": "service",
+      "version": "0.0.0",
+      "project": "services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj"
+    },
+    {
       "id": "Agentweaver.Environment",
       "kind": "library",
       "version": "0.0.0",
@@ -145,6 +151,21 @@
       "versions": [
         "0.0.0"
       ]
+    },
+    {
+      "consumer": "Agentweaver.Orchestrator",
+      "dependency": "Agentweaver.Orchestrator.Core",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Orchestrator",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Orchestrator",
+      "dependency": "Agentweaver.Persistence.Postgres",
+      "versions": ["0.0.0"]
     },
     {
       "consumer": "Agentweaver.Secrets.AzureKeyVault",

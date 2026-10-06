@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "V1 services, contracts, and adapters",
-  "alt": "Structural component view of the unpublished Knowledge and Events & Sessions service candidates, the Environment and Orchestrator Core AGT YAML Policy adapter candidates, and their Agentweaver.Abstractions, Providers, PostgreSQL, and Telemetry project references. The native journal defines typed redacted PolicyEvaluation evidence but rejects untrusted generic writes. AzureBlobObjectStore implements IObjectStore; AzureKeyVaultSecretRedemption implements ISecretRedemption. This is source structure, not deployment topology.",
+  "alt": "Structural component view of unpublished Knowledge and Events & Sessions candidates, Environment egress and Orchestrator Core AGT YAML Policy adapters, the Orchestrator owner, and their provider, PostgreSQL, and telemetry references. The journal rejects untrusted PolicyEvaluation writes. Azure Blob and Key Vault adapter chains are included. This is source structure, not deployment topology.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -108,7 +108,7 @@
     {
       "id": "events-and-sessions",
       "label": "Events & Sessions",
-      "subLabel": "PostgreSQL journal with PolicyEvaluation evidence.",
+      "subLabel": "PostgreSQL journal + addressed-message delivery.",
       "meta": "Agentweaver.EventsAndSessions",
       "icon": "server",
       "fluentIcon": "api",

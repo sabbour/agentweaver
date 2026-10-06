@@ -23,7 +23,8 @@ public enum SessionEventKind
     DecisionAccepted,
     EffectAccepted,
     ArtifactReference,
-    CacheReference
+    CacheReference,
+    AddressedMessage
 }
 
 public enum PolicyEvaluationOutcome
@@ -51,6 +52,7 @@ public readonly record struct SessionIdentity
     public string RunId { get; }
     public string SessionId { get; }
 
+    [JsonConstructor]
     public SessionIdentity(string projectId, string runId, string sessionId)
     {
         ProjectId = ValidateIdentity(projectId, nameof(projectId));
@@ -107,6 +109,7 @@ public sealed record StoredSessionObjectReference(
 [JsonDerivedType(typeof(AcceptedEffectSessionPayload), "effect_accepted")]
 [JsonDerivedType(typeof(ArtifactReferenceSessionPayload), "artifact_reference")]
 [JsonDerivedType(typeof(CacheReferenceSessionPayload), "cache_reference")]
+[JsonDerivedType(typeof(AddressedMessageSessionPayload), "addressed_message")]
 public abstract record SessionEventPayload;
 
 public sealed record TurnSessionPayload(string Role, SessionObjectReference Content) : SessionEventPayload;
@@ -152,6 +155,14 @@ public sealed record CacheReferenceSessionPayload(
     SessionObjectReference Cache,
     string RuntimeVersion,
     string BindingId) : SessionEventPayload;
+
+public sealed record AddressedMessageSessionPayload(
+    Guid MessageId,
+    SessionIdentity Sender,
+    SessionIdentity Recipient,
+    Guid ThreadId,
+    long ThreadSequence,
+    AddressedMessagePurpose Purpose) : SessionEventPayload;
 
 public sealed record AppendSessionEvent(
     Guid EventId,
@@ -350,6 +361,7 @@ public static class SessionEventPayloadValidation
         AcceptedEffectSessionPayload => SessionEventKind.EffectAccepted,
         ArtifactReferenceSessionPayload => SessionEventKind.ArtifactReference,
         CacheReferenceSessionPayload => SessionEventKind.CacheReference,
+        AddressedMessageSessionPayload => SessionEventKind.AddressedMessage,
         _ => throw new ArgumentException("The session event kind is not supported.", nameof(payload))
     };
 
@@ -399,6 +411,14 @@ public static class SessionEventPayloadValidation
                 RequireToken(cache.RuntimeVersion, nameof(cache.RuntimeVersion));
                 RequireToken(cache.BindingId, nameof(cache.BindingId));
                 return [ValidateReference(cache.Cache)];
+            case AddressedMessageSessionPayload message:
+                if (message.MessageId == Guid.Empty ||
+                    message.Sender.ProjectId != message.Recipient.ProjectId ||
+                    message.ThreadId == Guid.Empty ||
+                    message.ThreadSequence < 1 ||
+                    !Enum.IsDefined(message.Purpose))
+                    throw new ArgumentException("The addressed-message journal reference is invalid.", nameof(payload));
+                return [];
             default:
                 throw new ArgumentException("The session event kind is not supported.", nameof(payload));
         }

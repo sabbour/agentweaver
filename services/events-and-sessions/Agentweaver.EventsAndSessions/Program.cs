@@ -25,6 +25,13 @@ var options = new PostgresSessionsProviderOptions(
     providerSection.GetValue("PollIntervalMilliseconds", 250),
     providerSection.GetValue("ReferenceRetentionDays", 365));
 options.Validate();
+var messagingSection = builder.Configuration.GetSection("EventsAndSessions:Messaging");
+var messagingOptions = new NativePostgresMessagingProviderOptions(
+    messagingSection["OptionsRevision"] ?? "native-postgres-messaging-v1",
+    messagingSection.GetValue("ClaimLeaseSeconds", 120),
+    messagingSection.GetValue("MaximumMessageLifetimeDays", 1),
+    messagingSection.GetValue("OptionsSchemaVersion", 1));
+messagingOptions.Validate();
 
 if (migrate)
 {
@@ -64,6 +71,7 @@ builder.Services.AddSingleton<NpgsqlDataSource>(services =>
         runtimeConnection.ConnectionString, services.GetRequiredService<TokenCredential>()));
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(acceptedEffectOptions);
+builder.Services.AddSingleton(messagingOptions);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddAgentweaverTelemetry("agentweaver.events");
 builder.Services.ConfigureHttpJsonOptions(json =>
@@ -73,7 +81,9 @@ builder.Services.ConfigureHttpJsonOptions(json =>
     json.SerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(
         System.Text.Json.JsonNamingPolicy.CamelCase));
 });
-builder.Services.AddSingleton<ISessionsJournal, PostgresSessionsJournal>();
+builder.Services.AddSingleton<PostgresSessionsJournal>();
+builder.Services.AddSingleton<ISessionsJournal>(services =>
+    services.GetRequiredService<PostgresSessionsJournal>());
 builder.Services.AddSingleton<IProjectFactJournal, PostgresProjectFactJournal>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<KnowledgeAcceptedEffectReceiptClient>(client =>
@@ -83,6 +93,20 @@ builder.Services.AddHttpClient<ProjectsConfigAuthorizationClient>(client =>
     client.BaseAddress = acceptedEffectOptions.ProjectsConfigBaseAddress)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddScoped<AcceptedEffectApplicationService>();
+var projectsAuthorization = builder.Configuration.GetSection("ProjectsConfig:AuthorizationContext");
+builder.Services.AddSingleton(new ProjectsAuthorizationContextOptions(
+    projectsAuthorization["OwnerBaseAddress"],
+    projectsAuthorization["Audience"],
+    issuerUri.AbsoluteUri));
+builder.Services.AddHttpClient<IProjectsAuthorizationContextClient, ProjectsAuthorizationContextClient>()
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+var coordinationOwner = builder.Configuration.GetSection("EventsAndSessions:OrchestratorOwner");
+builder.Services.AddSingleton(new CoordinationOwnerClientOptions(
+    coordinationOwner["OwnerBaseAddress"],
+    coordinationOwner["Audience"],
+    issuerUri.AbsoluteUri));
+builder.Services.AddHttpClient<ICoordinationOwnerClient, CoordinationOwnerClient>()
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
 {
@@ -98,23 +122,39 @@ var projectOverrides = builder.Configuration.GetSection("EventsAndSessions:Proje
     .ToImmutableDictionary(section => section.Key, section => section.Value ?? string.Empty, StringComparer.Ordinal);
 var provider = new NativePostgresSessionsProvider();
 var registration = provider.CreateRegistration(options);
+var messagingProvider = new NativePostgresMessagingProvider();
+var messagingRegistration = messagingProvider.CreateRegistration(messagingOptions);
 var permittedOverrides = projectOverrides.Values.Distinct(StringComparer.Ordinal)
     .Select(providerId => new ProviderOverridePermission(ProviderSeam.Sessions, providerId))
     .ToArray();
 var catalogResult = ProviderCatalog.Create(
-    [registration],
-    [new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId)],
+    [registration, messagingRegistration],
+    [
+        new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId),
+        new ProviderSelection(ProviderSeam.Messaging, NativePostgresMessagingProvider.ProviderId)
+    ],
     permittedOverrides);
 if (!catalogResult.IsSuccess)
     throw new InvalidOperationException("The Sessions provider catalog configuration is invalid.");
 var resolver = new ProviderResolver(catalogResult.Value!);
 builder.Services.AddSingleton(provider);
+builder.Services.AddSingleton(messagingProvider);
 builder.Services.AddSingleton(catalogResult.Value!);
 builder.Services.AddSingleton(resolver);
 builder.Services.AddSingleton<IReadOnlyDictionary<string, string>>(projectOverrides);
 builder.Services.AddSingleton<SessionsProviderBindingService>();
 builder.Services.AddSingleton<ISessionsProviderBinder>(services =>
     services.GetRequiredService<SessionsProviderBindingService>());
+builder.Services.AddSingleton<PostgresAddressedMessageStore>(services =>
+    new PostgresAddressedMessageStore(
+        services.GetRequiredService<NpgsqlDataSource>(),
+        options,
+        messagingOptions,
+        messagingProvider,
+        resolver,
+        services.GetRequiredService<PostgresSessionsJournal>(),
+        issuerUri.AbsoluteUri,
+        services.GetRequiredService<TimeProvider>()));
 
 var app = builder.Build();
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
@@ -140,6 +180,7 @@ app.MapGet("/health/ready", async (CancellationToken ct) =>
 });
 app.MapEventsAndSessionsEndpoints();
 app.MapAcceptedEffectEndpoints();
+app.MapAddressedMessageEndpoints();
 app.Run();
 
 static string Required(IConfiguration configuration, string key) =>

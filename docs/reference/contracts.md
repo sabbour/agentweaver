@@ -39,6 +39,46 @@ Caller bindings require one authenticated identity whose `sub`, `project_id`, an
 validated HTTPS issuer. The current grant descriptor must match that issuer and subject; a missing, duplicate,
 or cross-issuer binding is denied before journal append or protected effects. The grant owner lookup remains
 responsible for resolving fresh tenant membership and current grant authority; a tenant claim is not required.
+## Orchestrator coordination owner
+
+The `Agentweaver.Orchestrator` is an unpublished .NET 10 host candidate. Protected
+coordination routes require an OpenIddict-validated bearer with one authenticated GUID
+`sub`, one project/run binding, `api.read` and `projects.orchestrator` scopes, and the
+route's configured audience. Each operation also revalidates current Projects & Config
+authority and the accepted run selection; the caller's claims alone do not establish
+current permission. Internal Events calls use the configured Events audience and the
+same caller bearer.
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/root` | Accept the root session for the current accepted run selection and register it with Events & Sessions. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{parentSessionId}/children` | Register a child under the active parent and register the child session with Events & Sessions. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/messages` | Persist a fenced owner message and synchronously admit it to Events against the exact persisted outbox record. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/turn-boundary` | Advance the logical turn, claim and present the next eligible addressed message, and return pending parent notifications. A retry with the original state version returns the completed boundary result. A blocked session can resume only when a wake is pending. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/turn-completion` | Record an explicit idle, blocked, or completed turn state under the current fence and state version. |
+| `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/notifications?limit={limit}` | Read unacknowledged parent notifications; the limit defaults to 50 and is bounded to 100. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/notifications/{notificationId}/acknowledge` | Acknowledge a notification belonging to this parent session. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/messages/{messageId}/acknowledge` | Acknowledge a delivered message using its claim fence; receipt is not gate approval or work completion. |
+| `POST /internal/projects/{projectId}/runs/{runId}/coordination/message-route` | Events-only owner callback. Confirms the full outbound message matches the durable owner outbox, then validates active session relationship, writer, request/reply correlation, and current execution fences. |
+| `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/owner-binding` | Events-only current session binding for message claim, presentation, and acknowledgment. Returns `Cache-Control: no-store`. |
+
+Configuration:
+
+| Key | Requirement |
+| --- | --- |
+| `ConnectionStrings:Orchestrator` | Password-free PostgreSQL connection with an Entra runtime role. |
+| `Orchestrator:Database:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Required runtime workload identity. |
+| `ConnectionStrings:OrchestratorMigration` | Separate connection with the migration Entra role; used only by `--migrate`. |
+| `Orchestrator:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Required migration workload identity. |
+| `Orchestrator:Schema` | Optional service-owned schema name; defaults to `orchestrator`. |
+| `Identity:Issuer` / `Identity:Audience` | HTTPS issuer and incoming Orchestrator audience. |
+| `ProjectsConfig:AuthorizationContext:OwnerBaseAddress` / `Audience` | Trusted HTTPS Projects & Config owner and required audience for current authority and selection. |
+| `EventsAndSessions:Authorization:OwnerBaseAddress` / `Audience` | Trusted HTTPS Events & Sessions owner and required audience for session registration and message delivery. |
+
+Runtime PostgreSQL access uses the PostgreSQL Entra token scope and TLS
+`VerifyFull`; the connection string must include the Entra role and omit a password.
+Ordinary startup verifies the service schema. Run the executable with only
+`--migrate` to apply migrations using the separate identity.
 
 ## Events & Sessions journal
 
@@ -90,6 +130,25 @@ Run cursors are opaque and bound to the project/run; session cursors are additio
 bound to the session. Callers should return either token unchanged on replay or
 reconnect.
 
+The service also exposes protected internal addressed-message routes:
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /internal/addressed-messages/admit` | Accept an Orchestrator outbox message only after the Orchestrator validates the exact persisted message, current participants, request/reply correlation, and execution fences. Returns an admission receipt. |
+| `POST /internal/addressed-messages/projects/{projectId}/runs/{runId}/sessions/{sessionId}/claim` | Claim the next eligible message only while the current Orchestrator session binding is `presenting`. |
+| `POST /internal/addressed-messages/projects/{projectId}/runs/{runId}/sessions/{sessionId}/messages/{messageId}/present` | Mark the fenced claim as presented only while the current Orchestrator session binding is `presenting`. |
+| `POST /internal/addressed-messages/projects/{projectId}/runs/{runId}/sessions/{sessionId}/messages/{messageId}/acknowledge` | Record receipt under the current session and claim fences. A valid correlated reply makes its request `input_available` on admission; this acknowledgment does not approve a gate or complete work. |
+
+The store writes messages with idempotency scoped to the sender run and session, a
+per-thread sequence, journal reference, and outbox record transactionally. Progress
+messages remain in sender history and are not presented as recipient input. Reply
+threads can be derived from the correlated reverse message. The store supports fenced
+delivery-state operations. Owner relationship and accepted-selection checks are performed by the
+Orchestrator through current Projects & Config authority. Orchestrator admission is
+synchronous; these source additions do not include a background delivery relay, a
+gate-approval decision, or automatic AgentHost scheduling. See [the owner integration
+and persistence boundary](../architecture/events-sessions#addressed-message-owner-integration).
+
 Configuration:
 
 | Key | Requirement |
@@ -108,6 +167,12 @@ Configuration:
 | `EventsAndSessions:Provider:PollIntervalMilliseconds` | Optional live-poll interval from 50 to 30,000 ms. |
 | `EventsAndSessions:Provider:ReferenceRetentionDays` | Optional object-reference retention from 1 to 3,650 days. |
 | `EventsAndSessions:ProjectOverrides:{projectId}` | Optional project-level provider IDs permitted by the host catalog. |
+| `EventsAndSessions:Messaging:OptionsRevision` | Optional native Messaging provider options revision; defaults to `native-postgres-messaging-v1`. |
+| `EventsAndSessions:Messaging:OptionsSchemaVersion` | Optional Messaging options schema version; the current provider accepts only `1`. |
+| `EventsAndSessions:Messaging:ClaimLeaseSeconds` | Optional claim lease from 10 to 3,600 seconds; defaults to `120`. |
+| `EventsAndSessions:Messaging:MaximumMessageLifetimeDays` | Optional message lifetime from 1 to 7 days; defaults to `1`. |
+| `ProjectsConfig:AuthorizationContext:OwnerBaseAddress` | Trusted HTTPS Projects owner base address for current authorization context and accepted run selection. |
+| `ProjectsConfig:AuthorizationContext:Audience` | Audience required on the incoming token when the internal owner client is called. |
 | `EventsAndSessions:Database:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Required explicit workload identity for the runtime PostgreSQL Entra role. |
 | `ConnectionStrings:EventsAndSessionsMigration` | Separate PostgreSQL connection using the migration Entra role; required only by `--migrate`. |
 | `EventsAndSessions:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Separate explicit workload identity used only by `--migrate`. |
@@ -117,9 +182,9 @@ Connections use TLS `VerifyFull` and the PostgreSQL Entra token scope. The runti
 identity only verifies applied migrations and uses the already-created schema; it
 cannot run DDL. Run the executable with only `--migrate` to apply embedded migrations
 with the separate privileged identity. Ordinary startup verifies the service and
-outbox schema and fails if a migration is pending. The service is source-only:
-the repository does not include its deployment, a Gateway route, AgentHost integration,
-message delivery, usage ledger, or consistency-manifest workflow. See the
+outbox schema and fails if a migration is pending. The service remains source-only: the repository does not include its deployment, a
+Gateway route, automatic AgentHost scheduling, an active delivery relay, usage ledger,
+or consistency-manifest workflow. See the
 [Events & Sessions journal reference](../architecture/events-sessions).
 
 For Knowledge promotion, the caller's existing bearer is forwarded when it is
