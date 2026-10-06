@@ -1,0 +1,37 @@
+name: v1 release pack
+
+# GitHub requires this dispatch path on the default branch before it can run on v1.
+# Only the admitted v1 branch contains the actual pack and publication jobs.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_source:
+        description: Exact full v1 commit SHA to prepare (and optionally publish)
+        required: true
+        type: string
+      publish:
+        description: Publish packages/images manually after separate approval (never deploy)
+        required: true
+        default: false
+        type: boolean
+      foundation_probe_sampler_replacement:
+        description: Select only the separately approved sampler-fixed Probe 0.0.0 replacement
+        required: true
+        default: false
+        type: boolean
+      expected_probe_digest:
+        description: Exact approved current Probe digest, required only for sampler replacement
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+jobs:
+  registration-only:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse execution from the default-branch registration stub
+        run: |
+          echo "::error::This default-branch stub only registers the v1 workflow. Dispatch the admitted refs/heads/v1 source; no publication is permitted here." >&2
+          exit 1
