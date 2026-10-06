@@ -44,6 +44,28 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
             : Fail<ProviderResolution>(candidate.Error!.Code, candidate.Error.Message);
     }
 
+    public ProviderResult<CostProviderResolution> ResolveCost(CostProviderResolutionRequest request)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.MeterSource) ||
+            !ValidRequirements(request.RequiredAdapterVersion, request.RequiredOptionsSchemaVersion,
+                request.RequiredCapabilities))
+            return Fail<CostProviderResolution>(ProviderErrorCode.InvalidConfiguration,
+                "Cost resolution request is invalid.");
+        if (ProviderSeams.Cardinality(ProviderSeam.Cost) != ProviderCardinality.KeyedByMeterSource)
+            return Fail<CostProviderResolution>(ProviderErrorCode.UnsupportedCardinality,
+                "Cost providers require meter-source resolution.");
+        if (!catalog.TryGetMeterSource(request.MeterSource, out var id))
+            return Fail<CostProviderResolution>(ProviderErrorCode.MissingDefault,
+                $"No provider is configured for cost meter source '{request.MeterSource}'.");
+
+        var candidate = Select(id!, ProviderSeam.Cost, request.RequiredAdapterVersion,
+            request.RequiredOptionsSchemaVersion, request.RequiredCapabilities);
+        return candidate.IsSuccess
+            ? ProviderResult<CostProviderResolution>.Success(
+                new CostProviderResolution(request.MeterSource, candidate.Value!))
+            : Fail<CostProviderResolution>(candidate.Error!.Code, candidate.Error.Message);
+    }
+
     public ProviderResult<OrderedProviderResolution> ResolveOrdered(OrderedProviderResolutionRequest request)
     {
         if (request is null || !Enum.IsDefined(request.Seam) ||

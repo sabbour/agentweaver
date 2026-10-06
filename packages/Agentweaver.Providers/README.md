@@ -29,7 +29,15 @@ generation. It records that generation; it does not compile, apply, verify,
 or provision egress policy. The owning environment manager must confirm the
 generation and enforce required constraints before dispatch.
 
-Keyed Cost selection and per-application Application Hosting are unsupported;
+Configure Cost with `ProviderMeterSourceSelection`; `ResolveCost` selects one
+enabled provider for each explicit meter-source key and checks the requested
+adapter version, options schema, and advertised capabilities. Projects & Config
+uses this path to persist source-keyed candidates in immutable run selections.
+Candidates do not prove an effective SDK model, trusted producer, live provider,
+resource negotiation, or pricing. Cost-specific binding and pricing remain
+separate consumer work.
+
+Per-application Application Hosting remains unsupported;
 the single-provider `Resolve` also explicitly returns `UnsupportedCardinality`
 for ordered and layered seams rather than silently treating them as exclusive.
 Sessions capture mirrors are not authoritative providers and are deferred.

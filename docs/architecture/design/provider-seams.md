@@ -529,6 +529,14 @@ and `estimate`, `reconciled`, or `unpriced` status. `Quote(plannedWork)` permits
 reported AI-credit units and model multipliers; each estimate stores its rate-card version, so a rate change
 does not silently reprice history ([R18](../decisions/0001-platform-architecture.md#risk-register)).
 
+The current source implements meter-keyed candidate selection through the existing
+`ProviderCatalog` and `ProviderResolver.ResolveCost`. The catalog owner supplies
+one enabled provider per source; Projects & Config's native run-selection routes
+persist the key and checked adapter/options versions, revision and capabilities.
+This independently usable source contract is not a Cost pricing adapter,
+negotiated resource binding, effective SDK model/source pin, or usage producer
+authorization. Those integrations remain separate from candidate selection.
+
 The Azure BYOK adapter uses deployment token rates from Azure Retail Prices, allocates
 provisioned-throughput capacity by usage share, and may reconcile estimates with Azure Cost Management
 exports filtered by resource tags. Other meter sources provide their own pricing; unknown sources remain

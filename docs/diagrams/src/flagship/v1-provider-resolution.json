@@ -34,7 +34,7 @@
     {
       "type": "note",
       "over": ["probe-host", "provider-resolver"],
-      "label": "ProbeTarget supplies resource IDs and generation 1 through ResourceNegotiation; no resource is provisioned."
+      "label": "Probe pins supplied resources without provisioning.\nProjects resolves Cost candidates by source; SDK provenance and pricing are separate."
     },
     {
       "type": "message",

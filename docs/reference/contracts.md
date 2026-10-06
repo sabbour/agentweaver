@@ -8,6 +8,18 @@
 
 These records contain no credentials or option values. See [providers and models](../architecture/providers-models) for resolver limits.
 
+`ProviderMeterSourceSelection` maps an explicit source to one enabled Cost provider.
+`CostProviderResolutionRequest` requires an exact adapter version, options schema
+and capability set. `ResolveCost` returns a checked `CostProviderResolution`
+candidate, not a live resource or pricing result.
+
+Projects & Config loads optional `ProjectsConfig:ProviderCatalog:MeterSourceSelections`
+entries containing `MeterSource` and `ProviderId`. Native
+`PUT /api/projects/{projectId}/runs/{runId}/selection` accepts a Cost
+`ProviderRequirement.MeterSource`; native selection GET returns that key in the
+stored `EffectiveProviderSelection`. Both retain current owner authorization.
+No new usage-writing endpoint, model-source authority, or pricing API is introduced.
+
 ## Events & Sessions journal
 
 The `Agentweaver.EventsAndSessions` service is an unpublished .NET 10 host candidate.

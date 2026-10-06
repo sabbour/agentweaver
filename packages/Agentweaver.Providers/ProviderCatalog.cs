@@ -44,22 +44,25 @@ public sealed class ProviderCatalog
     private readonly ImmutableHashSet<(ProviderSeam Seam, string Id)> _permittedOverrides;
     private readonly ImmutableDictionary<ProviderSeam, ImmutableArray<string>> _ordered;
     private readonly ImmutableDictionary<NetworkPolicyLayer, string> _layers;
+    private readonly ImmutableDictionary<string, string> _meterSources;
 
     private ProviderCatalog(
         ImmutableDictionary<string, ProviderRegistration> registrations,
         ImmutableDictionary<ProviderSeam, string> defaults,
         ImmutableHashSet<(ProviderSeam Seam, string Id)> permittedOverrides,
         ImmutableDictionary<ProviderSeam, ImmutableArray<string>> ordered,
-        ImmutableDictionary<NetworkPolicyLayer, string> layers) =>
-        (_registrations, _defaults, _permittedOverrides, _ordered, _layers) =
-            (registrations, defaults, permittedOverrides, ordered, layers);
+        ImmutableDictionary<NetworkPolicyLayer, string> layers,
+        ImmutableDictionary<string, string> meterSources) =>
+        (_registrations, _defaults, _permittedOverrides, _ordered, _layers, _meterSources) =
+            (registrations, defaults, permittedOverrides, ordered, layers, meterSources);
 
     public static ProviderResult<ProviderCatalog> Create(
         IEnumerable<ProviderRegistration> registrations,
         IEnumerable<ProviderSelection> defaults,
         IEnumerable<ProviderOverridePermission> permittedOverrides,
         IEnumerable<ProviderOrderedSelection>? orderedSelections = null,
-        IEnumerable<ProviderLayerSelection>? layerSelections = null)
+        IEnumerable<ProviderLayerSelection>? layerSelections = null,
+        IEnumerable<ProviderMeterSourceSelection>? meterSourceSelections = null)
     {
         if (registrations is null || defaults is null || permittedOverrides is null)
             return Invalid("Catalog collections cannot be null.");
@@ -163,9 +166,23 @@ public sealed class ProviderCatalog
             return ProviderResult<ProviderCatalog>.Failure(ProviderErrorCode.MissingDefault,
                 "Network policy requires an L3/L4 provider.");
 
+        var meterSources = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        foreach (var selection in meterSourceSelections ?? [])
+        {
+            if (selection is null || string.IsNullOrWhiteSpace(selection.MeterSource) ||
+                string.IsNullOrWhiteSpace(selection.ProviderId))
+                return Invalid("A cost meter-source selection is invalid.");
+            if (meterSources.ContainsKey(selection.MeterSource))
+                return ProviderResult<ProviderCatalog>.Failure(ProviderErrorCode.DuplicateSelection,
+                    $"Cost meter source '{selection.MeterSource}' has multiple providers.");
+            var error = CheckSelection(entries, ProviderSeam.Cost, selection.ProviderId);
+            if (error is not null) return error;
+            meterSources.Add(selection.MeterSource, selection.ProviderId);
+        }
+
         return ProviderResult<ProviderCatalog>.Success(new ProviderCatalog(
             entries.ToImmutable(), selected.ToImmutable(), permissions.ToImmutable(),
-            ordered.ToImmutable(), layers.ToImmutable()));
+            ordered.ToImmutable(), layers.ToImmutable(), meterSources.ToImmutable()));
     }
 
     private static ProviderResult<ProviderCatalog>? CheckSelection(
@@ -187,6 +204,8 @@ public sealed class ProviderCatalog
     public bool TryGetDefault(ProviderSeam seam, out string? id) => _defaults.TryGetValue(seam, out id);
     public bool TryGetOrdered(ProviderSeam seam, out ImmutableArray<string> ids) => _ordered.TryGetValue(seam, out ids);
     public bool TryGetLayer(NetworkPolicyLayer layer, out string? id) => _layers.TryGetValue(layer, out id);
+    public bool TryGetMeterSource(string meterSource, out string? id) =>
+        _meterSources.TryGetValue(meterSource, out id);
     public bool TryGetProvider(string id, out ProviderRegistration? registration) =>
         _registrations.TryGetValue(id, out registration);
 

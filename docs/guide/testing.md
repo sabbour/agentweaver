@@ -35,6 +35,22 @@ npm run test:release
 
 Missing Docker, image-pull permission, or PostgreSQL startup fails the integration suite. Testcontainers does not clean up unrelated containers or contact production resources.
 
+## Meter-keyed Cost source selection
+
+Provider tests cover independent enabled selections, duplicate/disabled/wrong-seam
+catalog rejection, absent sources, exact adapter/options schema requirements and
+required capabilities. The Projects disposable-PostgreSQL tests use the production
+catalog loader and run-selection service to persist and replay multiple source
+keys, read the immutable selection, reject invalid requirements, and deny a project
+Owner access without current Orchestrator authority. Existing non-Cost selection
+and tenant-authorization coverage remains in the same suites. A legacy-format
+regression pins the original non-Cost request serialization bytes, seeds a
+pre-change snapshot with no meter-source field, and verifies replay/read without
+rewriting its fingerprint or stored history.
+
+These tests exercise candidate selection only. They do not prove SDK model-source
+provenance, resource negotiation, pricing, or positive usage ingestion.
+
 ## Validate the documentation site
 
 Run these commands after changing a documentation page, link, or diagram:
