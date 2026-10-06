@@ -75,10 +75,30 @@ cursor contract.
 ## Schema and validation boundary
 
 The host defaults to the service-owned `events_sessions` schema. Run the executable
-with only `--migrate` to apply its embedded migration; ordinary startup verifies that
-the Events & Sessions and outbox schemas are current and fails when migration is
-needed. Readiness repeats the verification. The service does not create Azure
-resources, run a background relay, or publish an image.
+with only `--migrate` to apply its embedded migration. That command requires a
+separate privileged PostgreSQL connection and workload identity. Ordinary startup
+uses the runtime Entra role and only verifies that the Events & Sessions and outbox
+schemas are current; it fails when migration is needed and never creates or alters
+database objects. Readiness repeats the verification.
+
+Both connections require an explicit `WorkloadIdentityCredential` configuration.
+Npgsql obtains a PostgreSQL-scoped token through its async password callback for each
+new physical connection; Azure Identity manages token caching and refresh. The
+connection strings must include their Entra PostgreSQL role and must not contain a
+password. TLS uses `VerifyFull`. There is no developer-credential or password
+fallback. The service does not create Azure resources, run a background relay, or
+publish an image.
+
+Use these separate settings:
+
+| Configuration | Purpose |
+| --- | --- |
+| `ConnectionStrings:EventsAndSessions` | Runtime PostgreSQL endpoint, database, and least-privilege Entra role. |
+| `EventsAndSessions:Database:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Explicit workload identity for runtime database access. |
+| `ConnectionStrings:EventsAndSessionsMigration` | Migration PostgreSQL endpoint, database, and separately granted schema-owner role. |
+| `EventsAndSessions:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Explicit workload identity for the migration command only. |
+
+The migration job and its database grants are not provisioned by this source candidate.
 
 The [contract reference](../reference/contracts.md) lists routes and configuration.
 The [testing guide](../guide/testing.md) describes the disposable-PostgreSQL tests and

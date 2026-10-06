@@ -58,10 +58,16 @@ Configuration:
 | `EventsAndSessions:Provider:PollIntervalMilliseconds` | Optional live-poll interval from 50 to 30,000 ms. |
 | `EventsAndSessions:Provider:ReferenceRetentionDays` | Optional object-reference retention from 1 to 3,650 days. |
 | `EventsAndSessions:ProjectOverrides:{projectId}` | Optional project-level provider IDs permitted by the host catalog. |
+| `EventsAndSessions:Database:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Required explicit workload identity for the runtime PostgreSQL Entra role. |
+| `ConnectionStrings:EventsAndSessionsMigration` | Separate PostgreSQL connection using the migration Entra role; required only by `--migrate`. |
+| `EventsAndSessions:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Separate explicit workload identity used only by `--migrate`. |
 
-Run the executable with only `--migrate` to apply the embedded migration explicitly.
-Ordinary startup verifies the service and outbox schema, fails if a migration is
-pending, and does not create or alter database objects. The service is source-only:
+Both connection strings must omit passwords and name their Entra database role.
+Connections use TLS `VerifyFull` and the PostgreSQL Entra token scope. The runtime
+identity only verifies applied migrations and uses the already-created schema; it
+cannot run DDL. Run the executable with only `--migrate` to apply embedded migrations
+with the separate privileged identity. Ordinary startup verifies the service and
+outbox schema and fails if a migration is pending. The service is source-only:
 the repository does not include its deployment, a Gateway route, AgentHost integration,
 message delivery, usage ledger, or consistency-manifest workflow. See the
 [Events & Sessions journal reference](../architecture/events-sessions).

@@ -70,6 +70,11 @@
       "label": "OpenIddict validates issuer/audience; host requires GUID sub and one active-grant project_id/run_id pair."
     },
     {
+      "type": "note",
+      "over": ["api", "postgres"],
+      "label": "Runtime uses password-free workload identity and verifies schema only; --migrate uses a separate privileged connection and identity."
+    },
+    {
       "type": "message",
       "from": "api",
       "to": "provider",
