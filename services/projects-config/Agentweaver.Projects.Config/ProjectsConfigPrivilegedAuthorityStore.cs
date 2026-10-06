@@ -8,7 +8,7 @@ namespace Agentweaver.Projects.Config;
 public sealed class ProjectAuthorityConcurrencyException(string message) : Exception(message);
 
 public sealed class ProjectsConfigPrivilegedAuthorityStore(
-    ProjectsConfigDbContext db,
+    DbContextOptions<ProjectsConfigDbContext> options,
     TimeProvider timeProvider)
 {
     private const int MaxSerializationRetries = 3;
@@ -36,6 +36,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             GrantedBy = actor,
             GrantedAt = timeProvider.GetUtcNow(),
         };
+        await using var db = new ProjectsConfigDbContext(options);
         db.TenantMemberships.Add(membership);
         db.AuthorityAudit.Add(ToAudit(membership, "membership_granted", actor));
         try
@@ -65,6 +66,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
 
         for (var attempt = 0; ; attempt++)
         {
+            await using var db = new ProjectsConfigDbContext(options);
             await using var transaction = await db.Database
                 .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
                 .ConfigureAwait(false);
@@ -78,9 +80,9 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                     .ConfigureAwait(false)
                     ?? throw ProjectConfigException.NotFound();
                 await ValidateAssignmentScopeAsync(
-                    membership, resourceType, resourceId, role, cancellationToken).ConfigureAwait(false);
+                    db, membership, resourceType, resourceId, role, cancellationToken).ConfigureAwait(false);
                 if (resourceType == ProjectAuthorityResourceType.Project && role == ProjectAuthorityRole.Owner)
-                    await LockProjectOwnersAsync(resourceId, cancellationToken).ConfigureAwait(false);
+                    await LockProjectOwnersAsync(db, resourceId, cancellationToken).ConfigureAwait(false);
 
                 var assignment = new ProjectRoleAssignmentRecord
                 {
@@ -123,6 +125,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
 
         for (var attempt = 0; ; attempt++)
         {
+            await using var db = new ProjectsConfigDbContext(options);
             await using var transaction = await db.Database
                 .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
                 .ConfigureAwait(false);
@@ -134,7 +137,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                     ?? throw ProjectConfigException.NotFound();
                 if (current.ResourceType == ProjectAuthorityResourceType.Project &&
                     current.Role == ProjectAuthorityRole.Owner)
-                    await LockProjectOwnersAsync(current.ResourceId, cancellationToken).ConfigureAwait(false);
+                    await LockProjectOwnersAsync(db, current.ResourceId, cancellationToken).ConfigureAwait(false);
 
                 var assignment = await db.RoleAssignments
                     .FromSqlInterpolated($"""
@@ -153,7 +156,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                 if (assignment.ResourceType == ProjectAuthorityResourceType.Project &&
                     assignment.Role == ProjectAuthorityRole.Owner &&
                     !await HasOtherActiveProjectOwnerAsync(
-                        assignment, cancellationToken).ConfigureAwait(false))
+                        db, assignment, cancellationToken).ConfigureAwait(false))
                     throw new ProjectAuthorityConcurrencyException(
                         "Cannot revoke the last explicit Owner assignment for a project.");
 
@@ -193,6 +196,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
 
         for (var attempt = 0; ; attempt++)
         {
+            await using var db = new ProjectsConfigDbContext(options);
             await using var transaction = await db.Database
                 .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
                 .ConfigureAwait(false);
@@ -214,7 +218,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                     .ToArrayAsync(cancellationToken)
                     .ConfigureAwait(false);
                 foreach (var projectId in ownedProjects)
-                    await LockProjectOwnersAsync(projectId, cancellationToken).ConfigureAwait(false);
+                    await LockProjectOwnersAsync(db, projectId, cancellationToken).ConfigureAwait(false);
 
                 var membership = await db.TenantMemberships
                     .FromSqlInterpolated($"""
@@ -272,6 +276,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
     }
 
     private async Task ValidateAssignmentScopeAsync(
+        ProjectsConfigDbContext db,
         ProjectTenantMembershipRecord membership,
         ProjectAuthorityResourceType resourceType,
         string resourceId,
@@ -296,6 +301,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
     }
 
     private async Task<bool> HasOtherActiveProjectOwnerAsync(
+        ProjectsConfigDbContext db,
         ProjectRoleAssignmentRecord assignment,
         CancellationToken cancellationToken) =>
         await (
@@ -312,7 +318,10 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             .AnyAsync(cancellationToken)
             .ConfigureAwait(false);
 
-    private async Task LockProjectOwnersAsync(string projectId, CancellationToken cancellationToken)
+    private async Task LockProjectOwnersAsync(
+        ProjectsConfigDbContext db,
+        string projectId,
+        CancellationToken cancellationToken)
     {
         await db.Database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock(hashtextextended({"project-owner:" + projectId}, 0))",

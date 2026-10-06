@@ -25,7 +25,7 @@ internal static class ProjectsConfigPostgresDataSource
         builder.UsePasswordProvider(
             _ => throw new InvalidOperationException("Synchronous PostgreSQL token acquisition is disabled."),
             async (_, cancellationToken) =>
-                await GetPostgresTokenAsync(credential, cancellationToken).ConfigureAwait(false));
+                await GetPostgresTokenAsync(credential, cancellationToken, TimeProvider.System).ConfigureAwait(false));
         return builder.Build();
     }
 
@@ -42,14 +42,19 @@ internal static class ProjectsConfigPostgresDataSource
         return options;
     }
 
-    private static async ValueTask<string> GetPostgresTokenAsync(
+    internal static async ValueTask<string> GetPostgresTokenAsync(
         TokenCredential credential,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeProvider timeProvider)
     {
+        ArgumentNullException.ThrowIfNull(credential);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         var token = await credential.GetTokenAsync(
             new TokenRequestContext([TokenScope]), cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(token.Token))
             throw new InvalidOperationException("Projects & Config PostgreSQL Entra token acquisition returned an empty token.");
+        if (token.ExpiresOn <= timeProvider.GetUtcNow())
+            throw new InvalidOperationException("Projects & Config PostgreSQL Entra token acquisition returned an expired token.");
         return token.Token;
     }
 }
