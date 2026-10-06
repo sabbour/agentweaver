@@ -149,6 +149,85 @@ public sealed class ProjectsConfigHttpClientTests
         Assert.Single(wrongAudienceHandler.Requests);
     }
 
+    [Fact]
+    public async Task ProjectsClientRejectsSameHostRedirectWithoutForwardingCallerContext()
+    {
+        var handler = new RecordingHandler(
+            Json(ProjectAuthorizationContext()),
+            Json(Selection()),
+            authorizationStatus: HttpStatusCode.Found,
+            redirectLocation: new Uri("https://projects-config.example/redirected"));
+        var client = new ProjectsConfigHttpClient(new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://projects-config.example")
+        });
+
+        var exception = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+            client.GetAuthorizationContextAsync(
+                new CurrentCallerRequest("validated.jwt.token", "tenant-a"),
+                CancellationToken.None));
+
+        Assert.Equal("projects_config_redirect_rejected", exception.Code);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal("/api/authorization/context", request.Path);
+        Assert.NotNull(request.Authorization);
+        Assert.Equal("tenant-a", request.TenantSelector);
+        Assert.DoesNotContain("redirected", request.Path, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConfiguredProjectsBaseAndProductionHandlerRejectUnsafeRedirectConfiguration()
+    {
+        Assert.Equal(
+            new Uri("https://projects-config.example/api/"),
+            EnvironmentHttpTransport.RequireTrustedHttpsBaseUri(
+                "https://projects-config.example/api/",
+                "ProjectsConfig:BaseAddress"));
+        using var projectsHandler = EnvironmentHttpTransport.CreateRedirectDisabledHandler();
+        using var kubernetesHandler = EnvironmentHttpTransport.CreateRedirectDisabledHandler();
+        Assert.False(projectsHandler.AllowAutoRedirect);
+        Assert.False(kubernetesHandler.AllowAutoRedirect);
+
+        foreach (var invalid in new[]
+        {
+            "http://projects-config.example/",
+            "https://user:secret@projects-config.example/",
+            "https://projects-config.example/?tenant=other",
+            "https://projects-config.example/#fragment",
+        })
+            Assert.Throws<InvalidOperationException>(() =>
+                EnvironmentHttpTransport.RequireTrustedHttpsBaseUri(invalid, "ProjectsConfig:BaseAddress"));
+    }
+
+    [Fact]
+    public async Task KubernetesServiceAccountTransportRejectsRedirectBeforeAnotherRequest()
+    {
+        var tokenFile = Path.GetTempFileName();
+        await File.WriteAllTextAsync(tokenFile, "kubernetes-service-token");
+        try
+        {
+            var endpoint = new RedirectRecordingHandler();
+            using var handler = new KubernetesServiceAccountHandler(endpoint, tokenFile);
+            using var client = new HttpClient(handler)
+            {
+                BaseAddress = new Uri("https://kubernetes.example")
+            };
+
+            var exception = await Assert.ThrowsAsync<HttpRequestException>(() =>
+                client.GetAsync("/api/v1/namespaces/test"));
+
+            Assert.Contains("redirects are not permitted", exception.Message, StringComparison.Ordinal);
+            var request = Assert.Single(endpoint.Requests);
+            Assert.Equal("/api/v1/namespaces/test", request.Path);
+            Assert.Equal("Bearer kubernetes-service-token", request.Authorization);
+            Assert.DoesNotContain("redirected", request.Path, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(tokenFile);
+        }
+    }
+
     private static string Json<T>(T value)
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -207,7 +286,8 @@ public sealed class ProjectsConfigHttpClientTests
         string selectionResponse,
         bool noStore = true,
         HttpStatusCode authorizationStatus = HttpStatusCode.OK,
-        HttpStatusCode selectionStatus = HttpStatusCode.OK) : HttpMessageHandler
+        HttpStatusCode selectionStatus = HttpStatusCode.OK,
+        Uri? redirectLocation = null) : HttpMessageHandler
     {
         public List<RecordedRequest> Requests { get; } = [];
 
@@ -237,7 +317,31 @@ public sealed class ProjectsConfigHttpClientTests
                 {
                     NoStore = true
                 };
+            if (redirectLocation is not null)
+                response.Headers.Location = redirectLocation;
             return await Task.FromResult(response);
+        }
+    }
+
+    private sealed class RedirectRecordingHandler : HttpMessageHandler
+    {
+        public List<RecordedRequest> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(new RecordedRequest(
+                request.Method,
+                request.RequestUri!.AbsolutePath,
+                request.Headers.Authorization?.ToString(),
+                null,
+                false));
+            var response = new HttpResponseMessage(HttpStatusCode.Found)
+            {
+                Headers = { Location = new Uri("https://kubernetes.example/redirected") }
+            };
+            return Task.FromResult(response);
         }
     }
 

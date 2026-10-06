@@ -28,6 +28,11 @@ access, the operation fails explicitly before Kubernetes access. Revoke needs
 only `WriteProjects` and the Environment owner identity; it does not need to
 read or compile the run selection.
 
+`ProjectsConfig:BaseAddress` must be an absolute HTTPS URI without user info,
+query, or fragment. The authenticated Projects and Kubernetes clients disable
+automatic redirects and reject every 3xx response, so credentials are not
+forwarded to a redirect target.
+
 Every operation fetches fresh context before effects. Apply/Verify/Reconcile
 recheck it after selection retrieval and after Kubernetes readback, before
 pinning or recording reconciliation; Revoke rechecks after the tombstone

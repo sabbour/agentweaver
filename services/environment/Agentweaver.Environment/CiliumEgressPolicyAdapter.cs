@@ -781,6 +781,7 @@ public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) :
             })
         };
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        RejectRedirect(response);
         if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.OK or
             HttpStatusCode.NoContent or HttpStatusCode.Accepted)
             return;
@@ -798,6 +799,7 @@ public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) :
         if (policy is not null)
             request.Content = JsonContent.Create(policy, options: JsonOptions);
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        RejectRedirect(response);
         if (allowNotFound && response.StatusCode == HttpStatusCode.NotFound)
             return null;
         if (!response.IsSuccessStatusCode)
@@ -823,6 +825,14 @@ public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) :
         throw new CiliumPolicyException(
             statusCode == HttpStatusCode.Conflict ? "kubernetes_conflict" : "kubernetes_api_failure",
             $"Kubernetes Cilium policy operation failed with HTTP {(int)statusCode}.");
+
+    private static void RejectRedirect(HttpResponseMessage response)
+    {
+        if (EnvironmentHttpTransport.IsRedirect(response))
+            throw new CiliumPolicyException(
+                "kubernetes_redirect_rejected",
+                "Kubernetes API redirects are not permitted for authenticated requests.");
+    }
 
     private static string NamespacePath(string @namespace) =>
         $"{CollectionPath}/{Uri.EscapeDataString(@namespace)}/ciliumnetworkpolicies";
