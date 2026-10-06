@@ -126,7 +126,6 @@ jobs:
     permissions:
       contents: write
       packages: write
-    environment: v1-publication
     steps:
       - uses: actions/checkout@v4
         with:
