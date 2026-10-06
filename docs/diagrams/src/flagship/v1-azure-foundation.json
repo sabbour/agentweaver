@@ -10,7 +10,7 @@
     {
       "id": "aks",
       "label": "AKS",
-      "subLabel": "Public API; Cilium; OIDC; native managed Gateway API; NGINX None",
+      "subLabel": "Public API; Cilium; OIDC; system autoscaler 2-3 D2s_v5 nodes; Gateway API",
       "icon": "server",
       "library": "azure",
       "shape": "image;image=img/lib/azure2/containers/Kubernetes_Services.svg;imageAspect=1",

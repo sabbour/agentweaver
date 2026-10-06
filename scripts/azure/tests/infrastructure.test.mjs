@@ -64,6 +64,13 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     resource.name === "[format('{0}-aks', parameters('namePrefix'))]");
   const aks = aksDeployment.properties.template;
   const cluster = aks.resources.find(resource => resource.type === 'Microsoft.ContainerService/managedClusters');
+  assert.equal(cluster.properties.agentPoolProfiles[0].enableAutoScaling, true);
+  assert.equal(cluster.properties.agentPoolProfiles[0].minCount, "[parameters('nodePoolMinCount')]");
+  assert.equal(cluster.properties.agentPoolProfiles[0].maxCount, "[parameters('nodePoolMaxCount')]");
+  assert.equal(cluster.properties.agentPoolProfiles[0].count, "[parameters('nodePoolCount')]");
+  assert.deepEqual(template.parameters.nodePoolMinCount.allowedValues, [2]);
+  assert.deepEqual(template.parameters.nodePoolMaxCount.allowedValues, [3]);
+  assert.deepEqual(template.parameters.nodePoolCount.allowedValues, [2, 3]);
   assert.equal(cluster.apiVersion, '2026-07-02-preview');
   assert.equal(cluster.properties.disableLocalAccounts, true);
   assert.equal(cluster.properties.apiServerAccessProfile.enablePrivateCluster, false);
@@ -214,6 +221,15 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   ]).stdout);
   assert.equal(aksOnly.parameters.operatorObjectId.type, 'string');
   assert.equal(aksOnly.parameters.operatorRoleAssignmentName.type, 'string');
+  assert.deepEqual(aksOnly.parameters.nodePoolMinCount.allowedValues, [2]);
+  assert.deepEqual(aksOnly.parameters.nodePoolMaxCount.allowedValues, [3]);
+  assert.deepEqual(aksOnly.parameters.nodePoolCount.allowedValues, [2, 3]);
+  const aksOnlyModule = aksOnly.resources.find(resource =>
+    resource.name === "[format('{0}-aks', parameters('namePrefix'))]");
+  for (const name of ['nodePoolCount', 'nodePoolMinCount', 'nodePoolMaxCount']) {
+    assert.equal(aksOnlyModule.properties.parameters[name].value, `[parameters('${name}')]`);
+    assert.equal(aksDeployment.properties.parameters[name].value, `[parameters('${name}')]`);
+  }
   assert.ok(aksOnly.outputs.operatorRoleAssignmentId);
   assert.ok(aksOnly.outputs.oidcIssuerUrl);
   assert.deepEqual(aksOnly.resources.map(resource => resource.name), [

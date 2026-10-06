@@ -22,6 +22,23 @@ No Azure account, credentials, or cluster connection is necessary.
 Tests use fake transports and generated local fixtures.
 The only real Azure CLI test reads local CLI version information.
 
+## System pool autoscaling
+
+Both templates enable autoscaling on the existing `system` pool with explicit
+`nodePoolMinCount=2` and `nodePoolMaxCount=3` parameters. The VM size remains
+`Standard_D2s_v5`. The initial foundation starts with two nodes.
+
+The AKS-only installer reads the exact native pool before what-if.
+It passes the observed count to both what-if and deployment.
+It stops if the count or autoscaler configuration changes before deployment.
+This preserves a valid three-node count instead of resetting it to two.
+Tracked parameters cannot override the current count or expand the approved bounds.
+
+The receipt records native autoscaler bounds and counts before and after deployment.
+It does not claim that demand created another node.
+The two-node baseline remains unchanged. Three nodes can increase node compute
+cost by 50%, plus per-node service charges. Quota headroom does not prove regional capacity.
+
 ## ACNS security source setting
 
 AKS opts into Advanced Container Networking Services (ACNS) with security

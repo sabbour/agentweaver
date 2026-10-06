@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildDeployArgs, cliConfig, cliOptions, deploy } from '../deploy.mjs';
 import {
   fixture, source, fakeAzure, ids, tags, deploymentOutputs, operatorRoleAssignmentName,
-  subnetId, subnetRoleAssignmentName,
+  subnetId, subnetRoleAssignmentName, clusterId,
 } from './fixtures/target.mjs';
 
 test('deployment uses supported source parameters, explicit subscription and incremental mode, never tags', () => {
@@ -23,6 +23,79 @@ test('offline dry-run never reads account or mutates', async () => {
   const result = await deploy(fixture, { sourceResolver: () => source, execAz: () => { throw new Error('cloud call'); } });
   assert.equal(result.executed, false);
   assert.equal(result.scope, 'infrastructure-only');
+});
+
+test('AKS-only repair enables declared bounds without resetting an observed three-node pool', async () => {
+  const az = fakeAzure();
+  const calls = [];
+  const pool = { id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System',
+    vmSize: 'Standard_D2s_v5', count: 3, enableAutoScaling: false,
+    minCount: null, maxCount: null, provisioningState: 'Succeeded' };
+  let created = false;
+  const result = await deploy({ ...fixture, execute: true }, {
+    sourceResolver: () => ({ ...source, scope: 'aks-only' }),
+    bootstrapNamespace() {},
+    execAz(args, options) {
+      calls.push(args);
+      if (args.slice(0, 3).join(' ') === 'aks nodepool show') {
+        return { status: 0, stderr: '', stdout: JSON.stringify(created
+          ? { ...pool, enableAutoScaling: true, minCount: 2, maxCount: 3 } : pool) };
+      }
+      if (args.slice(0, 3).join(' ') === 'deployment group create') created = true;
+      return az(args, options);
+    },
+  });
+  assert.equal(result.receipt.autoscaling.countBefore, 3);
+  assert.equal(result.receipt.autoscaling.countSubmitted, 3);
+  assert.equal(result.receipt.autoscaling.countAfter, 3);
+  assert.equal(result.receipt.autoscaling.enabled, true);
+  assert.equal(result.receipt.autoscaling.scaleUpProven, false);
+  for (const args of calls.filter(args => ['what-if', 'create'].includes(args[2]))) {
+    assert.ok(args.includes('nodePoolCount=3'));
+  }
+});
+
+test('AKS-only count changes after what-if abort before deployment', async () => {
+  const az = fakeAzure();
+  let reads = 0;
+  let created = false;
+  await assert.rejects(deploy({ ...fixture, execute: true }, {
+    sourceResolver: () => ({ ...source, scope: 'aks-only' }), bootstrapNamespace() {},
+    execAz(args, options) {
+      if (args.slice(0, 3).join(' ') === 'aks nodepool show') {
+        reads++;
+        return { status: 0, stderr: '', stdout: JSON.stringify({
+          id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System',
+          vmSize: 'Standard_D2s_v5', count: reads === 1 ? 2 : 3,
+          enableAutoScaling: true, minCount: 2, maxCount: 3, provisioningState: 'Succeeded',
+        }) };
+      }
+      if (args.slice(0, 3).join(' ') === 'deployment group create') created = true;
+      return az(args, options);
+    },
+  }), /changed after what-if/);
+  assert.equal(created, false);
+});
+
+test('AKS-only repair rejects foreign SKU, out-of-bounds count and failed native confirmation', async () => {
+  for (const override of [{ vmSize: 'Standard_D4s_v5' }, { count: 4 }, { count: 2.5 },
+    { provisioningState: 'Updating' }, { id: 'foreign' }]) {
+    const az = fakeAzure({ nodePoolResult: { status: 0, stderr: '', stdout: JSON.stringify({
+      id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System', vmSize: 'Standard_D2s_v5',
+      count: 2, enableAutoScaling: false, minCount: null, maxCount: null,
+      provisioningState: 'Succeeded', ...override,
+    }) } });
+    await assert.rejects(deploy({ ...fixture, execute: true }, {
+      sourceResolver: () => ({ ...source, scope: 'aks-only' }), execAz: az, bootstrapNamespace() {},
+    }), /Existing system pool/);
+  }
+  await assert.rejects(deploy({ ...fixture, execute: true }, {
+    sourceResolver: () => source, bootstrapNamespace() {},
+    execAz: fakeAzure({ nodePoolResult: { status: 0, stderr: '', stdout: JSON.stringify({
+      id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System', vmSize: 'Standard_D2s_v5',
+      count: 2, enableAutoScaling: false, minCount: null, maxCount: null, provisioningState: 'Succeeded',
+    }) } }),
+  }), /did not confirm/);
 });
 
 test('stale subnet-role cleanup requires a separate explicit CLI authorization', () => {
@@ -287,6 +360,7 @@ test('deployment checks real account, group and resources, then what-if before c
     ['account', 'show', '-o'], ['group', 'show', '--name'], ['resource', 'list', '--resource-group'],
     ['role', 'assignment', 'list'], ['deployment', 'group', 'what-if'],
     ['resource', 'show', '--ids'], ['deployment', 'group', 'create'], ['resource', 'show', '--ids'],
+    ['aks', 'nodepool', 'show'],
   ]);
   for (const args of calls) assert.equal(args[args.indexOf('--subscription') + 1], ids.subscriptionId);
 });

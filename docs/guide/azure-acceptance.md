@@ -38,6 +38,13 @@ requires a separate verified full-foundation resource receipt for Probe acceptan
 The Probe image source and the native infrastructure source remain separate.
 Neither receipt can substitute for the other.
 
+The system pool uses autoscaling with a minimum of two and a maximum of three
+`Standard_D2s_v5` nodes. Both deployment paths declare the same bounds.
+The AKS-only installer preserves the observed count within those bounds.
+It stops if the count changes after what-if, instead of resetting three nodes to two.
+The receipt reports the observed bounds and counts, not proof of scale-up.
+Available vCPU quota does not prove regional VM capacity.
+
 The AKS API uses managed Entra authentication and Azure RBAC, with local
 accounts disabled. PostgreSQL, Key Vault, Blob, VNet/private endpoints, and
 Monitor retain their approved target and region placement.
