@@ -86,7 +86,9 @@ The image source remains `f46cff3c65a97b76b78c9ea717ec8b2068d56de5`.
 The dispatch source identifies the final admitted publisher helper SHA.
 
 The fixed recovery claim namespace is
-`agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-attempt-1`.
+`agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-attempt-2`.
+Attempt one and its helper claims remain consumed after the denied push in run `37415776940`.
+Attempt two requires separate fresh user approval. It does not reuse or remove attempt one's claims or partial receipts.
 The separate helper claim namespace is
 `agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-helper/<admitted-helper-sha>`.
 Both namespaces retain their claim and result records permanently.
