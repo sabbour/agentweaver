@@ -1417,11 +1417,17 @@ public sealed class EnvironmentLifecycleStore(
             throw new EnvironmentLifecycleException(
                 "environment_volume_operation_mismatch",
                 "The reserved workspace-volume operation does not match the typed completion method.");
-        if (operation.State != EnvironmentWorkspaceVolumeTransitionState.Reserved)
+        var releaseRetry = expectedOperation == EnvironmentWorkspaceVolumeOperation.Release &&
+            operation.State == EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
+        if (operation.State != EnvironmentWorkspaceVolumeTransitionState.Reserved && !releaseRetry)
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return ToVolumeResult(operation, replayed: true);
         }
+        if (releaseRetry && !effectMayHaveApplied)
+            throw new EnvironmentLifecycleException(
+                "environment_volume_release_retry_unverified",
+                "A reconciled Release retry must record that its provider effect may have applied.");
         if (durableFlushVerified &&
             (operation.Operation != EnvironmentWorkspaceVolumeOperation.Flush ||
              !effectVerified ||
@@ -1468,7 +1474,7 @@ public sealed class EnvironmentLifecycleStore(
                 connection,
                 transaction,
                 operationId,
-                EnvironmentWorkspaceVolumeTransitionState.Reserved,
+                operation.State,
                 operationState,
                 operation.TargetResource,
                 operation.TargetProviderBinding,
@@ -1481,7 +1487,7 @@ public sealed class EnvironmentLifecycleStore(
                 connection,
                 transaction,
                 operationId,
-                EnvironmentWorkspaceVolumeTransitionState.Reserved,
+                operation.State,
                 EnvironmentWorkspaceVolumeTransitionState.Completed,
                 providerResource,
                 operation.Operation is EnvironmentWorkspaceVolumeOperation.Provision or

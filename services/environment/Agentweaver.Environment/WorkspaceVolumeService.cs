@@ -410,8 +410,23 @@ public sealed class WorkspaceVolumeService
             environmentFence, request, snapshot, cancellationToken).ConfigureAwait(false);
         if (reservation.Replayed ||
             reservation.TransitionState != EnvironmentWorkspaceVolumeTransitionState.Reserved)
-            return await ReplayedAsync(
-                environmentFence, request.VolumeId, reservation, cancellationToken).ConfigureAwait(false);
+        {
+            var releaseReconciliation =
+                reservation.Replayed &&
+                reservation.Operation == EnvironmentWorkspaceVolumeOperation.Release &&
+                reservation.TransitionState == EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
+            if (!releaseReconciliation)
+                return await ReplayedAsync(
+                    environmentFence, request.VolumeId, reservation, cancellationToken).ConfigureAwait(false);
+
+            if (snapshot.TransitionRevision != reservation.ExpectedTransitionRevision ||
+                snapshot.ResourceGeneration != reservation.ExpectedResourceGeneration ||
+                snapshot.DataGeneration != reservation.ExpectedDataGeneration ||
+                snapshot.Resource != reservation.CurrentResource ||
+                !ProviderBindingsEqual(snapshot.ProviderBinding, reservation.CurrentProviderBinding))
+                throw new InvalidOperationException(
+                    "The pending Release no longer matches the current Environment-owned volume resource.");
+        }
 
         if (reservation.ExpectedResourceGeneration == 0)
         {
@@ -427,7 +442,7 @@ public sealed class WorkspaceVolumeService
         }
 
         var resource = RequirePinnedResource(reservation);
-        var providerBinding = snapshot.ProviderBinding
+        var providerBinding = reservation.CurrentProviderBinding
             ?? throw new InvalidOperationException("The Environment owner has no pinned provider binding.");
         var releaseRequest = new WorkspaceVolumeReleaseRequest(
             new WorkspaceVolumeReference(

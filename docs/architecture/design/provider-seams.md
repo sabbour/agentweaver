@@ -452,6 +452,9 @@ boundary. It derives a stable, project-scoped PVC name from the volume ID and ge
 existing claim's owner annotations and requested capacity/access mode, verifies the bound PV's claim UID,
 and uses UID preconditions when changing reclaim policy or deleting a claim. Its StorageClass must use the
 approved `uid=1000`, `gid=1000`, file/dir modes, `mfsymlinks`, strict cache, and `actimeo=30` options.
+The requested StorageClass must match the provider's configured class or provisioning fails before
+Kubernetes calls. The PV uses `Delete` only when an environment-bound volume requests `Delete` for both its
+reclaim and owner-deletion policies; all other combinations use `Retain`.
 Environment pins the adapter version, options schema and revision, non-secret options snapshot, and exact
 claim/PV release descriptor with each provisioned generation. Release receipts bind the exact provider
 resource and idempotency key. `Retained` requires a read-back of the exact PV's `Retain` policy. `Released`
@@ -460,7 +463,8 @@ absence of the exact saved PV, or a retry that confirms those same identities ar
 claim alone is not proof of release. The receipt confirms Kubernetes control-plane removal; it does not
 promise Azure Files data erasure or completion of asynchronous CSI backend cleanup. Environment validates
 the receipt before recording owner-side release completion. `AlreadyAbsent` is not accepted as a release
-receipt for either reclaim policy.
+receipt for either reclaim policy. An uncertain Release can be retried by replaying the same idempotency key;
+the provider rechecks the pinned claim/PV identities before the owner records completion.
 
 A Replace cleanup work item is inserted atomically with the owner CAS that pins the verified target. It
 preserves the exact old resource reference and generation, original provider binding/options snapshot and

@@ -138,6 +138,42 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
     }
 
     [Fact]
+    public async Task RejectsAStorageClassThatDiffersFromTheConfiguredProviderClass()
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client);
+
+        var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
+            provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(
+                Spec(storageClass: "other-storage-class"), 1, "provision-storage-class-mismatch")));
+
+        Assert.Equal("storage_class_mismatch", exception.Code);
+        Assert.Equal(0, client.GetStorageClassCalls);
+        Assert.Equal(0, client.EnsureClaimCalls);
+    }
+
+    [Theory]
+    [InlineData(WorkspaceVolumeBindingMode.Shared, WorkspaceVolumeOwnerDeletionPolicy.Delete)]
+    [InlineData(WorkspaceVolumeBindingMode.Environment, WorkspaceVolumeOwnerDeletionPolicy.Retain)]
+    public async Task ProvisionUsesRetainUnlessBothDeletionPoliciesAuthorizeDelete(
+        WorkspaceVolumeBindingMode bindingMode,
+        WorkspaceVolumeOwnerDeletionPolicy ownerDeletionPolicy)
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client);
+        var spec = Spec(
+            volumeId: $"volume-{bindingMode}-{ownerDeletionPolicy}",
+            bindingMode: bindingMode,
+            reclaimPolicy: WorkspaceVolumeReclaimPolicy.Delete,
+            ownerDeletionPolicy: ownerDeletionPolicy);
+
+        await provider.ProvisionAsync(
+            new WorkspaceVolumeProvisionRequest(spec, 1, $"provision-{bindingMode}-{ownerDeletionPolicy}"));
+
+        Assert.Equal("Retain", Assert.Single(client.PersistentVolumes.Values).ReclaimPolicy);
+    }
+
+    [Fact]
     public async Task RejectsAClaimReplacedByAnotherOwnerOrGeneration()
     {
         var client = new FakeAzureFilesCsiClient { ReplaceClaimIdentity = true };
@@ -598,20 +634,27 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         long capacityGiB = 8,
         WorkspaceVolumeConsistency consistency = WorkspaceVolumeConsistency.Strict,
         WorkspaceVolumeReclaimPolicy reclaimPolicy = WorkspaceVolumeReclaimPolicy.Retain,
-        WorkspaceVolumeOwnerDeletionPolicy ownerDeletionPolicy = WorkspaceVolumeOwnerDeletionPolicy.Delete) =>
-        new(
+        WorkspaceVolumeOwnerDeletionPolicy ownerDeletionPolicy = WorkspaceVolumeOwnerDeletionPolicy.Delete,
+        WorkspaceVolumeBindingMode bindingMode = WorkspaceVolumeBindingMode.Environment,
+        string? storageClass = null)
+    {
+        var isShared = bindingMode == WorkspaceVolumeBindingMode.Shared;
+        return new WorkspaceVolumeSpec(
             volumeId,
             "project-1",
-            new WorkspaceVolumeOwner(WorkspaceVolumeOwnerKind.Run, "run-1"),
-            "environment-1",
-            WorkspaceVolumeBindingMode.Environment,
+            new WorkspaceVolumeOwner(
+                isShared ? WorkspaceVolumeOwnerKind.Team : WorkspaceVolumeOwnerKind.Run,
+                isShared ? "team-1" : "run-1"),
+            isShared ? null : "environment-1",
+            bindingMode,
             WorkspaceVolumeAccessMode.ReadWriteMany,
             capacityGiB,
-            Options.StorageClassName,
+            storageClass ?? Options.StorageClassName,
             consistency,
             reclaimPolicy,
             ownerDeletionPolicy,
-            []);
+            isShared ? ["environment-1"] : []);
+    }
 
     private static WorkspaceVolumeReleaseRequest ReleaseRequest(
         WorkspaceVolumeSpec spec,
@@ -686,6 +729,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         public int PendingReadsBeforeBound { get; set; }
         public bool ReplaceClaimIdentity { get; set; }
         public bool ClaimRemainsAfterDelete { get; set; }
+        public int GetStorageClassCalls { get; private set; }
         public int EnsureClaimCalls { get; private set; }
         public int GetClaimCalls { get; private set; }
         public AzureFilesClaimRequest? LastClaimRequest { get; private set; }
@@ -697,8 +741,11 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
 
         public Task<AzureFilesStorageClassSnapshot?> GetStorageClassAsync(
             string name,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(StorageClass?.Name == name ? StorageClass : null);
+            CancellationToken cancellationToken = default)
+        {
+            GetStorageClassCalls++;
+            return Task.FromResult(StorageClass?.Name == name ? StorageClass : null);
+        }
 
         public Task<AzureFilesClaimSnapshot> EnsureClaimAsync(
             AzureFilesClaimRequest request,
