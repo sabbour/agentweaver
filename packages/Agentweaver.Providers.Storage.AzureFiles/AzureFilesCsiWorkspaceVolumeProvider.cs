@@ -41,6 +41,10 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
     {
         request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
         var spec = request.Spec;
+        if (!string.Equals(spec.StorageClass, _options.StorageClassName, StringComparison.Ordinal))
+            throw new AzureFilesCsiException(
+                "storage_class_mismatch",
+                "The requested workspace volume StorageClass differs from the configured Azure Files class.");
         if (spec.Consistency != WorkspaceVolumeConsistency.Strict)
             throw new AzureFilesCsiException(
                 "consistency_unsupported",
@@ -51,13 +55,13 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 "Workspace volume capacity exceeds the configured provider limit.");
 
         var storageClass = await _client.GetStorageClassAsync(
-            _options.StorageClassName,
+            spec.StorageClass,
             cancellationToken).ConfigureAwait(false);
         if (storageClass is null)
             throw new AzureFilesCsiException(
                 "storage_class_missing",
-                $"Azure Files StorageClass '{_options.StorageClassName}' does not exist.");
-        ValidateStorageClass(storageClass, _options.StorageClassName);
+                $"Azure Files StorageClass '{spec.StorageClass}' does not exist.");
+        ValidateStorageClass(storageClass, spec.StorageClass);
 
         var claimName = GetClaimName(spec.ProjectId, spec.VolumeId, request.ResourceGeneration);
         var claimRequest = new AzureFilesClaimRequest(
@@ -67,7 +71,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
             spec.VolumeId,
             request.ResourceGeneration,
             spec.Owner,
-            _options.StorageClassName,
+            spec.StorageClass,
             spec.CapacityGiB,
             spec.AccessMode);
         var claim = await _client.EnsureClaimAsync(claimRequest, cancellationToken).ConfigureAwait(false);
@@ -87,13 +91,14 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 "The Azure Files claim is bound but its persistent volume cannot be read.");
         ValidatePersistentVolume(persistentVolume, claimRequest, claim);
 
-        var expectedReclaimPolicy = ToKubernetesReclaimPolicy(spec.ReclaimPolicy);
+        var effectiveReleasePolicy = spec.GetEffectiveReleasePolicy();
+        var expectedReclaimPolicy = ToKubernetesReclaimPolicy(effectiveReleasePolicy);
         if (!string.Equals(persistentVolume.ReclaimPolicy, expectedReclaimPolicy, StringComparison.Ordinal))
         {
             await _client.SetPersistentVolumeReclaimPolicyAsync(
                 persistentVolume.Name,
                 persistentVolume.Uid,
-                spec.ReclaimPolicy,
+                effectiveReleasePolicy,
                 cancellationToken).ConfigureAwait(false);
             persistentVolume = await _client.GetPersistentVolumeAsync(
                 persistentVolume.Name,
@@ -105,7 +110,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
             if (!string.Equals(persistentVolume.ReclaimPolicy, expectedReclaimPolicy, StringComparison.Ordinal))
                 throw new AzureFilesCsiException(
                     "reclaim_policy_unconfirmed",
-                    "The Azure Files persistent volume did not retain the requested reclaim policy.");
+                    "The Azure Files persistent volume did not retain the effective release policy.");
         }
 
         var capabilities = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);

@@ -23,6 +23,34 @@ public sealed class WorkspaceVolumeCleanup : Migration
             type: "jsonb",
             nullable: true);
 
+        migrationBuilder.Sql($"""
+            DO $migration$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM "{EnvironmentDbContext.Schema}"."owner_effects" AS latest
+                    WHERE latest.effect_kind = 'WorkspaceVolume'
+                      AND latest.effect_state = 'Completed'
+                      AND latest.target_provider_resource_id IS NOT NULL
+                      AND latest.target_provider_binding_json IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM "{EnvironmentDbContext.Schema}"."owner_effects" AS newer
+                          WHERE newer.tenant_id = latest.tenant_id
+                            AND newer.project_id = latest.project_id
+                            AND newer.run_id = latest.run_id
+                            AND newer.environment_id = latest.environment_id
+                            AND newer.effect_kind = 'WorkspaceVolume'
+                            AND newer.resource_id = latest.resource_id
+                            AND newer.effect_state = 'Completed'
+                            AND newer.target_transition_revision > latest.target_transition_revision)
+                ) THEN
+                    RAISE EXCEPTION 'Cannot apply workspace-volume cleanup migration while an active provider generation lacks its pinned binding.';
+                END IF;
+            END
+            $migration$;
+            """);
+
         migrationBuilder.CreateTable(
             name: "workspace_volume_cleanup",
             schema: EnvironmentDbContext.Schema,

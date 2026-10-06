@@ -461,18 +461,24 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             setup.Service.ReleaseAsync(setup.Fence, request));
+        setup.Provider.ReleaseFailure = null;
         var replay = await setup.Service.ReleaseAsync(setup.Fence, request);
         var current = await setup.Store.GetWorkspaceVolumeAsync(
             setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
 
         Assert.Equal("release outcome uncertain", exception.Message);
+        Assert.True(replay.Reservation.Replayed);
         Assert.Equal(
             EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired,
             replay.Reservation.TransitionState);
-        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, current!.Phase);
+        Assert.Equal(
+            EnvironmentWorkspaceVolumeTransitionState.Completed,
+            replay.Completion!.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Released, current!.Phase);
         Assert.Equal(1, current.ResourceGeneration);
-        Assert.Equal(provision.Completion!.TargetResource, current.Resource);
-        Assert.Single(setup.Provider.ReleaseRequests);
+        Assert.Null(current.Resource);
+        Assert.Equal(provision.Completion!.TargetResource, replay.Completion.ExpectedResource);
+        Assert.Equal(2, setup.Provider.ReleaseRequests.Count);
     }
 
     [Fact]
@@ -665,6 +671,9 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
                     2,
                     1,
                     "release-retained")));
+        var unresolvedCurrent = await setup.Store.GetWorkspaceVolumeAsync(
+            setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
+        setup.Provider.ReleaseReceiptFactory = null;
         var pending = await setup.Service.ReleaseAsync(
             setup.Fence,
             Transition(
@@ -677,12 +686,18 @@ public sealed class WorkspaceVolumeServiceTests(EnvironmentPostgresFixture fixtu
             setup.Fence, setup.Specification.VolumeId, CancellationToken.None);
 
         Assert.Contains("exact provider resource", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, unresolvedCurrent!.Phase);
+        Assert.Equal(provision.Resource, unresolvedCurrent.Resource);
         Assert.Equal(
             EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired,
             pending.Reservation.TransitionState);
-        Assert.Equal(EnvironmentWorkspaceVolumeState.Ready, current!.Phase);
-        Assert.Equal(provision.Resource, current.Resource);
-        Assert.Single(setup.Provider.ReleaseRequests);
+        Assert.Equal(
+            EnvironmentWorkspaceVolumeTransitionState.Completed,
+            pending.Completion!.TransitionState);
+        Assert.Equal(EnvironmentWorkspaceVolumeState.Released, current!.Phase);
+        Assert.Null(current.Resource);
+        Assert.Equal(provision.Resource, pending.Completion.ExpectedResource);
+        Assert.Equal(2, setup.Provider.ReleaseRequests.Count);
     }
 
     [Fact]
