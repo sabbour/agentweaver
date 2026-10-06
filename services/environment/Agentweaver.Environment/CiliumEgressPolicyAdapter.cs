@@ -124,15 +124,16 @@ public sealed class EnvironmentEgressSelector
 
         var environmentHash = HashLabel(environmentId);
         var ownerHash = HashLabel(string.Join('\0', tenantId, projectId, runId));
+        var policyHash = HashLabel(string.Join('\0', environmentId, tenantId, projectId, runId));
         return new EnvironmentEgressSelector(
             @namespace,
             environmentHash,
             ownerHash,
-            $"aw-egress-{environmentHash[..20]}");
+            $"aw-egress-{policyHash[..20]}");
     }
 
     private static string HashLabel(string value) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant()[..32];
 
     private static bool IsNamespace(string value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 63 &&
@@ -159,41 +160,85 @@ public sealed record CiliumPolicyMetadata(
     string? ResourceVersion = null,
     long? Generation = null);
 
-public sealed record CiliumEndpointSelector(
-    ImmutableDictionary<string, string> MatchLabels);
+public sealed record CiliumEndpointSelector(ImmutableDictionary<string, string> MatchLabels)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
 
-public sealed record CiliumFqdnSelector(
-    string? MatchName = null,
-    string? MatchPattern = null);
+public sealed record CiliumFqdnSelector(string? MatchName = null, string? MatchPattern = null)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
 
-public sealed record CiliumCidrSelector(string Cidr);
+public sealed record CiliumCidrSelector(string Cidr)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
 
-public sealed record CiliumPort(string Port, string Protocol);
+public sealed record CiliumPort(string Port, string Protocol)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
 
-public sealed record CiliumDnsRule(string MatchPattern);
+public sealed record CiliumDnsRule(string MatchPattern)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
 
 public sealed record CiliumPortRules(
     ImmutableArray<CiliumPort> Ports,
-    CiliumDnsRuleCollection? Rules = null);
+    CiliumDnsRuleCollection? Rules = null)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
 
-public sealed record CiliumDnsRuleCollection(
-    ImmutableArray<CiliumDnsRule> Dns);
+public sealed record CiliumDnsRuleCollection(ImmutableArray<CiliumDnsRule> Dns)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
 
 public sealed record CiliumEgressRuleDocument(
     ImmutableArray<CiliumEndpointSelector>? ToEndpoints = null,
     [property: JsonPropertyName("toFQDNs")] ImmutableArray<CiliumFqdnSelector>? ToFqDns = null,
     [property: JsonPropertyName("toCIDRSet")] ImmutableArray<CiliumCidrSelector>? ToCidrSet = null,
-    ImmutableArray<CiliumPortRules>? ToPorts = null);
+    ImmutableArray<CiliumPortRules>? ToPorts = null)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
+
+public sealed record CiliumDefaultDeny(bool Ingress, bool Egress)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
 
 public sealed record CiliumPolicySpec(
     CiliumEndpointSelector EndpointSelector,
-    ImmutableArray<CiliumEgressRuleDocument> Egress);
+    ImmutableArray<CiliumEgressRuleDocument> Egress,
+    ImmutableArray<CiliumEgressRuleDocument>? EgressDeny = null,
+    CiliumDefaultDeny? EnableDefaultDeny = null)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
 
 public sealed record CiliumNetworkPolicyDocument(
     string ApiVersion,
     string Kind,
     CiliumPolicyMetadata Metadata,
-    CiliumPolicySpec Spec);
+    CiliumPolicySpec Spec)
+{
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+}
 
 public sealed class CiliumPolicyException(string code, string message) : Exception(message)
 {
@@ -284,10 +329,10 @@ public sealed class CiliumEgressPolicyAdapter(
             .ConfigureAwait(false);
         if (current is null)
         {
-            if (expectedPreviousGeneration != 0 || generation != 1)
+            if (expectedPreviousGeneration != 0)
                 throw new CiliumPolicyException(
                     "stale_generation",
-                    "A first policy generation must start at generation 1 with expected generation 0.");
+                    "A first policy generation must start with expected generation 0.");
             return await store.CreateAsync(desired, cancellationToken).ConfigureAwait(false);
         }
 
@@ -296,11 +341,9 @@ public sealed class CiliumEgressPolicyAdapter(
         var currentHash = current.Metadata.Annotations.GetValueOrDefault(IntentHashAnnotation);
         if (currentGeneration == generation)
         {
-            if (expectedPreviousGeneration != currentGeneration - 1)
-                throw new CiliumPolicyException(
-                    "stale_generation",
-                    "An idempotent retry must retain the expected predecessor of the applied generation.");
-            if (currentHash == desiredHash && SameSpec(current.Spec, desired.Spec))
+            if (currentHash == desiredHash &&
+                HasOnlyExpectedRootFields(current) &&
+                SameSpec(current.Spec, desired.Spec))
                 return current;
             throw new CiliumPolicyException(
                 "generation_conflict",
@@ -344,6 +387,7 @@ public sealed class CiliumEgressPolicyAdapter(
             !IsRevoked(actual) &&
             actual.Metadata.Namespace == selector.Namespace &&
             actual.Metadata.Name == selector.PolicyName &&
+            HasOnlyExpectedRootFields(actual) &&
             LabelsMatch(selector, actual.Metadata.Labels) &&
             SameSpec(actual.Spec, expected.Spec);
         return new(
@@ -371,10 +415,10 @@ public sealed class CiliumEgressPolicyAdapter(
             .ConfigureAwait(false);
         if (current is null)
         {
-            if (expectedPreviousGeneration != 0 || generation != 1)
+            if (expectedPreviousGeneration != 0)
                 throw new CiliumPolicyException(
                     "stale_generation",
-                    "A revocation fence without prior Kubernetes state must start at generation 1 with expected generation 0.");
+                    "A revocation fence without prior Kubernetes state must start with expected generation 0.");
             var firstTombstone = RenderRevocation(selector, generation);
             _ = await store.CreateAsync(firstTombstone, cancellationToken).ConfigureAwait(false);
             return ObserveRevocation(
@@ -386,9 +430,7 @@ public sealed class CiliumEgressPolicyAdapter(
         EnsureSameOwner(selector, current);
         var currentGeneration = ReadIntentGeneration(current);
         var expectedTombstone = RenderRevocation(selector, generation);
-        if (currentGeneration == generation &&
-            expectedPreviousGeneration == generation - 1 &&
-            IsRevoked(current))
+        if (currentGeneration == generation && IsRevoked(current))
             return ObserveRevocation(selector, generation, current);
         if (currentGeneration != expectedPreviousGeneration)
             throw new CiliumPolicyException(
@@ -470,19 +512,18 @@ public sealed class CiliumEgressPolicyAdapter(
         ]);
         var egress = ImmutableArray.CreateBuilder<CiliumEgressRuleDocument>();
         foreach (var group in intent.Rules
-            .GroupBy(rule => (rule.Purpose, rule.DestinationKind, rule.Port))
+            .GroupBy(rule => (rule.Purpose, rule.DestinationKind, rule.Port, rule.Protocol))
             .OrderBy(group => group.Key.Purpose)
             .ThenBy(group => group.Key.DestinationKind)
-            .ThenBy(group => group.Key.Port))
+            .ThenBy(group => group.Key.Port)
+            .ThenBy(group => group.Key.Protocol))
         {
             var ports = ImmutableArray.Create(new CiliumPortRules(
-                group.Select(rule => rule.Protocol)
-                    .Distinct()
-                    .Order()
-                    .Select(protocol => new CiliumPort(
+                [
+                    new CiliumPort(
                         group.Key.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                        protocol.ToString().ToUpperInvariant()))
-                    .ToImmutableArray(),
+                        group.Key.Protocol.ToString().ToUpperInvariant())
+                ],
                 group.Key.Purpose == NetworkEgressPurpose.DnsResolver
                     ? new CiliumDnsRuleCollection([new CiliumDnsRule("*")])
                     : null));
@@ -523,6 +564,10 @@ public sealed class CiliumEgressPolicyAdapter(
             }
         }
 
+        var policyEgress = egress.ToImmutable();
+        ImmutableArray<CiliumEgressRuleDocument>? egressDeny = policyEgress.IsEmpty
+            ? ImmutableArray.Create(new CiliumEgressRuleDocument())
+            : null;
         return new CiliumNetworkPolicyDocument(
             "cilium.io/v2",
             "CiliumNetworkPolicy",
@@ -533,7 +578,9 @@ public sealed class CiliumEgressPolicyAdapter(
                 annotations),
             new CiliumPolicySpec(
                 new CiliumEndpointSelector(selector.MatchLabels),
-                egress.ToImmutable()));
+                policyEgress,
+                egressDeny,
+                new CiliumDefaultDeny(Ingress: false, Egress: true)));
     }
 
     private static CiliumNetworkPolicyDocument RenderRevocation(
@@ -569,7 +616,9 @@ public sealed class CiliumEgressPolicyAdapter(
                 annotations),
             new CiliumPolicySpec(
                 new CiliumEndpointSelector(selector.MatchLabels),
-                ImmutableArray<CiliumEgressRuleDocument>.Empty));
+                ImmutableArray<CiliumEgressRuleDocument>.Empty,
+                ImmutableArray.Create(new CiliumEgressRuleDocument()),
+                new CiliumDefaultDeny(Ingress: false, Egress: true)));
     }
 
     private static CiliumPolicyObservation ObserveRevocation(
@@ -587,6 +636,7 @@ public sealed class CiliumEgressPolicyAdapter(
             IsRevoked(actual) &&
             actual.Metadata.Namespace == selector.Namespace &&
             actual.Metadata.Name == selector.PolicyName &&
+            HasOnlyExpectedRootFields(actual) &&
             LabelsMatch(selector, actual.Metadata.Labels) &&
             SameSpec(actual.Spec, expected.Spec);
         return new(
@@ -651,6 +701,10 @@ public sealed class CiliumEgressPolicyAdapter(
 
     private static bool SameSpec(CiliumPolicySpec left, CiliumPolicySpec right) =>
         string.Equals(CanonicalJson(left), CanonicalJson(right), StringComparison.Ordinal);
+
+    private static bool HasOnlyExpectedRootFields(CiliumNetworkPolicyDocument policy) =>
+        policy.AdditionalProperties is null ||
+        policy.AdditionalProperties.Keys.All(key => string.Equals(key, "status", StringComparison.Ordinal));
 
     private static string CanonicalJson<T>(T value)
     {

@@ -235,11 +235,13 @@ public static class NetworkEgressRuleSemantics
         if (string.Equals(candidate, allowed, StringComparison.Ordinal)) return true;
         if (!allowed.StartsWith("*.", StringComparison.Ordinal)) return false;
         var suffix = allowed[2..];
-        var candidateSuffix = candidate.StartsWith("*.", StringComparison.Ordinal)
-            ? candidate[2..]
-            : candidate;
-        return candidateSuffix.Length > suffix.Length &&
-            candidateSuffix.EndsWith($".{suffix}", StringComparison.Ordinal);
+        if (candidate.StartsWith("*.", StringComparison.Ordinal))
+            return string.Equals(candidate[2..], suffix, StringComparison.Ordinal);
+        var suffixWithSeparator = $".{suffix}";
+        if (!candidate.EndsWith(suffixWithSeparator, StringComparison.Ordinal))
+            return false;
+        var label = candidate[..^suffixWithSeparator.Length];
+        return label.Length > 0 && !label.Contains('.');
     }
 
     private static bool CidrIsSubset(string candidate, string allowed)

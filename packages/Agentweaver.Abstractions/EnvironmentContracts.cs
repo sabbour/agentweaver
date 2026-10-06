@@ -432,6 +432,12 @@ public interface IEnvironmentLifecycleStore
         EnvironmentGenerationFence currentFence,
         CancellationToken cancellationToken);
 
+    Task RequireVerifiedNetworkPolicyGenerationAsync(
+        EnvironmentGenerationFence fence,
+        string resourceId,
+        long policyGeneration,
+        CancellationToken cancellationToken);
+
     Task<EnvironmentNetworkEffectReservation> CompleteNetworkEffectAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,

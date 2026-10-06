@@ -471,7 +471,7 @@ public sealed class ProjectsConfigService(
             .SingleOrDefaultAsync(item => item.ProjectId == project.ProjectId && item.RunId == runId, cancellationToken)
             .ConfigureAwait(false)
             ?? throw ProjectConfigException.NotFound();
-        return Deserialize<EffectiveRunSelection>(selection.SnapshotJson);
+        return DeserializeRunSelection(selection.SnapshotJson);
     }
 
     private async Task<ProjectRecord> FindProjectAsync(
@@ -796,7 +796,39 @@ public sealed class ProjectsConfigService(
     {
         if (existing.ProjectId != projectId || existing.RequestFingerprint != fingerprint)
             throw ProjectConfigException.IdempotencyConflict();
-        return Deserialize<EffectiveRunSelection>(existing.SnapshotJson);
+        return DeserializeRunSelection(existing.SnapshotJson);
+    }
+
+    internal static EffectiveRunSelection DeserializeRunSelection(string value)
+    {
+        var selection = Deserialize<EffectiveRunSelection>(value);
+        if (!selection.EgressBaseline.IsDefault &&
+            !selection.RequiredEgress.IsDefault &&
+            selection.ProjectEgressNarrowing is not { IsDefault: true })
+            return selection;
+
+        if (!selection.EgressBaseline.IsDefault ||
+            !selection.RequiredEgress.IsDefault ||
+            selection.ProjectEgressNarrowing is not null)
+            throw new JsonException("Stored run selection has an incomplete egress snapshot.");
+
+        var effective = selection.EgressAllowlist.IsDefault
+            ? ImmutableArray<NetworkEgressRule>.Empty
+            : NetworkEgressRuleSemantics.NormalizeSet(selection.EgressAllowlist, "legacy run selection");
+        var legacyProjectConfiguration = selection.ProjectConfiguration with
+        {
+            EgressNarrowing = selection.ProjectConfiguration.EgressNarrowing is { } narrowing
+                ? NetworkEgressRuleSemantics.NormalizeSet(narrowing, "legacy project egress narrowing")
+                : null,
+        };
+        return selection with
+        {
+            EgressAllowlist = effective,
+            EgressBaseline = effective,
+            ProjectEgressNarrowing = effective,
+            RequiredEgress = effective,
+            ProjectConfiguration = legacyProjectConfiguration,
+        };
     }
 
     private static string Fingerprint(string projectId, string runId, AcceptRunSelectionRequest request)
@@ -968,6 +1000,95 @@ public sealed class ProjectsConfigService(
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         };
         options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        options.Converters.Add(new LegacyProjectEgressRuleConverter());
         return options;
+    }
+
+    private sealed class LegacyProjectEgressRuleConverter : JsonConverter<NetworkEgressRule>
+    {
+        private static readonly string[] CurrentFields =
+            ["purpose", "destinationKind", "destination", "port", "protocol"];
+        private static readonly string[] LegacyFields = ["host", "port", "protocol"];
+
+        public override NetworkEgressRule Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options)
+        {
+            using var document = JsonDocument.ParseValue(ref reader);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new JsonException("An egress rule must be an object.");
+
+            var properties = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in document.RootElement.EnumerateObject())
+                if (!properties.TryAdd(property.Name, property.Value))
+                    throw new JsonException("An egress rule contains a duplicate property.");
+
+            if (properties.ContainsKey("host"))
+            {
+                RequireExactFields(properties, LegacyFields);
+                return new(
+                    NetworkEgressPurpose.PublicHttps,
+                    NetworkEgressDestinationKind.Fqdn,
+                    ReadString(properties, "host"),
+                    ReadInt32(properties, "port"),
+                    ReadEnum<EgressProtocol>(properties, "protocol", options));
+            }
+
+            RequireExactFields(properties, CurrentFields);
+            return new(
+                ReadEnum<NetworkEgressPurpose>(properties, "purpose", options),
+                ReadEnum<NetworkEgressDestinationKind>(properties, "destinationKind", options),
+                ReadString(properties, "destination"),
+                ReadInt32(properties, "port"),
+                ReadEnum<EgressProtocol>(properties, "protocol", options));
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            NetworkEgressRule value,
+            JsonSerializerOptions options)
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("purpose");
+            JsonSerializer.Serialize(writer, value.Purpose, options);
+            writer.WritePropertyName("destinationKind");
+            JsonSerializer.Serialize(writer, value.DestinationKind, options);
+            writer.WriteString("destination", value.Destination);
+            writer.WriteNumber("port", value.Port);
+            writer.WritePropertyName("protocol");
+            JsonSerializer.Serialize(writer, value.Protocol, options);
+            writer.WriteEndObject();
+        }
+
+        private static void RequireExactFields(
+            IReadOnlyDictionary<string, JsonElement> properties,
+            IReadOnlyCollection<string> expected)
+        {
+            if (properties.Count != expected.Count ||
+                expected.Any(field => !properties.ContainsKey(field)))
+                throw new JsonException("An egress rule does not match a supported contract.");
+        }
+
+        private static string ReadString(
+            IReadOnlyDictionary<string, JsonElement> properties,
+            string name) =>
+            properties[name].ValueKind == JsonValueKind.String
+                ? properties[name].GetString() ?? throw new JsonException($"Egress field '{name}' is null.")
+                : throw new JsonException($"Egress field '{name}' must be a string.");
+
+        private static int ReadInt32(
+            IReadOnlyDictionary<string, JsonElement> properties,
+            string name) =>
+            properties[name].ValueKind == JsonValueKind.Number &&
+            properties[name].TryGetInt32(out var value)
+                ? value
+                : throw new JsonException($"Egress field '{name}' must be an integer.");
+
+        private static T ReadEnum<T>(
+            IReadOnlyDictionary<string, JsonElement> properties,
+            string name,
+            JsonSerializerOptions options) where T : struct, Enum =>
+            JsonSerializer.Deserialize<T>(properties[name], options);
     }
 }

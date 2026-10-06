@@ -229,6 +229,11 @@ public sealed class EnvironmentEgressManager(
                 request.Fence.Owner.ProjectId,
                 request.Fence.Owner.RunId,
                 providerOptions.Namespace);
+            await lifecycleStore.RequireVerifiedNetworkPolicyGenerationAsync(
+                request.Fence,
+                $"{selector.Namespace}/{selector.PolicyName}",
+                request.PolicyGeneration,
+                cancellationToken).ConfigureAwait(false);
             var observed = await cilium.VerifyAsync(
                 selector,
                 intent,

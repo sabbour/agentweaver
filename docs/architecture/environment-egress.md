@@ -39,7 +39,8 @@ IDs needed to bind policy operations to the current Projects context and
 selection. `EnvironmentGenerationFence` carries that owner identity and its
 `LifecycleGeneration`. The Cilium API separately receives `PolicyGeneration`
 and `ExpectedPreviousPolicyGeneration`; these fence the policy resource and
-must not be conflated with the Environment lifecycle generation.
+must not be conflated with the Environment lifecycle generation. Policy
+generations are positive, owner-CAS-checked values and need not be contiguous.
 
 The Environment host, lifecycle store, and `environment` schema are owned by
 `Agentweaver.Environment`. `EnvironmentGenerationFence.LifecycleGeneration` is
@@ -54,6 +55,13 @@ requires current target-project write authority, the separately admitted run
 selection, an active owner fence, matching operation/resource identity, and
 exact generation/hash/revocation readback. It cannot revive an unknown,
 released, stale, or foreign owner.
+
+Verify also requires the owner's latest verified policy generation to match
+the requested generation, with no reserved or unresolved network effect. A
+provider readback alone cannot make an untracked generation ready. Failed or
+stale operations that never started a provider call do not block release;
+operations that may have changed provider state remain unresolved until exact
+reconciliation.
 
 The owner producer is registered in the host, but the existing run/environment
 registration producer has not yet been bound to it. There is deliberately no
@@ -71,6 +79,13 @@ or Entra endpoints—and wildcard ancestors broad enough to include those
 destinations—is rejected; agent credentials must not be sent directly to those
 services.
 
+Previously persisted egress rules with only `host`, `port`, and `protocol` are
+read as `PublicHttps` FQDN rules. Their old effective allowlist is retained as
+the baseline, narrowing, and run needs, so this compatibility path cannot widen
+access. `PublicHttps` requires L7 mediation; this Cilium-only slice therefore
+fails closed for those legacy selections instead of treating unclassified
+destinations as ordinary L3/L4 egress.
+
 The selected layered Network Policy binding must include exactly one L3/L4
 provider. Cilium options are accepted only when provider ID, adapter version,
 schema version, and options revision match the immutable selection, and the
@@ -82,12 +97,14 @@ than becoming a blanket HTTPS rule. This slice contains no L7 adapter; if the
 immutable selection contains an L7 candidate, the operation also fails
 explicitly rather than silently ignoring or pinning an unapplied layer.
 
-The Cilium adapter assigns a hashed environment/owner selector, applies a
-generation using the observed Kubernetes resource version, and verifies the
+The Cilium adapter assigns a hashed environment/owner selector and derives its
+resource name from the full owner tuple. It applies a positive policy generation
+against the explicit expected predecessor using the observed Kubernetes
+resource version, and verifies the
 exact policy object, selector, spec, intent hash, and generation on readback.
 It pins through the existing `ProviderResolver.PinNetworkPolicy` only after
 that verification. Revoke advances the generation to a verified empty-egress
-deny-all tombstone instead of deleting the policy, so a delayed apply cannot
+`egressDeny: [{}]` tombstone instead of deleting the policy, so a delayed apply cannot
 recreate a revoked generation—even when revoke is the first observed operation.
 The operation's current request trace records the selected layer/provider/adapter
 version and observed intent/resource generations, verification, and revoke state.

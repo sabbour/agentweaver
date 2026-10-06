@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Net.Http;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Agentweaver.Providers;
@@ -64,7 +65,8 @@ public sealed class EnvironmentEgressManagerTests
             Rules(),
             Rules());
 
-    private static EffectiveProviderCandidate CiliumCandidate() =>
+    private static EffectiveProviderCandidate CiliumCandidate(
+        ImmutableArray<string>? requiredCapabilities = null) =>
         new(
             ProviderSeam.NetworkPolicy,
             CiliumEgressPolicyAdapter.ProviderId,
@@ -73,7 +75,7 @@ public sealed class EnvironmentEgressManagerTests
             ProviderRevision,
             ProviderHostingPattern.KubernetesController,
             CiliumCapabilities(),
-            CiliumCapabilities(),
+            requiredCapabilities ?? CiliumCapabilities(),
             NetworkPolicyLayer.L3L4);
 
     private static ImmutableArray<string> CiliumCapabilities() =>
@@ -250,7 +252,8 @@ public sealed class EnvironmentEgressManagerTests
 
         Assert.True(result.ReadyForDispatch);
         Assert.Equal(expectedSelector.MatchLabels, policy.Spec.EndpointSelector.MatchLabels);
-        Assert.Equal(3, policy.Spec.Egress.Length);
+        Assert.Equal(4, policy.Spec.Egress.Length);
+        Assert.All(policy.Metadata.Labels.Values, value => Assert.InRange(value.Length, 1, 63));
         Assert.Contains(policy.Spec.Egress, rule =>
             rule.ToFqDns?.Any(fqdn => fqdn.MatchName == "api.github.com") == true);
         Assert.Contains(policy.Spec.Egress, rule =>
@@ -265,6 +268,172 @@ public sealed class EnvironmentEgressManagerTests
     }
 
     [Fact]
+    public async Task CiliumRulesPreserveEachDestinationProtocolPair()
+    {
+        var rules = ImmutableArray.Create(
+            new NetworkEgressRule(
+                NetworkEgressPurpose.SourceControl,
+                NetworkEgressDestinationKind.Cidr,
+                "203.0.113.0/24",
+                443,
+                EgressProtocol.Tcp),
+            new NetworkEgressRule(
+                NetworkEgressPurpose.SourceControl,
+                NetworkEgressDestinationKind.Cidr,
+                "198.51.100.0/24",
+                443,
+                EgressProtocol.Udp));
+        var selection = Selection([CiliumCandidate([
+            CiliumEgressCapabilities.L3L4,
+            CiliumEgressCapabilities.Cidr
+        ])]) with
+        {
+            EgressBaseline = rules,
+            RequiredEgress = rules,
+            EgressAllowlist = rules
+        };
+        var store = new FakeCiliumPolicyResourceStore();
+        var result = await Manager(
+                new FakeProjectsConfigClient(AuthorizationContext(), selection),
+                store)
+            .ApplyAndVerifyAsync(Caller(), ApplyRequest(), CancellationToken.None);
+        var policy = Assert.Single(store.Resources.Values);
+
+        Assert.True(result.ReadyForDispatch, result.FailureMessage);
+        Assert.Equal(2, policy.Spec.Egress.Length);
+        Assert.Contains(policy.Spec.Egress, rule =>
+            rule.ToCidrSet?.Single().Cidr == "203.0.113.0/24" &&
+            rule.ToPorts?.Single().Ports.Single().Protocol == "TCP");
+        Assert.Contains(policy.Spec.Egress, rule =>
+            rule.ToCidrSet?.Single().Cidr == "198.51.100.0/24" &&
+            rule.ToPorts?.Single().Ports.Single().Protocol == "UDP");
+    }
+
+    [Fact]
+    public async Task EmptyIntentAndRevocationUseExplicitEgressDenyAllRules()
+    {
+        var emptyRules = ImmutableArray<NetworkEgressRule>.Empty;
+        var selection = Selection([CiliumCandidate([CiliumEgressCapabilities.L3L4])]) with
+        {
+            EgressBaseline = emptyRules,
+            RequiredEgress = emptyRules,
+            EgressAllowlist = emptyRules
+        };
+        var store = new FakeCiliumPolicyResourceStore();
+        var manager = Manager(new FakeProjectsConfigClient(AuthorizationContext(), selection), store);
+
+        var applied = await manager.ApplyAndVerifyAsync(Caller(), ApplyRequest(), CancellationToken.None);
+        var appliedPolicy = Assert.Single(store.Resources.Values);
+
+        Assert.True(applied.ReadyForDispatch, applied.FailureMessage);
+        Assert.Empty(appliedPolicy.Spec.Egress);
+        Assert.Equal(new CiliumEgressRuleDocument(), appliedPolicy.Spec.EgressDeny!.Value.Single());
+        Assert.Equal(new CiliumDefaultDeny(Ingress: false, Egress: true), appliedPolicy.Spec.EnableDefaultDeny);
+
+        var revoked = await manager.RevokeAsync(
+            Caller(),
+            ApplyRequest(generation: 2, expectedPrevious: 1),
+            CancellationToken.None);
+        var tombstone = Assert.Single(store.Resources.Values);
+
+        Assert.True(revoked.Revoked, revoked.FailureMessage);
+        Assert.Empty(tombstone.Spec.Egress);
+        Assert.Equal(new CiliumEgressRuleDocument(), tombstone.Spec.EgressDeny!.Value.Single());
+        Assert.Equal(new CiliumDefaultDeny(Ingress: false, Egress: true), tombstone.Spec.EnableDefaultDeny);
+    }
+
+    [Fact]
+    public async Task NonSequentialPolicyGenerationsCanBeAppliedAndRetriedIdempotently()
+    {
+        var selection = Selection();
+        var compilation = EgressIntentCompiler.Compile(selection);
+        Assert.True(compilation.IsSuccess, compilation.Failure?.Message);
+        var intent = compilation.Intent!;
+        var selector = EnvironmentEgressSelector.Create(
+            EnvironmentId,
+            TenantId,
+            ProjectId,
+            RunId,
+            Options().Namespace);
+        var store = new FakeCiliumPolicyResourceStore();
+        var adapter = new CiliumEgressPolicyAdapter(store, Options());
+
+        _ = await adapter.ApplyAsync(selector, intent, 41, 0, CancellationToken.None);
+        _ = await adapter.ApplyAsync(selector, intent, 47, 41, CancellationToken.None);
+        var appliedReplay = await adapter.ApplyAsync(selector, intent, 47, 41, CancellationToken.None);
+
+        Assert.Equal(47, long.Parse(appliedReplay.Metadata.Annotations[
+            CiliumEgressPolicyAdapter.IntentGenerationAnnotation]));
+        var revoked = await adapter.RevokeAsync(selector, 60, 47, CancellationToken.None);
+        var revokeReplay = await adapter.RevokeAsync(selector, 60, 47, CancellationToken.None);
+
+        Assert.True(revoked.Revoked);
+        Assert.True(revokeReplay.Revoked);
+        Assert.Equal(60, revokeReplay.AppliedIntentGeneration);
+    }
+
+    [Fact]
+    public async Task ReadbackRejectsDisabledDefaultDenyAndUnmodeledPolicySpecs()
+    {
+        var projects = new FakeProjectsConfigClient(AuthorizationContext(), Selection());
+        var store = new FakeCiliumPolicyResourceStore();
+        var manager = Manager(projects, store);
+        var applied = await manager.ApplyAndVerifyAsync(Caller(), ApplyRequest(), CancellationToken.None);
+        var policy = Assert.Single(store.Resources.Values);
+        Assert.True(applied.ReadyForDispatch);
+
+        store.Update(policy with
+        {
+            Spec = policy.Spec with
+            {
+                EnableDefaultDeny = new CiliumDefaultDeny(Ingress: false, Egress: false)
+            }
+        });
+        var defaultDenyDisabled = await manager.VerifyAsync(Caller(), ApplyRequest(), CancellationToken.None);
+        Assert.False(defaultDenyDisabled.ReadyForDispatch);
+        Assert.Equal("policy_generation_unverified", defaultDenyDisabled.FailureCode);
+
+        using var specs = JsonDocument.Parse("[{}]");
+        store.Update(policy with
+        {
+            AdditionalProperties = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+            {
+                ["specs"] = specs.RootElement.Clone()
+            }
+        });
+        var additionalPolicy = await manager.VerifyAsync(Caller(), ApplyRequest(), CancellationToken.None);
+        Assert.False(additionalPolicy.ReadyForDispatch);
+        Assert.Equal("policy_generation_unverified", additionalPolicy.FailureCode);
+    }
+
+    [Fact]
+    public async Task VerifyCannotPinProviderStateWhileOwnerEffectIsUnresolved()
+    {
+        var projects = new FakeProjectsConfigClient(AuthorizationContext(), Selection());
+        var store = new FakeCiliumPolicyResourceStore();
+        var fence = ApplyRequest().Fence;
+        var lifecycle = new FakeEnvironmentLifecycleStore(fence);
+        var manager = Manager(projects, store, lifecycle);
+        var applied = await manager.ApplyAndVerifyAsync(Caller(), ApplyRequest(), CancellationToken.None);
+        var policy = Assert.Single(store.Resources.Values);
+        Assert.True(applied.ReadyForDispatch);
+
+        _ = await lifecycle.ReserveNetworkEffectAsync(
+            fence,
+            $"{policy.Metadata.Namespace}/{policy.Metadata.Name}",
+            policyGeneration: 2,
+            expectedPreviousPolicyGeneration: 1,
+            EnvironmentNetworkEffectKind.Apply,
+            "unresolved-provider-effect",
+            CancellationToken.None);
+        var verified = await manager.VerifyAsync(Caller(), ApplyRequest(), CancellationToken.None);
+
+        Assert.False(verified.ReadyForDispatch);
+        Assert.Equal("environment_effect_reconciliation_required", verified.FailureCode);
+        Assert.Null(verified.Binding);
+    }
+
+    [Fact]
     public async Task SecondEnvironmentCannotSelectOrRevokeTheFirstEnvironmentPolicy()
     {
         var projects = new FakeProjectsConfigClient(AuthorizationContext(), Selection());
@@ -276,7 +445,7 @@ public sealed class EnvironmentEgressManagerTests
         var projectsB = new FakeProjectsConfigClient(
             AuthorizationContext("project-b", "run-b"),
             selectionB);
-        var requestB = ApplyRequest("environment-b", "project-b", "run-b");
+        var requestB = ApplyRequest("environment-a", "project-b", "run-b");
         var second = await Manager(
             projectsB,
             store,
@@ -291,7 +460,7 @@ public sealed class EnvironmentEgressManagerTests
         Assert.NotEqual(
             store.Resources.Values.First().Spec.EndpointSelector.MatchLabels["agentweaver.dev/environment-owner"],
             store.Resources.Values.Last().Spec.EndpointSelector.MatchLabels["agentweaver.dev/environment-owner"]);
-        Assert.NotEqual(
+        Assert.Equal(
             store.Resources.Values.First().Spec.EndpointSelector.MatchLabels["agentweaver.dev/environment-id"],
             store.Resources.Values.Last().Spec.EndpointSelector.MatchLabels["agentweaver.dev/environment-id"]);
     }
@@ -314,9 +483,9 @@ public sealed class EnvironmentEgressManagerTests
         var policy = Assert.Single(store.Resources.Values);
 
         Assert.False(staleApply.ReadyForDispatch);
-        Assert.Equal("stale_generation", staleApply.FailureCode);
+        Assert.Equal("stale_policy_generation", staleApply.FailureCode);
         Assert.False(staleRevoke.Revoked);
-        Assert.Equal("stale_generation", staleRevoke.FailureCode);
+        Assert.Equal("stale_policy_generation", staleRevoke.FailureCode);
         Assert.Equal("2", policy.Metadata.Annotations[CiliumEgressPolicyAdapter.IntentGenerationAnnotation]);
     }
 
@@ -415,9 +584,10 @@ public sealed class EnvironmentEgressManagerTests
         Assert.True(revoked.AppliedState!.ObjectVerified);
         Assert.True(revoked.AppliedState.Revoked);
         Assert.Empty(policy.Spec.Egress);
+        Assert.Equal(new CiliumEgressRuleDocument(), policy.Spec.EgressDeny!.Value.Single());
         Assert.Equal("true", policy.Metadata.Annotations[CiliumEgressPolicyAdapter.IntentRevokedAnnotation]);
         Assert.False(lateSameGenerationApply.ReadyForDispatch);
-        Assert.Equal("generation_conflict", lateSameGenerationApply.FailureCode);
+        Assert.Equal("stale_policy_generation", lateSameGenerationApply.FailureCode);
         Assert.False(lateOlderApply.ReadyForDispatch);
         Assert.Equal("stale_generation", lateOlderApply.FailureCode);
     }
@@ -439,7 +609,7 @@ public sealed class EnvironmentEgressManagerTests
         Assert.True(revoked.Revoked);
         Assert.True(revoked.AppliedState!.Revoked);
         Assert.False(lateApply.ReadyForDispatch);
-        Assert.Equal("generation_conflict", lateApply.FailureCode);
+        Assert.Equal("stale_policy_generation", lateApply.FailureCode);
         Assert.Single(store.Resources);
     }
 
@@ -456,7 +626,7 @@ public sealed class EnvironmentEgressManagerTests
             CancellationToken.None);
 
         Assert.False(revoked.Revoked);
-        Assert.Equal("stale_generation", revoked.FailureCode);
+        Assert.Equal("stale_policy_generation", revoked.FailureCode);
         Assert.Empty(store.Resources);
     }
 
@@ -931,6 +1101,8 @@ public sealed class EnvironmentEgressManagerTests
         private readonly Dictionary<(string Tenant, string Project, string Run, string Environment), EnvironmentLifecycleSnapshot>
             _owners = [];
         private readonly Dictionary<Guid, EnvironmentNetworkEffectReservation> _effects = [];
+        private readonly Dictionary<((string Tenant, string Project, string Run, string Environment) Owner, string Key), Guid>
+            _effectKeys = [];
 
         public FakeEnvironmentLifecycleStore(params EnvironmentGenerationFence[] registeredFences)
         {
@@ -991,6 +1163,40 @@ public sealed class EnvironmentEgressManagerTests
             CancellationToken cancellationToken)
         {
             _ = RequireActiveAsync(fence, cancellationToken);
+            var idempotency = (Key(fence.Owner), idempotencyKey);
+            if (_effectKeys.TryGetValue(idempotency, out var priorOperationId))
+            {
+                var prior = _effects[priorOperationId];
+                if (prior.Fence != fence ||
+                    !string.Equals(prior.ResourceId, resourceId, StringComparison.Ordinal) ||
+                    prior.PolicyGeneration != policyGeneration ||
+                    prior.ExpectedPreviousPolicyGeneration != expectedPreviousPolicyGeneration ||
+                    prior.Kind != kind)
+                    throw new EnvironmentLifecycleException(
+                        "environment_effect_idempotency_conflict",
+                        "The effect idempotency key was reused for a different operation.");
+                var replayed = prior with { Replayed = true };
+                LastEffect = replayed;
+                return Task.FromResult(replayed);
+            }
+
+            var resourceEffects = _effects.Values.Where(effect =>
+                effect.Fence.Owner == fence.Owner &&
+                string.Equals(effect.ResourceId, resourceId, StringComparison.Ordinal)).ToArray();
+            if (resourceEffects.Any(effect => effect.State is EnvironmentNetworkEffectState.Reserved or
+                EnvironmentNetworkEffectState.ReconciliationRequired))
+                throw new EnvironmentLifecycleException(
+                    "environment_effect_reconciliation_required",
+                    "A pending or unresolved provider effect blocks this network-policy resource.");
+            var currentGeneration = resourceEffects
+                .Where(effect => effect.State is EnvironmentNetworkEffectState.Completed or
+                    EnvironmentNetworkEffectState.Reconciled)
+                .MaxBy(effect => effect.PolicyGeneration)?.PolicyGeneration ?? 0;
+            if (currentGeneration != expectedPreviousPolicyGeneration)
+                throw new EnvironmentLifecycleException(
+                    "stale_policy_generation",
+                    "The expected previous policy generation does not match the owner's latest verified generation.");
+
             var reservation = new EnvironmentNetworkEffectReservation(
                 Guid.NewGuid(),
                 fence,
@@ -1001,6 +1207,7 @@ public sealed class EnvironmentEgressManagerTests
                 EnvironmentNetworkEffectState.Reserved,
                 false);
             _effects[reservation.OperationId] = reservation;
+            _effectKeys[idempotency] = reservation.OperationId;
             LastEffect = reservation;
             return Task.FromResult(reservation);
         }
@@ -1015,6 +1222,30 @@ public sealed class EnvironmentEgressManagerTests
                 reservation.Fence.Owner != currentFence.Owner)
                 throw new EnvironmentLifecycleException("environment_effect_unknown", "Unknown effect.");
             return Task.FromResult(reservation);
+        }
+
+        public Task RequireVerifiedNetworkPolicyGenerationAsync(
+            EnvironmentGenerationFence fence,
+            string resourceId,
+            long policyGeneration,
+            CancellationToken cancellationToken)
+        {
+            _ = RequireActiveAsync(fence, cancellationToken);
+            var effects = _effects.Values.Where(effect =>
+                effect.Fence.Owner == fence.Owner &&
+                string.Equals(effect.ResourceId, resourceId, StringComparison.Ordinal)).ToArray();
+            if (effects.Any(effect => effect.State is EnvironmentNetworkEffectState.Reserved or
+                EnvironmentNetworkEffectState.ReconciliationRequired))
+                throw new EnvironmentLifecycleException(
+                    "environment_effect_reconciliation_required",
+                    "A pending or unresolved provider effect blocks network-policy verification.");
+            if (effects.Where(effect => effect.State is EnvironmentNetworkEffectState.Completed or
+                    EnvironmentNetworkEffectState.Reconciled)
+                .MaxBy(effect => effect.PolicyGeneration)?.PolicyGeneration != policyGeneration)
+                throw new EnvironmentLifecycleException(
+                    "environment_policy_generation_untracked",
+                    "The requested policy generation is not the Environment owner's latest verified generation.");
+            return Task.CompletedTask;
         }
 
         public Task<EnvironmentNetworkEffectReservation> CompleteNetworkEffectAsync(
@@ -1304,6 +1535,9 @@ public sealed class EnvironmentEgressManagerTests
         public bool FailCreate { get; init; }
         public bool HideReads { get; init; }
         public IReadOnlyDictionary<(string Namespace, string Name), CiliumNetworkPolicyDocument> Resources => _resources;
+
+        public void Update(CiliumNetworkPolicyDocument policy) =>
+            _resources[(policy.Metadata.Namespace, policy.Metadata.Name)] = policy;
 
         public Task<CiliumNetworkPolicyDocument?> GetAsync(
             string @namespace,
