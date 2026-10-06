@@ -33,7 +33,6 @@ const projectReferences = new Map([
   ]],
   ['Agentweaver.Projects.Config', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
-    '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
   ]],
 ]);

@@ -44,13 +44,14 @@ Reference refresh tokens have no reuse grace period.
 Replay revokes the authorization and its token family.
 Token exchange rejects disabled users and grants bound to another client.
 
-After validating the configured external OIDC identity, the broker maps exactly one
-upstream `tid` claim to `tenant_id` and copies only the recognized `platform_admin`
-and `orchestrator` role values. These claims pass through the protected local cookie
-and appear only in broker-signed access tokens. Missing, invalid, or ambiguous
-tenant context produces no authorization context; unknown roles are omitted.
-Clients cannot supply or widen these claims through OAuth scopes, request parameters,
-or headers.
+After validating the configured external OIDC identity, the broker maps the upstream
+issuer and subject to its local broker user. Broker-signed access tokens contain the
+local `sub`, registered OAuth scopes, and resource audience; upstream tenant and role
+claims are not forwarded and the broker does not assign Projects roles. Projects &
+Config resolves the validated issuer and local subject against its own active
+membership and resource-role records. OAuth scopes and tenant selectors cannot
+create authority. Signed `project_id` and `run_id` claims are included only after
+the broker validates the exact run-bound grant.
 
 Startup creates missing clients and scopes.
 It refuses changes to registered redirects, permissions, requirements, type, consent policy, credentials, or scope resources.

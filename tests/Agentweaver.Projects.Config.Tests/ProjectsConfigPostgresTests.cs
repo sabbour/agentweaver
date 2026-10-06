@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Security.Claims;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
 using Microsoft.AspNetCore.Http;
@@ -15,21 +16,34 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
     [Fact]
     public async Task KeepsRunSelectionsImmutableAndEnforcesTenantScopedRunSelection()
     {
-        var platformAdmin = new ProjectCaller(
-            "platform-admin", "tenant-1", ImmutableHashSet.Create(StringComparer.Ordinal, ProjectCaller.PlatformAdminRole));
-        var owner = new ProjectCaller(
-            "owner-1", "tenant-1", ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal));
-        var orchestrator = new ProjectCaller(
-            "orchestrator-1", "tenant-1",
-            ImmutableHashSet.Create(StringComparer.Ordinal, ProjectCaller.OrchestratorRole));
         var providerCatalog = CreateProviderCatalog();
 
         await using var context = CreateDbContext();
         var service = new ProjectsConfigService(context, providerCatalog, TimeProvider.System);
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(context, TimeProvider.System);
+        var platformAdmin = await SeedCallerAsync(
+            context, authorityStore, "platform-admin", "tenant-1",
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Platform, ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        var owner = await SeedCallerAsync(
+            context, authorityStore, "owner-1", "tenant-1",
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, "tenant-1", ProjectAuthorityRole.TenantAdmin);
+        var orchestratorMembership = await SeedMembershipAsync(
+            authorityStore, "orchestrator-1", "tenant-1");
         var defaults = await service.GetPlatformRuntimeDefaultsAsync(platformAdmin, CancellationToken.None);
         var platformRevision = await service.UpdatePlatformRuntimeDefaultsAsync(
             platformAdmin, defaults.Revision, PlatformDefaults(), CancellationToken.None);
         var project = await service.CreateProjectAsync(owner, "Test project", CancellationToken.None);
+        await authorityStore.AssignRoleAsync(
+            orchestratorMembership,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator,
+            "fixture");
+        var orchestrator = await ResolveCallerAsync(
+            context, "orchestrator-1", "tenant-1", ["api.read", "projects.orchestrator"]);
         var configuration = await service.UpdateProjectConfigurationAsync(
             owner,
             project.ProjectId,
@@ -157,14 +171,15 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         Assert.Equal(selection.ProjectConfigurationRevision, stored.ProjectConfigurationRevision);
         Assert.Equal(selection.ModelSelection.Reference, stored.ModelSelection.Reference);
 
-        var ownerOnly = new ProjectCaller(
-            "different-actor", "tenant-1", ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal));
+        var ownerOnly = await SeedCallerAsync(
+            context, authorityStore, "different-actor", "tenant-1", ["api.read"]);
         var unauthorized = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.GetProjectAsync(ownerOnly, project.ProjectId, CancellationToken.None));
         Assert.Equal(StatusCodes.Status404NotFound, unauthorized.StatusCode);
-        var otherTenantAdmin = new ProjectCaller(
-            "platform-admin", "tenant-2",
-            ImmutableHashSet.Create(StringComparer.Ordinal, ProjectCaller.PlatformAdminRole));
+        var otherTenantAdmin = await SeedCallerAsync(
+            context, authorityStore, "other-tenant-admin", "tenant-2",
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant, "tenant-2", ProjectAuthorityRole.TenantAdmin);
         var crossTenant = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.GetProjectAsync(otherTenantAdmin, project.ProjectId, CancellationToken.None));
         Assert.Equal(StatusCodes.Status404NotFound, crossTenant.StatusCode);
@@ -203,6 +218,89 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             "TRUNCATE projects_config.project_run_selections");
     }
 
+    [Fact]
+    public async Task AuthorityRevocationUsesCasAuditAndPreservesTheLastProjectOwner()
+    {
+        await using var context = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(context, TimeProvider.System);
+        var tenantId = $"tenant-{Guid.NewGuid():N}";
+        var tenantAdmin = await SeedCallerAsync(
+            context,
+            authorityStore,
+            $"tenant-admin-{Guid.NewGuid():N}",
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await new ProjectsConfigService(context, CreateProviderCatalog(), TimeProvider.System)
+            .CreateProjectAsync(tenantAdmin, "Authority test project", CancellationToken.None);
+        var secondOwnerMembershipId = await SeedMembershipAsync(
+            authorityStore, $"second-owner-{Guid.NewGuid():N}", tenantId);
+        var firstOwnerAssignment = await authorityStore.AssignRoleAsync(
+            tenantAdmin.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Owner,
+            "fixture");
+        var secondOwnerAssignment = await authorityStore.AssignRoleAsync(
+            secondOwnerMembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Owner,
+            "fixture");
+
+        await using (var revokeFirstOwnerContext = CreateDbContext())
+        {
+            var store = new ProjectsConfigPrivilegedAuthorityStore(revokeFirstOwnerContext, TimeProvider.System);
+            await store.RevokeRoleAssignmentAsync(firstOwnerAssignment.AssignmentId, 1, "fixture");
+        }
+
+        await using (var revokeLastOwnerContext = CreateDbContext())
+        {
+            var store = new ProjectsConfigPrivilegedAuthorityStore(revokeLastOwnerContext, TimeProvider.System);
+            await Assert.ThrowsAsync<ProjectAuthorityConcurrencyException>(() =>
+                store.RevokeRoleAssignmentAsync(secondOwnerAssignment.AssignmentId, 1, "fixture"));
+            await Assert.ThrowsAsync<ProjectAuthorityConcurrencyException>(() =>
+                store.RevokeMembershipAsync(secondOwnerMembershipId, 1, "fixture"));
+        }
+
+        await using (var staleCasContext = CreateDbContext())
+        {
+            var store = new ProjectsConfigPrivilegedAuthorityStore(staleCasContext, TimeProvider.System);
+            await Assert.ThrowsAsync<ProjectAuthorityConcurrencyException>(() =>
+                store.RevokeRoleAssignmentAsync(firstOwnerAssignment.AssignmentId, 1, "fixture"));
+        }
+
+        ProjectAuthorityAuditRecord roleRevoked;
+        await using (var verifyContext = CreateDbContext())
+        {
+            var firstOwner = await verifyContext.RoleAssignments.AsNoTracking()
+                .SingleAsync(item => item.AssignmentId == firstOwnerAssignment.AssignmentId);
+            var lastOwner = await verifyContext.RoleAssignments.AsNoTracking()
+                .SingleAsync(item => item.AssignmentId == secondOwnerAssignment.AssignmentId);
+            Assert.Equal(ProjectAuthorityRecordState.Revoked, firstOwner.State);
+            Assert.Equal(2, firstOwner.Revision);
+            Assert.Equal(ProjectAuthorityRecordState.Active, lastOwner.State);
+            Assert.Equal(1, lastOwner.Revision);
+            Assert.Equal(ProjectAuthorityRecordState.Active,
+                (await verifyContext.TenantMemberships.AsNoTracking()
+                    .SingleAsync(item => item.MembershipId == secondOwnerMembershipId)).State);
+            roleRevoked = await verifyContext.AuthorityAudit.AsNoTracking()
+                .SingleAsync(item =>
+                    item.AssignmentId == firstOwnerAssignment.AssignmentId &&
+                    item.EventType == "role_revoked");
+            Assert.Equal(2, roleRevoked.Revision);
+        }
+
+        await AssertImmutableAsync(
+            "UPDATE projects_config.authority_audit SET actor = 'tampered' WHERE event_id = @event_id",
+            ("event_id", roleRevoked.EventId));
+        await AssertImmutableAsync(
+            "DELETE FROM projects_config.authority_audit WHERE event_id = @event_id",
+            ("event_id", roleRevoked.EventId));
+    }
+
     private async Task AssertImmutableAsync(string sql, (string Name, object Value)? parameter = null)
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
@@ -211,6 +309,49 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             command.Parameters.AddWithValue(value.Name, value.Value);
         var exception = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
         Assert.Equal("55000", exception.SqlState);
+    }
+
+    private const string TestIssuer = "https://projects-config.test/";
+
+    private static async Task<ProjectAuthorizationContext> SeedCallerAsync(
+        ProjectsConfigDbContext db,
+        ProjectsConfigPrivilegedAuthorityStore authorityStore,
+        string subject,
+        string tenantId,
+        string[] scopes,
+        ProjectAuthorityResourceType? resourceType = null,
+        string? resourceId = null,
+        ProjectAuthorityRole? role = null)
+    {
+        var membershipId = await SeedMembershipAsync(authorityStore, subject, tenantId);
+        if (resourceType is { } type && resourceId is not null && role is { } assignedRole)
+            await authorityStore.AssignRoleAsync(membershipId, type, resourceId, assignedRole, "fixture");
+        return await ResolveCallerAsync(db, subject, tenantId, scopes);
+    }
+
+    private static async Task<Guid> SeedMembershipAsync(
+        ProjectsConfigPrivilegedAuthorityStore authorityStore,
+        string subject,
+        string tenantId)
+    {
+        var membership = await authorityStore.GrantMembershipAsync(
+            TestIssuer, subject, tenantId, "fixture");
+        return membership.MembershipId;
+    }
+
+    private static Task<ProjectAuthorizationContext> ResolveCallerAsync(
+        ProjectsConfigDbContext db,
+        string subject,
+        string tenantId,
+        string[] scopes)
+    {
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", subject),
+            new Claim("scope", string.Join(' ', scopes)),
+        ], "test"));
+        return new ProjectAuthorizationOwner(db, new ProjectsConfigIdentityOptions(TestIssuer))
+            .ResolveAsync(principal, [tenantId], CancellationToken.None);
     }
 
     private ProjectsConfigDbContext CreateDbContext()

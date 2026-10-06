@@ -1,5 +1,6 @@
 extern alias ProjectsConfig;
 
+using System.Security.Cryptography;
 using Agentweaver.Identity;
 using ProjectsConfig::Agentweaver.Projects.Config;
 using Microsoft.AspNetCore.Builder;
@@ -19,29 +20,56 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
 {
     private readonly IHost _host;
     private readonly NpgsqlDataSource _dataSource;
+    private readonly NpgsqlDataSource _privilegedDataSource;
+    private readonly string _runtimeRole;
     private readonly HttpClient _client;
 
-    private ProjectsConfigResourceServer(IHost host, NpgsqlDataSource dataSource)
+    private ProjectsConfigResourceServer(
+        IHost host,
+        NpgsqlDataSource dataSource,
+        NpgsqlDataSource privilegedDataSource,
+        string runtimeRole)
     {
         _host = host;
         _dataSource = dataSource;
+        _privilegedDataSource = privilegedDataSource;
+        _runtimeRole = runtimeRole;
         _client = host.GetTestClient();
         _client.BaseAddress = new Uri("https://projects.test");
     }
 
     public HttpClient Client => _client;
+    public NpgsqlDataSource RuntimeDataSource => _dataSource;
+    public NpgsqlDataSource PrivilegedFixtureDataSource => _privilegedDataSource;
 
     public static async Task<ProjectsConfigResourceServer> StartAsync(
         string connectionString,
         SecurityKey signingKey,
         string audience = "https://api.test")
     {
-        var dataSource = NpgsqlDataSource.Create(connectionString);
+        var privilegedDataSource = NpgsqlDataSource.Create(connectionString);
+        var privilegedDbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+            .UseNpgsql(privilegedDataSource, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history", ProjectsConfigDbContext.Schema))
+            .Options;
+        await ProjectsConfigMigrator.MigrateAsync(privilegedDataSource, privilegedDbOptions);
+
+        var runtimeRole = $"projects_config_runtime_{Guid.NewGuid():N}";
+        var runtimePassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        await CreateRuntimeRoleAsync(privilegedDataSource, connectionString, runtimeRole, runtimePassword);
+        var runtimeConnectionString = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            Username = runtimeRole,
+            Password = runtimePassword,
+            Pooling = false,
+        }.ConnectionString;
+        var dataSource = NpgsqlDataSource.Create(runtimeConnectionString);
         var dbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
             .UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", ProjectsConfigDbContext.Schema))
             .Options;
-        await ProjectsConfigMigrator.MigrateAsync(dataSource, dbOptions);
+        await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);
+        await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
 
         var catalog = ProviderCatalogConfiguration.Load(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -72,6 +100,9 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 services.AddSingleton(catalog);
                 services.AddSingleton(TimeProvider.System);
                 services.AddScoped<ProjectsConfigService>();
+                services.AddSingleton(new ProjectsConfigIdentityOptions(
+                    new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri));
+                services.AddScoped<ProjectAuthorizationOwner>();
                 services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                     .AddJwtBearer(options =>
                     {
@@ -88,7 +119,6 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                             RequireSignedTokens = true,
                             ClockSkew = TimeSpan.FromSeconds(30),
                             ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
-                            RoleClaimType = IdentityAuthorizationContext.RoleClaimType,
                         };
                     });
                 services.AddAuthorization();
@@ -102,7 +132,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             });
         }).StartAsync();
 
-        return new ProjectsConfigResourceServer(host, dataSource);
+        return new ProjectsConfigResourceServer(host, dataSource, privilegedDataSource, runtimeRole);
     }
 
     public async ValueTask DisposeAsync()
@@ -111,5 +141,48 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         await _host.StopAsync();
         _host.Dispose();
         await _dataSource.DisposeAsync();
+        await using (var connection = await _privilegedDataSource.OpenConnectionAsync())
+        {
+            await using var cleanup = new NpgsqlCommand(
+                $"DROP OWNED BY \"{_runtimeRole}\"; DROP ROLE \"{_runtimeRole}\"",
+                connection);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+        await _privilegedDataSource.DisposeAsync();
+    }
+
+    private static async Task CreateRuntimeRoleAsync(
+        NpgsqlDataSource privilegedDataSource,
+        string ownerConnectionString,
+        string runtimeRole,
+        string runtimePassword)
+    {
+        var database = new NpgsqlConnectionStringBuilder(ownerConnectionString).Database;
+        await using var connection = await privilegedDataSource.OpenConnectionAsync();
+        await using (var create = new NpgsqlCommand(
+            $"CREATE ROLE \"{runtimeRole}\" LOGIN PASSWORD '{runtimePassword}'",
+            connection))
+            await create.ExecuteNonQueryAsync();
+
+        var statements = new[]
+        {
+            $"GRANT CONNECT ON DATABASE \"{database}\" TO \"{runtimeRole}\"",
+            $"GRANT USAGE ON SCHEMA projects_config TO \"{runtimeRole}\"",
+            $"GRANT SELECT ON projects_config.__ef_migrations_history TO \"{runtimeRole}\"",
+            $"GRANT SELECT, INSERT, UPDATE ON projects_config.projects TO \"{runtimeRole}\"",
+            $"GRANT SELECT, UPDATE ON projects_config.platform_runtime_heads TO \"{runtimeRole}\"",
+            $"GRANT SELECT, INSERT ON projects_config.project_configuration_revisions TO \"{runtimeRole}\"",
+            $"GRANT SELECT, INSERT ON projects_config.platform_runtime_revisions TO \"{runtimeRole}\"",
+            $"GRANT SELECT, INSERT ON projects_config.project_run_selections TO \"{runtimeRole}\"",
+            $"GRANT USAGE, SELECT ON SEQUENCE projects_config.platform_runtime_revisions_revision_seq TO \"{runtimeRole}\"",
+            $"GRANT SELECT ON projects_config.tenant_memberships TO \"{runtimeRole}\"",
+            $"GRANT SELECT ON projects_config.project_role_assignments TO \"{runtimeRole}\"",
+            $"GRANT SELECT ON projects_config.authority_audit TO \"{runtimeRole}\"",
+        };
+        foreach (var statement in statements)
+        {
+            await using var grant = new NpgsqlCommand(statement, connection);
+            await grant.ExecuteNonQueryAsync();
+        }
     }
 }

@@ -40,12 +40,15 @@ public static class ProjectConfigEndpoints
             CreateProjectRequest request,
             HttpContext context,
             ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             try
             {
                 var created = await service.CreateProjectAsync(
-                    ProjectCaller.FromPrincipal(context.User), request.Name, cancellationToken).ConfigureAwait(false);
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    request.Name,
+                    cancellationToken).ConfigureAwait(false);
                 return Results.Created($"/api/projects/{created.ProjectId}", created);
             }
             catch (ProjectConfigException exception)
@@ -57,12 +60,14 @@ public static class ProjectConfigEndpoints
         projects.MapGet("/", async (
             HttpContext context,
             ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             try
             {
                 return Results.Ok(await service.ListProjectsAsync(
-                    ProjectCaller.FromPrincipal(context.User), cancellationToken).ConfigureAwait(false));
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    cancellationToken).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)
             {
@@ -74,12 +79,15 @@ public static class ProjectConfigEndpoints
             string projectId,
             HttpContext context,
             ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             try
             {
                 return Results.Ok(await service.GetProjectAsync(
-                    ProjectCaller.FromPrincipal(context.User), projectId, cancellationToken).ConfigureAwait(false));
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    cancellationToken).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)
             {
@@ -92,12 +100,13 @@ public static class ProjectConfigEndpoints
             UpdateProjectRequest request,
             HttpContext context,
             ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             try
             {
                 return Results.Ok(await service.UpdateProjectAsync(
-                    ProjectCaller.FromPrincipal(context.User),
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
                     projectId,
                     request.ExpectedRevision,
                     request.Name,
@@ -115,12 +124,16 @@ public static class ProjectConfigEndpoints
             long? revision,
             HttpContext context,
             ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             try
             {
                 return Results.Ok(await service.GetProjectConfigurationAsync(
-                    ProjectCaller.FromPrincipal(context.User), projectId, revision, cancellationToken).ConfigureAwait(false));
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    revision,
+                    cancellationToken).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)
             {
@@ -133,12 +146,13 @@ public static class ProjectConfigEndpoints
             UpdateProjectConfigurationRequest request,
             HttpContext context,
             ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             try
             {
                 return Results.Ok(await service.UpdateProjectConfigurationAsync(
-                    ProjectCaller.FromPrincipal(context.User),
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
                     projectId,
                     request.ExpectedRevision,
                     request.Configuration,
@@ -156,14 +170,13 @@ public static class ProjectConfigEndpoints
             AcceptRunSelectionRequest request,
             HttpContext context,
             ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             try
             {
-                var caller = ProjectCaller.FromPrincipal(context.User);
-                if (!caller.Roles.Contains(ProjectCaller.OrchestratorRole) &&
-                    !caller.Roles.Contains(ProjectCaller.PlatformAdminRole))
-                    throw ProjectConfigException.Forbidden();
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
                 return Results.Ok(await service.AcceptRunSelectionAsync(
                     caller, projectId, runId, request, cancellationToken).ConfigureAwait(false));
             }
@@ -178,14 +191,13 @@ public static class ProjectConfigEndpoints
             string runId,
             HttpContext context,
             ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             try
             {
-                var caller = ProjectCaller.FromPrincipal(context.User);
-                if (!caller.Roles.Contains(ProjectCaller.OrchestratorRole) &&
-                    !caller.Roles.Contains(ProjectCaller.PlatformAdminRole))
-                    throw ProjectConfigException.Forbidden();
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
                 return Results.Ok(await service.GetRunSelectionAsync(
                     caller, projectId, runId, cancellationToken).ConfigureAwait(false));
             }
@@ -199,12 +211,14 @@ public static class ProjectConfigEndpoints
         platform.MapGet("/", async (
             HttpContext context,
             ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             try
             {
                 return Results.Ok(await service.GetPlatformRuntimeDefaultsAsync(
-                    ProjectCaller.FromPrincipal(context.User), cancellationToken).ConfigureAwait(false));
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    cancellationToken).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)
             {
@@ -215,12 +229,13 @@ public static class ProjectConfigEndpoints
             UpdatePlatformRuntimeDefaultsRequest request,
             HttpContext context,
             ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
             CancellationToken cancellationToken) =>
         {
             try
             {
                 return Results.Ok(await service.UpdatePlatformRuntimeDefaultsAsync(
-                    ProjectCaller.FromPrincipal(context.User),
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
                     request.ExpectedRevision,
                     request.Defaults,
                     cancellationToken).ConfigureAwait(false));
@@ -240,4 +255,13 @@ public static class ProjectConfigEndpoints
             detail: exception.Message,
             statusCode: exception.StatusCode,
             extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+
+    private static Task<ProjectAuthorizationContext> ResolveCallerAsync(
+        HttpContext context,
+        ProjectAuthorizationOwner authorizationOwner,
+        CancellationToken cancellationToken) =>
+        authorizationOwner.ResolveAsync(
+            context.User,
+            context.Request.Headers[ProjectAuthorizationOwner.TenantSelectorHeader].ToArray(),
+            cancellationToken);
 }

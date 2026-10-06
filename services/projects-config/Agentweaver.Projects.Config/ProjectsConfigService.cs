@@ -70,17 +70,27 @@ public sealed class ProjectsConfigService(
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     public async Task<ProjectSummary> CreateProjectAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         string name,
         CancellationToken cancellationToken)
     {
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        caller.RequireUnboundRequest();
+        if (!await HasCurrentRoleAsync(
+            caller,
+            ProjectAuthorityResourceType.Tenant,
+            caller.TenantId,
+            ProjectAuthorityRole.TenantAdmin,
+            cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
         ValidateProjectName(name);
         var now = timeProvider.GetUtcNow();
         var project = new ProjectRecord
         {
             ProjectId = Guid.NewGuid().ToString("N"),
             TenantId = caller.TenantId,
-            OwnerActorId = caller.ActorId,
+            CreatedByActorId = caller.ActorId,
             Name = name.Trim(),
             State = ProjectLifecycleState.Active,
             Revision = 1,
@@ -103,39 +113,68 @@ public sealed class ProjectsConfigService(
     }
 
     public async Task<ImmutableArray<ProjectSummary>> ListProjectsAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         CancellationToken cancellationToken)
     {
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireUnboundRequest();
+        await EnsureCurrentMembershipAsync(caller, cancellationToken).ConfigureAwait(false);
         var query = db.Projects.AsNoTracking()
             .Where(project => project.TenantId == caller.TenantId);
-        if (!caller.Roles.Contains(ProjectCaller.PlatformAdminRole))
-            query = query.Where(project => project.OwnerActorId == caller.ActorId);
+        var isTenantAdmin = await HasCurrentRoleAsync(
+            caller,
+            ProjectAuthorityResourceType.Tenant,
+            caller.TenantId,
+            ProjectAuthorityRole.TenantAdmin,
+            cancellationToken).ConfigureAwait(false);
         var projects = await query.OrderBy(project => project.CreatedAt)
             .ToArrayAsync(cancellationToken).ConfigureAwait(false);
-        return projects.Select(ToSummary).ToImmutableArray();
+        if (isTenantAdmin)
+            return projects.Select(ToSummary).ToImmutableArray();
+
+        var visible = ImmutableArray.CreateBuilder<ProjectSummary>();
+        foreach (var project in projects)
+        {
+            if (await HasAnyCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Project,
+                project.ProjectId,
+                [
+                    ProjectAuthorityRole.Owner,
+                    ProjectAuthorityRole.Contributor,
+                    ProjectAuthorityRole.Viewer,
+                ],
+                cancellationToken).ConfigureAwait(false))
+                visible.Add(ToSummary(project));
+        }
+        return visible.ToImmutable();
     }
 
     public async Task<ProjectSummary> GetProjectAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         string projectId,
         CancellationToken cancellationToken)
     {
-        var project = await FindProjectAsync(caller, projectId, cancellationToken, allowOrchestrator: true).ConfigureAwait(false);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        var project = await FindProjectAsync(
+            caller, projectId, ProjectAccess.Read, cancellationToken).ConfigureAwait(false);
         return ToSummary(project);
     }
 
     public async Task<ProjectSummary> UpdateProjectAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         string projectId,
         long expectedRevision,
         string name,
         ProjectLifecycleState state,
         CancellationToken cancellationToken)
     {
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
         ValidateProjectName(name);
         if (!Enum.IsDefined(state))
             throw new ProjectConfigException("invalid_project_state", "Project lifecycle state is invalid.", StatusCodes.Status400BadRequest);
-        var project = await FindProjectAsync(caller, projectId, cancellationToken)
+        var project = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
             .ConfigureAwait(false);
         if (project.Revision != expectedRevision)
             throw ProjectConfigException.Conflict("The project revision has changed.");
@@ -155,12 +194,14 @@ public sealed class ProjectsConfigService(
     }
 
     public async Task<VersionedProjectConfiguration> GetProjectConfigurationAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         string projectId,
         long? revision,
         CancellationToken cancellationToken)
     {
-        var project = await FindProjectAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        var project = await FindProjectAsync(
+            caller, projectId, ProjectAccess.Read, cancellationToken).ConfigureAwait(false);
         var requestedRevision = revision ?? project.ConfigurationRevision;
         var configuration = await db.ProjectConfigurationRevisions.AsNoTracking()
             .SingleOrDefaultAsync(item => item.ProjectId == project.ProjectId && item.Revision == requestedRevision,
@@ -176,14 +217,16 @@ public sealed class ProjectsConfigService(
     }
 
     public async Task<VersionedProjectConfiguration> UpdateProjectConfigurationAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         string projectId,
         long expectedRevision,
         ProjectConfiguration configuration,
         CancellationToken cancellationToken)
     {
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
         var normalized = ProjectConfigurationValidator.Validate(configuration);
-        var project = await FindProjectAsync(caller, projectId, cancellationToken)
+        var project = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
             .ConfigureAwait(false);
         if (project.State != ProjectLifecycleState.Active)
             throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
@@ -216,21 +259,21 @@ public sealed class ProjectsConfigService(
     }
 
     public async Task<VersionedPlatformRuntimeDefaults> GetPlatformRuntimeDefaultsAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         CancellationToken cancellationToken)
     {
-        EnsurePlatformAdmin(caller);
+        await EnsurePlatformAdminAsync(caller, cancellationToken).ConfigureAwait(false);
         var head = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
         return await ReadPlatformDefaultsAsync(head, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<VersionedPlatformRuntimeDefaults> UpdatePlatformRuntimeDefaultsAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         long expectedRevision,
         PlatformRuntimeDefaults defaults,
         CancellationToken cancellationToken)
     {
-        EnsurePlatformAdmin(caller);
+        await EnsurePlatformAdminAsync(caller, cancellationToken).ConfigureAwait(false);
         var normalized = ProjectConfigurationValidator.Validate(defaults);
         var head = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
         if (head.CurrentRevision != expectedRevision)
@@ -260,20 +303,30 @@ public sealed class ProjectsConfigService(
     }
 
     public async Task<EffectiveRunSelection> AcceptRunSelectionAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         string projectId,
         string runId,
         AcceptRunSelectionRequest request,
         CancellationToken cancellationToken)
     {
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
+        caller.RequireResourceBinding(projectId, runId);
         ValidateIdentifier(runId, "runId");
         ArgumentNullException.ThrowIfNull(request);
         ValidateSelectionContext(request.Context);
         await using var transaction = await db.Database
-            .BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             .ConfigureAwait(false);
         await LockRunSelectionInputsAsync(caller, projectId, runId, cancellationToken).ConfigureAwait(false);
-        var project = await FindProjectAsync(caller, projectId, cancellationToken, allowOrchestrator: true)
+        if (!await HasCurrentRoleAsync(
+            caller,
+            ProjectAuthorityResourceType.Project,
+            projectId,
+            ProjectAuthorityRole.Orchestrator,
+            cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
+        var project = await FindTenantProjectAsync(caller, projectId, runId, cancellationToken)
             .ConfigureAwait(false);
         var fingerprint = Fingerprint(project.ProjectId, runId, request);
         var existing = await db.RunSelections.AsNoTracking()
@@ -345,6 +398,13 @@ public sealed class ProjectsConfigService(
         try
         {
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            if (!await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Project,
+                projectId,
+                ProjectAuthorityRole.Orchestrator,
+                cancellationToken).ConfigureAwait(false))
+                throw ProjectConfigException.Forbidden();
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return effective;
         }
@@ -362,20 +422,20 @@ public sealed class ProjectsConfigService(
     }
 
     private async Task LockRunSelectionInputsAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         string projectId,
         string runId,
         CancellationToken cancellationToken)
     {
         var connection = (NpgsqlConnection)db.Database.GetDbConnection();
         var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+
         await using (var projectLock = new NpgsqlCommand(
             """
             SELECT project_id
             FROM projects_config.projects
             WHERE project_id = @project_id
               AND tenant_id = @tenant_id
-              AND (@is_platform_admin OR owner_actor_id = @actor_id OR @is_orchestrator)
             FOR SHARE
             """,
             connection,
@@ -383,9 +443,6 @@ public sealed class ProjectsConfigService(
         {
             projectLock.Parameters.AddWithValue("project_id", projectId);
             projectLock.Parameters.AddWithValue("tenant_id", caller.TenantId);
-            projectLock.Parameters.AddWithValue("is_platform_admin", caller.Roles.Contains(ProjectCaller.PlatformAdminRole));
-            projectLock.Parameters.AddWithValue("actor_id", caller.ActorId);
-            projectLock.Parameters.AddWithValue("is_orchestrator", caller.Roles.Contains(ProjectCaller.OrchestratorRole));
             if (await projectLock.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
                 return;
         }
@@ -403,12 +460,22 @@ public sealed class ProjectsConfigService(
     }
 
     public async Task<EffectiveRunSelection> GetRunSelectionAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         string projectId,
         string runId,
         CancellationToken cancellationToken)
     {
-        var project = await FindProjectAsync(caller, projectId, cancellationToken, allowOrchestrator: true).ConfigureAwait(false);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
+        caller.RequireResourceBinding(projectId, runId);
+        if (!await HasCurrentRoleAsync(
+            caller,
+            ProjectAuthorityResourceType.Project,
+            projectId,
+            ProjectAuthorityRole.Orchestrator,
+            cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
+        var project = await FindTenantProjectAsync(caller, projectId, runId, cancellationToken).ConfigureAwait(false);
         var selection = await db.RunSelections.AsNoTracking()
             .SingleOrDefaultAsync(item => item.ProjectId == project.ProjectId && item.RunId == runId, cancellationToken)
             .ConfigureAwait(false)
@@ -417,11 +484,13 @@ public sealed class ProjectsConfigService(
     }
 
     private async Task<ProjectRecord> FindProjectAsync(
-        ProjectCaller caller,
+        ProjectAuthorizationContext caller,
         string projectId,
-        CancellationToken cancellationToken,
-        bool allowOrchestrator = false)
+        ProjectAccess access,
+        CancellationToken cancellationToken)
     {
+        caller.RequireResourceBinding(projectId);
+        await EnsureCurrentMembershipAsync(caller, cancellationToken).ConfigureAwait(false);
         if (!Guid.TryParseExact(projectId, "N", out _))
             throw ProjectConfigException.NotFound();
         var project = await db.Projects.SingleOrDefaultAsync(item => item.ProjectId == projectId, cancellationToken)
@@ -430,13 +499,50 @@ public sealed class ProjectsConfigService(
             throw ProjectConfigException.NotFound();
         if (project.TenantId != caller.TenantId)
             throw ProjectConfigException.NotFound();
-        if (caller.Roles.Contains(ProjectCaller.PlatformAdminRole))
-            return project;
-        if (project.OwnerActorId == caller.ActorId)
-            return project;
-        if (allowOrchestrator && caller.Roles.Contains(ProjectCaller.OrchestratorRole))
+        var isTenantAdmin = await HasCurrentRoleAsync(
+            caller,
+            ProjectAuthorityResourceType.Tenant,
+            caller.TenantId,
+            ProjectAuthorityRole.TenantAdmin,
+            cancellationToken).ConfigureAwait(false);
+        var hasProjectRole = access == ProjectAccess.Read
+            ? await HasAnyCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Project,
+                projectId,
+                [
+                    ProjectAuthorityRole.Owner,
+                    ProjectAuthorityRole.Contributor,
+                    ProjectAuthorityRole.Viewer,
+                ],
+                cancellationToken).ConfigureAwait(false)
+            : await HasCurrentRoleAsync(
+                caller,
+                ProjectAuthorityResourceType.Project,
+                projectId,
+                ProjectAuthorityRole.Owner,
+                cancellationToken).ConfigureAwait(false);
+        if (isTenantAdmin || hasProjectRole)
             return project;
         throw ProjectConfigException.NotFound();
+    }
+
+    private async Task<ProjectRecord> FindTenantProjectAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string? runId,
+        CancellationToken cancellationToken)
+    {
+        caller.RequireResourceBinding(projectId, runId);
+        await EnsureCurrentMembershipAsync(caller, cancellationToken).ConfigureAwait(false);
+        if (!Guid.TryParseExact(projectId, "N", out _))
+            throw ProjectConfigException.NotFound();
+        var project = await db.Projects.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.ProjectId == projectId, cancellationToken)
+            .ConfigureAwait(false);
+        if (project is null || project.TenantId != caller.TenantId)
+            throw ProjectConfigException.NotFound();
+        return project;
     }
 
     private async Task EnsureProjectNarrowingAsync(
@@ -707,10 +813,91 @@ public sealed class ProjectsConfigService(
     private static bool IsUniqueViolation(DbUpdateException exception) =>
         exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
 
-    private static void EnsurePlatformAdmin(ProjectCaller caller)
+    private async Task EnsurePlatformAdminAsync(
+        ProjectAuthorizationContext caller,
+        CancellationToken cancellationToken)
     {
-        if (!caller.Roles.Contains(ProjectCaller.PlatformAdminRole))
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        caller.RequireUnboundRequest();
+        if (!await HasCurrentRoleAsync(
+            caller,
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin,
+            cancellationToken).ConfigureAwait(false))
             throw ProjectConfigException.Forbidden();
+    }
+
+    private async Task EnsureCurrentMembershipAsync(
+        ProjectAuthorizationContext caller,
+        CancellationToken cancellationToken)
+    {
+        var isCurrent = await db.TenantMemberships.AsNoTracking().AnyAsync(
+            membership =>
+                membership.MembershipId == caller.MembershipId &&
+                membership.Issuer == caller.Issuer &&
+                membership.Subject == caller.ActorId &&
+                membership.TenantId == caller.TenantId &&
+                membership.Revision == caller.MembershipRevision &&
+                membership.State == ProjectAuthorityRecordState.Active,
+            cancellationToken).ConfigureAwait(false);
+        if (!isCurrent)
+            throw ProjectConfigException.Forbidden();
+    }
+
+    private async Task<bool> HasCurrentRoleAsync(
+        ProjectAuthorizationContext caller,
+        ProjectAuthorityResourceType resourceType,
+        string resourceId,
+        ProjectAuthorityRole role,
+        CancellationToken cancellationToken) =>
+        await (
+            from membership in db.TenantMemberships.AsNoTracking()
+            join assignment in db.RoleAssignments.AsNoTracking()
+                on membership.MembershipId equals assignment.MembershipId
+            where membership.MembershipId == caller.MembershipId &&
+                membership.Issuer == caller.Issuer &&
+                membership.Subject == caller.ActorId &&
+                membership.TenantId == caller.TenantId &&
+                membership.Revision == caller.MembershipRevision &&
+                membership.State == ProjectAuthorityRecordState.Active &&
+                assignment.ResourceType == resourceType &&
+                assignment.ResourceId == resourceId &&
+                assignment.Role == role &&
+                assignment.State == ProjectAuthorityRecordState.Active
+            select assignment.AssignmentId)
+            .AnyAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task<bool> HasAnyCurrentRoleAsync(
+        ProjectAuthorizationContext caller,
+        ProjectAuthorityResourceType resourceType,
+        string resourceId,
+        IReadOnlyCollection<ProjectAuthorityRole> roles,
+        CancellationToken cancellationToken) =>
+        await (
+            from membership in db.TenantMemberships.AsNoTracking()
+            join assignment in db.RoleAssignments.AsNoTracking()
+                on membership.MembershipId equals assignment.MembershipId
+            where membership.MembershipId == caller.MembershipId &&
+                membership.Issuer == caller.Issuer &&
+                membership.Subject == caller.ActorId &&
+                membership.TenantId == caller.TenantId &&
+                membership.Revision == caller.MembershipRevision &&
+                membership.State == ProjectAuthorityRecordState.Active &&
+                assignment.ResourceType == resourceType &&
+                assignment.ResourceId == resourceId &&
+                roles.Contains(assignment.Role) &&
+                assignment.State == ProjectAuthorityRecordState.Active
+            select assignment.AssignmentId)
+            .AnyAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+    private enum ProjectAccess
+    {
+        Read,
+        Write,
     }
 
     private static void ValidateProjectName(string name)
