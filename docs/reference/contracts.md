@@ -84,8 +84,10 @@ Ordinary startup verifies the service schema. Run the executable with only
 ## Events & Sessions journal
 
 The `Agentweaver.EventsAndSessions` service is an unpublished .NET 10 host candidate.
-Its protected routes require an OpenIddict-validated bearer token with a GUID `sub`
-and exactly one `project_id` and `run_id` pair issued for an active core grant. They
+Its protected session routes require an OpenIddict-validated bearer token with a GUID
+`sub` and exactly one `project_id` and `run_id` pair issued for an active core grant.
+The accepted-effect project-fact route separately checks the receipt's original
+issuer, subject, project/run bounds, and fresh effective project permission. These
 are service-internal contracts, not public product API routes; tenant and platform
 role claims are not required.
 
@@ -99,6 +101,12 @@ role claims are not required.
 | `GET /internal/sessions/{sessionId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll durable journal state and stream NDJSON `SessionEventDelivery` records, each containing the event and a reconnectable `nextCursor`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events?cursor={cursor}&limit={limit}` | Read a bounded, run-ordered page across all sessions in the authorized project/run. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll and stream run-ordered NDJSON deliveries across sessions; each delivery includes a reconnectable `nextCursor`. |
+| `POST /internal/project-facts/accepted-effects` | Append a project-scoped accepted-effect fact. The body contains only `receiptId`, `schemaVersion`, and `eventVersion`. Events fetches the receipt from the fixed Knowledge owner, requires the original issuer/subject/resource bounds and current `WriteProjects`, then commits the fact, project sequence, and inbox receipt atomically. Returns the persisted acknowledgment for new and identical requests; changed reuse returns `409`. |
+
+Project accepted-effect facts have their own address and sequence. They do not enter
+`session_events`, use or change a run's Sessions-provider pin, or represent a
+session/run transition. The durable acknowledgment binds the receipt and contract
+versions to the native fact ID, project, and sequence.
 
 The `Agentweaver.Abstractions` contract provides `ISessionsJournal`,
 `SessionSubscriptionRequest`, `SessionIdentity`, `AppendSessionEvent`, and a
@@ -150,6 +158,8 @@ Configuration:
 | `ConnectionStrings:EventsAndSessions` | PostgreSQL connection for the service-owned schema and transactional outbox/inbox. |
 | `Identity:Issuer` | Absolute HTTPS OpenIddict issuer used to validate caller tokens. |
 | `Identity:Audience` | Required token audience for the service. |
+| `EventsAndSessions:Knowledge:BaseAddress` | Fixed absolute HTTPS Knowledge owner URI for committed accepted-effect receipts; redirects are rejected. |
+| `ProjectsConfig:BaseAddress` | Fixed absolute HTTPS Projects & Config owner URI for fresh project authorization; redirects are rejected. |
 | `EventsAndSessions:Provider:ResourceId` | Stable opaque resource identity used in the Sessions provider pin. |
 | `EventsAndSessions:Provider:DatabaseName` | Expected live PostgreSQL database name; negotiation compares it with `current_database()`. |
 | `EventsAndSessions:Provider:ResourceGeneration` | Positive generation recorded in the immutable provider pin. |
@@ -179,6 +189,13 @@ Gateway route, automatic AgentHost scheduling, an active delivery relay, usage l
 or consistency-manifest workflow. See the
 [Events & Sessions journal reference](../architecture/events-sessions).
 
+For Knowledge promotion, the caller's existing bearer is forwarded when it is
+audience-correct for both owners. If separate audience-correct tokens for the same
+caller are already available, the caller may provide the Events token in
+`X-Agentweaver-Events-Authorization`; Knowledge forwards its original bearer to
+Events in a redacted request-only header so Events can fetch the receipt. Neither
+token is acquired or persisted. The runtime does not provision these audiences.
+
 ## Identity broker endpoints
 
 These routes belong to the unpublished Identity broker candidate. They are service contracts in source, not deployed product endpoints.
@@ -207,6 +224,66 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 | `GET /api/authorization/context` | Versioned current effective permission context, filtered by the validated audience, `api.read` scope, purpose, optional tenant selector, and project/run bindings. Returns `Cache-Control: no-store`. |
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
+
+## Knowledge and Memory
+
+These routes belong to the unpublished `Agentweaver.Knowledge` .NET 10 service
+candidate. Protected routes require the configured OpenIddict issuer and audience.
+Each privileged request forwards its original validated bearer token to Projects &
+Config for a fresh authorization-context check; Knowledge does not keep memberships,
+roles, or authorization caches. Private content reads and writes require fresh effective
+`WriteProjects` for the target project; `ReadProjects` alone is metadata-only and does
+not authorize private Knowledge records, revisions, or context. Memory-provider
+resolution additionally requires effective project `ReadRunSelection`. If the validated
+caller token is already bound to a project/run, those bindings must match the requested
+route and the authority response.
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /health/live` | Process liveness. |
+| `GET /health/ready` | PostgreSQL and current owned-schema readiness; returns `503` when migrations, tables, or required runtime grants are missing. |
+| `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records` | Create a Memory, SessionContext, or Proposal record. Requires one `Idempotency-Key`; a new write returns `201`, an identical retry returns `200`, and reuse with different request content returns `409`. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records?kind={kind}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` | Search only the requested project and agent, with bounded pages; requires current `WriteProjects` for private content. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Read one record in the requested project/agent scope; requires current `WriteProjects` for private content. |
+| `PUT /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Append a revision using `expectedRevision` compare-and-swap and an `Idempotency-Key`; stale revisions return `409`. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/revisions?page={n}&pageSize={n}` | Read bounded immutable revision history; requires current `WriteProjects` for private content. |
+| `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/proposals/{proposalId}/promote` | Explicitly promote an owned pending proposal using its expected revision and an `Idempotency-Key`. The response includes `delivery` (`DELIVERED` or `PENDING`); pending delivery does not undo the committed promotion. An identical retry uses the same immutable receipt. |
+| `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/proposals/{proposalId}/reject` | Explicitly reject a pending proposal using its expected revision and an `Idempotency-Key`. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/context?q={text}&maxItems={n}&maxTokens={n}` | Compose bounded context with immutable revision references; requires current `WriteProjects` for private content. Invalid narrowing is `400`; mandatory-content, candidate, or output budget overflow is returned explicitly as `413`. |
+| `GET /internal/accepted-effects/{receiptId}` | No-store redacted accepted-effect receipt for the original issuer/subject and matching bounds, after a fresh current project `WriteProjects` check. Does not return proposal or decision content. |
+
+The service owns a separate `knowledge` PostgreSQL schema. Revisions are append-only,
+provider bindings are immutable, and current records cannot be physically deleted;
+record changes use expected revisions. Proposal promotion checks current
+`WriteProjects`, agent ownership, source run, pending state, and expected revision. It
+commits the proposal revision, approved decision, redacted immutable receipt, and
+Knowledge-owned outbox intent in one transaction. Events fetches the receipt and
+appends a separate project fact; this is not a native Sessions journal event. Failed
+delivery remains `PENDING` until a fresh authorized caller retries.
+
+Configuration:
+
+| Key | Requirement |
+| --- | --- |
+| `Identity:Issuer` | Absolute HTTPS issuer used to validate callers. |
+| `Identity:Audience` | Required bearer-token audience for Knowledge. |
+| `ProjectsConfig:BaseAddress` | Trusted absolute HTTPS Projects & Config owner URI; redirects are rejected. |
+| `Knowledge:Events:BaseAddress` | Fixed absolute HTTPS Events owner URI for caller-driven project-fact delivery; redirects are rejected. |
+| `Knowledge:Events:Audience` | Required Events audience for the already-issued caller bearer; a missing audience returns delivery as `PENDING` with the subject/audience tuple. |
+| `ProjectsConfig:ProviderCatalog` | The catalog owner's startup snapshot used to validate negotiated provider metadata. |
+| `ConnectionStrings:Knowledge` | Passwordless PostgreSQL runtime connection to the Knowledge-owned schema. |
+| `Knowledge:Database:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Explicit projected workload identity for the runtime Entra database role. |
+| `ConnectionStrings:KnowledgeMigration` | Separate connection for the explicit `--migrate` operation. |
+| `Knowledge:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Separate explicit migration workload identity. |
+| `Knowledge:Provider:{ResourceId,DatabaseName,ResourceGeneration,Schema,OptionsRevision,OptionsSchemaVersion}` | Expected resource identity and immutable provider options used during negotiation/pinning. |
+| `Knowledge:Context:{MaximumCandidates,MaximumItems,MaximumTokens}` | Service-owned hard limits; each request can only narrow them and the current run's prompt-token limit. |
+
+Both PostgreSQL connections omit passwords and use TLS `VerifyFull` with the
+PostgreSQL Entra token scope. Ordinary startup verifies the already-applied schema and
+requires the runtime identity to have only the necessary DML grants; it cannot migrate.
+Run the executable with only `--migrate` to use the separate privileged identity. See
+[Knowledge and Memory](../architecture/knowledge-memory) for ownership, context, and
+current event-delivery boundaries.
 
 ## Identity host configuration
 

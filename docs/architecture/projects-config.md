@@ -44,7 +44,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
 
-The authorization-context route requires `api.read`, accepts the existing optional `X-Agentweaver-Tenant` selector, and resolves only the authenticated issuer and subject. It rejects query parameters, including caller-subject and role selectors, and purpose-bound tokens. It applies the validated service audience, OAuth scopes, and optional project/run bindings before returning grouped effective permissions with membership and role revisions; it does not return assignment rows or a transferable credential. Responses use `Cache-Control: no-store`. Resource services request this context for each privileged operation and do not maintain separate membership/role records, caches, or authorization pins.
+The authorization-context route requires `api.read`, accepts the existing optional `X-Agentweaver-Tenant` selector, and resolves only the authenticated issuer and subject. It rejects query parameters, including caller-subject and role selectors, and purpose-bound tokens. It applies the validated service audience, OAuth scopes, and optional project/run bindings before returning grouped effective permissions with membership and role revisions; it does not return assignment rows or a transferable credential. Responses use `Cache-Control: no-store`. Resource services request this context for each privileged operation and do not maintain separate membership/role records, caches, or authorization pins. The contract-1 wire DTOs are shared in `Agentweaver.Abstractions`; this shares serialization types, not authority data or database access.
 
 ## Selection and persistence rules
 
@@ -59,6 +59,14 @@ The authorization-context route requires `api.read`, accepts the existing option
 - Provider resolution returns candidates, not resource bindings. Resource identity, generation, negotiated capabilities, and final pins are owned by the consumer after provisioning.
 
 The service does not own provider catalog registrations, Git or workflow materialization, remote MCP, UI state, run journals, or secret redemption. The catalog owner supplies its snapshot through the required `ProjectsConfig:ProviderCatalog` startup configuration section, containing `Registrations`, `Defaults`, `PermittedOverrides`, `OrderedSelections`, `LayerSelections`, and optional `MeterSourceSelections` entries (`MeterSource`, `ProviderId`); provider registrations include adapter version, options schema/revision, hosting pattern, enabled state, and advertised capabilities. The service validates the supplied catalog through `ProviderCatalog.Create` and fails startup if it is missing or invalid rather than using an empty catalog. The snapshot is fixed for the service process lifetime, and run requests carry their own immutable context revision. Database migrations run through the separate `--migrate` operation; normal startup verifies that migrations have already been applied.
+
+Projects & Config and Knowledge use the shared loader from `Agentweaver.Providers`.
+Both validate the supplied catalog through `ProviderCatalog.Create` and fail startup
+if it is missing or invalid rather than using an empty catalog. The snapshot is fixed
+for each service process lifetime; run requests carry an immutable context revision,
+and consumers fail closed if a selected candidate differs from the supplied catalog.
+Database migrations run through the separate `--migrate` operation; normal startup
+verifies that migrations have already been applied.
 
 Cost candidates remain selections, not producer authority. An opaque model-selection
 reference plus a selected meter key does not prove the effective SDK model/source.

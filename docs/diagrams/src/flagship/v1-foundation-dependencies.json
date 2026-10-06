@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "V1 services, contracts, and adapters",
-  "alt": "Structural component view of the unpublished Events & Sessions service and its Abstractions, Providers, PostgreSQL, and Telemetry references, with native journal PolicyEvaluation evidence and addressed-message delivery. It also shows Azure Blob and Key Vault adapter chains. The Orchestrator owner flow is in the sessions journal sequence; these are not deployment diagrams.",
+  "alt": "Structural component view of unpublished Knowledge and Events & Sessions candidates, Environment egress and Orchestrator Core AGT YAML Policy adapters, the Orchestrator owner, and their provider, PostgreSQL, and telemetry references. The journal rejects untrusted PolicyEvaluation writes. Azure Blob and Key Vault adapter chains are included. This is source structure, not deployment topology.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -27,6 +27,12 @@
     {
       "id": "journal-composition",
       "label": "Events & Sessions candidate",
+      "subLabel": "Host and direct project references.",
+      "tier": 1
+    },
+    {
+      "id": "knowledge-composition",
+      "label": "Knowledge candidate",
       "subLabel": "Host and direct project references.",
       "tier": 1
     }
@@ -114,6 +120,33 @@
       "group": "journal-composition"
     },
     {
+      "id": "knowledge-dependencies",
+      "label": "Refs",
+      "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "contracts + libraries",
+        "tone": "lavender",
+        "visible": true
+      },
+      "group": "knowledge-composition"
+    },
+    {
+      "id": "knowledge-service",
+      "label": "Knowledge",
+      "subLabel": "Memory API and native PostgreSQL adapter candidate.",
+      "meta": "Agentweaver.Knowledge",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": {
+        "text": "service",
+        "tone": "teal",
+        "visible": true
+      },
+      "group": "knowledge-composition"
+    },
+    {
       "id": "azure-blob-container",
       "label": "Azure Blob container",
       "subLabel": "External object-storage resource.",
@@ -146,6 +179,11 @@
     {
       "from": "events-and-sessions",
       "to": "sessions-dependencies",
+      "label": "references"
+    },
+    {
+      "from": "knowledge-service",
+      "to": "knowledge-dependencies",
       "label": "references"
     },
     {

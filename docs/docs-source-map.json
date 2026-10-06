@@ -7,6 +7,7 @@
     "docs/diagrams/README.md",
     "docs/architecture/overview.md",
     "docs/architecture/events-sessions.md",
+    "docs/architecture/knowledge-memory.md",
     "docs/architecture/providers-models.md",
     "docs/architecture/projects-config.md",
     "docs/architecture/environment-egress.md",
@@ -113,6 +114,21 @@
         "docs/architecture/overview.md",
         "docs/architecture/design/provider-seams.md",
         "docs/guide/testing.md"
+      ]
+    },
+    {
+      "name": "Knowledge and Memory",
+      "sourcePrefixes": [
+        "services/knowledge/Agentweaver.Knowledge/"
+      ],
+      "required": [
+        "docs/architecture/knowledge-memory.md",
+        "docs/architecture/overview.md",
+        "docs/architecture/providers-models.md",
+        "docs/architecture/projects-config.md",
+        "docs/reference/contracts.md",
+        "docs/guide/testing.md",
+        "docs/diagrams/src/flagship/v1-knowledge-memory.json"
       ]
     },
     {

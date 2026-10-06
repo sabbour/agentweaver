@@ -1,21 +1,25 @@
 using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
+using Microsoft.Extensions.Configuration;
 
-namespace Agentweaver.Projects.Config;
+namespace Agentweaver.Providers;
 
 public static class ProviderCatalogConfiguration
 {
-    public static ProviderCatalog Load(IConfiguration configuration)
+    public static ProviderCatalog Load(
+        IConfiguration configuration,
+        string sectionPath = "ProjectsConfig:ProviderCatalog")
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var section = configuration.GetSection("ProjectsConfig:ProviderCatalog");
+        ArgumentException.ThrowIfNullOrWhiteSpace(sectionPath);
+        var section = configuration.GetSection(sectionPath);
         if (!section.Exists())
             throw new InvalidOperationException(
-                "Projects & Config requires the provider catalog snapshot supplied by the catalog owner.");
+                $"The provider catalog snapshot supplied by the catalog owner is missing at '{sectionPath}'.");
 
         var settings = section.Get<ProviderCatalogSettings>()
-            ?? throw new InvalidOperationException("Projects & Config provider catalog settings are invalid.");
+            ?? throw new InvalidOperationException($"Provider catalog settings at '{sectionPath}' are invalid.");
         var registrations = settings.Registrations.Select(item =>
         {
             var seam = ParseEnum<ProviderSeam>(item.Seam, "provider seam");
@@ -45,13 +49,14 @@ public static class ProviderCatalogConfiguration
                 item.ProviderIds.ToImmutableArray()));
         var layers = settings.LayerSelections.Select(item =>
             new ProviderLayerSelection(ParseEnum<NetworkPolicyLayer>(item.Layer, "network policy layer"), item.ProviderId));
-        var meters = settings.MeterSourceSelections.Select(item =>
+        var meterSources = settings.MeterSourceSelections.Select(item =>
             new ProviderMeterSourceSelection(item.MeterSource, item.ProviderId));
 
-        var result = ProviderCatalog.Create(registrations, defaults, overrides, ordered, layers, meters);
+        var result = ProviderCatalog.Create(
+            registrations, defaults, overrides, ordered, layers, meterSources);
         return result.Value
             ?? throw new InvalidOperationException(
-                $"The provider catalog owner supplied an invalid snapshot: {result.Error?.Code}: {result.Error?.Message}");
+                $"The provider catalog owner supplied an invalid snapshot at '{sectionPath}': {result.Error?.Code}: {result.Error?.Message}");
     }
 
     private static T ParseEnum<T>(string value, string name) where T : struct, Enum =>

@@ -1217,6 +1217,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             var databaseName = new NpgsqlConnectionStringBuilder(connectionString).Database;
+            builder.UseSetting("EventsAndSessions:Knowledge:BaseAddress", "https://knowledge.test/");
+            builder.UseSetting("ProjectsConfig:BaseAddress", "https://projects.test/");
             builder.ConfigureAppConfiguration((_, configuration) =>
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -1230,6 +1232,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["EventsAndSessions:Provider:Schema"] = schema,
                     ["EventsAndSessions:Provider:OptionsRevision"] = "integration-v1",
                     ["EventsAndSessions:Messaging:OptionsRevision"] = "integration-messaging-v1",
+                    ["EventsAndSessions:Knowledge:BaseAddress"] = "https://knowledge.test/",
+                    ["ProjectsConfig:BaseAddress"] = "https://projects.test/",
                     ["Identity:Issuer"] = IdentityBrokerWebApplicationFactory.Issuer,
                     ["Identity:Audience"] = "https://api.test",
                     ["ProjectsConfig:AuthorizationContext:OwnerBaseAddress"] = "https://projects.test/",
