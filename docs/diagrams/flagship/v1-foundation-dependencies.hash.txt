@@ -2,7 +2,7 @@
   "version": 2,
   "source": {
     "file": "v1-foundation-dependencies.json",
-    "sha256": "ee388bb720b5add688013d3c77cab4e509c9e98538f5acbcd469b862101f472c"
+    "sha256": "e1283747642c22a0c51aff9070314d027cbd8cf33df7419c3e06a0a8e187a875"
   },
   "drawio": {
     "file": "v1-foundation-dependencies.drawio",

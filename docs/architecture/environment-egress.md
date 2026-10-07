@@ -187,6 +187,14 @@ profile identifies fixed HTTPS configure and observation endpoints for an exact
 tenant, project, run, Environment, and Sandbox resource UID/generation.
 Unknown profiles or a different placement fail explicitly.
 
+The runtime profile route uses the canonical `EnvironmentSandboxManager` placement reader.
+Its callback retains the actual lease transaction while it reads the current
+Orchestrator work item and resolves the registered profile.
+It does not request the full runtime registration recursively or dispatch provider effects.
+The internal route requires current `ReadRunSelection` for the exact signed run.
+The public placement route still requires `WriteProjects`.
+Run-bound tokens do not gain public write permission.
+
 A profile match does not create a lease, prove current owner authority, or
 authorize an SDK session. Delivery must verify the Identity pending nonce and
 fresh Projects, Orchestrator, and lease state before and after transport.

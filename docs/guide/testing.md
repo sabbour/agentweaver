@@ -70,13 +70,34 @@ The disposable-PostgreSQL tests cover concurrent duplicates, content conflicts,
 restart, immutable history, transaction rollback, and exact run/agent totals.
 Receipt tests read the committed hash and immutable price through a separate
 PostgreSQL connection. Duplicate retries return the identical receipt.
-Migration tests cover fresh version 4, version-3 upgrades, the legacy version-2
+Migration tests cover fresh version 6, version-3 upgrades, the legacy version-2
 project-fact layout, and rejected version gaps.
 
-These tests exercise storage and pricing primitives only. They do not prove
-resolved SDK model provenance, an authorized producer, or positive native usage
-ingestion. Fixture model metadata and existing typed action grants are not
-SDK producer authority.
+The combined Broker test connects actual OAuth and bearer validation, current Core
+memberships/roles, immutable Projects selection, Environment lease/profile, Orchestrator
+registration and source receipt, native SDK callbacks, and Events HTTP/PostgreSQL accounting.
+The test controls only external placement, SDK transport/events/catalog, and pricing inputs.
+It does not seed producer authority or take a desired model from caller JSON.
+
+The five scenarios cover successful accounting, Broker revocation before SDK creation,
+observe-grant revocation during an observation lock wait, registration revocation
+before the source lock opens, and Environment retirement during an observation wait.
+The positive scenario commits duplicate native callbacks to one immutable receipt,
+then verifies reference-only ingestion and exact `0.00123456725 AIC` accounting.
+The multiplier is not applied a second time.
+Database checks reject mutation and truncation of source and accounting history.
+
+The canonical Sandbox integration also covers public write versus internal run-read
+permission, three current-authority reads, and retained-lease protection against competing retirement.
+Neither placement route reads the accepted selection recursively or dispatches provider effects.
+These local tests do not prove deployed hosts, live AKS placement, or paid model output.
+
+After the Release build, run the combined source scenarios with:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerIssuedOwnerAndSeparateRunSelectionAuthorizeWorkspaceVolumeHttpEffects
+```
 
 ## Validate the documentation site
 

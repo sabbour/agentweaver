@@ -1,0 +1,15 @@
+---
+"Agentweaver.Abstractions": minor
+"Agentweaver.AgentRuntime": minor
+"Agentweaver.Identity": minor
+"Agentweaver.Identity.Broker": minor
+"Agentweaver.Orchestrator": minor
+"Agentweaver.Environment": minor
+"Agentweaver.EventsAndSessions": minor
+---
+
+Connect authenticated native Copilot SDK observations to immutable source receipts
+and reference-only Events accounting through the existing keyed Cost resolver.
+Preserve nullable native measurements and already-weighted nano-AIU.
+Recheck current registration, grant, Core authority, and Environment placement after waits.
+Reuse the canonical retained-lease placement reader without changing public write permissions.

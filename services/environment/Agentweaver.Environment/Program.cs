@@ -84,7 +84,6 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
 builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
-builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
 builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
     builder.Configuration.GetSection("Environment:RuntimeBootstrap:Profiles")

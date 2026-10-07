@@ -54,10 +54,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     };
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, null)]
+    [InlineData(true, null)]
+    [InlineData(false, "grant")]
+    [InlineData(false, "head")]
+    [InlineData(false, "lease")]
     public async Task BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
-        bool revokeSourceBeforeSdk)
+        bool revokeSourceBeforeSdk, string? sourceLoss)
     {
         using var signingCertificate = X509CertificateLoader.LoadPkcs12FromFile(
             _signingCertificate.PfxPath,
@@ -1290,7 +1293,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(runtimeOwner, await ReadJsonAsync<RuntimeOwnerContext>(replayedOwner));
             await VerifyRunBoundRuntimeRegistrationWithCurrentEnvironmentAsync(
                 ownerSchema, signingKey, projects, eventsFactory, runToken, runtimeOwner,
-                runnerMembership.MembershipId, sandboxProvider, revokeSourceBeforeSdk);
+                runnerMembership.MembershipId, sandboxProvider, revokeSourceBeforeSdk, sourceLoss);
         }
         using (var unmappedOwner = await SendAsync(
                    orchestrator, HttpMethod.Get,

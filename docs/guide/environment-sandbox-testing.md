@@ -67,6 +67,14 @@ policy-resource boundary are controlled. It is not a live Kubernetes or
 datapath test. Sandbox observations remain `Pending` without AgentHost configure
 evidence.
 
+The separate native SDK harness reuses the canonical placement manager.
+Its profile callback reads actual Orchestrator work-item context under the retained lease.
+The module tests retire a lease before lifecycle advancement, as the admitted lifecycle guard requires.
+The combined source scenarios then exercise actual Broker delivery, SDK callbacks,
+immutable Orchestrator receipts, and reference-only Events accounting.
+See the [native accounting scenarios](./testing#cost-bindings-pricing-and-usage-storage)
+for their exact command and local evidence boundary.
+
 Build the service and all referenced provider projects with:
 
 ```powershell

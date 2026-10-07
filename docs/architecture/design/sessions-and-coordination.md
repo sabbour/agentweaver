@@ -83,12 +83,12 @@ ID and registered profile ID. Provider identity, lease revision, lifecycle gener
 expiry, model reference, and turn identity are not configure-body authority.
 The registration transaction repeats current authority after database waits.
 
-Public Environment placement/profile reads retain `WriteProjects`. Current Projects
+Public Environment placement reads retain `WriteProjects`. Current Projects
 policy deliberately excludes that permission from run-bound tokens, including project
-owners. The genuine combined test therefore denies enrollment and leaves zero
-registrations. A separate read-only run-bound lookup, using existing
-`ReadRunSelection`, is the authorized integration path; it must not grant configure
-or delivery authority. Complete positive enrollment and accounting proof remain pending.
+owners. The separate internal lookup uses existing `ReadRunSelection` for the exact run.
+It reuses the canonical manager's retained lease callback for current owner context
+and the registered profile. This read does not grant configure or delivery authority.
+Identity's separate pending nonce still protects delivery.
 
 Child registration can bind a confirmed WorkPlan item. The owner transaction
 checks its current decision version, selection hash, and fence before storing
@@ -111,9 +111,13 @@ before and after native session creation. It returns one fully initialized immut
 session; failures dispose the SDK session and revoke or invalidate the source credential.
 Usage reads also check current registration and source authority.
 
-The storage and Broker transport source does not prove complete SDK ingestion.
-Full acceptance still requires genuine current owner and placement checks,
-immutable observation persistence, and a separate priced Events receipt.
+The runtime library registers actual SDK facts and commits callbacks to the Orchestrator.
+The source writer rechecks the observe grant and current registration after database waits.
+Its immutable source receipt preserves the nullable native measurements and weighted nano-AIU.
+Events accepts only the receipt ID, fetches trusted owner evidence, and commits
+the immutable price, rate card, ledger, source hash, and inbox together.
+The combined local harness covers successful accounting and authority loss before SDK creation
+or during source transaction waits. It does not prove deployed dispatch or paid model execution.
 See the [runtime credential contract](../../reference/contracts#runtime-credential-source-candidate).
 
 ## Today in 0.x

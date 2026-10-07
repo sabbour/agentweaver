@@ -68,8 +68,12 @@ owner authority after SDK awaits. The registration candidate also pins the exact
 Environment provider, lifecycle generation, lease revision, and lease-bounded expiry.
 These pins do not give a run-bound token public project-write authority.
 
-Storage and Broker HTTP tests cover these boundaries. They do not prove the full
-current-Core, Environment placement, native SDK, and accounting path. See the
+The combined local harness uses actual Broker OAuth, current Core membership and roles,
+accepted Projects selection, Environment lease/profile, native SDK callbacks, and Events accounting.
+It controls only external placement and SDK transport, catalog, and pricing inputs.
+Revocation before SDK creation produces zero SDK requests and source records.
+Authority loss during source transaction waits denies the observation without accounting.
+This evidence does not prove cloud deployment or paid model execution. See the
 [runtime credential source contract](../reference/contracts#runtime-credential-source-candidate).
 
 ## PostgreSQL authentication and workload boundary

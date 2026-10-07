@@ -21,16 +21,20 @@ The Foundation Probe resolves provider descriptors and pins binding evidence for
 
 Projects & Config loads the catalog owner's meter-source selections and uses the
 existing resolver to persist Cost candidates through its native run-selection
-routes. This is source-keyed selection, not SDK model/producer authority, resource
-negotiation or usage ingestion. Separate Cost source primitives provide immutable
-bindings, Copilot AI-credit pricing, and append-only PostgreSQL usage storage.
-The source does not connect an authorized SDK producer to that storage.
+routes. Selection alone does not authorize an SDK producer.
+The runtime pipeline separately binds actual SDK facts to a current registration
+and purpose-bound Identity credential.
+Orchestrator commits immutable source receipts before Events fetches and prices them.
+Events uses the existing keyed Cost resolver and append-only PostgreSQL accounting.
 
 The runtime library now creates an auth-first native SDK session from a delivered
 configure nonce and a current registration. The registration source compares the
 confirmed work item and active turn with the current Environment lease and registered
-profile. Public Environment write gates still reject run-bound tokens; the separate
-read-only runtime lookup and complete delivery/accounting integration remain pending.
+profile. The canonical Environment manager retains its lease transaction during
+the internal profile callback. Public write gates still reject run-bound tokens.
+The separate read-only path uses current `ReadRunSelection` without new roles or claims.
+The local combined harness exercises SDK source persistence and reference-only accounting.
+It does not prove deployed AgentHost scheduling or paid model execution.
 
 ## Canonical component overview
 
@@ -80,14 +84,14 @@ their external boundaries.
 | `Agentweaver.Providers` | In-memory provider catalog and resolver. | `Agentweaver.Abstractions` |
 | `Agentweaver.Orchestrator.Core` | Workflow validation and the platform-singleton AGT YAML Policy adapter. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Microsoft.AgentGovernance` |
 | `Agentweaver.Identity` | Trusted actor, exact secret grants, separate runtime nonce contracts, and fixed owner HTTP transport. | `Agentweaver.Abstractions` |
-| `Agentweaver.AgentRuntime` | Auth-first native SDK session and nullable usage callbacks; no deployed AgentHost or complete accounting pipeline. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `GitHub.Copilot.SDK` |
+| `Agentweaver.AgentRuntime` | Authenticated bootstrap, native SDK callbacks, and durable source-receipt client. No AgentHost executable or relay. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `GitHub.Copilot.SDK` |
 | `Agentweaver.Secrets.AzureKeyVault` | Exact-version Azure Key Vault adapter. | `Agentweaver.Abstractions` |
 | `Agentweaver.Persistence.Postgres` | Service-schema outbox, consumer inbox, and relay library. | — |
 | `Agentweaver.ObjectStore.AzureBlob` | Opaque-object Azure Blob adapter. | `Agentweaver.Abstractions` |
 | `Agentweaver.Telemetry` | In-process OpenTelemetry traces, metrics, and logs. | — |
 | `Agentweaver.Telemetry.AzureMonitor` | Opt-in Azure Monitor exporters. | `Agentweaver.Telemetry` |
 | `Agentweaver.Identity.Broker` | OAuth and secret-redemption host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault` |
-| `Agentweaver.EventsAndSessions` | Native PostgreSQL journal, addressed messages, Cost pricing, usage storage, and HTTP host candidate. No authorized SDK usage producer. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
+| `Agentweaver.EventsAndSessions` | Native journal, addressed messages, reference-only SDK usage admission, immutable Cost pricing, and exact usage totals. Unpublished host candidate. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Knowledge` | Project-scoped Memory API, context compiler, and native PostgreSQL adapter candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Environment` | Environment-owned egress, workspace volumes, Sandbox leases, registered runtime profiles, and authenticated nonce delivery; not deployed. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles`, `Agentweaver.Providers.Sandbox.AgentSandbox` |
 | `Agentweaver.Orchestrator` | Current session/work-item/turn context, runtime registration, immutable SDK source receipts, message outbox, and parent notifications. It checks current Projects authority. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Orchestrator.Core`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres` |

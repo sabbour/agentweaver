@@ -28,7 +28,7 @@ uses the existing provider catalog/resolver and telemetry helper. The provider-n
 This source slice connects owner-validated addressed-message delivery to session
 turn-boundary requests. It does not implement the rest of the proposed platform:
 automatic AgentHost scheduling, a background delivery relay, gate approval decisions,
-authorized SDK usage ingestion, consistency manifests, MAF checkpoints, or Gateway/UI/MCP routes.
+consistency manifests, MAF checkpoints, or Gateway/UI/MCP routes.
 The broader Sessions and coordination design remains Proposed for those workflows.
 
 ## Usage storage and Copilot pricing
@@ -38,7 +38,8 @@ The service owns separate append-only `usage_ledger` and immutable
 the session journal, addressed messages, and project facts. The migration preserves
 both current version-3 schemas and the earlier version-2 project-fact layout.
 Migration `005_native_sdk_usage.sql` adds cache-write values and permits unknown
-request counts. Ordinary startup requires version 5 and verifies both usage tables.
+request counts. Migration `006_native_usage_receipts.sql` adds immutable source
+receipts and run-scoped Cost bindings. Ordinary startup requires version 6.
 
 `PostgresUsageLedger` implements the low-level `IUsageLedger` storage contract.
 An entry records tenant, project, run, session, agent, model metadata, measurements,
@@ -65,17 +66,36 @@ model weighting. Only quotes with an explicit unweighted basis apply a model
 multiplier. The adapter requires an immutable rate card and exact provider,
 configuration, resource, and capability bindings.
 
-These are storage and pricing primitives, not native SDK ingestion.
-`IUsageLedger.AppendAsync` does not authorize its caller. The HTTP host exposes
-no usage-writing route and registers no SDK producer. Existing typed Orchestrator
-action grants and opaque model references do not prove an SDK usage source.
-Trusted resolved-model provenance and current producer authority remain required.
-The accounting receipt proves a committed ledger entry, not SDK source authority.
-It remains separate from the required trusted source-observation receipt.
-The shared `RuntimeUsageSourceReceipt` contract binds one native observation to
-its immutable runtime registration and source hash. Its validator rejects changed
-owner, SDK, model, catalog, event, and accepted-selection pins.
-This contract alone does not register a producer or authorize a remote writer.
+`IUsageLedger.AppendAsync` remains a low-level storage contract without caller authorization.
+The optional HTTP consumer uses a different, reference-only admission path.
+`POST /internal/sessions/{sessionId}/usage-receipts` accepts only `receiptId`.
+Callers cannot supply a source URL, SDK measurements, price, rate card, or accepted marker.
+Events fetches the immutable receipt from its fixed HTTPS Orchestrator owner.
+The HTTP client rejects redirects and preserves the original validated bearer.
+
+The Orchestrator source writer requires that bearer and an independent observe credential.
+It checks the current registration, Core permission, accepted selection, active
+session and turn, Environment lease, and Identity grant after database waits.
+The actual SDK session supplies the effective model, catalog hash, SDK versions,
+event identity, and nullable measurements.
+The owner commits these values before it returns `RuntimeUsageSourceReceipt`.
+The receipt validator rejects changed owner, SDK, model, catalog, event, and selection pins.
+
+Events requires current `ReadRunSelection` for the exact signed project/run.
+It resolves the meter source through the existing Cost catalog/resolver and pins
+the run's first Cost binding or explicit unavailable reason.
+The transaction commits the price, rate card, ledger, source hash, receipt, and
+consumer inbox before it returns a no-store accounting acknowledgment.
+It repeats current Core authority after transaction waits, including duplicate requests.
+Failed revalidation rolls back the transaction.
+
+The accounting acknowledgment proves a committed price, not runtime credential authority.
+It remains separate from the source receipt.
+Committed source receipts support explicit retries after restart.
+Unavailable providers and missing measurements produce `Unpriced`, not zero cost.
+`GET /internal/projects/{projectId}/runs/{runId}/usage` returns exact run and agent totals.
+These routes are enabled only with `EventsAndSessions:RuntimeUsage:Enabled`.
+This source has no background usage relay, AgentHost executable, or cloud acceptance.
 
 ## Addressed-message owner integration
 

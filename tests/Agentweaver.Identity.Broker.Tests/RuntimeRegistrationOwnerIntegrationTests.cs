@@ -12,6 +12,7 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
+using Agentweaver.Providers.Sandbox.AgentSandbox;
 using EnvironmentService::Agentweaver.Environment;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -32,7 +33,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     private async Task VerifyRunBoundRuntimeRegistrationWithCurrentEnvironmentAsync(
         string ownerSchema, SecurityKey signingKey, ProjectsConfigResourceServer projects,
         EventsIntegrationFactory events, string runToken, RuntimeOwnerContext owner, Guid membershipId,
-        ICoordinatorSandboxResourceProvider sandboxProvider, bool revokeSourceBeforeSdk)
+        ICoordinatorSandboxResourceProvider sandboxProvider, bool revokeSourceBeforeSdk, string? sourceLoss)
     {
         await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membershipId,
             ProjectAuthorityResourceType.Project, owner.ProjectId, ProjectAuthorityRole.Owner);
@@ -115,13 +116,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(forged, HttpStatusCode.BadRequest);
         await VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
             registration, signingKey, runToken, routes, failures, projects, events.Schema, ownerSchema,
-            revokeSourceBeforeSdk);
+            revokeSourceBeforeSdk, sourceLoss, environment);
     }
 
     private async Task VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
         RuntimeRegistration registration, SecurityKey signingKey, string runToken,
         Dictionary<string, Func<HttpMessageHandler>> routes, ConcurrentQueue<string> failures,
-        ProjectsConfigResourceServer projects, string eventsSchema, string ownerSchema, bool revokeSourceBeforeSdk)
+        ProjectsConfigResourceServer projects, string eventsSchema, string ownerSchema, bool revokeSourceBeforeSdk,
+        string? sourceLoss, RuntimePlacementTestServer environment)
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         await using var brokerFactory = new IdentityBrokerWebApplicationFactory(
@@ -293,6 +295,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(registration.Binding.AcceptedSelectionHash, session.Facts.AcceptedSelectionHash);
             var sourceClient = new RuntimeUsageSourceHttpClient(
                 runtimeHttp, new("https://orchestrator.test/"), actor);
+            if (sourceLoss is not null)
+            {
+                await VerifyNativeSourceAuthorityAfterWaitAsync(
+                    sourceLoss, session, sourceClient, runtimeBroker, receiver, environment, ownerSchema,
+                    projects, runToken, timeout.Token);
+                return;
+            }
             await using var usage = session.CommitUsageAsync(sourceClient, timeout.Token).GetAsyncEnumerator();
             Assert.True(await usage.MoveNextAsync());
             var accepted = usage.Current;
@@ -478,11 +487,102 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
+    private async Task VerifyNativeSourceAuthorityAfterWaitAsync(
+        string loss, AuthorizedRuntimeSession session, RuntimeUsageSourceHttpClient sourceClient,
+        RuntimeBrokerCredentialClient broker, RuntimeBootstrapReceiver receiver, RuntimePlacementTestServer environment,
+        string schema, ProjectsConfigResourceServer projects, string runToken, CancellationToken cancellationToken)
+    {
+        await sourceClient.RegisterAsync(session, cancellationToken);
+        await using var lockConnection = new NpgsqlConnection(_connectionString);
+        await lockConnection.OpenAsync(cancellationToken);
+        await using var transaction = await lockConnection.BeginTransactionAsync(cancellationToken);
+        await using (var acquire = new NpgsqlCommand(loss == "head"
+            ? "SELECT pg_advisory_xact_lock(hashtext('agentweaver.runtime.usage'), hashtext(@runtime))"
+            : $"""LOCK TABLE "{schema}".runtime_usage_observations IN ACCESS EXCLUSIVE MODE""",
+            lockConnection, transaction))
+        {
+            if (loss == "head")
+                acquire.Parameters.AddWithValue("runtime", session.Registration.RuntimeInstanceId.ToString("D"));
+            await acquire.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await using var observations = session.CommitUsageAsync(sourceClient, cancellationToken).GetAsyncEnumerator();
+        var append = observations.MoveNextAsync().AsTask();
+        try
+        {
+            await using var observer = new NpgsqlConnection(_connectionString);
+            await observer.OpenAsync(cancellationToken);
+            var waiting = false;
+            while (!waiting)
+            {
+                await using var wait = new NpgsqlCommand("""
+                    SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                        WHERE datname = current_database() AND @locker = ANY(pg_blocking_pids(pid)))
+                    """, observer);
+                wait.Parameters.AddWithValue("locker", lockConnection.ProcessID);
+                waiting = (bool)(await wait.ExecuteScalarAsync(cancellationToken))!;
+                if (append.IsCompleted)
+                    await append;
+                if (!waiting)
+                    await Task.Delay(20, cancellationToken);
+            }
+            switch (loss)
+            {
+                case "grant":
+                    Assert.Equal(RuntimeCredentialState.Revoked,
+                        (await broker.RevokeAsync(session.Proof(), Guid.NewGuid(), cancellationToken)).State);
+                    break;
+                case "head":
+                    await using (var source = NpgsqlDataSource.Create(_connectionString))
+                    {
+                        var owner = new RuntimeRegistrationStore(source, schema, TimeProvider.System);
+                        var revoked = await owner.RevokeAsync(
+                            session.Registration.RuntimeInstanceId, session.Registration.Revision, cancellationToken);
+                        Assert.Equal(RuntimeRegistrationState.Revoked, revoked.State);
+                        Assert.Equal(session.Registration.Revision + 1, revoked.Revision);
+                    }
+                    break;
+                case "lease":
+                    using (var response = await SendAsync(projects.Client, HttpMethod.Get,
+                        "/api/authorization/context", runToken, [session.Registration.Binding.TenantId]))
+                    {
+                        await AssertStatusAsync(response, HttpStatusCode.OK);
+                        var current = await ReadAuthorizationContextAsync(response);
+                        await environment.RetireCurrentLeaseAsync(new(
+                            current.Issuer, current.ActorId, current.MembershipRevision), cancellationToken);
+                    }
+                    break;
+                default:
+                    throw new InvalidOperationException("Unknown native source authority-loss case.");
+            }
+        }
+        finally
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+        }
+        var denial = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => append);
+        Assert.Equal("runtime_owner_denied", denial.Code);
+        await AssertNativeSourceCountsAsync(schema, 1, 0);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.DisposeAsync().AsTask());
+        Assert.Equal(RuntimeBootstrapReceiverState.Disposed, receiver.State);
+        output.WriteLine($"Native source {loss} loss after actual PostgreSQL wait denies without observation or accounting.");
+    }
+
     private sealed class RuntimePlacementTestServer(IHost host, NpgsqlDataSource dataSource,
         SandboxLeaseSnapshot lease) : IAsyncDisposable
     {
         public SandboxLeaseSnapshot Lease { get; } = lease;
         public HttpMessageHandler CreateHandler() => host.GetTestServer().CreateHandler();
+
+        public async Task RetireCurrentLeaseAsync(
+            SandboxRetirementAuthorization authorization, CancellationToken cancellationToken)
+        {
+            var lease = await new EnvironmentSandboxLeaseStore(dataSource, TimeProvider.System).BeginRetirementAsync(
+                Lease.Fence, Lease.ResourceGeneration, Lease.ProviderFencingGeneration,
+                SandboxRetirementReason.AuthorizedAbandon, "source-current-fence-denial",
+                authorization, terminalEvidence: null, cancellationToken);
+            Assert.Equal(SandboxLeaseState.Releasing, lease.State);
+            Assert.True(lease.CurrentFencingGeneration > Lease.CurrentFencingGeneration);
+        }
 
         public static async Task<RuntimePlacementTestServer> StartAsync(
             string connectionString, SecurityKey signingKey, Func<HttpMessageHandler> projectsHandler,
@@ -535,6 +635,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
                         services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
                         services.AddScoped<EnvironmentRuntimePlacementReader>();
+                        services.AddScoped<EnvironmentSandboxManager>();
+                        services.AddSingleton(new AgentSandboxOptions(
+                            1, "unused-sandbox-options", "agentweaver", "azure-files-csi",
+                            "runtime-test:local", "kata-test", "kata-test", "100m", "128Mi", 20, 100));
+                        services.AddHttpClient<KubernetesAgentSandboxClient>(client =>
+                            client.BaseAddress = new Uri("https://kubernetes.test/"))
+                            .ConfigurePrimaryHttpMessageHandler(() => new UnusedRuntimePlacementTransport());
+                        services.AddScoped<ISandboxProvider, AgentSandboxProvider>();
                         services.AddScoped<EnvironmentEgressManager>();
                         services.AddScoped<EnvironmentWorkspaceVolumeManager>();
                         services.AddSingleton(networkOptions);
@@ -600,5 +708,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             throw new InvalidOperationException("The placement getter must not use Kubernetes.");
         public Task DeleteAsync(string ns, string name, string version, CancellationToken token) =>
             throw new InvalidOperationException("The placement getter must not use Kubernetes.");
+    }
+
+    private sealed class UnusedRuntimePlacementTransport : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("A current placement read must not dispatch a provider effect.");
     }
 }

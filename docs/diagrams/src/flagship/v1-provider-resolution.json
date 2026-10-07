@@ -34,7 +34,7 @@
     {
       "type": "note",
       "over": ["probe-host", "provider-resolver"],
-      "label": "Probe pins supplied resources without provisioning.\nCost has immutable resource/rate pins and pricing.\nNeither a source key nor a Cost pin proves an SDK producer."
+      "label": "Probe pins supplied resources without provisioning.\nEvents reuses the keyed Cost resolver.\nRuntime/Identity owners authorize the SDK producer."
     },
     {
       "type": "message",

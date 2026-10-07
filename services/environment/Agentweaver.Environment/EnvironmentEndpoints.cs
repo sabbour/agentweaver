@@ -333,14 +333,15 @@ public static class EnvironmentEndpoints
             string runId,
             string environmentId,
             HttpContext context,
-            EnvironmentRuntimePlacementReader reader,
+            EnvironmentSandboxManager manager,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
             {
-                var projection = await reader.GetCurrentPlacementAsync(
+                var projection = await manager.GetCurrentPlacementAsync(
                     caller!, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
                 return projection is null ? Results.NotFound() : Results.Ok(projection);
             }, cancellationToken).ConfigureAwait(false);
@@ -350,14 +351,15 @@ public static class EnvironmentEndpoints
             string runId,
             string environmentId,
             HttpContext context,
-            EnvironmentRuntimePlacementReader reader,
+            EnvironmentSandboxManager manager,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
             {
-                var projection = await reader.GetCurrentRunBoundPlacementAsync(
+                var projection = await manager.GetCurrentRunBoundPlacementAsync(
                     caller!, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
                 return projection is null ? Results.NotFound() : Results.Ok(projection);
             }, cancellationToken).ConfigureAwait(false);

@@ -75,7 +75,10 @@ cross-service messaging endpoint.
 
 The Foundation Probe registers `azure-key-vault`, `azure-blob`, and `azure-monitor` descriptors for its checks. These registrations do not form a product provider catalog.
 
-Model is not a provider seam. The v1 source contains no AgentHost, model resolver, or model adapter. It does not declare support for a model vendor.
+Model is not a provider seam. The v1 source contains no AgentHost executable or
+general model resolver. The runtime library maps accepted references to actual SDK
+models through a registered connection and SDK catalog.
+This source does not declare deployed model-vendor support.
 
 A Cost source key and an opaque model-selection reference are not trusted SDK
 provenance. The native Projects run-selection routes retain the source key,
@@ -89,3 +92,6 @@ Pre-flight quotes apply the multiplier only to explicitly unweighted AI credits.
 Each binding includes an explicit immutable rate-card version. Missing units,
 unsupported sources, and unknown model rates return `Unpriced`, not a zero price.
 The adapter and PostgreSQL ledger do not establish SDK producer authority.
+The separate runtime pipeline requires a current registration, original validated bearer,
+and purpose-bound observe credential before it commits actual SDK measurements.
+Events accepts only the resulting immutable source receipt reference.

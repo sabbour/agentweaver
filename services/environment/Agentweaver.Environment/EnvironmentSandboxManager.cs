@@ -347,7 +347,8 @@ public sealed class EnvironmentSandboxManager(
         string environmentId,
         CancellationToken cancellationToken) =>
         GetCurrentPlacementCoreAsync(
-            caller, projectId, runId, environmentId, runBoundRead: false, cancellationToken);
+            caller, projectId, runId, environmentId, runBoundRead: false,
+            (projection, _) => Task.FromResult(projection), cancellationToken);
 
     internal Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentRunBoundPlacementAsync(
         CurrentCallerRequest caller,
@@ -356,14 +357,16 @@ public sealed class EnvironmentSandboxManager(
         string environmentId,
         CancellationToken cancellationToken) =>
         GetCurrentPlacementCoreAsync(
-            caller, projectId, runId, environmentId, runBoundRead: true, cancellationToken);
+            caller, projectId, runId, environmentId, runBoundRead: true,
+            (projection, _) => Task.FromResult(projection), cancellationToken);
 
-    private async Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentPlacementCoreAsync(
+    internal async Task<TResult> GetCurrentPlacementCoreAsync<TResult>(
         CurrentCallerRequest caller,
         string projectId,
         string runId,
         string environmentId,
         bool runBoundRead,
+        Func<EnvironmentSandboxPlacementProjectionV1?, CancellationToken, Task<TResult>> project,
         CancellationToken cancellationToken)
     {
         var authorization = runBoundRead
@@ -404,13 +407,14 @@ public sealed class EnvironmentSandboxManager(
                         authorization.Owner,
                         authorization.Authorization,
                         callbackCancellationToken).ConfigureAwait(false);
-                return currentLease is null
+                var projection = currentLease is null
                     ? null
                     : ProjectCurrentPlacement(
                         authorization.Owner,
                         lifecycle.Fence,
                         currentLease,
                         DateTimeOffset.UtcNow);
+                return await project(projection, callbackCancellationToken).ConfigureAwait(false);
             },
             cancellationToken).ConfigureAwait(false);
     }

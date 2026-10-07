@@ -153,8 +153,11 @@ This input rejection does not prove durable owner-side revocation.
 The Broker HTTP test uses an actual Broker-issued bearer and a separate nonce.
 It covers pending verification, consumption, exchange, source verification,
 rotation, revocation, and cookie-only denial. It isolates the owner and delivery
-boundaries. The full current-Core, placement, SDK, and accounting proof remains
-in progress.
+boundaries. The combined local harness separately connects actual current Core,
+Projects, Environment, Orchestrator, native SDK, and Events accounting code.
+It controls only external placement and SDK transport, catalog, and pricing inputs.
+It covers revocation before SDK creation and authority loss during source transaction waits.
+This evidence does not prove cloud deployment or paid model execution.
 
 When runtime bootstrap is configured, the existing validated Broker audience
 protects these routes. The routes return `Cache-Control: no-store`.
