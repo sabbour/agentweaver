@@ -74,7 +74,28 @@ are not an atomic transaction with a backend, and revocation after return does
 not retroactively revoke a delivered credential. Refresh always reauthorizes.
 Invalidation cannot erase value strings a consumer has already copied.
 
-## What this does not do
+## Runtime bootstrap contracts
+
+The library also defines a separate runtime-bootstrap contract. It does not reuse
+`SecretRedemptionGrant` or change the human Broker profile.
+
+`RuntimeRegistration` binds a server-generated runtime identifier to the delegated
+actor, accepted run selection, current session/agent/turn, execution fence, and
+actual Environment placement UID and generation. The registered profile fixes
+the configure and observation HTTPS endpoints.
+
+`IRuntimeRegistrationOwner` must check current authority with genuine actor
+credentials. Stored actor identifiers cannot replace authentication.
+`IRuntimeBootstrapDelivery` belongs to the Environment owner. It delivers a
+short-lived credential out of band to the exact registered placement. Its receipt
+contains references, the configuration hash, and placement/fence evidence, not a
+credential value. A missing registered delivery adapter must report unavailable.
+
+The configure and observation credential purposes are separate. Default JSON and
+diagnostic strings omit credential values. These contracts alone do not establish
+a runtime channel or prove SDK provenance.
+
+## Service and deployment limits
 
 This library implements no wire authentication, OAuth/OpenIddict broker,
 running service, or Azure deployment. It does not mint tokens, authenticate a
