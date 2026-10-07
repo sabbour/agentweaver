@@ -3,6 +3,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 export const SEMVER = /^\d+\.\d+\.\d+$/;
+const RELEASE_TARGET_SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const FRAGMENT_PATTERN = /^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]+)$/;
 const BUMP_PATTERN = /^\s*["']?([^"':\s]+)["']?\s*:\s*(major|minor|patch)\s*$/gm;
 const RELEASE_METADATA_PATTERN = /^(VERSION|package\.json|package-lock\.json|CHANGELOG\.md|\.changeset\/)/;
@@ -70,6 +71,132 @@ export function compareSemver(left, right) {
     }
   }
   return 0;
+}
+
+function isReleaseTargetSemver(version) {
+  return RELEASE_TARGET_SEMVER.test(version ?? "")
+    && version.split(".").every((part) => Number.isSafeInteger(Number(part)));
+}
+
+export function parseReleaseTarget(args) {
+  const targetIndex = args.indexOf("--target");
+  if (args.some((arg) => arg.startsWith("--target="))) {
+    throw new Error("Use --target X.Y.Z");
+  }
+  if (args.lastIndexOf("--target") !== targetIndex) {
+    throw new Error("Use --target only once.");
+  }
+  if (targetIndex < 0) {
+    return undefined;
+  }
+
+  const target = args[targetIndex + 1];
+  if (!target || target.startsWith("--")) {
+    throw new Error("Use --target X.Y.Z");
+  }
+  return target;
+}
+
+export function applyExplicitReleaseTarget(
+  releasePlan,
+  target,
+  currentVersion,
+  publishedVersion,
+  config = { fixed: [], linked: [] },
+) {
+  if (target === undefined) {
+    return undefined;
+  }
+  if (!isReleaseTargetSemver(target)) {
+    throw new Error(
+      `--target must be a stable SemVer version in X.Y.Z format with no leading zeroes `
+      + `and safe integer components, not '${target}'.`,
+    );
+  }
+
+  const release = releasePlan.releases.find((item) => item.name === "agentweaver");
+  if (!release) {
+    throw new Error("--target requires a pending native release plan for agentweaver.");
+  }
+  if (!SEMVER.test(release.newVersion ?? "")) {
+    throw new Error(`Changesets calculated unsupported native release version '${release.newVersion ?? "missing"}'.`);
+  }
+  const relatedReleases = new Set(["agentweaver"]);
+  const requiredFixedPackages = new Set();
+  const releaseGroups = [
+    ...(config.fixed ?? []).map((packages) => ({ kind: "fixed", packages })),
+    ...(config.linked ?? []).map((packages) => ({ kind: "linked", packages })),
+  ];
+  const releasesByName = new Map(releasePlan.releases.map((item) => [item.name, item]));
+  let expanded;
+  do {
+    expanded = false;
+    for (const group of releaseGroups) {
+      if (!group.packages.some((name) => relatedReleases.has(name))) {
+        continue;
+      }
+      for (const name of group.packages) {
+        if (group.kind === "fixed") {
+          requiredFixedPackages.add(name);
+        } else if (!releasesByName.has(name)) {
+          continue;
+        }
+        if (!relatedReleases.has(name)) {
+          relatedReleases.add(name);
+          expanded = true;
+        }
+      }
+    }
+  } while (expanded);
+
+  const groupedReleases = [...relatedReleases].map((name) => {
+    const groupedRelease = releasesByName.get(name);
+    if (!groupedRelease && requiredFixedPackages.has(name)) {
+      throw new Error(`Changesets fixed release group is missing '${name}' from the native release plan.`);
+    }
+    return groupedRelease;
+  }).filter(Boolean);
+
+  for (const groupedRelease of groupedReleases) {
+    if (!SEMVER.test(groupedRelease.newVersion ?? "")) {
+      throw new Error(
+        `Changesets calculated unsupported native release version for '${groupedRelease.name}': `
+        + `'${groupedRelease.newVersion ?? "missing"}'.`,
+      );
+    }
+    if (compareSemver(target, groupedRelease.oldVersion) <= 0) {
+      throw new Error(
+        `--target ${target} must be newer than current version ${groupedRelease.oldVersion} `
+        + `for '${groupedRelease.name}'.`,
+      );
+    }
+  }
+  if (publishedVersion && compareSemver(target, publishedVersion) <= 0) {
+    throw new Error(`--target ${target} must be newer than latest published v${publishedVersion}.`);
+  }
+
+  for (const groupedRelease of groupedReleases) {
+    const [nativeMajor, nativeMinor] = groupedRelease.newVersion.split(".");
+    const [targetMajor, targetMinor] = target.split(".");
+    if (targetMajor !== nativeMajor || targetMinor !== nativeMinor) {
+      throw new Error(
+        `--target ${target} must stay in the native release series ${nativeMajor}.${nativeMinor}.x `
+        + `for '${groupedRelease.name}'.`,
+      );
+    }
+    if (compareSemver(target, groupedRelease.newVersion) < 0) {
+      throw new Error(
+        `--target ${target} is below Changesets' required native bump ${groupedRelease.newVersion} `
+        + `for '${groupedRelease.name}'.`,
+      );
+    }
+  }
+
+  const nativeVersion = release.newVersion;
+  for (const groupedRelease of groupedReleases) {
+    groupedRelease.newVersion = target;
+  }
+  return { nativeVersion };
 }
 
 export function latestPublishedVersion(refs) {
@@ -235,6 +362,13 @@ export function ensureReleaseBranchHasMainAncestry(
   const commit = git("rev-parse", "--short", "HEAD");
   log(`Created ancestry merge ${commit}.`);
   return { merged: true, commit };
+}
+
+export function isReleasePlanInputPath(file) {
+  const normalized = file.replaceAll("\\", "/").toLowerCase();
+  return normalized.startsWith(".changeset/")
+    || /(^|\/)package\.json$/.test(normalized)
+    || /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|yarn\.lock|\.yarnrc\.yml|bun\.lockb?|lerna\.json|rush\.json)$/.test(normalized);
 }
 
 export function validateReleasePreparationFiles(sha, files) {
