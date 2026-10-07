@@ -67,16 +67,16 @@ continues to enforce the configured Environment audience for both routes.
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/abandon` | Explicitly abandon one current resource generation and provider fence. The request is not itself proof of ownership; fresh Projects authorization and the durable owner CAS are required. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource. A network-policy generation may be supplied to verify readiness. |
 
-Both v1 placement routes use one `ISandboxLeaseStore.GetCurrentAsync` reader
-under the exact active Environment owner fence. The public route rechecks fresh
-`WriteProjects`; the internal route rechecks fresh `ReadRunSelection` and the
-same exact project/run binding after the first lease read. Both recheck the
-active lifecycle and read the locked current lease again. The two snapshots
-must match on operation, owner fence, resource generation, lease revision,
-provider/current fences, state, current flag, and expiry; this rejects a lease
-retired or replaced during the authorization wait. After the second locked
-current-lease read and snapshot comparison, each route checks fresh authority
-again before returning; revocation during the final owner-lock wait is rejected.
+Both v1 placement routes use the owner-scoped `ISandboxLeaseStore.GetCurrentAsync`
+callback overload under the exact active Environment owner fence. The public
+callback rechecks fresh `WriteProjects`; the internal callback rechecks fresh
+`ReadRunSelection` and the same exact project/run binding. The store retains the
+same transaction and owner advisory lock while the callback runs, then rereads
+the current lease and compares its owner fence, resource generation, operation,
+lease revision, provider/current fences, state, current flag, expiry, and update
+stamp before commit and return. A mismatch fails closed; a callback exception
+rolls back and returns no projection. The manager also compares the retained
+snapshot with its first read before making the final authorization request.
 The projection returns the tenant/project/run/Environment tuple, lifecycle and
 provider fences, lease revision/expiry/current state, and the exact resource,
 endpoint, and opaque placement references recorded by the lease. It does not derive lease data from
@@ -89,6 +89,12 @@ rejected. Provider options, release descriptors, and credentials are not
 included. Profile mapping, receiver registration, and delivery receipts remain
 the responsibility of the separately owned bootstrap profile adapter; absent
 approved production transport remains unavailable.
+
+The callback is for a bounded owner-scoped read, such as the fixed Core
+authorization-context request. It must not recurse through a registration route
+that reads the same Environment lease or perform provider effects. A successful
+placement read is not authorization for a later configure or provider effect;
+those operations recheck current authority and lease state independently.
 
 The Environment owner must already exist and be active. These routes do not
 register or release an Environment lifecycle, create a Core run provider pin,

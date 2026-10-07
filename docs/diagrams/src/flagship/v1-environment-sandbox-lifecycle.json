@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["environment", "projects"],
-      "label": "Owner exists first; one lease per Environment. Placement rechecks run claims after the final owner-lock wait."
+      "label": "Placement holds the owner lock through final authority and exact-lease checks; later effects recheck independently."
     },
     {
       "type": "message",

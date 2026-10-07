@@ -384,24 +384,35 @@ public sealed class EnvironmentSandboxManager(
         else
             await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
                 caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
-        var currentLease = await leaseStore.GetCurrentAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
-        if (!SameCurrentPlacementLease(lease, currentLease))
-            throw new EnvironmentLifecycleException(
-                "sandbox_lease_stale",
-                "The current Sandbox lease changed while its placement was being authorized.");
-        if (runBoundRead)
-            await egressManager.EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
-                caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
-        else
-            await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
-                caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
-        return currentLease is null
-            ? null
-            : ProjectCurrentPlacement(
-                authorization.Owner,
-                lifecycle.Fence,
-                currentLease,
-                DateTimeOffset.UtcNow);
+        return await leaseStore.GetCurrentAsync(
+            lifecycle.Fence,
+            async (currentLease, callbackCancellationToken) =>
+            {
+                if (!SameCurrentPlacementLease(lease, currentLease))
+                    throw new EnvironmentLifecycleException(
+                        "sandbox_lease_stale",
+                        "The current Sandbox lease changed while its placement was being authorized.");
+                if (runBoundRead)
+                    await egressManager.EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
+                        caller,
+                        authorization.Owner,
+                        authorization.Authorization,
+                        callbackCancellationToken).ConfigureAwait(false);
+                else
+                    await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
+                        caller,
+                        authorization.Owner,
+                        authorization.Authorization,
+                        callbackCancellationToken).ConfigureAwait(false);
+                return currentLease is null
+                    ? null
+                    : ProjectCurrentPlacement(
+                        authorization.Owner,
+                        lifecycle.Fence,
+                        currentLease,
+                        DateTimeOffset.UtcNow);
+            },
+            cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<EnvironmentSandboxResult> AbandonAsync(

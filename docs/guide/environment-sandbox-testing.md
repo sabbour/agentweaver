@@ -52,9 +52,14 @@ Orchestrator token with exact project/run bindings and `ReadRunSelection`, while
 the public placement route still rejects that token for lack of `WriteProjects`.
 The same integration checks unbound owners, viewers, missing roles, mismatched
 project/run/tenant, wrong Environment audience, and role revocation between
-fresh Core checks. It also revokes the role while the final current-lease read
-waits on the PostgreSQL owner advisory lock (verified with `pg_blocking_pids`)
-and requires a typed 403 without a placement projection or provider effect.
+fresh Core checks. The placement callback test pauses immediately before its
+final Core authorization request while the store holds the Environment owner
+transaction and advisory lock. It starts a competing retirement CAS, verifies
+the wait with PostgreSQL lock metadata and `pg_blocking_pids`, revokes the real
+Core role, and then allows the authorization request to run. The response must
+be a typed 403 with no placement projection or provider effect; the retirement
+must proceed only after the denied callback rolls back. A subsequent provider
+request against the retired lease must still fail its own current-lease check.
 Placement reads do not fetch run selection or cause provider effects. It runs
 the production Sandbox provider and Kubernetes client against a fake
 Kubernetes HTTP API; only the Workspace provider and Cilium
