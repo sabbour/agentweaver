@@ -71,6 +71,33 @@ describe('AgentweaverApiClient skill catalog contract', () => {
   });
 });
 
+describe('AgentweaverApiClient assembly review contract', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('sends the reviewed output revision with the decision', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ runId: 'run-1', accepted: true }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
+
+    await client.reviewAssembly('run-1', 'approve', 'output-revision-1');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/runs/run-1/assembly/review');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      output_revision_id: 'output-revision-1',
+      approved: true,
+      request_changes: false,
+    });
+  });
+});
+
 describe('AgentweaverApiClient keepalive', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

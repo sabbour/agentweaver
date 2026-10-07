@@ -1372,11 +1372,17 @@ export class AgentweaverApiClient {
   }
 
   // Collective human review over the assembled integration output (Feature 008 Phase 3).
-  // Posts the backend AssemblyReviewRequest shape ({ approved, request_changes, feedback }) derived
-  // from a friendlier decision verb. approve -> merge/scribe/complete; request_changes -> re-dispatch;
-  // decline -> assembly_declined.
-  reviewAssembly(coordinatorRunId: string, decision: AssemblyReviewDecision, comment?: string, providerKey?: string): Promise<void> {
+  // Posts the decision against the exact output snapshot shown to the reviewer. approve ->
+  // merge/scribe/complete; request_changes -> re-dispatch; decline -> assembly_declined.
+  reviewAssembly(
+    coordinatorRunId: string,
+    decision: AssemblyReviewDecision,
+    outputRevisionId: string,
+    comment?: string,
+    providerKey?: string,
+  ): Promise<void> {
     const body: AssemblyReviewRequest = {
+      output_revision_id: outputRevisionId,
       approved: decision === 'approve',
       request_changes: decision === 'request_changes',
       feedback: comment,

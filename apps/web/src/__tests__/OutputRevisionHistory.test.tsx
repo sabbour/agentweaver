@@ -37,8 +37,9 @@ it('loads exact historic files and compares a predecessor without following the 
     revision_id: 'new', path: 'file.txt', mode: 33188, sha256: 'abc', content_base64: 'AQID',
   });
 
-  render(<OutputRevisionHistory runId="run" />);
-  fireEvent.click(await screen.findByRole('button', { name: /new · generation 2/ }));
+  render(<OutputRevisionHistory runId="run" currentReviewRevisionId="new" />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Output version 2 · Under review' }));
+  expect(screen.getByText('new')).toBeTruthy();
   await screen.findByText('Changed since old');
   fireEvent.click(screen.getByRole('button', { name: 'file.txt (3 bytes)' }));
   await screen.findByText('AQID');
