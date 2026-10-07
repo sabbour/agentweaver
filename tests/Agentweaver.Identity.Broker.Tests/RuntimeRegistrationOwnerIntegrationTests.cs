@@ -243,6 +243,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(RuntimeBootstrapReceiverState.Pending, receiver.State);
             Assert.Empty(sdk.Requests);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var operationElapsed = System.Diagnostics.Stopwatch.StartNew();
+            using var deadlineTrace = timeout.Token.Register(() =>
+                TraceNativeStage(failures, $"Native operation deadline cancelled after {operationElapsed.Elapsed}; limit=00:00:20."));
             var duringSdkPreparation = sourceLoss?.StartsWith("sdk-preparation-", StringComparison.Ordinal) == true;
             if (revokeSourceBeforeSdk || duringSdkPreparation)
             {
@@ -547,7 +550,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 $"cancellable={cancellationToken.CanBeCanceled}, cancelled={cancellationToken.IsCancellationRequested}.");
             var response = await invoker.SendAsync(request, cancellationToken).ConfigureAwait(false);
             TraceNativeStage(failures, $"HTTP response {request.Method} {endpoint.Host}{endpoint.AbsolutePath}: " +
-                $"{(int)response.StatusCode}, elapsed={elapsed.Elapsed}.");
+                $"{(int)response.StatusCode}, elapsed={elapsed.Elapsed}, cancelled={cancellationToken.IsCancellationRequested}, " +
+                $"content-type={response.Content.Headers.ContentType}, content-length={response.Content.Headers.ContentLength}.");
             if (elapsed.Elapsed > TimeSpan.FromMilliseconds(500))
                 failures.Enqueue($"{endpoint.Host}{endpoint.AbsolutePath}: took {elapsed.Elapsed}");
             if (!response.IsSuccessStatusCode)
