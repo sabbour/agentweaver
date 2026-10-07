@@ -1092,7 +1092,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         var runId = await InsertInactiveCoordinatorRunAsync(
             CoordinatorWebApplicationFactory.OwnerUser, RunStatus.AwaitingReview);
         await SeedWorkPlanAsync(runId, WorkPlanStatus.InReview, AssemblyStage.Review);
-        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+        var reviewRequestId = await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _factory.Services.GetRequiredService<IServiceScopeFactory>(),
             runId,
             CoordinatorWebApplicationFactory.OwnerUser,
@@ -1103,6 +1103,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
 
         var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
             new { kind = "redirect", instruction = "Rework the signup validation.",
+                review_request_id = reviewRequestId,
                 output_revision_id = (await _factory.Services.GetRequiredService<SqliteRunStore>()
                     .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId });
 
@@ -1133,7 +1134,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         var runId = await InsertInactiveCoordinatorRunAsync(
             CoordinatorWebApplicationFactory.OwnerUser, RunStatus.AwaitingReview);
         await SeedWorkPlanAsync(runId, WorkPlanStatus.InReview, AssemblyStage.Review);
-        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+        var reviewRequestId = await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _factory.Services.GetRequiredService<IServiceScopeFactory>(),
             runId,
             CoordinatorWebApplicationFactory.OwnerUser,
@@ -1144,6 +1145,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
 
         var resp = await _owner.PostAsJsonAsync($"/api/runs/{runId}/steer",
             new { kind = "amend", instruction = "Also cover the empty-email edge case.",
+                review_request_id = reviewRequestId,
                 output_revision_id = (await _factory.Services.GetRequiredService<SqliteRunStore>()
                     .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId });
 
@@ -1170,7 +1172,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
         var childRunId = await SeedAssembleReadyChildRunAsync(
             "diff --git a/src/api/Signup.cs b/src/api/Signup.cs\n+++ b/src/api/Signup.cs\n@@ -1 +1 @@\n");
         await SeedWorkPlanWithChildAsync(runId, childRunId, WorkPlanStatus.InReview, AssemblyStage.Review);
-        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+        var reviewRequestId = await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _factory.Services.GetRequiredService<IServiceScopeFactory>(),
             runId,
             CoordinatorWebApplicationFactory.OwnerUser,
@@ -1181,7 +1183,7 @@ public sealed class CoordinatorPhase2EndpointsTests : IDisposable
 
         var candidateId = (await _factory.Services.GetRequiredService<SqliteRunStore>()
             .GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId;
-        var json = $$"""{"kind":"redirect","target_child_run_id":"{{childRunId}}","instruction":"fix the signup path","output_revision_id":"{{candidateId}}"}""";
+        var json = $$"""{"kind":"redirect","target_child_run_id":"{{childRunId}}","instruction":"fix the signup path","review_request_id":"{{reviewRequestId}}","output_revision_id":"{{candidateId}}"}""";
         var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
         var resp = await _owner.PostAsync($"/api/runs/{runId}/steer", content);
 
