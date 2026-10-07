@@ -166,6 +166,10 @@ builder.Services.AddSingleton<ISecretRedemption>(provider =>
     provider.GetRequiredService<AzureKeyVaultSecretRedemption>());
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
+var runtimeBootstrapOptions = builder.Configuration
+    .GetSection("IdentityBroker:RuntimeBootstrap").Get<RuntimeBootstrapOptions>();
+if (runtimeBootstrapOptions is not null)
+    builder.Services.AddIdentityRuntimeCredentials(runtimeBootstrapOptions, identityOptions.Issuer);
 
 // The broker's own signing/encryption credential. Production composition mounts a real
 // PFX; there is no "development certificate" escape hatch in this host.
@@ -305,6 +309,8 @@ app.UseAuthorization();
 
 app.MapIdentityBrokerEndpoints();
 app.MapIdentitySecretRedemptionEndpoints();
+if (runtimeBootstrapOptions is not null)
+    app.MapIdentityRuntimeCredentialEndpoints();
 
 app.Run();
 

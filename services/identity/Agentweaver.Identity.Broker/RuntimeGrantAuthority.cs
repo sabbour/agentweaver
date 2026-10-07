@@ -12,7 +12,7 @@ public sealed class RuntimeGrantAuthority(
     IRuntimeBootstrapDelivery delivery,
     RuntimeCredentialPolicy policy,
     RuntimeActorAuthorization actor,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider) : IRuntimePendingBootstrapVerifier
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -140,6 +140,27 @@ public sealed class RuntimeGrantAuthority(
             db.ChangeTracker.Clear();
             throw;
         }
+    }
+
+    public async Task<RuntimeGrantReceipt> VerifyPendingBootstrapDeliveryAsync(
+        RuntimeCredentialProof proof, Guid deliveryOperationId, CancellationToken cancellationToken)
+    {
+        ValidateOperation(deliveryOperationId);
+        var registration = await RequireCurrentAsync(proof.RuntimeInstanceId, cancellationToken);
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+        var current = await LockCurrentAsync(proof.GrantId, cancellationToken);
+        await VerifyOriginalAsync(proof, registration, RuntimeCredentialPurpose.Configure, cancellationToken);
+        RequireCurrentProof(current, proof, RuntimeCredentialState.Active);
+        if (current.DeliveryOperationId != deliveryOperationId ||
+            current.ExpiresAt != proof.Credential.ExpiresAt ||
+            await db.RuntimeGrantOperationReceipts.AsNoTracking().AnyAsync(
+                row => row.OperationId == deliveryOperationId, cancellationToken))
+            throw Denied("runtime_pending_delivery_invalid");
+        await RequireSameCurrentAsync(registration, cancellationToken);
+        RequireLive(current);
+        await transaction.CommitAsync(cancellationToken);
+        await RequireSameCurrentAsync(registration, cancellationToken);
+        return Receipt(current);
     }
 
     public Task<RuntimeCredentialExchange> ExchangeBootstrapAsync(

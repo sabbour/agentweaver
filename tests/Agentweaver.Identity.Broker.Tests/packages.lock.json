@@ -1268,6 +1268,7 @@
         "type": "Project",
         "dependencies": {
           "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Identity": "[0.0.0, )",
           "Agentweaver.Providers": "[0.0.0, )",
           "Agentweaver.Providers.Storage.AzureFiles": "[0.0.0, )",
           "Azure.Identity": "[1.17.1, )",

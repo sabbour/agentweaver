@@ -123,6 +123,12 @@ The store keeps cryptographic nonce verifiers, exact runtime/actor/selection/
 placement bindings, purpose, audience, revision, state, expiry, and configuration
 hash. PostgreSQL revisions and operation receipts are append-only.
 
+The reviewed grant SQL permits `SELECT`, `INSERT`, and `UPDATE` on runtime grant
+heads. Runtime grant revisions, operations, and receipts permit only `SELECT`
+and `INSERT`. The runtime cannot delete these records, update audit records,
+create schema objects, or write migration history. A disposable PostgreSQL test
+runs the credential lifecycle through a separate restricted runtime login.
+
 Initial bootstrap material is delivered only through the Environment-owned
 out-of-band boundary. A completed delivery receipt is required before nonce
 consumption. Consumption, source exchange, and rotation use row-locked CAS.
@@ -130,6 +136,12 @@ Exact operation replay returns the original receipt, not a persisted credential
 value. Each asynchronous owner lookup uses genuine protected actor credentials
 and rechecks the current registration. Missing delivery or owner authorization
 must fail explicitly.
+
+The pending-ticket verifier checks the exact nonce, delivery operation,
+configuration hash, audience, expiry, and current registration before delivery.
+It returns only a grant receipt. It cannot consume a nonce, configure a runtime,
+or issue a source credential. Credential values travel only over the fixed
+authenticated HTTPS owner channel; they are not stored in an outbox.
 
 The current store tests cover persistence and cryptographic lifecycle only.
 They do not prove the remote authenticated runtime channel or native SDK source.
@@ -143,6 +155,8 @@ The host supplies native .NET configuration through its deployment secret/config
 | `ConnectionStrings:IdentityBrokerMigration` | Used only by `--migrate`; separate Entra-only schema-owner role; no password |
 | `ConnectionStrings:IdentityBrokerBootstrap` | Used only by `--bootstrap-identity-postgres`; connects to `postgres` as the approved Entra administrator with `VerifyFull` TLS and no password |
 | `IdentityBroker:Bootstrap:*` | Exact PostgreSQL FQDN, administrator username, initial database name, runtime and migration role names, and the two UAMI principal object IDs |
+| `IdentityBroker:RuntimeBootstrap:OrchestratorOwnerAddress` / `EnvironmentOwnerAddress` | Optional runtime credential composition; both fixed HTTPS root owner addresses are required when configured |
+| `IdentityBroker:RuntimeBootstrap:BootstrapLifetime` / `SourceLifetime` | Explicit positive credential lifetimes, bounded by current registration and actor expiry |
 | `IdentityBroker:Issuer` | Public, absolute HTTPS issuer |
 | `IdentityBroker:Signing:PfxPath` | Mounted private-key certificate for signing, token encryption, and key-ring protection |
 | `IdentityBroker:Signing:PfxPassword` | Deployment secret, never a checked-in value |

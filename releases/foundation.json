@@ -284,6 +284,11 @@
     },
     {
       "consumer": "Agentweaver.Environment",
+      "dependency": "Agentweaver.Identity",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Environment",
       "dependency": "Agentweaver.Providers",
       "versions": [
         "0.0.0"

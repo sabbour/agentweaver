@@ -82,6 +82,14 @@ public interface IRuntimeBootstrapDelivery
         CancellationToken cancellationToken);
 }
 
+public interface IRuntimePendingBootstrapVerifier
+{
+    Task<RuntimeGrantReceipt> VerifyPendingBootstrapDeliveryAsync(
+        RuntimeCredentialProof proof,
+        Guid deliveryOperationId,
+        CancellationToken cancellationToken);
+}
+
 public enum RuntimeCredentialPurpose { Configure, Observe }
 public enum RuntimeCredentialState { Active, Consumed, Revoked }
 

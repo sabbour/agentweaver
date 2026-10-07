@@ -3,6 +3,7 @@
 "Agentweaver.Identity.Broker": minor
 "Agentweaver.Orchestrator": minor
 "Agentweaver.AgentRuntime": minor
+"Agentweaver.Environment": minor
 ---
 
 Add separate runtime registration, bootstrap delivery, and purpose-bound source

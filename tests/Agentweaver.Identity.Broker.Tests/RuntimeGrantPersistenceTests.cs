@@ -14,9 +14,49 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
     public async Task GrantsConsumeExchangeRotateAndRevokeWithHashOnlyImmutableReceipts()
     {
         var connectionString = await postgres.CreateDatabaseAsync();
-        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var suffix = Guid.NewGuid().ToString("N");
+        var runtimeRole = "runtime_" + suffix;
+        var migrationRole = "migration_" + suffix;
+        var password = Guid.NewGuid().ToString("N");
+        await using var admin = new NpgsqlConnection(connectionString);
+        await admin.OpenAsync();
+        await using (var createRoles = new NpgsqlCommand($"""
+            CREATE ROLE "{runtimeRole}" LOGIN PASSWORD '{password}'
+              NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+            CREATE ROLE "{migrationRole}" LOGIN PASSWORD '{password}'
+              NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT;
+            CREATE SCHEMA identity_broker AUTHORIZATION "{migrationRole}";
+            REVOKE ALL ON SCHEMA identity_broker FROM PUBLIC;
+            GRANT USAGE ON SCHEMA identity_broker TO "{runtimeRole}";
+            """, admin))
+            await createRoles.ExecuteNonQueryAsync();
+        await using (var migrationSource = NpgsqlDataSource.Create(
+            new NpgsqlConnectionStringBuilder(connectionString)
+            {
+                Username = migrationRole,
+                Password = password,
+            }.ConnectionString))
+            await IdentityBrokerMigrator.MigrateAsync(migrationSource, CreateOptions(migrationSource));
+        Assert.True(await IdentityBrokerPostgresBootstrapCommand.ApplyRuntimeGrantsIfMigratedAsync(
+            admin, runtimeRole, migrationRole));
+        await using var dataSource = NpgsqlDataSource.Create(
+            new NpgsqlConnectionStringBuilder(connectionString)
+            {
+                Username = runtimeRole,
+                Password = password,
+            }.ConnectionString);
         var options = CreateOptions(dataSource);
-        await IdentityBrokerMigrator.MigrateAsync(dataSource, options);
+        await IdentityBrokerMigrator.VerifyMigrationsAppliedAsync(dataSource, options);
+        await using (var connection = await dataSource.OpenConnectionAsync())
+        await using (var principal = new NpgsqlCommand("""
+            SELECT current_user = @runtime AND NOT rolsuper AND NOT rolcreatedb
+              AND NOT rolcreaterole AND NOT rolinherit
+            FROM pg_roles WHERE rolname = current_user
+            """, connection))
+        {
+            principal.Parameters.AddWithValue("runtime", runtimeRole);
+            Assert.Equal(true, await principal.ExecuteScalarAsync());
+        }
         var owner = new StorageOwner();
         var delivery = new StorageDelivery();
         var actor = CreateActor();
@@ -110,7 +150,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
                 UPDATE identity_broker.runtime_grant_revisions SET state = 2
                 WHERE grant_id = {sourceReceipt.GrantId} AND revision = {1L}
                 """));
-        Assert.Contains("append-only", immutableError.MessageText);
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, immutableError.SqlState);
         var skippedRevision = await Assert.ThrowsAsync<PostgresException>(() =>
             restarted.Database.ExecuteSqlInterpolatedAsync($"""
                 UPDATE identity_broker.runtime_grant_heads SET current_revision = 9
@@ -160,6 +200,51 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         owner.ChangeAfterRead = null;
         Assert.Equal(RuntimeCredentialState.Consumed,
             (await authority.ConsumeBootstrapAsync(correct, Guid.NewGuid())).State);
+    }
+
+    [Fact]
+    public async Task PendingTicketVerificationChecksTheCommittedNonceWithoutConsumingOrIssuing()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var options = CreateOptions(dataSource);
+        await IdentityBrokerMigrator.MigrateAsync(dataSource, options);
+        var owner = new StorageOwner();
+        var delivery = new StorageDelivery();
+        await using var db = new IdentityBrokerDbContext(options);
+        var authority = new RuntimeGrantAuthority(
+            db, owner, delivery, CreatePolicy(), CreateActor(), TimeProvider.System);
+        RuntimeCredentialProof? validProof = null;
+        var operation = Guid.NewGuid();
+        delivery.VerifyPending = async (registration, deliveryOperation, grantId, hash, credential) =>
+        {
+            validProof = Proof(grantId, 1, RuntimeCredentialPurpose.Configure,
+                registration.Binding.ConfigureEndpoint, credential, owner, hash);
+            var pending = await authority.VerifyPendingBootstrapDeliveryAsync(
+                validProof, deliveryOperation, default);
+            Assert.Equal(RuntimeCredentialState.Active, pending.State);
+            Assert.Equal(1, pending.Revision);
+            Assert.Equal(1, await db.RuntimeGrantRevisions.CountAsync());
+            Assert.Empty(await db.RuntimeGrantOperationReceipts.ToArrayAsync());
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                authority.ConsumeBootstrapAsync(validProof, Guid.NewGuid()));
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                authority.VerifyPendingBootstrapDeliveryAsync(validProof, Guid.NewGuid(), default));
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                authority.VerifyPendingBootstrapDeliveryAsync(
+                    Proof(grantId, 1, RuntimeCredentialPurpose.Configure, validProof.Audience,
+                        new SecretCredential(new string('f', 64), credential.ExpiresAt),
+                        owner, hash), deliveryOperation, default));
+        };
+        var delivered = await authority.DeliverBootstrapAsync(
+            owner.Registration.RuntimeInstanceId, new string('a', 64), operation);
+        Assert.NotNull(validProof);
+        var deliveredProof = Proof(delivered.GrantId, 1, RuntimeCredentialPurpose.Configure,
+            validProof.Audience, delivery.Credential!, owner, delivered.ConfigurationHash);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            authority.VerifyPendingBootstrapDeliveryAsync(deliveredProof, operation, default));
+        Assert.Equal(RuntimeCredentialState.Consumed,
+            (await authority.ConsumeBootstrapAsync(deliveredProof, Guid.NewGuid())).State);
     }
 
     [Fact]
@@ -234,8 +319,9 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         public SecretCredential? Credential { get; private set; }
         public int Deliveries { get; private set; }
         public bool WrongPlacement { get; init; }
+        public Func<RuntimeRegistration, Guid, Guid, string, SecretCredential, Task>? VerifyPending { get; set; }
 
-        public Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
+        public async Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
             RuntimeRegistration registration, RuntimeActorAuthorization actor, Guid operationId,
             Guid grantId, string configurationHash, SecretCredential credential, CancellationToken cancellationToken)
         {
@@ -243,7 +329,9 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             _ = actor.Bearer.GetValue();
             Deliveries++;
             Credential = new SecretCredential(credential.GetValue(), credential.ExpiresAt);
-            return Task.FromResult(new RuntimeBootstrapDeliveryReceipt(
+            if (VerifyPending is not null)
+                await VerifyPending(registration, operationId, grantId, configurationHash, credential);
+            return new RuntimeBootstrapDeliveryReceipt(
                 operationId, grantId, registration.RuntimeInstanceId, registration.Revision,
                 WrongPlacement ? "foreign-placement" : registration.Binding.PlacementUid,
                 registration.Binding.PlacementGeneration, registration.Binding.ExecutionFence,
@@ -251,7 +339,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             {
                 EnvironmentCurrentFencingGeneration = registration.Binding.EnvironmentCurrentFencingGeneration,
                 EnvironmentProviderFencingGeneration = registration.Binding.EnvironmentProviderFencingGeneration
-            });
+            };
         }
     }
 }
