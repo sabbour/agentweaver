@@ -239,6 +239,7 @@ interface OrchState {
   phase: OrchPhase;
   reason?: string;
   diff?: string;
+  outputRevisionId?: string;
   conflictFiles?: string[];
   conflictBranch?: string;
   revisionGateLabel?: string;
@@ -523,6 +524,12 @@ function isHumanReviewGateEvent(evt: RunStreamEvent): boolean {
   return gateKind === undefined || gateKind === 'human-review';
 }
 
+function requireAssemblyReviewRevisionId(revisionId: string | undefined): string {
+  if (!revisionId)
+    throw new Error('The reviewed output version is unavailable. Refresh before deciding.');
+  return revisionId;
+}
+
 function assemblyReviewPhaseForEvent(evt: RunStreamEvent, fallback: OrchPhase): OrchPhase {
   const gateKind = readGateKind(evt.payload);
   if (evt.type === 'coordinator.assembly_review_requested') {
@@ -680,6 +687,7 @@ function deriveOrchState(
     return {
       phase: fieldPhase,
       reason: normalizeCoordinatorReasonForPhase(reasonField, fieldPhase),
+      outputRevisionId: readStr(winner.payload, ['outputRevisionId', 'output_revision_id']),
       ineligibleSubtasks: reasonField && isIneligibleSubtasksReason(reasonField)
         ? parseIneligibleIdsFromReason(reasonField).map((id) => ({ id }))
         : undefined,
@@ -708,6 +716,7 @@ function deriveOrchState(
       phase: winner.phase,
       reason: isBlocked ? normalizeAssemblyBlockedReason(blockedReasonSource) : rawReason,
       diff: readStr(winner.payload, ['diff', 'summary', 'integrationDiff', 'integration_diff', 'treeHash', 'tree_hash']),
+      outputRevisionId: readStr(winner.payload, ['outputRevisionId', 'output_revision_id']),
       conflictFiles: conflictFiles && conflictFiles.length > 0 ? conflictFiles : undefined,
       conflictBranch: readStr(winner.payload, ['conflictingBranch', 'conflicting_branch']),
       revisionGateLabel: winner.type === 'coordinator.assembly_changes_requested' ? winner.gateLabel : undefined,
@@ -4072,9 +4081,13 @@ export function CoordinatorRunPage() {
     getWorkspace: (rid) => apiClient.getAssemblyWorkspace(rid),
     getContent: (rid, path) => apiClient.getAssemblyFileContent(rid, path),
     approve: async (rid) => {
+      const outputRevisionId = requireAssemblyReviewRevisionId(orch.outputRevisionId);
       providerContext.setPhase('active');
       try {
-        await apiClient.reviewAssembly(rid, 'approve', undefined, providerContext.providerKey);
+        await apiClient.reviewAssembly(
+          rid, 'approve', outputRevisionId,
+          undefined, providerContext.providerKey,
+        );
         providerContext.setPhase('completed');
       } catch (err) {
         providerContext.handleInvocationError(err);
@@ -4085,20 +4098,26 @@ export function CoordinatorRunPage() {
     approveAriaLabel: 'Approve human review and continue to merge',
     approveAcceptedStatus: 'review_accepted',
     requestChanges: async (rid, comment) => {
+      const outputRevisionId = requireAssemblyReviewRevisionId(orch.outputRevisionId);
       providerContext.setPhase('active');
       try {
-        await apiClient.reviewAssembly(rid, 'request_changes', comment, providerContext.providerKey);
+        await apiClient.reviewAssembly(
+          rid, 'request_changes', outputRevisionId,
+          comment, providerContext.providerKey,
+        );
         providerContext.setPhase('completed');
       } catch (err) {
         providerContext.handleInvocationError(err);
         throw err;
       }
     },
-    decline: (rid) => apiClient.reviewAssembly(rid, 'decline'),
+    decline: (rid) => apiClient.reviewAssembly(
+      rid, 'decline', requireAssemblyReviewRevisionId(orch.outputRevisionId),
+    ),
     aiExecutionContext: providerContext.context,
     aiExecutionLoading: providerContext.loading,
     aiExecutionAvailable: providerContext.available,
-  }), [providerContext]);
+  }), [orch.outputRevisionId, providerContext]);
 
   // Run-wide changes summary: the coordinator's collective integration diff (assembly files).
   // getAssemblyFiles returns [] before assembly runs, so this stays null until real changes exist.
@@ -4246,11 +4265,16 @@ export function CoordinatorRunPage() {
   const handleAssemblyApproval = useCallback(async (decision: 'approve' | 'decline') => {
     if (!runId) return;
     setAutomationError(null);
+    if (!orch.outputRevisionId) {
+      setAutomationError('The reviewed output version is unavailable. Refresh before deciding.');
+      return;
+    }
     if (decision === 'approve') providerContext.setPhase('active');
     try {
       await apiClient.reviewAssembly(
         runId,
         decision,
+        orch.outputRevisionId,
         undefined,
         decision === 'approve' ? providerContext.providerKey : undefined,
       );
@@ -4261,16 +4285,21 @@ export function CoordinatorRunPage() {
         ? 'The AI provider changed. Review the updated provider and approve again.'
         : `Assembly review failed: ${formatApiErrorMessage(err, 'Could not update assembly review.')}`);
     }
-  }, [providerContext, reconnectStream, runId]);
+  }, [orch.outputRevisionId, providerContext, reconnectStream, runId]);
 
   const handleAssemblyRequestChanges = useCallback(async (_stepId: string, comment: string) => {
     if (!runId) return;
     setAutomationError(null);
+    if (!orch.outputRevisionId) {
+      setAutomationError('The reviewed output version is unavailable. Refresh before deciding.');
+      return;
+    }
     providerContext.setPhase('active');
     try {
       await apiClient.reviewAssembly(
         runId,
         'request_changes',
+        orch.outputRevisionId,
         comment,
         providerContext.providerKey,
       );
@@ -4281,7 +4310,7 @@ export function CoordinatorRunPage() {
         ? 'The AI provider changed. Review the updated provider and request changes again.'
         : `Assembly review failed: ${formatApiErrorMessage(err, 'Could not update assembly review.')}`);
     }
-  }, [providerContext, reconnectStream, runId]);
+  }, [orch.outputRevisionId, providerContext, reconnectStream, runId]);
 
   // Nested agentic progress tree: coordinator/agents and their tasks with live status.
   const approvalSteps = useMemo<AgentStep[]>(() => reviewActionable
@@ -5163,7 +5192,7 @@ export function CoordinatorRunPage() {
           flushBody
         >
           <CoordinatorArtifactsPanel runId={runId} runStatus={coordRunStatus} adapter={coordAdapter} liveUpdateKey={artifactsLiveUpdateKey} previewStatusSlot={previewStatusSlot} />
-          <OutputRevisionHistory runId={runId} />
+          <OutputRevisionHistory runId={runId} currentReviewRevisionId={orch.outputRevisionId} />
         </SlidePanel>
       )}
 
