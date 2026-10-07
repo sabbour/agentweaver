@@ -240,6 +240,69 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.False(effectInvoked);
     }
 
+    [Theory]
+    [InlineData("session-completed")]
+    [InlineData("run-completed")]
+    [InlineData("fence-advanced")]
+    [InlineData("selection-superseded")]
+    public async Task PolicyDenyAndErrorReceiptsRequireCurrentOwnerSessionRunAndSelection(string change)
+    {
+        await using var harness = await CreatePolicyReceiptAdmissionHarnessAsync(
+            new PolicyOwnerAdmissionBarrier());
+        var ownerReceiptsBefore = await ReadPolicyOwnerReceiptCountAsync(harness);
+        var eventsBefore = await ReadEventsJournalSnapshotAsync(harness);
+
+        var deny = await CreateUnappendedDenyReceiptAsync(harness);
+        var error = await CreateUnappendedPolicyReceiptAsync(harness, string.Empty);
+        Assert.Equal(ownerReceiptsBefore + 2, await ReadPolicyOwnerReceiptCountAsync(harness));
+
+        foreach (var (receipt, expectedOutcome) in new[]
+        {
+            (deny, PolicyEvaluationOutcome.Deny),
+            (error, PolicyEvaluationOutcome.Error)
+        })
+        {
+            using var ownerResponse = await SendAsync(
+                harness.Orchestrator,
+                HttpMethod.Get,
+                $"/api/projects/{harness.Project.ProjectId}/runs/{RunId}/coordination/policy-evaluations/{receipt.ReceiptId:D}",
+                harness.RunToken,
+                [TenantId]);
+            Assert.Equal(HttpStatusCode.OK, ownerResponse.StatusCode);
+            var stored = await ReadJsonAsync<PolicyEvaluationReceiptView>(ownerResponse);
+            Assert.Equal(expectedOutcome, stored.Evidence.Outcome);
+        }
+
+        await ChangeOwnerReceiptStateAsync(harness, change);
+        using (var currentAuthority = await SendAsync(
+                   harness.Projects.Client,
+                   HttpMethod.Get,
+                   "/api/authorization/context",
+                   harness.RunToken,
+                   [TenantId]))
+            Assert.Equal(HttpStatusCode.OK, currentAuthority.StatusCode);
+
+        var effectInvoked = false;
+        _ = await CreateUnappendedPolicyReceiptAsync(
+            harness, AdmissionDenyPolicy, () => effectInvoked = true);
+        Assert.False(effectInvoked);
+        Assert.Equal(ownerReceiptsBefore + 2, await ReadPolicyOwnerReceiptCountAsync(harness));
+
+        foreach (var receipt in new[] { deny, error })
+        {
+            using var response = await SendJsonAsync(
+                harness.Events,
+                HttpMethod.Post,
+                $"/internal/sessions/{harness.Root.RootSessionId}/policy-evaluations",
+                harness.RunToken,
+                new PolicyEvaluationReceiptReferenceRequest(receipt.ReceiptId));
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        }
+
+        Assert.Equal(ownerReceiptsBefore + 2, await ReadPolicyOwnerReceiptCountAsync(harness));
+        Assert.Equal(eventsBefore, await ReadEventsJournalSnapshotAsync(harness));
+    }
+
     private async Task<PolicyReceiptAdmissionHarness> CreatePolicyReceiptAdmissionHarnessAsync(
         PolicyOwnerAdmissionBarrier barrier)
     {
@@ -521,7 +584,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var provider = new AgtPolicyProvider();
         var options = new AgtPolicyProviderOptions(
             "agt-policy-admission-resource", 3, "agt-policy-admission-v1", [policy]);
-        var binding = await ResolveReceiptPolicyBindingAsync(provider, options, RunId);
+        var bindingOptions = string.IsNullOrEmpty(policy)
+            ? options with { PlatformPolicyDocuments = [AdmissionDenyPolicy] }
+            : options;
+        var binding = await ResolveReceiptPolicyBindingAsync(provider, bindingOptions, RunId);
         var principal = new ClaimsPrincipal(new ClaimsIdentity(
             new JwtSecurityTokenHandler().ReadJwtToken(harness.RunToken).Claims,
             "integration-jwt"));
@@ -598,6 +664,87 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             reader.GetString(3),
             AdmissionPolicyActionId,
             reader.GetInt64(4));
+    }
+
+    private static async Task ChangeOwnerReceiptStateAsync(
+        PolicyReceiptAdmissionHarness harness,
+        string change)
+    {
+        await using var database = NpgsqlDataSource.Create(harness.ConnectionString);
+        await using var connection = await database.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        switch (change)
+        {
+            case "session-completed":
+            {
+                await using var command = new NpgsqlCommand($"""
+                    UPDATE "{harness.OwnerSchema}".coordination_sessions
+                    SET lifecycle_state = 'completed', turn_state = 'completed',
+                        state_version = state_version + 1
+                    WHERE project_id = @project AND run_id = @run AND session_id = @session
+                        AND lifecycle_state = 'active'
+                    """, connection, transaction);
+                BindOwnerRun(command, harness);
+                Assert.Equal(1, await command.ExecuteNonQueryAsync());
+                break;
+            }
+            case "run-completed":
+            {
+                await using var command = new NpgsqlCommand($"""
+                    UPDATE "{harness.OwnerSchema}".accepted_runs
+                    SET execution_state = 'completed', state_version = state_version + 1
+                    WHERE project_id = @project AND run_id = @run AND execution_state <> 'completed'
+                    """, connection, transaction);
+                BindOwnerRun(command, harness);
+                Assert.Equal(1, await command.ExecuteNonQueryAsync());
+                break;
+            }
+            case "fence-advanced":
+            {
+                await using (var updateRun = new NpgsqlCommand($"""
+                    UPDATE "{harness.OwnerSchema}".accepted_runs
+                    SET execution_fence = execution_fence + 1, state_version = state_version + 1
+                    WHERE project_id = @project AND run_id = @run
+                    """, connection, transaction))
+                {
+                    BindOwnerRun(updateRun, harness);
+                    Assert.Equal(1, await updateRun.ExecuteNonQueryAsync());
+                }
+                await using (var updateSession = new NpgsqlCommand($"""
+                    UPDATE "{harness.OwnerSchema}".coordination_sessions
+                    SET execution_fence = execution_fence + 1, state_version = state_version + 1
+                    WHERE project_id = @project AND run_id = @run AND session_id = @session
+                    """, connection, transaction))
+                {
+                    BindOwnerRun(updateSession, harness);
+                    Assert.Equal(1, await updateSession.ExecuteNonQueryAsync());
+                }
+                break;
+            }
+            case "selection-superseded":
+            {
+                await using var command = new NpgsqlCommand($"""
+                    UPDATE "{harness.OwnerSchema}".accepted_runs
+                    SET accepted_selection_hash = 'superseded-selection',
+                        state_version = state_version + 1
+                    WHERE project_id = @project AND run_id = @run
+                    """, connection, transaction);
+                BindOwnerRun(command, harness);
+                Assert.Equal(1, await command.ExecuteNonQueryAsync());
+                break;
+            }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(change));
+        }
+        await transaction.CommitAsync();
+    }
+
+    private static void BindOwnerRun(NpgsqlCommand command, PolicyReceiptAdmissionHarness harness)
+    {
+        command.Parameters.AddWithValue("project", harness.Project.ProjectId);
+        command.Parameters.AddWithValue("run", RunId);
+        if (command.CommandText.Contains("@session", StringComparison.Ordinal))
+            command.Parameters.AddWithValue("session", harness.Root.RootSessionId);
     }
 
     private static async Task ChangeGrantAsync(

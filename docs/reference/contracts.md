@@ -85,7 +85,7 @@ caller cannot submit a resource pin or override the durable binding.
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/message-route` | Events-only owner callback. Confirms the full outbound message matches the durable owner outbox, then validates active session relationship, writer, request/reply correlation, and current execution fences. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/owner-binding` | Events-only current session binding for message claim, presentation, and acknowledgment. Returns `Cache-Control: no-store`. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}` | Events-only read of the immutable Orchestrator-owned PolicyEvaluation receipt. |
-| `POST /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}/admission` | Events-only current admission check for that exact owner receipt. Every outcome requires current Core write authority, accepted selection, and matching actor/tenant; Allow additionally requires the exact unexpired grant/fence. Deny/Error do not require an active Allow grant and remain non-authorizing immutable facts. Returns no-store. |
+| `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}/admission` | Events-only current admission check for that exact owner receipt. Every outcome requires current Core write authority, accepted selection, and matching actor/tenant; Allow additionally requires the exact unexpired grant/fence. Deny/Error do not require an active Allow grant and remain non-authorizing immutable facts. Returns no-store. |
 
 Configuration:
 

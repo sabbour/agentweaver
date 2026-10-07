@@ -134,7 +134,8 @@ public sealed class NativePostgresSessionsProvider
         options.Validate();
         if (candidate.Seam != ProviderSeam.Sessions || candidate.ProviderId != ProviderId ||
             candidate.OptionsSchemaVersion != options.OptionsSchemaVersion ||
-            candidate.OptionsRevision != options.OptionsRevision)
+            candidate.OptionsRevision != options.OptionsRevision ||
+            !candidate.RequiredCapabilities.IsSubsetOf(Descriptor.AdvertisedCapabilities))
             return ProviderResult<ResourceNegotiation>.Failure(
                 ProviderErrorCode.InvalidConfiguration,
                 "The Sessions candidate does not match the configured provider options.");
@@ -153,7 +154,7 @@ public sealed class NativePostgresSessionsProvider
             return ProviderResult<ResourceNegotiation>.Success(new ResourceNegotiation(
                 new ProviderResourceRef(
                     ProviderSeam.Sessions, ProviderId, options.ResourceId, options.ResourceGeneration),
-                SessionsCapabilities.All));
+                candidate.RequiredCapabilities));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
