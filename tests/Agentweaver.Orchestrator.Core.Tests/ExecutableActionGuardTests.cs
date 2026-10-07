@@ -532,6 +532,14 @@ public sealed class ExecutableActionGuardTests
                 AppendFailure ?? new SessionAccessDeniedException("The writer is not trusted."));
         }
 
+        public Task<SessionForkResult> ForkFromExplicitEventAsync(
+            ClaimsPrincipal principal,
+            string sourceSessionId,
+            SessionForkRequest request,
+            Func<CancellationToken, Task> validateAdmission,
+            CancellationToken cancellationToken = default) =>
+            throw new SessionForkUnsupportedException("The recording journal does not support session forks.");
+
         public Task<SessionEventPage> ReplayAsync(
             ClaimsPrincipal principal,
             SessionEventPageRequest request,

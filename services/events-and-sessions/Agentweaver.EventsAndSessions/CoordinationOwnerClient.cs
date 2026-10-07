@@ -27,6 +27,12 @@ public interface ICoordinationOwnerClient
         string runId,
         string sessionId,
         CancellationToken cancellationToken = default);
+
+    Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
+        HttpContext context,
+        SessionIdentity source,
+        SessionForkRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class CoordinationOwnerClientException(
@@ -73,12 +79,47 @@ public sealed class CoordinationOwnerClient(
             content: null,
             cancellationToken);
 
+    public async Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
+        HttpContext context,
+        SessionIdentity source,
+        SessionForkRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var receipt = await SendAsync<SessionForkAdmissionReceipt>(
+            context,
+            HttpMethod.Post,
+            $"/internal/projects/{Uri.EscapeDataString(source.ProjectId)}/runs/{Uri.EscapeDataString(source.RunId)}/coordination/sessions/{Uri.EscapeDataString(source.SessionId)}/fork-admission",
+            request,
+            cancellationToken,
+            conflictIsDenied: true).ConfigureAwait(false);
+        var issuers = context.User.FindAll("iss").Take(2).ToArray();
+        var subjects = context.User.FindAll("sub").Take(2).ToArray();
+        if (issuers.Length != 1 || subjects.Length != 1 ||
+            string.IsNullOrWhiteSpace(receipt.AcceptedSelectionHash) ||
+            receipt.CommandId == Guid.Empty ||
+            receipt.Source != source ||
+            receipt.TargetSessionId != request.TargetSessionId ||
+            receipt.SourceEventId != request.SourceEventId ||
+            !string.Equals(receipt.SourceCursor, request.SourceCursor, StringComparison.Ordinal) ||
+            !string.Equals(receipt.IdempotencyKey, request.IdempotencyKey, StringComparison.Ordinal) ||
+            receipt.ExecutionFence < 1 ||
+            !string.Equals(receipt.ActorIssuer, issuers[0].Value, StringComparison.Ordinal) ||
+            !string.Equals(receipt.ActorSubject, subjects[0].Value, StringComparison.Ordinal) ||
+            receipt.AcceptedSelectionHash.Length != 64 ||
+            !receipt.AcceptedSelectionHash.All(Uri.IsHexDigit))
+            throw new CoordinationOwnerClientException(
+                "coordination_owner_contract_invalid", StatusCodes.Status502BadGateway);
+        return receipt;
+    }
+
     private async Task<T> SendAsync<T>(
         HttpContext context,
         HttpMethod method,
         string path,
         object? content,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool conflictIsDenied = false)
     {
         ArgumentNullException.ThrowIfNull(context);
         var owner = RequireOwnerUri();
@@ -119,6 +160,9 @@ public sealed class CoordinationOwnerClient(
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 throw new CoordinationOwnerClientException(
                     "coordination_owner_denied", StatusCodes.Status403Forbidden);
+            if (conflictIsDenied && response.StatusCode == HttpStatusCode.Conflict)
+                throw new CoordinationOwnerClientException(
+                    "coordination_owner_admission_denied", StatusCodes.Status409Conflict);
             if (response.StatusCode != HttpStatusCode.OK ||
                 response.Headers.CacheControl?.NoStore != true)
                 throw new CoordinationOwnerClientException(

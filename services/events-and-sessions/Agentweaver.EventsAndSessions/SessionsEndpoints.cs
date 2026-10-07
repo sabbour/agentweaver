@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.EventsAndSessions;
 
@@ -15,6 +16,7 @@ public static class SessionsEndpoints
 
         endpoints.MapPost("/{sessionId}", CreateAsync);
         endpoints.MapPost("/{sessionId}/events", AppendAsync);
+        endpoints.MapPost("/{sessionId}/fork", ForkFromExplicitEventAsync);
         endpoints.MapGet("/{sessionId}/events", ReplayAsync);
         endpoints.MapGet("/{sessionId}/events/live", SubscribeAsync);
 
@@ -49,6 +51,41 @@ public static class SessionsEndpoints
             var binding = await journal.GetProviderBindingAsync(context.User, sessionId, cancellationToken);
             await bindings.VerifyPinnedAsync(context.User, binding, cancellationToken);
             var result = await journal.AppendAsync(context.User, sessionId, input, cancellationToken);
+            return Results.Json(result, JsonOptions, statusCode: result.IsDuplicate
+                ? StatusCodes.Status200OK : StatusCodes.Status201Created);
+        }, cancellationToken);
+
+    private static async Task<IResult> ForkFromExplicitEventAsync(
+        HttpContext context,
+        string sessionId,
+        SessionForkRequest input,
+        ISessionsJournal journal,
+        ISessionsProviderBinder bindings,
+        [FromServices] ICoordinationOwnerClient owner,
+        CancellationToken cancellationToken) =>
+        await ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!SessionIdentityClaims.TryGetScope(context.User, out var scope) || scope is null)
+                throw new SessionAuthenticationException();
+            var source = scope.Value.ForSession(sessionId);
+            var admission = await owner.ValidateSessionForkAdmissionAsync(
+                context, source, input, cancellationToken).ConfigureAwait(false);
+            var binding = await journal.GetProviderBindingAsync(context.User, sessionId, cancellationToken);
+            await bindings.VerifyPinnedAsync(context.User, binding, cancellationToken);
+            var result = await journal.ForkFromExplicitEventAsync(
+                context.User,
+                sessionId,
+                input,
+                async token =>
+                {
+                    var currentAdmission = await owner.ValidateSessionForkAdmissionAsync(
+                        context, source, input, token).ConfigureAwait(false);
+                    if (currentAdmission != admission)
+                        throw new CoordinationOwnerClientException(
+                            "coordination_owner_admission_changed", StatusCodes.Status409Conflict);
+                },
+                cancellationToken);
             return Results.Json(result, JsonOptions, statusCode: result.IsDuplicate
                 ? StatusCodes.Status200OK : StatusCodes.Status201Created);
         }, cancellationToken);
@@ -181,6 +218,10 @@ public static class SessionsEndpoints
         {
             throw;
         }
+        catch (CoordinationOwnerClientException exception)
+        {
+            return Results.Json(new { error = exception.Code }, statusCode: exception.StatusCode);
+        }
         catch (SessionAuthenticationException)
         {
             return Results.Json(new { error = "invalid_run_claims" }, statusCode: StatusCodes.Status401Unauthorized);
@@ -196,6 +237,11 @@ public static class SessionsEndpoints
         catch (SessionEventConflictException)
         {
             return Results.Json(new { error = "event_identity_conflict" }, statusCode: StatusCodes.Status409Conflict);
+        }
+        catch (SessionForkUnsupportedException)
+        {
+            return Results.Json(new { error = "session_fork_unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
         }
         catch (SessionProviderBindingConflictException)
         {
@@ -229,6 +275,8 @@ public static class SessionsEndpoints
 
     private static IResult ErrorResult(Exception exception) => exception switch
     {
+        CoordinationOwnerClientException ownerException => Results.Json(
+            new { error = ownerException.Code }, statusCode: ownerException.StatusCode),
         SessionAuthenticationException => Results.Json(
             new { error = "invalid_run_claims" }, statusCode: StatusCodes.Status401Unauthorized),
         SessionAccessDeniedException => Results.Json(
@@ -237,6 +285,8 @@ public static class SessionsEndpoints
             new { error = "session_not_found" }, statusCode: StatusCodes.Status404NotFound),
         SessionEventConflictException => Results.Json(
             new { error = "event_identity_conflict" }, statusCode: StatusCodes.Status409Conflict),
+        SessionForkUnsupportedException => Results.Json(
+            new { error = "session_fork_unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable),
         SessionProviderBindingConflictException => Results.Json(
             new { error = "sessions_provider_binding_conflict" }, statusCode: StatusCodes.Status409Conflict),
         SessionContractVersionException => Results.Json(

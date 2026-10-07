@@ -8,6 +8,8 @@ namespace Agentweaver.Orchestrator;
 
 public static class CoordinationEndpoints
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     public static IEndpointRouteBuilder MapCoordinationEndpoints(this IEndpointRouteBuilder app)
     {
         var coordination = app.MapGroup("/api/projects/{projectId}/runs/{runId}/coordination")
@@ -16,6 +18,8 @@ public static class CoordinationEndpoints
         coordination.MapPost(
             "/sessions/{sessionId}/decisions/outcome",
             ProposeCoordinatorOutcomeAsync);
+        coordination.MapGet("/status", ReadOwnerRunStatusAsync);
+        coordination.MapPost("/recovery", RecoverRunExecutionAsync);
         coordination.MapPost(
             "/sessions/{sessionId}/actions/propose_outcome_spec",
             ProposeCoordinatorOutcomeAsync);
@@ -34,6 +38,9 @@ public static class CoordinationEndpoints
         coordination.MapGet(
             "/sessions/{sessionId}/decisions",
             ReadCoordinatorDecisionStateAsync);
+        coordination.MapGet("/sessions/{sessionId}/tree", ReadSessionTreeAsync);
+        coordination.MapGet("/sessions/{sessionId}/status", ReadSessionStatusAsync);
+        coordination.MapPost("/sessions/{sessionId}/turn-failure", ReportRunFailureAsync);
         coordination.MapPost(
             "/sessions/{sessionId}/decisions/gates/{requestId}/answer",
             AnswerCoordinatorGateAsync);
@@ -50,6 +57,22 @@ public static class CoordinationEndpoints
             "/sessions/{sessionId}/decisions/gates/{requestId}/acknowledge",
             AcknowledgeCoordinatorGateAsync);
         coordination.MapPost("/sessions/{parentSessionId}/children", RegisterChildAsync);
+        coordination.MapPost("/sessions/{parentSessionId}/spawn", SpawnSessionAsync);
+        coordination.MapPost("/sessions/{sessionId}/fork", ForkSessionAsync);
+        coordination.MapPost("/sessions/{sessionId}/detach", DetachSessionAsync);
+        coordination.MapPost(
+            "/sessions/{parentSessionId}/children/{childSessionId}/archive",
+            ArchiveChildAsync);
+        coordination.MapPost(
+            "/sessions/{sessionId}/idle-subscriptions",
+            SubscribeToIdleAsync);
+        coordination.MapPost("/sessions/{sessionId}/steering", SteerSessionAsync);
+        coordination.MapPost(
+            "/sessions/{sessionId}/decisions/gates/{requestId}/approve",
+            ApproveCoordinatorGateAsync);
+        coordination.MapPost(
+            "/sessions/{sessionId}/decisions/gates/{requestId}/reject",
+            RejectCoordinatorGateAsync);
         coordination.MapPost("/sessions/{sessionId}/messages", SendMessageAsync);
         coordination.MapPost("/sessions/{sessionId}/turn-boundary", AdvanceTurnBoundaryAsync);
         coordination.MapPost("/sessions/{sessionId}/turn-completion", FinishTurnAsync);
@@ -70,6 +93,12 @@ public static class CoordinationEndpoints
         app.MapGet(
             "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/owner-binding",
             GetSessionBindingAsync).RequireAuthorization();
+        app.MapPost(
+            "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/fork-admission",
+            ValidateSessionForkAdmissionAsync).RequireAuthorization();
+        app.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context",
+            ReadRuntimeOwnerContextAsync).RequireAuthorization();
         return app;
     }
 
@@ -102,6 +131,470 @@ public static class CoordinationEndpoints
                 current.State.CanDispatch,
                 current.State.PendingGate));
         }, cancellationToken);
+
+    private static Task<IResult> ReadSessionTreeAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var tree = await store.ReadSessionTreeAsync(
+                actor, new SessionIdentity(projectId, runId, sessionId), cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(tree);
+        }, cancellationToken);
+
+    private static Task<IResult> ReadSessionStatusAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CoordinatorDecisionOwnerStore decisions,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var identity = new SessionIdentity(projectId, runId, sessionId);
+            var status = await store.ReadSessionStatusAsync(actor, identity, cancellationToken)
+                .ConfigureAwait(false);
+            if (status.Kind == CoordinationSessionKind.Coordinator)
+            {
+                var decision = await decisions.ReadCurrentAsync(
+                    actor, identity, selection, cancellationToken).ConfigureAwait(false);
+                if (decision.State.Fence != status.ExecutionFence)
+                    throw new CoordinationException(
+                        "session_status_fence_conflict", StatusCodes.Status409Conflict);
+                status = status with
+                {
+                    Blockers = decision.State.PendingGate is { } gate
+                        ? [ToStatusBlocker(gate)]
+                        : []
+                };
+            }
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(status);
+        }, cancellationToken);
+
+    private static Task<IResult> ReadRuntimeOwnerContextAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CoordinatorDecisionOwnerStore decisions,
+        CoordinatorRunSelectionContextStore runSelectionContexts,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var identity = new SessionIdentity(projectId, runId, sessionId);
+            var owner = await store.ReadRuntimeOwnerStateAsync(
+                actor, identity, cancellationToken).ConfigureAwait(false);
+            var root = new SessionIdentity(projectId, runId, owner.RootSessionId);
+            var decision = await decisions.ReadCurrentAsync(
+                actor, root, selection, cancellationToken).ConfigureAwait(false);
+            if (decision.State.Fence != owner.ExecutionFence ||
+                decision.SelectionHash != owner.AcceptedSelectionHash ||
+                !decision.State.CanDispatch ||
+                decision.State.ConfirmedWorkPlan is not { } confirmedPlan)
+                throw new CoordinationException(
+                    "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
+
+            var selectionContext = await runSelectionContexts.ReadAsync(
+                    selection.Selection, owner.ExecutionFence, cancellationToken).ConfigureAwait(false)
+                ?? CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Selection.Snapshot);
+            var validatedPlan = WorkPlanValidator.ValidateAndSnapshot(
+                confirmedPlan.Workflow, confirmedPlan.Plan, selectionContext);
+            if (!validatedPlan.IsValid || validatedPlan.Value is null)
+                throw new CoordinationException(
+                    "runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+            var workPlanItem = validatedPlan.Value.Plan.Items.FirstOrDefault(item =>
+                string.Equals(item.Id, owner.WorkPlanItemId, StringComparison.Ordinal));
+            if (workPlanItem is null ||
+                string.IsNullOrWhiteSpace(workPlanItem.AgentId) ||
+                string.IsNullOrWhiteSpace(workPlanItem.ModelSelectionReference))
+                throw new CoordinationException(
+                    "runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            var currentOwner = await store.ReadRuntimeOwnerStateAsync(
+                actor, identity, cancellationToken).ConfigureAwait(false);
+            if (currentOwner != owner)
+                throw new CoordinationException(
+                    "runtime_owner_context_stale", StatusCodes.Status409Conflict);
+
+            return Results.Ok(new RuntimeOwnerContext(
+                1,
+                actor.Issuer,
+                actor.Subject,
+                owner.TenantId,
+                projectId,
+                runId,
+                sessionId,
+                workPlanItem.AgentId,
+                workPlanItem.ModelSelectionReference,
+                owner.RuntimeTurnId,
+                selection.Selection.ProjectRevision,
+                selection.Selection.ProjectConfigurationRevision,
+                selection.Selection.PlatformRuntimeRevision,
+                selection.Selection.ContextRevision,
+                owner.AcceptedSelectionHash.ToLowerInvariant(),
+                owner.ExecutionFence,
+                owner.LogicalTurnOrdinal,
+                owner.StateVersion,
+                decision.StateVersion));
+        }, cancellationToken);
+
+    private static SessionStatusBlocker ToStatusBlocker(CoordinatorGateRequest gate)
+    {
+        var kind = gate.Kind switch
+        {
+            CoordinatorGateKind.Question => CoordinationBlockerKind.AwaitingInput,
+            CoordinatorGateKind.Approval => CoordinationBlockerKind.AwaitingApproval,
+            CoordinatorGateKind.OutcomeConfirmation => CoordinationBlockerKind.AwaitingOutcomeConfirmation,
+            CoordinatorGateKind.GeneratedWorkflowConfirmation or
+            CoordinatorGateKind.WorkPlanConfirmation or
+            CoordinatorGateKind.ScopeChangeConfirmation => CoordinationBlockerKind.AwaitingPlanApproval,
+            _ => throw new CoordinationException(
+                "coordinator_gate_state_unavailable", StatusCodes.Status503ServiceUnavailable)
+        };
+        return new SessionStatusBlocker(
+            kind, gate.RequestId, gate.AllowedChoices, gate.AllowsFreeform, gate.Prompt);
+    }
+
+    private static Task<IResult> SpawnSessionAsync(
+        string projectId,
+        string runId,
+        string parentSessionId,
+        SpawnSessionRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        CoordinationOwnerStore store,
+        EventsAddressedMessageClient events,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            CoordinationOwnerStore.ValidateSpawnRequest(request);
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var parent = new SessionIdentity(projectId, runId, parentSessionId);
+            var parentStatus = await store.ReadSessionStatusAsync(actor, parent, cancellationToken)
+                .ConfigureAwait(false);
+            if (request.Kind == CoordinationSessionKind.ChildRun &&
+                parentStatus.Kind != CoordinationSessionKind.OperatorChat)
+                throw new CoordinationException(
+                    "child_run_spawn_requires_operator_chat", StatusCodes.Status403Forbidden);
+
+            ConfirmedWorkPlanItemAssociation? workPlanItemAssociation = null;
+            if (request.WorkPlanItemId is { } workPlanItemId)
+            {
+                var root = new SessionIdentity(projectId, runId, parentStatus.RootSessionId);
+                var decision = await decisions.ReadCurrentAsync(
+                    actor, root, selection, cancellationToken).ConfigureAwait(false);
+                var isConfirmedAndDispatchable = decision.State.CanDispatch &&
+                    decision.State.ConfirmedWorkPlan?.Plan.Items.Any(item =>
+                        string.Equals(item.Id, workPlanItemId, StringComparison.Ordinal)) == true;
+                if (!isConfirmedAndDispatchable)
+                    throw new CoordinationException(
+                        "session_work_plan_item_unavailable", StatusCodes.Status409Conflict);
+                workPlanItemAssociation = new ConfirmedWorkPlanItemAssociation(
+                    workPlanItemId, decision.StateVersion, decision.SelectionHash);
+            }
+
+            var childIdentity = new SessionIdentity(projectId, runId, request.SessionId);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            await events.EnsureSessionAsync(context, childIdentity, cancellationToken).ConfigureAwait(false);
+            var spawned = await store.SpawnSessionAsync(
+                actor,
+                parent,
+                request,
+                CoordinatorWorkflowCatalog.ReadMaxChildren(selection.Selection.Snapshot),
+                CoordinatorWorkflowCatalog.ReadMaxConcurrentChildren(selection.Selection.Snapshot),
+                cancellationToken,
+                workPlanItemAssociation).ConfigureAwait(false);
+            return Results.Accepted(value: spawned);
+        }, cancellationToken);
+
+    private static Task<IResult> ForkSessionAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        CoordinationSessionForkRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        EventsAddressedMessageClient events,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            CoordinationOwnerStore.ValidateForkRequest(request);
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var source = new SessionIdentity(projectId, runId, sessionId);
+            var selectionHash = CoordinationOwnerStore.HashSelection(selection.Selection);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            var maxChildren = CoordinatorWorkflowCatalog.ReadMaxChildren(selection.Selection.Snapshot);
+            var maxConcurrentChildren =
+                CoordinatorWorkflowCatalog.ReadMaxConcurrentChildren(selection.Selection.Snapshot);
+            var prepared = await store.PrepareSessionForkAsync(
+                actor,
+                source,
+                request,
+                selectionHash,
+                maxChildren,
+                maxConcurrentChildren,
+                cancellationToken).ConfigureAwait(false);
+            if (prepared.RegistrationState == CoordinationForkRegistrationState.Registered)
+                return Results.Ok(prepared);
+            if (prepared.RegistrationState == CoordinationForkRegistrationState.Unregistered)
+                return Results.Conflict(prepared);
+
+            SessionForkResult eventsFork;
+            try
+            {
+                eventsFork = await events.ForkFromExplicitEventAsync(
+                    context,
+                    source,
+                    new SessionForkRequest(
+                        request.TargetSessionId,
+                        request.SourceEventId,
+                        request.SourceCursor,
+                        request.IdempotencyKey),
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (CoordinationException exception) when (
+                exception.Code is "events_session_fork_denied" or "events_session_fork_conflict")
+            {
+                var unregistered = await store.FinalizeSessionForkAdmissionFailureAsync(
+                    actor, source, request, selectionHash, cancellationToken).ConfigureAwait(false);
+                return Results.Conflict(unregistered);
+            }
+            var currentSelection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var selectionIsCurrent = AuthorizedSelectionIsUnchanged(projectId, selection, currentSelection);
+            var currentSelectionHash = CoordinationOwnerStore.HashSelection(currentSelection.Selection);
+            var completed = await store.CompleteSessionForkAsync(
+                actor,
+                source,
+                request,
+                selectionHash,
+                currentSelectionHash,
+                selectionIsCurrent,
+                eventsFork,
+                maxChildren,
+                maxConcurrentChildren,
+                prepared.IsDuplicate,
+                cancellationToken).ConfigureAwait(false);
+            return completed.RegistrationState == CoordinationForkRegistrationState.Registered
+                ? Results.Json(completed, statusCode: completed.IsDuplicate
+                    ? StatusCodes.Status200OK : StatusCodes.Status201Created)
+                : Results.Conflict(completed);
+        }, cancellationToken);
+
+    private static Task<IResult> DetachSessionAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        SessionTreeCommandRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            _ = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var detached = await store.DetachSessionAsync(
+                actor, new SessionIdentity(projectId, runId, sessionId), request, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Ok(detached);
+        }, cancellationToken);
+
+    private static Task<IResult> ArchiveChildAsync(
+        string projectId,
+        string runId,
+        string parentSessionId,
+        string childSessionId,
+        SessionTreeCommandRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            _ = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var archived = await store.ArchiveChildAsync(
+                actor,
+                new SessionIdentity(projectId, runId, parentSessionId),
+                childSessionId,
+                request,
+                cancellationToken).ConfigureAwait(false);
+            return Results.Ok(archived);
+        }, cancellationToken);
+
+    private static Task<IResult> SubscribeToIdleAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        SubscribeToIdleRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            _ = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var subscription = await store.SubscribeToIdleAsync(
+                actor, new SessionIdentity(projectId, runId, sessionId), request, cancellationToken)
+                .ConfigureAwait(false);
+            return Results.Accepted(value: subscription);
+        }, cancellationToken);
+
+    private static Task<IResult> SteerSessionAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        SteerSessionRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        EventsAddressedMessageClient events,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            if (!Enum.IsDefined(request.Action) || request.Instruction.ValueKind != JsonValueKind.Object)
+                throw new CoordinationException("steering_request_invalid", StatusCodes.Status400BadRequest);
+            var action = request.Action switch
+            {
+                CoordinationSteeringAction.Stop => "stop",
+                CoordinationSteeringAction.Redirect => "redirect",
+                CoordinationSteeringAction.Amend => "amend",
+                _ => throw new CoordinationException(
+                    "steering_request_invalid", StatusCodes.Status400BadRequest)
+            };
+            var payload = JsonSerializer.SerializeToElement(new
+            {
+                action,
+                instruction = request.Instruction
+            }, JsonOptions);
+            return await SendMessageAsync(
+                projectId,
+                runId,
+                sessionId,
+                new CoordinationMessageRequest(
+                    request.RecipientSessionId,
+                    request.IdempotencyKey,
+                    request.DeliveryMode,
+                    AddressedMessagePurpose.Steering,
+                    AddressedMessageKind.Steering,
+                    payload,
+                    UserQuote: request.UserQuote,
+                    CoordinatorInstructions: request.CoordinatorInstructions),
+                context,
+                options,
+                projects,
+                store,
+                events,
+                cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
+
+    private static Task<IResult> ApproveCoordinatorGateAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        string requestId,
+        ResolveCoordinatorGateRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        CancellationToken cancellationToken) =>
+        AnswerCoordinatorGateAsync(
+            projectId,
+            runId,
+            sessionId,
+            requestId,
+            new AnswerCoordinatorGateRequest(
+                request.ExpectedStateVersion,
+                request.IdempotencyKey,
+                CoordinatorGateChoices.Approve,
+                null),
+            context,
+            options,
+            projects,
+            decisions,
+            cancellationToken);
+
+    private static Task<IResult> RejectCoordinatorGateAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        string requestId,
+        ResolveCoordinatorGateRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        CancellationToken cancellationToken) =>
+        AnswerCoordinatorGateAsync(
+            projectId,
+            runId,
+            sessionId,
+            requestId,
+            new AnswerCoordinatorGateRequest(
+                request.ExpectedStateVersion,
+                request.IdempotencyKey,
+                CoordinatorGateChoices.Reject,
+                null),
+            context,
+            options,
+            projects,
+            decisions,
+            cancellationToken);
 
     private static Task<IResult> ProposeCoordinatorOutcomeAsync(
         string projectId,
@@ -692,6 +1185,16 @@ public static class CoordinationEndpoints
     {
         var refreshed = await projects.ReadAcceptedSelectionWithAuthorityAsync(
             context, projectId, runId, cancellationToken).ConfigureAwait(false);
+        if (!AuthorizedSelectionIsUnchanged(projectId, initial, refreshed))
+            throw new CoordinationException(
+                "coordinator_selection_stale", StatusCodes.Status409Conflict);
+    }
+
+    private static bool AuthorizedSelectionIsUnchanged(
+        string projectId,
+        AuthorizedRunSelection initial,
+        AuthorizedRunSelection refreshed)
+    {
         if (refreshed.Authorization.ContractVersion != initial.Authorization.ContractVersion ||
             refreshed.Authorization.Issuer != initial.Authorization.Issuer ||
             refreshed.Authorization.ActorId != initial.Authorization.ActorId ||
@@ -712,8 +1215,8 @@ public static class CoordinationEndpoints
                 refreshed.Selection.Snapshot.GetRawText(),
                 initial.Selection.Snapshot.GetRawText(),
                 StringComparison.Ordinal))
-            throw new CoordinationException(
-                "coordinator_selection_stale", StatusCodes.Status409Conflict);
+            return false;
+        return true;
     }
 
     private static async Task<CoordinatorDecisionTransition<T>> EnforceRunChildLimitAsync<T>(
@@ -960,6 +1463,33 @@ public static class CoordinationEndpoints
             return Results.Ok(binding);
         }, cancellationToken);
 
+    private static Task<IResult> ValidateSessionForkAdmissionAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        SessionForkRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.EventsAudience);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var receipt = await store.ValidateSessionForkAdmissionAsync(
+                actor,
+                new SessionIdentity(projectId, runId, sessionId),
+                request,
+                CoordinationOwnerStore.HashSelection(selection.Selection),
+                cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(receipt);
+        }, cancellationToken);
+
     private static Task<IResult> AdvanceTurnBoundaryAsync(
         string projectId,
         string runId,
@@ -1036,6 +1566,69 @@ public static class CoordinationEndpoints
                 new SessionIdentity(projectId, runId, sessionId),
                 request,
                 cancellationToken).ConfigureAwait(false);
+            return Results.Ok(result);
+        }, cancellationToken);
+
+    private static Task<IResult> ReadOwnerRunStatusAsync(
+        string projectId,
+        string runId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            _ = await projects.ReadAcceptedSelectionAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var result = await store.ReadOwnerRunStatusAsync(
+                actor, projectId, runId, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(result);
+        }, cancellationToken);
+
+    private static Task<IResult> ReportRunFailureAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        ReportRunFailureRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            _ = await projects.ReadAcceptedSelectionAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var result = await store.ReportRunFailureAsync(
+                actor,
+                new SessionIdentity(projectId, runId, sessionId),
+                request,
+                cancellationToken).ConfigureAwait(false);
+            return Results.Ok(result);
+        }, cancellationToken);
+
+    private static Task<IResult> RecoverRunExecutionAsync(
+        string projectId,
+        string runId,
+        RecoverRunExecutionRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore store,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            _ = await projects.ReadAcceptedSelectionAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var result = await store.RecoverRunExecutionAsync(
+                actor, projectId, runId, request, cancellationToken).ConfigureAwait(false);
             return Results.Ok(result);
         }, cancellationToken);
 

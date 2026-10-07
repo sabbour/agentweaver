@@ -13,6 +13,7 @@ using Agentweaver.Providers;
 using Agentweaver.Telemetry;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -462,6 +463,241 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         Assert.Single(page2.Events);
         Assert.Equal(second.Event.EventId, page2.Events[0].EventId);
         Assert.False(page2.HasMore);
+    }
+
+    [Fact]
+    public async Task ExplicitForkPreservesCommittedPrefixAndObjectRetentionAcrossRetries()
+    {
+        var owner = Principal("project-1", "fork-run");
+        const string sourceSessionId = "fork-source";
+        var forkBinding = new SessionProviderBinding(
+            "project-1",
+            "fork-run",
+            _binding.ProviderId,
+            _binding.AdapterVersion,
+            _binding.OptionsSchemaVersion,
+            _binding.OptionsRevision,
+            _binding.ResourceId,
+            _binding.ResourceGeneration,
+            _binding.NegotiatedCapabilities.Add("sessions.events.fork"));
+        await _journal.CreateSessionAsync(owner, sourceSessionId, forkBinding);
+
+        var first = await _journal.AppendAsync(owner, sourceSessionId, Turn(Guid.NewGuid(), "turns/fork-first"));
+        var second = await _journal.AppendAsync(owner, sourceSessionId, Turn(Guid.NewGuid(), "turns/fork-second"));
+        string originalRetainUntil;
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT retain_until::text
+            FROM "{_schema}".session_object_references
+            WHERE event_id = @event
+            """, connection))
+        {
+            command.Parameters.AddWithValue("event", NpgsqlDbType.Uuid, first.Event.EventId);
+            originalRetainUntil = (string)(await command.ExecuteScalarAsync() ??
+                throw new InvalidOperationException("Expected the source event object reference."));
+        }
+        var firstPage = await _journal.ReplayAsync(
+            owner, new SessionEventPageRequest(sourceSessionId, Limit: 1));
+        Assert.True(firstPage.HasMore);
+        Assert.Equal(first.Event.EventId, firstPage.Events.Single().EventId);
+
+        var request = new SessionForkRequest(
+            "fork-target",
+            first.Event.EventId,
+            firstPage.NextCursor!,
+            "fork-prefix-1");
+        var concurrentResults = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ =>
+            new PostgresSessionsJournal(_fixture.DataSource, _options).ForkFromExplicitEventAsync(
+                owner, sourceSessionId, request, static _ => Task.CompletedTask)));
+        Assert.Single(concurrentResults, result => !result.IsDuplicate);
+        Assert.All(concurrentResults, result =>
+        {
+            Assert.Equal("fork-target", result.Target.Identity.SessionId);
+            Assert.Equal(sourceSessionId, result.Lineage.Source.SessionId);
+            Assert.Equal(first.Event.EventId, result.Lineage.SourceEventId);
+            Assert.Equal(first.Event.Position, result.Lineage.SourceSequence);
+            Assert.Equal(1, result.Lineage.CursorVersion);
+            Assert.Equal(first.Event.SchemaVersion, result.Lineage.SourceSchemaVersion);
+            Assert.Equal(first.Event.EventVersion, result.Lineage.SourceEventVersion);
+            Assert.Equal(64, result.Lineage.ProviderBindingHash.Length);
+            Assert.Equal(firstPage.NextCursor, result.Lineage.SourceCursor);
+        });
+
+        var secondPage = await _journal.ReplayAsync(
+            owner, new SessionEventPageRequest(sourceSessionId, firstPage.NextCursor, Limit: 1));
+        Assert.Equal(second.Event.EventId, secondPage.Events.Single().EventId);
+        var mismatchedCursor = await Assert.ThrowsAsync<SessionEventConflictException>(() =>
+            _journal.ForkFromExplicitEventAsync(
+                owner,
+                sourceSessionId,
+                request with { SourceEventId = second.Event.EventId },
+                static _ => Task.CompletedTask,
+                CancellationToken.None));
+        Assert.Contains("cursor", mismatchedCursor.Message, StringComparison.OrdinalIgnoreCase);
+
+        var conflictingReplay = await Assert.ThrowsAsync<SessionEventConflictException>(() =>
+            _journal.ForkFromExplicitEventAsync(
+                owner,
+                sourceSessionId,
+                request with
+                {
+                    SourceEventId = second.Event.EventId,
+                    SourceCursor = secondPage.NextCursor!
+                },
+                static _ => Task.CompletedTask,
+                CancellationToken.None));
+        Assert.Contains("idempotency", conflictingReplay.Message, StringComparison.OrdinalIgnoreCase);
+
+        var legacyCursor = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+            """{"projectId":"project-1","runId":"fork-run","sessionId":"fork-source","position":1}"""))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var legacyPage = await _journal.ReplayAsync(
+            owner, new SessionEventPageRequest(sourceSessionId, legacyCursor, Limit: 1));
+        Assert.Equal(second.Event.EventId, legacyPage.Events.Single().EventId);
+
+        await _journal.AppendAsync(owner, sourceSessionId, Turn(Guid.NewGuid(), "turns/fork-later"));
+        var forkedHistory = await new PostgresSessionsJournal(_fixture.DataSource, _options).ReplayAsync(
+            owner, new SessionEventPageRequest("fork-target"));
+        Assert.Single(forkedHistory.Events);
+        Assert.Equal(first.Event.EventId, forkedHistory.Events.Single().EventId);
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT retain_until::text = @retainUntil
+            FROM "{_schema}".session_object_references
+            WHERE event_id = @event
+            """, connection))
+        {
+            command.Parameters.AddWithValue("event", NpgsqlDbType.Uuid, first.Event.EventId);
+            command.Parameters.AddWithValue("retainUntil", NpgsqlDbType.Text, originalRetainUntil);
+            Assert.True((bool)(await command.ExecuteScalarAsync() ??
+                throw new InvalidOperationException("Expected the forked event reference to be retained.")),
+                "Forking must preserve the original bounded object-reference retention deadline.");
+        }
+
+        var targetEvent = await _journal.AppendAsync(
+            owner, "fork-target", Turn(Guid.NewGuid(), "turns/fork-target"));
+        var targetHistory = await _journal.ReplayAsync(
+            owner, new SessionEventPageRequest("fork-target"));
+        Assert.Equal(
+            [first.Event.EventId, targetEvent.Event.EventId],
+            targetHistory.Events.Select(item => item.EventId));
+        Assert.DoesNotContain(second.Event.EventId, targetHistory.Events.Select(item => item.EventId));
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            DELETE FROM "{_schema}".session_events WHERE event_id = @event
+            """, connection))
+        {
+            command.Parameters.AddWithValue("event", NpgsqlDbType.Uuid, first.Event.EventId);
+            var retentionConstraint = await Assert.ThrowsAsync<PostgresException>(
+                () => command.ExecuteNonQueryAsync());
+            Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, retentionConstraint.SqlState);
+        }
+
+        var otherRunCursor = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+            """{"projectId":"project-1","runId":"another-run","sessionId":"fork-source","position":1}"""))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        await Assert.ThrowsAsync<SessionNotFoundException>(() =>
+            _journal.ForkFromExplicitEventAsync(
+                Principal("project-1", "another-run"),
+                sourceSessionId,
+                request with { SourceCursor = otherRunCursor },
+                static _ => Task.CompletedTask,
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task AuthenticatedEventsRouteForksOnlyTheRequestedCommittedPrefix()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var issuer = new Uri("https://identity.test");
+        const string audience = "https://events.test";
+        const string runId = "fork-http-run";
+        var token = CreateRunToken(rsa, issuer.ToString(), audience, runId);
+        var owner = Principal("project-1", runId);
+        var forkBinding = new SessionProviderBinding(
+            "project-1",
+            runId,
+            _binding.ProviderId,
+            _binding.AdapterVersion,
+            _binding.OptionsSchemaVersion,
+            _binding.OptionsRevision,
+            _binding.ResourceId,
+            _binding.ResourceGeneration,
+            _binding.NegotiatedCapabilities.Add("sessions.events.fork"));
+        await _journal.CreateSessionAsync(owner, "fork-http-source", forkBinding);
+        var first = await _journal.AppendAsync(owner, "fork-http-source", Turn(Guid.NewGuid(), "turns/http-first"));
+        await _journal.AppendAsync(owner, "fork-http-source", Turn(Guid.NewGuid(), "turns/http-second"));
+        var firstPage = await _journal.ReplayAsync(
+            owner, new SessionEventPageRequest("fork-http-source", Limit: 1));
+        var request = new SessionForkRequest(
+            "fork-http-target", first.Event.EventId, firstPage.NextCursor!, "fork-http-once");
+
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
+        builder.Services.AddOpenIddict().AddValidation(validation =>
+        {
+            validation.SetIssuer(issuer);
+            validation.AddAudiences(audience);
+            validation.Configure(configuration => configuration.Configuration = new OpenIddictConfiguration
+            {
+                Issuer = issuer,
+                SigningKeys = { signingKey }
+            });
+            validation.UseAspNetCore();
+        });
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton<ISessionsJournal>(_journal);
+        builder.Services.AddSingleton<ISessionsProviderBinder>(
+            new FixedSessionsProviderBinder(forkBinding));
+        var forkAdmissionOwner = new AllowForkAdmissionClient();
+        builder.Services.AddSingleton<ICoordinationOwnerClient>(forkAdmissionOwner);
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapEventsAndSessionsEndpoints();
+        await app.StartAsync();
+
+        using var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var response = await client.PostAsJsonAsync(
+            "/internal/sessions/fork-http-source/fork", request);
+        Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore == true);
+        var created = await response.Content.ReadFromJsonAsync<SessionForkResult>(
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(created);
+        Assert.False(created.IsDuplicate);
+        Assert.Equal("fork-http-target", created.Target.Identity.SessionId);
+        Assert.Equal(first.Event.EventId, created.Lineage.SourceEventId);
+
+        using var replayResponse = await client.PostAsJsonAsync(
+            "/internal/sessions/fork-http-source/fork", request);
+        Assert.Equal(System.Net.HttpStatusCode.OK, replayResponse.StatusCode);
+        Assert.True(replayResponse.Headers.CacheControl?.NoStore == true);
+        var replayedCommand = await replayResponse.Content.ReadFromJsonAsync<SessionForkResult>(
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(replayedCommand);
+        Assert.True(replayedCommand.IsDuplicate);
+        Assert.Equal(4, forkAdmissionOwner.Admissions.Count);
+        Assert.All(forkAdmissionOwner.Admissions, admission =>
+        {
+            Assert.Equal(new SessionIdentity("project-1", runId, "fork-http-source"), admission.Source);
+            Assert.Equal(request, admission.Request);
+        });
+
+        using var mismatchResponse = await client.PostAsJsonAsync(
+            "/internal/sessions/fork-http-source/fork",
+            request with { SourceEventId = Guid.NewGuid() });
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, mismatchResponse.StatusCode);
+
+        await _journal.AppendAsync(owner, "fork-http-source", Turn(Guid.NewGuid(), "turns/http-later"));
+        var targetHistory = await NewJournal().ReplayAsync(
+            owner, new SessionEventPageRequest("fork-http-target"));
+        Assert.Equal(first.Event.EventId, targetHistory.Events.Single().EventId);
     }
 
     [Fact]
@@ -1074,7 +1310,11 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             1,
             "options-2026-10");
 
-    private static string CreateRunToken(RSA signingKey, string issuer, string audience)
+    private static string CreateRunToken(
+        RSA signingKey,
+        string issuer,
+        string audience,
+        string runId = "run-1")
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         var header = Base64Url(JsonSerializer.SerializeToUtf8Bytes(new { alg = "RS256", typ = "at+jwt" }));
@@ -1084,7 +1324,7 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             aud = audience,
             sub = "33333333-3333-3333-3333-333333333333",
             project_id = "project-1",
-            run_id = "run-1",
+            run_id = runId,
             scope = "openid",
             nbf = now - 60,
             exp = now + 300
@@ -1099,6 +1339,64 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
 
     private static string Base64Url(byte[] value) =>
         Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private sealed class AllowForkAdmissionClient : ICoordinationOwnerClient
+    {
+        public List<(SessionIdentity Source, SessionForkRequest Request)> Admissions { get; } = [];
+
+        public Task<MessageRouteBinding> ValidateMessageRouteAsync(
+            HttpContext context,
+            string projectId,
+            string runId,
+            MessageRouteValidationRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<CoordinationSessionBinding> GetSessionBindingAsync(
+            HttpContext context,
+            string projectId,
+            string runId,
+            string sessionId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
+            HttpContext context,
+            SessionIdentity source,
+            SessionForkRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Admissions.Add((source, request));
+            return Task.FromResult(new SessionForkAdmissionReceipt(
+                Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                source,
+                request.TargetSessionId,
+                request.SourceEventId,
+                request.SourceCursor,
+                request.IdempotencyKey,
+                1,
+                "https://identity.test",
+                "33333333-3333-3333-3333-333333333333",
+                new string('A', 64)));
+        }
+    }
+
+    private sealed class FixedSessionsProviderBinder(SessionProviderBinding binding) : ISessionsProviderBinder
+    {
+        public Task<SessionProviderBinding> ResolveAndPinAsync(
+            ClaimsPrincipal principal,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(binding);
+
+        public Task VerifyPinnedAsync(
+            ClaimsPrincipal principal,
+            SessionProviderBinding requestedBinding,
+            CancellationToken cancellationToken = default) =>
+            binding.Matches(requestedBinding)
+                ? Task.CompletedTask
+                : Task.FromException(new SessionPinnedProviderUnavailableException(
+                    "The test provider binding does not match the persisted binding."));
+    }
 
     private static SessionObjectReference Ref(string key) => new(new ObjectKey(key), "transcript", 128);
 

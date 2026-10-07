@@ -1,9 +1,11 @@
 using System.Security.Claims;
+using System.Net.Http.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -25,6 +27,7 @@ public sealed class SessionsEndpointFakeTests
         builder.Services.AddAuthorization();
         var journal = new FakeJournal();
         var binder = new FakeBinder();
+        builder.Services.AddSingleton<ICoordinationOwnerClient, FakeCoordinationOwnerClient>();
         builder.Services.AddSingleton<ISessionsJournal>(journal);
         builder.Services.AddSingleton<ISessionsProviderBinder>(binder);
         await using var app = builder.Build();
@@ -50,6 +53,50 @@ public sealed class SessionsEndpointFakeTests
         Assert.Equal(System.Net.HttpStatusCode.OK, runReplayResponse.StatusCode);
         Assert.Equal(("project-1", "run-1"), journal.LastRunScope);
         Assert.True(journal.CreatedBinding.Matches(binder.VerifiedBinding!));
+
+        using var forkResponse = await client.PostAsJsonAsync(
+            "/internal/sessions/session-1/fork",
+            new SessionForkRequest("fork-target", Guid.NewGuid(), "cursor", "fork-once"));
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, forkResponse.StatusCode);
+        Assert.True(forkResponse.Headers.CacheControl?.NoStore == true);
+        Assert.Contains("session_fork_unavailable",
+            await forkResponse.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    private sealed class FakeCoordinationOwnerClient : ICoordinationOwnerClient
+    {
+        public Task<MessageRouteBinding> ValidateMessageRouteAsync(
+            HttpContext context,
+            string projectId,
+            string runId,
+            MessageRouteValidationRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<CoordinationSessionBinding> GetSessionBindingAsync(
+            HttpContext context,
+            string projectId,
+            string runId,
+            string sessionId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
+            HttpContext context,
+            SessionIdentity source,
+            SessionForkRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new SessionForkAdmissionReceipt(
+                Guid.NewGuid(),
+                source,
+                request.TargetSessionId,
+                request.SourceEventId,
+                request.SourceCursor,
+                request.IdempotencyKey,
+                1,
+                "https://identity.test",
+                context.User.FindFirstValue("sub")!,
+                new string('A', 64)));
     }
 
     private sealed class FakeBinder : ISessionsProviderBinder
@@ -112,6 +159,14 @@ public sealed class SessionsEndpointFakeTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<SessionForkResult> ForkFromExplicitEventAsync(
+            ClaimsPrincipal principal,
+            string sourceSessionId,
+            SessionForkRequest request,
+            Func<CancellationToken, Task> validateAdmission,
+            CancellationToken cancellationToken = default) =>
+            throw new SessionForkUnsupportedException("The fake journal does not support session forks.");
+
         public Task<SessionEventPage> ReplayAsync(
             ClaimsPrincipal principal,
             SessionEventPageRequest request,
@@ -148,6 +203,7 @@ public sealed class SessionsEndpointFakeTests
             var identity = new ClaimsIdentity(
                 [
                     new Claim("sub", "33333333-3333-3333-3333-333333333333"),
+                    new Claim("iss", "https://identity.test"),
                     new Claim("scope", "openid"),
                     new Claim("aud", "agentweaver.events"),
                     new Claim("project_id", "project-1"),

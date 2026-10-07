@@ -305,6 +305,39 @@ public sealed record SessionSubscriptionRequest(
     int MaximumEvents = 1000,
     int MaximumDurationSeconds = 300);
 
+public sealed record SessionForkRequest(
+    string TargetSessionId,
+    Guid SourceEventId,
+    string SourceCursor,
+    string IdempotencyKey);
+
+public sealed record SessionForkLineage(
+    SessionIdentity Source,
+    Guid SourceEventId,
+    long SourceSequence,
+    int CursorVersion,
+    int SourceSchemaVersion,
+    int SourceEventVersion,
+    string ProviderBindingHash,
+    string SourceCursor);
+
+public sealed record SessionForkResult(
+    SessionRecord Target,
+    SessionForkLineage Lineage,
+    bool IsDuplicate);
+
+public sealed record SessionForkAdmissionReceipt(
+    Guid CommandId,
+    SessionIdentity Source,
+    string TargetSessionId,
+    Guid SourceEventId,
+    string SourceCursor,
+    string IdempotencyKey,
+    long ExecutionFence,
+    string ActorIssuer,
+    string ActorSubject,
+    string AcceptedSelectionHash);
+
 public interface ISessionsJournal
 {
     Task<SessionRecord> CreateSessionAsync(
@@ -319,6 +352,11 @@ public interface ISessionsJournal
 
     Task<SessionAppendResult> AppendAsync(
         ClaimsPrincipal principal, string sessionId, AppendSessionEvent input,
+        CancellationToken cancellationToken = default);
+
+    Task<SessionForkResult> ForkFromExplicitEventAsync(
+        ClaimsPrincipal principal, string sourceSessionId, SessionForkRequest request,
+        Func<CancellationToken, Task> validateAdmission,
         CancellationToken cancellationToken = default);
 
     Task<SessionEventPage> ReplayAsync(
@@ -339,6 +377,8 @@ public interface ISessionsJournal
 }
 
 public sealed class SessionEventConflictException(string message) : Exception(message);
+
+public sealed class SessionForkUnsupportedException(string message) : Exception(message);
 
 public sealed class SessionProviderBindingConflictException(string message) : Exception(message);
 

@@ -243,6 +243,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         EventsIntegrationFactory? eventsFactoryReference = null;
         var admissions = new List<(HttpStatusCode Status, bool NoStore, string Body)>();
+        var forkAdmissionGate = new ForkAdmissionGate();
         var cacheObjectStore = new InMemoryObjectStore();
         var sandboxProvider = new ControlledSandboxResourceProvider();
         await using var orchestratorFactory = new OrchestratorIntegrationFactory(
@@ -260,7 +261,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             eventsSchema,
             signingKey,
             projects.CreateHandler,
-            () => orchestratorFactory.Server.CreateHandler());
+            () => new ForkAdmissionBarrierHandler(
+                orchestratorFactory.Server.CreateHandler(), forkAdmissionGate));
         eventsFactoryReference = eventsFactory;
 
         using var orchestrator = orchestratorFactory.CreateClient(new WebApplicationFactoryClientOptions
@@ -995,6 +997,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             runToken,
             new RegisterChildRequest("child-two"));
         await AssertStatusAsync(secondChildResponse, HttpStatusCode.Created);
+        var childTwo = await ReadJsonAsync<RegisteredChild>(secondChildResponse);
         using var overConcurrentLimit = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
@@ -1204,10 +1207,288 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             presented.MessageId,
             journalEvent.GetProperty("payload").GetProperty("messageId").GetGuid());
 
-        await RevokeRoleAsync(
-            projects.PrivilegedFixtureDataSource,
-            runnerRole.AssignmentId,
-            1);
+        async Task CompleteChildForForkCapacityAsync(RegisteredChild registeredChild)
+        {
+            using var bindingResponse = await SendAsync(
+                orchestrator,
+                HttpMethod.Get,
+                $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{registeredChild.Identity.SessionId}/owner-binding",
+                runToken,
+                [TenantId]);
+            await AssertStatusAsync(bindingResponse, HttpStatusCode.OK);
+            var binding = await ReadJsonAsync<CoordinationSessionBinding>(bindingResponse);
+            var expectedStateVersion = binding.StateVersion;
+            if (binding.TurnState == "idle")
+            {
+                using var boundaryResponse = await SendJsonAsync(
+                    orchestrator,
+                    HttpMethod.Post,
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{registeredChild.Identity.SessionId}/turn-boundary",
+                    runToken,
+                    new TurnBoundaryRequest(registeredChild.ExecutionFence, binding.StateVersion));
+                await AssertStatusAsync(boundaryResponse, HttpStatusCode.OK);
+                expectedStateVersion = (await ReadJsonAsync<TurnBoundaryResult>(boundaryResponse)).StateVersion;
+            }
+            else
+            {
+                Assert.Equal("active", binding.TurnState);
+            }
+
+            using var completionResponse = await SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{registeredChild.Identity.SessionId}/turn-completion",
+                runToken,
+                new FinishTurnRequest(
+                    registeredChild.ExecutionFence,
+                    expectedStateVersion,
+                    LogicalTurnCompletion.Completed));
+            await AssertStatusAsync(completionResponse, HttpStatusCode.OK);
+        }
+        await CompleteChildForForkCapacityAsync(child);
+        await CompleteChildForForkCapacityAsync(childTwo);
+
+        var forkEventId = Guid.NewGuid();
+        using var forkEventAppend = await SendJsonAsync(
+            events,
+            HttpMethod.Post,
+            "/internal/sessions/root/events",
+            runToken,
+            new AppendSessionEvent(
+                forkEventId,
+                SessionsContractVersions.CurrentSchemaVersion,
+                SessionsContractVersions.CurrentEventVersion,
+                new TurnSessionPayload(
+                    "assistant",
+                    new SessionObjectReference(new ObjectKey("turns/fork-source"), "turns"))));
+        await AssertStatusAsync(forkEventAppend, HttpStatusCode.Created);
+        using var forkSourceReplay = await SendAsync(
+            events, HttpMethod.Get, "/internal/sessions/root/events?limit=100", runToken, [TenantId]);
+        await AssertStatusAsync(forkSourceReplay, HttpStatusCode.OK);
+        using var forkSourceDocument =
+            JsonDocument.Parse(await forkSourceReplay.Content.ReadAsStringAsync());
+        var forkSourceEvents = forkSourceDocument.RootElement.GetProperty("events");
+        Assert.Equal(forkEventId, forkSourceEvents[forkSourceEvents.GetArrayLength() - 1]
+            .GetProperty("eventId").GetGuid());
+        var forkCursor = Assert.IsType<string>(
+            forkSourceDocument.RootElement.GetProperty("nextCursor").GetString());
+
+        string originalForkRetention;
+        async Task AssertNoEventsForkEffectsAsync(string targetSessionId)
+        {
+            await using var database = NpgsqlDataSource.Create(_connectionString);
+            await using var connection = await database.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand($"""
+                SELECT
+                    (SELECT count(*) FROM "{eventsSchema}".sessions
+                     WHERE project_id = @project AND run_id = @run AND session_id = @target),
+                    (SELECT count(*) FROM "{eventsSchema}".session_fork_lineage
+                     WHERE project_id = @project AND run_id = @run AND target_session_id = @target),
+                    (SELECT retain_until::text FROM "{eventsSchema}".session_object_references
+                     WHERE project_id = @project AND run_id = @run AND event_id = @event)
+                """, connection);
+            command.Parameters.AddWithValue("project", project.ProjectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("target", targetSessionId);
+            command.Parameters.AddWithValue("event", forkEventId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(0L, reader.GetInt64(0));
+            Assert.Equal(0L, reader.GetInt64(1));
+            Assert.Equal(originalForkRetention, reader.GetString(2));
+        }
+
+        await using (var database = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await database.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT retain_until::text
+            FROM "{eventsSchema}".session_object_references
+            WHERE project_id = @project AND run_id = @run AND event_id = @event
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", project.ProjectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("event", forkEventId);
+            originalForkRetention = (string)(await command.ExecuteScalarAsync() ??
+                throw new InvalidOperationException("Expected bounded source-object retention."));
+        }
+
+        using var directFork = await SendJsonAsync(
+            events,
+            HttpMethod.Post,
+            "/internal/sessions/root/fork",
+            runToken,
+            new SessionForkRequest(
+                "fork-without-owner-reservation",
+                forkEventId,
+                forkCursor,
+                "fork-without-owner-reservation"));
+        await AssertStatusAsync(directFork, HttpStatusCode.Conflict);
+        Assert.True(directFork.Headers.CacheControl?.NoStore);
+        await AssertNoEventsForkEffectsAsync("fork-without-owner-reservation");
+
+        var forkRequest = new CoordinationSessionForkRequest(
+            root.ExecutionFence,
+            "fork-owner-admitted",
+            "fork-owner-target",
+            forkEventId,
+            forkCursor,
+            CoordinationSessionKind.ChildWork);
+        using var ownerFork = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
+            runToken,
+            forkRequest);
+        await AssertStatusAsync(ownerFork, HttpStatusCode.Created);
+        var ownerForkResult = await ReadJsonAsync<CoordinationSessionForkResult>(ownerFork);
+        Assert.Equal(CoordinationForkRegistrationState.Registered, ownerForkResult.RegistrationState);
+        Assert.Equal(forkEventId, ownerForkResult.Lineage?.SourceEventId);
+        Assert.Equal(forkCursor, ownerForkResult.Lineage?.SourceCursor);
+
+        using var ownerForkReplay = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
+            runToken,
+            forkRequest);
+        await AssertStatusAsync(ownerForkReplay, HttpStatusCode.OK);
+        var ownerForkReplayResult = await ReadJsonAsync<CoordinationSessionForkResult>(ownerForkReplay);
+        Assert.True(ownerForkReplayResult.IsDuplicate);
+        Assert.Equal(ownerForkResult.CommandId, ownerForkReplayResult.CommandId);
+        await using (var database = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await database.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{eventsSchema}".sessions
+                 WHERE project_id = @project AND run_id = @run AND session_id = @target),
+                (SELECT count(*) FROM "{eventsSchema}".session_fork_lineage
+                 WHERE project_id = @project AND run_id = @run AND target_session_id = @target),
+                (SELECT retain_until::text FROM "{eventsSchema}".session_object_references
+                 WHERE project_id = @project AND run_id = @run AND event_id = @event)
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", project.ProjectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("target", forkRequest.TargetSessionId);
+            command.Parameters.AddWithValue("event", forkEventId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(1L, reader.GetInt64(0));
+            Assert.Equal(1L, reader.GetInt64(1));
+            Assert.Equal(originalForkRetention, reader.GetString(2));
+        }
+
+        using var runStatusResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(runStatusResponse, HttpStatusCode.OK);
+        var runStatus = await ReadJsonAsync<OwnerRunStatus>(runStatusResponse);
+        using var rootStatusResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(rootStatusResponse, HttpStatusCode.OK);
+        var rootStatus = await ReadJsonAsync<SessionStatusSnapshot>(rootStatusResponse);
+        var failureRequest = new ReportRunFailureRequest(
+            runStatus.ExecutionFence,
+            runStatus.StateVersion,
+            rootStatus.StateVersion,
+            "integration-runtime-failure",
+            OwnerRunFailureState.Indeterminate,
+            "runtime_lost",
+            "sdk-turn-unknown");
+        using var failureResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/turn-failure",
+            runToken,
+            failureRequest);
+        await AssertStatusAsync(failureResponse, HttpStatusCode.OK);
+        var failure = await ReadJsonAsync<RunExecutionTransitionResult>(failureResponse);
+        Assert.Equal("indeterminate", failure.State);
+        Assert.True(failure.ExecutionFence > runStatus.ExecutionFence);
+        Assert.Equal("runtime_lost", failure.CauseCode);
+        Assert.Equal("sdk-turn-unknown", failure.Reference);
+
+        using var failedRunStatusResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(failedRunStatusResponse, HttpStatusCode.OK);
+        var failedRunStatus = await ReadJsonAsync<OwnerRunStatus>(failedRunStatusResponse);
+        Assert.Equal("indeterminate", failedRunStatus.ExecutionState);
+        Assert.Equal("runtime_lost", failedRunStatus.CauseCode);
+        Assert.Equal("sdk-turn-unknown", failedRunStatus.Reference);
+
+        var recoveryRequest = new RecoverRunExecutionRequest(
+            failure.ExecutionFence,
+            failure.RunStateVersion,
+            "integration-runtime-recovery",
+            "operator_recovery",
+            "recovery-approved");
+        using var recoveryResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/recovery",
+            runToken,
+            recoveryRequest);
+        await AssertStatusAsync(recoveryResponse, HttpStatusCode.OK);
+        var recovered = await ReadJsonAsync<RunExecutionTransitionResult>(recoveryResponse);
+        Assert.Equal("idle", recovered.State);
+        Assert.True(recovered.ExecutionFence > failure.ExecutionFence);
+        Assert.Equal("runtime_lost", recovered.PreviousCauseCode);
+        Assert.Equal("sdk-turn-unknown", recovered.PreviousReference);
+        using var recoveredStatusResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(recoveredStatusResponse, HttpStatusCode.OK);
+        var recoveredStatus = await ReadJsonAsync<OwnerRunStatus>(recoveredStatusResponse);
+        Assert.Equal("idle", recoveredStatus.ExecutionState);
+        Assert.Null(recoveredStatus.CauseCode);
+        Assert.Null(recoveredStatus.Reference);
+        forkRequest = forkRequest with { ExecutionFence = recovered.ExecutionFence };
+
+        var revocationPause = forkAdmissionGate.PauseSecondOwnerAdmission();
+        var revokedForkRequest = forkRequest with
+        {
+            IdempotencyKey = "fork-owner-revoked",
+            TargetSessionId = "fork-owner-revoked-target"
+        };
+        var revokedForkTask = SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
+            runToken,
+            revokedForkRequest);
+        try
+        {
+            await revocationPause.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            await RevokeRoleAsync(projects.PrivilegedFixtureDataSource, runnerRole.AssignmentId, 1);
+        }
+        finally
+        {
+            revocationPause.Release();
+        }
+        using var revokedFork = await revokedForkTask;
+        await AssertStatusAsync(revokedFork, HttpStatusCode.Conflict);
+        var revokedForkResult = await ReadJsonAsync<CoordinationSessionForkResult>(revokedFork);
+        Assert.Equal(
+            CoordinationForkRegistrationState.Unregistered,
+            revokedForkResult.RegistrationState);
+        Assert.Equal("session_fork_admission_denied", revokedForkResult.UnavailableCode);
+        await AssertNoEventsForkEffectsAsync(revokedForkRequest.TargetSessionId);
+
         using var revokedBinding = await SendAsync(
             orchestrator,
             HttpMethod.Get,
@@ -1462,6 +1743,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 new SessionAccessDeniedException("PolicyEvaluation append remains fail-closed."));
         }
 
+        public Task<SessionForkResult> ForkFromExplicitEventAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string sourceSessionId,
+            SessionForkRequest request,
+            Func<CancellationToken, Task> validateAdmission,
+            CancellationToken cancellationToken = default) =>
+            throw new SessionForkUnsupportedException("The denying journal does not support session forks.");
+
         public Task<SessionEventPage> ReplayAsync(
             System.Security.Claims.ClaimsPrincipal principal,
             SessionEventPageRequest request,
@@ -1548,6 +1837,76 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ValidAlgorithms = [SecurityAlgorithms.RsaSha256]
                 };
             });
+    }
+
+    private sealed class ForkAdmissionGate
+    {
+        private readonly object _sync = new();
+        private int _admissionsToSkip;
+        private ForkAdmissionPause? _armedPause;
+
+        public ForkAdmissionPause PauseSecondOwnerAdmission()
+        {
+            lock (_sync)
+            {
+                if (_armedPause is not null)
+                    throw new InvalidOperationException("A fork admission pause is already armed.");
+                _admissionsToSkip = 1;
+                return _armedPause = new ForkAdmissionPause();
+            }
+        }
+
+        public async Task PauseIfArmedAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri is not { } uri ||
+                !uri.AbsolutePath.EndsWith("/fork-admission", StringComparison.Ordinal))
+                return;
+
+            ForkAdmissionPause? pause;
+            lock (_sync)
+            {
+                if (_armedPause is null)
+                    return;
+                if (_admissionsToSkip > 0)
+                {
+                    _admissionsToSkip--;
+                    return;
+                }
+                pause = _armedPause;
+                _armedPause = null;
+            }
+
+            pause.MarkPaused();
+            await pause.WaitForReleaseAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private sealed class ForkAdmissionPause
+    {
+        private readonly TaskCompletionSource _paused =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task WaitUntilPausedAsync() => _paused.Task;
+        public void Release() => _release.TrySetResult();
+        public void MarkPaused() => _paused.TrySetResult();
+
+        public Task WaitForReleaseAsync(CancellationToken cancellationToken) =>
+            _release.Task.WaitAsync(cancellationToken);
+    }
+
+    private sealed class ForkAdmissionBarrierHandler(
+        HttpMessageHandler innerHandler,
+        ForkAdmissionGate gate) : DelegatingHandler(innerHandler)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await gate.PauseIfArmedAsync(request, cancellationToken).ConfigureAwait(false);
+            return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private sealed class OrchestratorIntegrationFactory(
@@ -1638,7 +1997,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
-            var databaseName = new NpgsqlConnectionStringBuilder(connectionString).Database;
+            var databaseName = new NpgsqlConnectionStringBuilder(connectionString).Database
+                ?? throw new InvalidOperationException("The integration database name is missing.");
             builder.UseSetting("EventsAndSessions:Knowledge:BaseAddress", "https://knowledge.test/");
             builder.UseSetting("ProjectsConfig:BaseAddress", "https://projects.test/");
             builder.ConfigureAppConfiguration((_, configuration) =>
@@ -1667,6 +2027,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             {
                 services.RemoveAll<NpgsqlDataSource>();
                 services.AddSingleton(NpgsqlDataSource.Create(connectionString));
+                services.RemoveAll<EventsHost::Agentweaver.EventsAndSessions.ISessionsProviderBinder>();
+                services.AddSingleton<EventsHost::Agentweaver.EventsAndSessions.ISessionsProviderBinder>(
+                    new ForkEnabledSessionsProviderBinder(
+                        new PostgresSessionsProviderOptions(
+                            "postgres-test", databaseName, 1, schema, "integration-v1")));
                 AddJwtBearer(services, signingKey);
                 services.AddHttpClient<
                         EventsHost::Agentweaver.EventsAndSessions.IProjectsAuthorizationContextClient,
@@ -1678,5 +2043,46 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     .ConfigurePrimaryHttpMessageHandler(orchestratorHandler);
             });
         }
+    }
+
+    private sealed class ForkEnabledSessionsProviderBinder(PostgresSessionsProviderOptions options)
+        : EventsHost::Agentweaver.EventsAndSessions.ISessionsProviderBinder
+    {
+        public Task<SessionProviderBinding> ResolveAndPinAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            CancellationToken cancellationToken = default)
+        {
+            if (!EventsHost::Agentweaver.EventsAndSessions.SessionIdentityClaims.TryGetScope(
+                    principal, out var scope) || scope is null)
+                throw new EventsHost::Agentweaver.EventsAndSessions.SessionAuthenticationException();
+            return Task.FromResult(CreateBinding(scope.Value));
+        }
+
+        public Task VerifyPinnedAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            SessionProviderBinding binding,
+            CancellationToken cancellationToken = default)
+        {
+            if (!EventsHost::Agentweaver.EventsAndSessions.SessionIdentityClaims.TryGetScope(
+                    principal, out var scope) || scope is null)
+                throw new EventsHost::Agentweaver.EventsAndSessions.SessionAuthenticationException();
+            if (!binding.Matches(CreateBinding(scope.Value)))
+                throw new SessionPinnedProviderUnavailableException(
+                    "The test Sessions provider binding changed.");
+            return Task.CompletedTask;
+        }
+
+        private SessionProviderBinding CreateBinding(
+            EventsHost::Agentweaver.EventsAndSessions.SessionRunScope scope) =>
+            new(
+                scope.ProjectId,
+                scope.RunId,
+                EventsHost::Agentweaver.EventsAndSessions.NativePostgresSessionsProvider.ProviderId,
+                EventsHost::Agentweaver.EventsAndSessions.NativePostgresSessionsProvider.AdapterVersion,
+                EventsHost::Agentweaver.EventsAndSessions.NativePostgresSessionsProvider.OptionsSchemaVersion,
+                options.OptionsRevision,
+                options.ResourceId,
+                options.ResourceGeneration,
+                EventsHost::Agentweaver.EventsAndSessions.SessionsCapabilities.All.Add("sessions.events.fork"));
     }
 }

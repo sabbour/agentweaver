@@ -74,6 +74,73 @@ internal sealed class EventsAddressedMessageClient(
         }
     }
 
+    public async Task<SessionForkResult> ForkFromExplicitEventAsync(
+        HttpContext context,
+        SessionIdentity source,
+        SessionForkRequest fork,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(fork);
+        var owner = RequireEventsOwner(context, source);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(owner, $"/internal/sessions/{Uri.EscapeDataString(source.SessionId)}/fork"))
+        {
+            Content = JsonContent.Create(fork, options: JsonOptions)
+        };
+        request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new CoordinationException(
+                "events_session_fork_unavailable", StatusCodes.Status502BadGateway, exception);
+        }
+
+        using (response)
+        {
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                throw new CoordinationException(
+                    "events_session_fork_denied", StatusCodes.Status403Forbidden);
+            if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.NotFound)
+                throw new CoordinationException(
+                    "events_session_fork_conflict", StatusCodes.Status409Conflict);
+            if (response.StatusCode == HttpStatusCode.ServiceUnavailable)
+                throw new CoordinationException(
+                    "events_session_fork_unavailable", StatusCodes.Status503ServiceUnavailable);
+            if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Created) ||
+                response.Headers.CacheControl?.NoStore != true)
+                throw new CoordinationException(
+                    "events_session_fork_unavailable", StatusCodes.Status502BadGateway);
+
+            try
+            {
+                return await response.Content.ReadFromJsonAsync<SessionForkResult>(
+                    JsonOptions, cancellationToken).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "events_session_fork_contract_invalid", StatusCodes.Status502BadGateway);
+            }
+            catch (JsonException exception)
+            {
+                throw new CoordinationException(
+                    "events_session_fork_contract_invalid", StatusCodes.Status502BadGateway, exception);
+            }
+        }
+    }
+
     public async Task<MessageAdmissionReceipt> AdmitAsync(
         HttpContext context,
         OwnerOutboundMessage message,
