@@ -125,7 +125,7 @@ flowchart LR
 | Gateway/BFF | HTTP REST and server-sent events (SSE) for web and CLI; authentication entry, route dispatch, and authorized projections. | Agent execution or an application provider's viewer identity decisions. |
 | Identity | OpenIddict broker, MCP OAuth, purpose-bound run tokens, `SecretRef` redemption, and scoped gateway credential injection. This is the trust boundary. | Long-lived agent secrets in a run database or image. |
 | Projects & Config | Project lifecycle and revisioned configuration, casting/charters, blueprint/workflow references, skill settings, model-selection references, project provider overrides, platform runtime defaults, egress narrowing, validated run limits, and its own tenant memberships, resource-role assignments, and authorization audit. | Identity issuance, provider catalog registrations, repository/workflow materialization, raw credentials, or final provisioned-resource pins. |
-| Orchestrator | Runs, Microsoft Agent Framework (MAF) workflows, session tree and coordination verbs, typed coordinator decisions, OutcomeSpec and WorkPlan, approval and question gates, immutable accepted-run Sandbox binding metadata, checkpoints, recovery, consistency manifest, and run-limit budget enforcement. | The run journal's storage, Sandbox resource provisioning, or direct cross-schema updates. |
+| Orchestrator | Runs, Microsoft Agent Framework (MAF) workflows, session tree and coordination verbs, typed coordinator decisions, OutcomeSpec and WorkPlan, approval and question gates, immutable accepted-run Sandbox binding metadata, checkpoints, recovery, consistency manifest, run-limit budget enforcement, and the current session/work-item/turn context and runtime-registration source. | The run journal's storage, Sandbox resource provisioning, direct cross-schema updates, complete runtime delivery, or usage accounting. |
 | Environment manager | Sandbox, Snapshots, Storage, Network Policy, and Application Hosting adapters; leases and fencing; egress verification; startup phases; retention, reclaim, application deployments, and control-plane image publication. | Viewer authentication or a workflow's publish decision. |
 | Source Control & Merge | Git workspace preparation, diff and assembly, merge locks, pull requests, webhooks, backlog intake, and the Source Control provider seam. | Platform-wide project identity. |
 | Knowledge | Memory and session-context records, decisions and proposals, prompt composition, and Memory adapters. | Repository files as an authoritative memory database. |
@@ -146,6 +146,15 @@ commands and events, not a shared context transaction. This preserves the produc
 message semantics](sessions-and-coordination.md) while removing 0.x cross-module database access.
 Runs and coordinator decisions remain together inside the Orchestrator because separating their
 shared transitions would reproduce the transaction problem.
+
+Mapped child spawning checks the latest root decision while holding the root-session owner lock.
+The decision envelope must still match the actor, tenant, run, accepted-selection hash, and
+execution fence; dispatch must remain enabled with the requested confirmed WorkPlan item and no
+pending gate. Registration and spawn recheck live Projects & Config authority immediately before
+committing owner state. The read-only runtime-owner-context route rechecks the child owner row,
+latest root decision, confirmed item and current authority before returning its agent/model/turn
+metadata; a stale decision or gate produces a conflict. This metadata path does not provide an
+AgentHost scheduler or complete runtime delivery.
 
 The current v1 source includes unpublished `Agentweaver.EventsAndSessions` and
 `Agentweaver.Orchestrator` host candidates. Events & Sessions provides the PostgreSQL run

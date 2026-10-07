@@ -208,9 +208,15 @@ public sealed class SessionsContractTests
         Assert.Equal(ProviderSeam.Sessions, registration.Descriptor.Seam);
         Assert.Equal(NativePostgresSessionsProvider.ProviderId, registration.Descriptor.Id);
         Assert.Equal(SessionsCapabilities.All, registration.Descriptor.AdvertisedCapabilities);
-        Assert.Contains(
+        Assert.DoesNotContain(
             SessionsCapabilities.PolicyEvaluations,
             registration.Descriptor.AdvertisedCapabilities);
+        var policyRequest = new ProviderResolutionRequest(
+            ProviderSeam.Sessions,
+            null,
+            NativePostgresSessionsProvider.AdapterVersion,
+            NativePostgresSessionsProvider.OptionsSchemaVersion,
+            ImmutableHashSet.Create(StringComparer.Ordinal, SessionsCapabilities.PolicyEvaluations));
         Assert.Equal("options-2026-10", registration.OptionsRevision);
 
         var catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
@@ -218,6 +224,9 @@ public sealed class SessionsContractTests
             [new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId)],
             [new ProviderOverridePermission(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId)]).Value);
         var resolver = new ProviderResolver(catalog);
+        var unavailablePolicy = resolver.Resolve(policyRequest);
+        Assert.False(unavailablePolicy.IsSuccess);
+        Assert.Equal(ProviderErrorCode.CapabilityUnavailable, unavailablePolicy.Error!.Code);
         var defaultCandidate = resolver.Resolve(Request()).Value!.Candidate!;
         var overrideCandidate = resolver.Resolve(Request(NativePostgresSessionsProvider.ProviderId)).Value!.Candidate!;
         Assert.Equal(defaultCandidate.ProviderId, overrideCandidate.ProviderId);

@@ -34,6 +34,16 @@ Config authority and accepted run selection; Events validates message admission
 against the exact owner outbox record and rechecks owner bindings for claim,
 presentation, and acknowledgment.
 
+Mapped child spawn checks the latest root decision envelope under the root-session
+owner lock and rejects a pending gate or a changed actor, accepted-selection hash,
+fence, dispatch state, or confirmed WorkPlan item. Registration and spawn recheck live
+Projects authority before their owner transactions commit. The read-only runtime-owner
+context endpoint returns mapped agent/model/turn metadata only after re-reading the
+child owner row and root decision and checking authority and selection again; a stale
+mapping or decision returns a conflict. The current status endpoint reports durable
+owner run state and its fence/version/cause, not live AgentHost health. These routes do
+not add a full dispatch engine, automatic AgentHost scheduler, or runtime delivery.
+
 The owner persists accepted definitions, decisions, pending gate request IDs, step
 position, and child references in its PostgreSQL schema. Its MAF checkpoint refers to
 an opaque Object Store SDK cache blob with SDK version and pinned-model metadata; a
@@ -275,6 +285,11 @@ new branch at the recorded event, not deterministic re-execution.
 A single status snapshot is computed from executor, WorkPlan, gate, and session state.
 It is a query, not a second state machine maintained by the web client. Its activity
 and blocker fields can coexist:
+
+The current owner `GET /api/projects/{projectId}/runs/{runId}/coordination/status`
+is narrower: it returns the durable run/root identity, execution state, fence, logical
+turn ordinal, state version, and optional failure cause/reference. It does not report
+runtime-agent presence or effects.
 
 ```mermaid
 sequenceDiagram

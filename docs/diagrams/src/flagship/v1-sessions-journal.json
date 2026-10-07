@@ -212,7 +212,7 @@
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
-      "label": "Knowledge receipts are project facts, not session events. Orchestrator validates its owner outbox before fenced turn-boundary delivery; receipt is not approval."
+      "label": "Knowledge receipts are project facts, not session events. Orchestrator validates its owner outbox before fenced turn-boundary delivery; receipt is not approval. Runtime-owner-context returns mapped metadata only after the latest dispatchable root decision still confirms the WorkPlan item, agent, model reference, and fence, and Projects authority/selection is rechecked; stale state returns 409."
     }
   ]
 }
