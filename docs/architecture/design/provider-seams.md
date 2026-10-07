@@ -799,6 +799,15 @@ accepts the merge, Orchestrator retains the true merged state and SHA even if au
 changes afterward; replay from another host reads the persisted result without issuing
 another merge request.
 
+If an approved intent's fence becomes stale while execution waits for the repository lock,
+the execution path rechecks current Projects authority, Core decision state, and the exact
+grant through the current-grant lookup. A scoped owner-store compare-and-swap records
+`source_control_run_binding_changed` only when the accepted selection and revisions are
+unchanged, the run and session fences agree at a newer value, the typed approval version is
+superseded, and the original grant is superseded and not current. This handling is limited
+to merge execution; ordinary intent reads do not expose stale intents, and no merge request
+is sent.
+
 Projects stores only a repository identity and versioned API, checkout, and webhook `SecretRef`s. After an
 authorized caller requests a run pin, Orchestrator resolves the exact provider from the accepted run
 selection, redeems the API reference through Identity.Broker, negotiates the repository, rechecks current
@@ -812,6 +821,7 @@ create-or-reuse, review reads, workspace preparation/diff, typed merge intents, 
 Each operation loads the persisted pin, checks the current accepted selection and run fence, redeems the
 specific API or checkout `SecretRef` purpose, and rechecks authority around provider calls. Workspace
 manifests bind run, repository, resource generation, base SHA, and branch; they contain no credentials.
+Short-lived checkout values are invalidated after each operation and redacted from Git diagnostics.
 Set `SourceControl:WorkspaceRoot` to an absolute path shared with the trusted run caller to enable
 workspace routes. If it is absent, those routes return unavailable rather than using an implicit host
 directory. Workspace diffs are bounded; absolute workspace paths are returned only to the authenticated

@@ -190,12 +190,35 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
                 await store.AcquireRepositoryMergeLockAsync(otherRepository, CancellationToken.None);
             waitingForSameRepository =
                 store.AcquireRepositoryMergeLockAsync(repository, CancellationToken.None);
-            await Task.Delay(TimeSpan.FromMilliseconds(100));
+            Assert.True(
+                await WaitForAdvisoryLockWaitAsync(fixture.DataSource),
+                "the second acquisition must be blocked inside PostgreSQL on the repository advisory lock");
             Assert.False(waitingForSameRepository.IsCompleted);
         }
 
         await using var sameRepository =
             await waitingForSameRepository.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    private static async Task<bool> WaitForAdvisoryLockWaitAsync(NpgsqlDataSource dataSource)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            await using var connection = await dataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_stat_activity
+                    WHERE datname = current_database()
+                      AND wait_event = 'advisory'
+                      AND query LIKE '%pg_advisory_lock%'
+                      AND query LIKE '%agentweaver.source-control.merge%')
+                """, connection);
+            if ((bool)(await command.ExecuteScalarAsync())!)
+                return true;
+            await Task.Delay(TimeSpan.FromMilliseconds(25));
+        }
+        return false;
     }
 
     private static AuthorizedRunSelection CreateSelection(CoordinationActor actor)

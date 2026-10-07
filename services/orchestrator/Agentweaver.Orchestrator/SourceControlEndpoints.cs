@@ -775,8 +775,54 @@ internal static class SourceControlEndpoints
         var mergeStarted = false;
         try
         {
-            var lockedIntent = await sourceControlOwner.ReadMergeIntentAsync(
-                actor, identity, selection, intent.IntentId, cancellationToken).ConfigureAwait(false);
+            SourceControlMergeIntentSnapshot lockedIntent;
+            try
+            {
+                lockedIntent = await sourceControlOwner.ReadMergeIntentAsync(
+                    actor, identity, selection, intent.IntentId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (CoordinationException exception) when (
+                exception.Code == "source_control_intent_unavailable")
+            {
+                try
+                {
+                    await RequireCurrentMergeAuthorityAsync(
+                        context,
+                        actor,
+                        identity,
+                        selection,
+                        intent,
+                        projects,
+                        decisions,
+                        grantOwner,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (CoordinationException fenceChanged) when (
+                    fenceChanged.Code == "source_control_run_binding_changed")
+                {
+                    if (intent.GrantReference is { } staleGrantReference)
+                    {
+                        var currentGrant = await grantOwner.GetCurrentAsync(
+                            staleGrantReference, CancellationToken.None).ConfigureAwait(false);
+                        if (currentGrant.Status is not (
+                                ExecutableActionGrantLookupStatus.Current or
+                                ExecutableActionGrantLookupStatus.Error or
+                                ExecutableActionGrantLookupStatus.Expired) &&
+                            await sourceControlOwner.RecordStaleFenceMergeConflictAsync(
+                                actor,
+                                identity,
+                                selection,
+                                intent,
+                                CancellationToken.None).ConfigureAwait(false))
+                            return new SourceControlMergeExecutionResult(
+                                "conflict", null, "source_control_run_binding_changed");
+                    }
+                }
+
+                throw;
+            }
+            if (lockedIntent.State == "merged")
+                return new SourceControlMergeExecutionResult("merged", lockedIntent.MergeSha, null);
             await RequireCurrentMergeAuthorityAsync(
                 context,
                 actor,
@@ -787,8 +833,6 @@ internal static class SourceControlEndpoints
                 decisions,
                 grantOwner,
                 cancellationToken).ConfigureAwait(false);
-            if (lockedIntent.State == "merged")
-                return new SourceControlMergeExecutionResult("merged", lockedIntent.MergeSha, null);
             if (lockedIntent.State == "merge_started")
             {
                 await sourceControlOwner.MarkInterruptedMergeUncertainAsync(
@@ -994,6 +1038,8 @@ internal static class SourceControlEndpoints
             intent.Pin.Repository, cancellationToken).ConfigureAwait(false);
         var current = await sourceControlOwner.ReadMergeIntentAsync(
             actor, identity, selection, intent.IntentId, cancellationToken).ConfigureAwait(false);
+        if (current.State == "merged")
+            return Results.Ok(ToView(current));
         await RequireCurrentMergeAuthorityAsync(
             context,
             actor,
@@ -1004,8 +1050,6 @@ internal static class SourceControlEndpoints
             decisions,
             grantOwner,
             cancellationToken).ConfigureAwait(false);
-        if (current.State == "merged")
-            return Results.Ok(ToView(current));
         if (current.State != "merge_started")
             return Results.Ok(ToView(current));
         await sourceControlOwner.MarkInterruptedMergeUncertainAsync(
@@ -1035,12 +1079,14 @@ internal static class SourceControlEndpoints
             cancellationToken).ConfigureAwait(false);
         var current = await decisions.ReadCurrentAsync(
             actor, identity, selection, cancellationToken).ConfigureAwait(false);
+        if (current.State.Fence != intent.AcceptedRun.Fence)
+            throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict);
         var receipt = intent.ApprovalReceipt;
         if (intent.ApprovalDecisionId is null ||
             intent.ApprovalStateVersion is null ||
             current.StateVersion != intent.ApprovalStateVersion.Value ||
             current.SelectionHash != intent.AcceptedRun.AcceptedSelectionHash ||
-            current.State.Fence != intent.AcceptedRun.Fence ||
             current.State.PendingGate is not null ||
             receipt is null ||
             receipt.Kind != CoordinatorGateKind.Approval ||

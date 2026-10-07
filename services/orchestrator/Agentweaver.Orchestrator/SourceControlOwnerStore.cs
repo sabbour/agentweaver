@@ -26,7 +26,6 @@ internal sealed class SourceControlOwnerStore(
         MaxDepth = 32
     };
     private static readonly TimeSpan MergeLockTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan MergeLockPollInterval = TimeSpan.FromMilliseconds(100);
 
     private readonly string _schema = QuoteSchema(schema);
     private string Pins => $"{_schema}.source_control_repository_pins";
@@ -474,20 +473,35 @@ internal sealed class SourceControlOwnerStore(
         var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         try
         {
-            var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            while (true)
+            await using (var setLockTimeout = new NpgsqlCommand(
+                             $"SET lock_timeout = '{(long)MergeLockTimeout.TotalMilliseconds}ms'",
+                             connection))
             {
-                await using var command = new NpgsqlCommand(
-                    "SELECT pg_try_advisory_lock(hashtext('agentweaver.source-control.merge'), hashtext(@repository))",
-                    connection);
-                command.Parameters.AddWithValue("repository", NpgsqlDbType.Text, key);
-                if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
-                    return new SourceControlRepositoryMergeLock(connection, key);
-                if (System.Diagnostics.Stopwatch.GetElapsedTime(startedAt) >= MergeLockTimeout)
-                    throw new CoordinationException(
-                        "source_control_merge_lock_timeout", StatusCodes.Status503ServiceUnavailable);
-                await Task.Delay(MergeLockPollInterval, cancellationToken).ConfigureAwait(false);
+                await setLockTimeout.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
+
+            await using (var command = new NpgsqlCommand(
+                             "SELECT pg_advisory_lock(hashtext('agentweaver.source-control.merge'), hashtext(@repository))",
+                             connection)
+                         {
+                             CommandTimeout = checked((int)MergeLockTimeout.TotalSeconds + 5)
+                         })
+            {
+                command.Parameters.AddWithValue("repository", NpgsqlDbType.Text, key);
+                await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await using (var resetLockTimeout = new NpgsqlCommand("RESET lock_timeout", connection))
+                await resetLockTimeout.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            return new SourceControlRepositoryMergeLock(connection, key);
+        }
+        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.LockNotAvailable)
+        {
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw new CoordinationException(
+                "source_control_merge_lock_timeout",
+                StatusCodes.Status503ServiceUnavailable,
+                exception);
         }
         catch
         {
@@ -577,6 +591,150 @@ internal sealed class SourceControlOwnerStore(
         if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
             throw new CoordinationException(
                 "source_control_intent_not_current", StatusCodes.Status409Conflict);
+    }
+
+    public async Task<bool> RecordStaleFenceMergeConflictAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        SourceControlMergeIntentSnapshot expected,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(expected);
+        if (expected.State != "approved" ||
+            expected.ApprovalDecisionId is null ||
+            expected.ApprovalStateVersion is null ||
+            expected.GrantReference is null)
+            return false;
+
+        var acceptedRun = expected.AcceptedRun;
+        var effective = selection.Selection;
+        var selectionHash = HashSelection(effective);
+        if (identity.ProjectId != effective.ProjectId ||
+            identity.RunId != effective.RunId ||
+            acceptedRun.Issuer != actor.Issuer ||
+            acceptedRun.Subject != actor.Subject ||
+            acceptedRun.TenantId != selection.Authorization.TenantId ||
+            acceptedRun.ProjectId != identity.ProjectId ||
+            acceptedRun.RunId != identity.RunId ||
+            acceptedRun.RootSessionId != identity.SessionId ||
+            acceptedRun.AcceptedSelectionHash != selectionHash ||
+            acceptedRun.ProjectRevision != effective.ProjectRevision ||
+            acceptedRun.ProjectConfigurationRevision != effective.ProjectConfigurationRevision ||
+            acceptedRun.PlatformRuntimeRevision != effective.PlatformRuntimeRevision ||
+            acceptedRun.ContextRevision != effective.ContextRevision)
+            return false;
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        OwnerBindingSnapshot owner;
+        try
+        {
+            owner = await ReadOwnerBindingAsync(
+                connection,
+                transaction,
+                actor,
+                identity,
+                selection.Authorization.TenantId,
+                selectionHash,
+                forUpdate: true,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (CoordinationException exception) when (
+            exception.StatusCode is StatusCodes.Status404NotFound or StatusCodes.Status409Conflict)
+        {
+            return false;
+        }
+
+        if (owner.ExecutionState == "completed" ||
+            owner.SessionLifecycle != "active" ||
+            owner.RunFence <= acceptedRun.Fence ||
+            owner.StateVersion <= expected.ApprovalStateVersion.Value)
+            return false;
+
+        var stored = await ReadIntentByIdAsync(
+            connection,
+            transaction,
+            identity,
+            expected.IntentId,
+            forUpdate: true,
+            cancellationToken).ConfigureAwait(false);
+        if (stored is null ||
+            stored.AcceptedRun != acceptedRun ||
+            stored.ApprovalDecisionId != expected.ApprovalDecisionId ||
+            stored.ApprovalStateVersion != expected.ApprovalStateVersion ||
+            stored.ApprovalReceipt != expected.ApprovalReceipt)
+            return false;
+
+        var failureCode = "source_control_run_binding_changed";
+        if (stored.State == "conflict" && stored.LastFailureCode == failureCode)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        if (stored.State != "approved" || stored.GrantReference is not null ||
+            !await IsSupersededMergeGrantAsync(
+                connection, transaction, identity, expected, cancellationToken).ConfigureAwait(false))
+            return false;
+
+        await using var update = new NpgsqlCommand($"""
+            UPDATE {Intents}
+            SET intent_state = 'conflict', last_failure_code = @failureCode,
+                updated_at = clock_timestamp()
+            WHERE project_id = @project AND run_id = @run AND intent_id = @intent
+              AND accepted_selection_hash = @selectionHash
+              AND execution_fence = @fence
+              AND approval_decision_id = @approvalDecision
+              AND approval_state_version = @approvalVersion
+              AND intent_state = 'approved'
+            """, connection, transaction);
+        AddScope(update, identity);
+        update.Parameters.AddWithValue("intent", NpgsqlDbType.Varchar, expected.IntentId);
+        update.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, selectionHash);
+        update.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, acceptedRun.Fence);
+        update.Parameters.AddWithValue(
+            "approvalDecision", NpgsqlDbType.Uuid, expected.ApprovalDecisionId.Value);
+        update.Parameters.AddWithValue(
+            "approvalVersion", NpgsqlDbType.Bigint, expected.ApprovalStateVersion.Value);
+        update.Parameters.AddWithValue("failureCode", NpgsqlDbType.Varchar, failureCode);
+        if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            return false;
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task<bool> IsSupersededMergeGrantAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        SourceControlMergeIntentSnapshot expected,
+        CancellationToken cancellationToken)
+    {
+        var grant = expected.GrantReference
+            ?? throw new ArgumentException("An approved merge intent must have a grant.", nameof(expected));
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {Grants} AS g
+                WHERE g.project_id = @project AND g.run_id = @run
+                  AND g.source_control_intent_id = @intent
+                  AND g.grant_id = @grant AND g.revision = @revision
+                  AND NOT g.is_current AND g.grant_state = 'superseded')
+              AND NOT EXISTS (
+                SELECT 1 FROM {Grants} AS g
+                WHERE g.project_id = @project AND g.run_id = @run
+                  AND g.source_control_intent_id = @intent AND g.is_current)
+            """, connection, transaction);
+        AddScope(command, identity);
+        command.Parameters.AddWithValue("intent", NpgsqlDbType.Varchar, expected.IntentId);
+        command.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, grant.GrantId);
+        command.Parameters.AddWithValue("revision", NpgsqlDbType.Varchar, grant.Revision);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
     public async Task RecordMergeOutcomeAsync(

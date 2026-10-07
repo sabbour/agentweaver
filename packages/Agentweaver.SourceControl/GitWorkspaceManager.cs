@@ -343,6 +343,8 @@ public sealed class GitWorkspaceManager
         startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
         startInfo.Environment["GIT_CONFIG_GLOBAL"] = emptyGitConfig;
         var sensitiveValues = new List<string>();
+        if (credential is not null)
+            sensitiveValues.Add(credential.GetValue());
         if (remoteUri is { Scheme: "https" } &&
             string.Equals(remoteUri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
         {
@@ -352,7 +354,6 @@ public sealed class GitWorkspaceManager
                     "A broker-redeemed checkout credential is required for the GitHub repository.");
             var authorization = "x-access-token:" + credential.GetValue();
             var encodedAuthorization = Convert.ToBase64String(Encoding.UTF8.GetBytes(authorization));
-            sensitiveValues.Add(credential.GetValue());
             sensitiveValues.Add(authorization);
             sensitiveValues.Add(encodedAuthorization);
             startInfo.Environment["GIT_CONFIG_COUNT"] = "1";

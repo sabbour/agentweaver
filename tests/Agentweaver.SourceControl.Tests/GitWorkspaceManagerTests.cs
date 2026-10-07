@@ -66,6 +66,43 @@ public sealed class GitWorkspaceManagerTests
     }
 
     [Fact]
+    public async Task RedactsCheckoutCredentialFromGitDiagnostics()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        var credentialValue = "transient-token-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            var request = CreateRequest(
+                "run-redaction",
+                "workspace-redaction",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            request = request with
+            {
+                Context = new SourceControlOperationContext(
+                    request.Context.Binding,
+                    request.Context.Repository,
+                    new SecretCredential(
+                        credentialValue, DateTimeOffset.UtcNow.AddMinutes(3)))
+            };
+            var remotePath = Path.Combine(temporaryRoot, "missing-" + credentialValue);
+            var manager = new GitWorkspaceManager(
+                Path.Combine(temporaryRoot, "workspaces"),
+                new LocalGitRepositoryRemote(new Uri(remotePath)));
+
+            var exception = await Assert.ThrowsAsync<GitWorkspaceException>(
+                () => manager.PrepareAsync(request, CancellationToken.None));
+
+            Assert.Equal(GitWorkspaceFailureCode.GitFailed, exception.Code);
+            Assert.Contains("[REDACTED]", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(credentialValue, exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
     public async Task PreservesUnownedWorkspacePathInsteadOfDeletingIt()
     {
         var temporaryRoot = CreateTemporaryDirectory();
