@@ -1030,6 +1030,11 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
   });
 
   it('requests assembly changes with reviewer feedback via the inline Change button', async () => {
+    mockRunStreamState.current.events = [{
+      sequence: 1,
+      type: 'coordinator.assembly_review_requested',
+      payload: { gateKind: 'human-review', outputRevisionId: 'reviewed-output-v1' },
+    }];
     vi.mocked(apiClient.getRun).mockResolvedValue({
       run_id: 'coord-run-1',
       status: 'awaiting_review',
@@ -1053,6 +1058,7 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       expect(apiClient.reviewAssembly).toHaveBeenCalledWith(
         'coord-run-1',
         'request_changes',
+        'reviewed-output-v1',
         'Please tighten the error messaging.',
         'signed-provider-key',
       );

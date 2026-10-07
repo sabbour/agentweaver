@@ -1547,6 +1547,7 @@ export type AssemblyReviewDecision = 'approve' | 'request_changes' | 'decline';
 
 // POST /api/runs/{coordinatorRunId}/assembly/review body — backend contract.
 export interface AssemblyReviewRequest {
+  output_revision_id: string;
   approved: boolean;
   request_changes?: boolean;
   feedback?: string;
