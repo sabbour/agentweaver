@@ -389,6 +389,9 @@ public sealed class GitHubSourceControlAdapterTests
     [InlineData(HttpStatusCode.OK, "{\"required_status_checks\":{}}")]
     [InlineData(HttpStatusCode.OK, "{\"required_status_checks\":[]}")]
     [InlineData(HttpStatusCode.OK, "{\"required_status_checks\":{\"checks\":\"bad\",\"contexts\":[]}}")]
+    [InlineData(HttpStatusCode.OK, "{\"required_status_checks\":{\"checks\":[{\"context\":\"classic-ci\",\"app_id\":\"17\"}],\"contexts\":[\"classic-ci\"]}}")]
+    [InlineData(HttpStatusCode.OK, "{\"required_status_checks\":{\"checks\":[{\"context\":\"classic-ci\",\"app_id\":[]}],\"contexts\":[\"classic-ci\"]}}")]
+    [InlineData(HttpStatusCode.OK, "{\"required_status_checks\":{\"checks\":[{\"context\":\"classic-ci\",\"app_id\":{}}],\"contexts\":[\"classic-ci\"]}}")]
     public async Task MergeReadinessFailsClosedForUnknownClassicProtection(
         HttpStatusCode status,
         string responseBody)
@@ -421,6 +424,8 @@ public sealed class GitHubSourceControlAdapterTests
                 SourceControlFailureCode.PermissionDenied,
                 SourceControlFailureCode.RemoteUnavailable
             }.Contains(exception.Code));
+        if (status == HttpStatusCode.OK)
+            Assert.Equal(SourceControlFailureCode.CapabilityUnavailable, exception.Code);
         if (status == HttpStatusCode.NotFound)
             Assert.Equal(SourceControlFailureCode.CapabilityUnavailable, exception.Code);
     }

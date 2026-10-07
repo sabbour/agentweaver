@@ -526,7 +526,9 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 long? appId;
                 if (appValue.ValueKind == JsonValueKind.Null)
                     appId = null;
-                else if (appValue.TryGetInt64(out var parsedAppId) && parsedAppId > 0)
+                else if (appValue.ValueKind == JsonValueKind.Number &&
+                         appValue.TryGetInt64(out var parsedAppId) &&
+                         parsedAppId > 0)
                     appId = parsedAppId;
                 else
                     throw UnavailableMergeEvidence(
