@@ -58,6 +58,65 @@ rewriting its fingerprint or stored history.
 These tests exercise candidate selection only. They do not prove SDK model-source
 provenance, resource negotiation, pricing, or positive usage ingestion.
 
+## Cost bindings, pricing, and usage storage
+
+The additive Provider tests cover Cost resource pins, changed configuration, and
+missing or changed providers. Existing candidate-selection and legacy snapshot
+tests remain unchanged.
+
+The Events & Sessions tests cover weighted nano-AIU pricing, unweighted quotes,
+missing measurements, immutable rate cards, and redacted binding diagnostics.
+The disposable-PostgreSQL tests cover concurrent duplicates, content conflicts,
+restart, immutable history, transaction rollback, and exact run/agent totals.
+Receipt tests read the committed hash and immutable price through a separate
+PostgreSQL connection. Duplicate retries return the identical receipt.
+Migration tests cover fresh Events version 7, admitted version-3 and version-4 upgrades,
+the legacy version-2 project-fact layout, and rejected version gaps.
+Orchestrator migration tests upgrade admitted version 8 and native intermediate versions 9 and 10 to version 11.
+Repeated migration and startup checks preserve the original migration history.
+
+The combined Broker test connects actual OAuth and bearer validation, current Core
+memberships/roles, immutable Projects selection, Environment lease/profile, Orchestrator
+registration and source receipt, native SDK callbacks, and Events HTTP/PostgreSQL accounting.
+The test controls only external placement, SDK transport/events/catalog, and pricing inputs.
+It does not seed producer authority or take a desired model from caller JSON.
+
+The five scenarios cover successful accounting, Broker revocation before SDK creation,
+observe-grant revocation during an observation lock wait, registration revocation
+before the source lock opens, and Environment retirement during an observation wait.
+Three additional scenarios hold the actual SDK `status.get` response before creation.
+They revoke the genuine Broker grant, retire the actual Environment lease, or wait
+for the real source credential to expire. Each proves zero `session.create` requests,
+source records, and accounting entries.
+The positive scenario commits duplicate native callbacks to one immutable receipt,
+then verifies reference-only ingestion and exact `0.00123456725 AIC` accounting.
+The multiplier is not applied a second time.
+Database checks reject mutation and truncation of source and accounting history.
+They check each table's statement trigger and attempt dependent, multi-table, and
+`CASCADE` truncation. Stored rows and pins remain identical, and receipt replay succeeds.
+
+The fixture disposes the receiver before its caller credential and HTTP transport.
+Failure output retains the exercise error and cleanup errors.
+Direct console stages identify pending owner requests, SQL waits, native SDK responses,
+and cleanup when a test aborts before Xunit reports a result.
+Broker hosts own their registered PostgreSQL pools.
+Native fixture SQL connections use a fixture-owned data source that closes during cleanup.
+Repeated-host and full-suite checks verify that owned connections return to zero after disposal.
+Broker coverage includes the Agent Runtime library through the existing test project and collector.
+
+The canonical Sandbox integration also covers public write versus internal run-read
+permission, three current-authority reads, and retained-lease protection against competing retirement.
+Neither placement route reads the accepted selection recursively or dispatches provider effects.
+These local tests do not prove deployed hosts, live AKS placement, or paid model output.
+
+After the Release build, run the combined source scenarios with:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~AuthorityLossDuringSdkPreparationPreventsNativeSessionCreation
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerIssuedOwnerAndSeparateRunSelectionAuthorizeWorkspaceVolumeHttpEffects
+```
+
 ## Validate the documentation site
 
 Run these commands after changing a documentation page, link, or diagram:

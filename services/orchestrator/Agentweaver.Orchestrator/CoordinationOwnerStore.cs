@@ -11,7 +11,7 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-internal sealed class CoordinationOwnerStore
+internal sealed partial class CoordinationOwnerStore
 {
     private const string IngressConsumer = "orchestrator.addressed-message-ingress";
     private const int EventVersion = 1;
@@ -191,11 +191,12 @@ internal sealed class CoordinationOwnerStore
         int maxChildren,
         int maxConcurrentChildren,
         CancellationToken cancellationToken,
+        ConfirmedWorkPlanItemAssociation? workPlanItemAssociation = null,
         Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         var result = await RegisterChildCoreAsync(
             actor, parent, childSessionId, CoordinationSessionKind.ChildWork, null,
-            null, maxChildren, maxConcurrentChildren, cancellationToken,
+            workPlanItemAssociation, maxChildren, maxConcurrentChildren, cancellationToken,
             revalidateCurrentAuthority).ConfigureAwait(false);
         return result.Registered;
     }
@@ -775,8 +776,12 @@ internal sealed class CoordinationOwnerStore
             throw new CoordinationException(
                 "child_run_spawn_requires_operator_chat", StatusCodes.Status403Forbidden);
 
-        if (spawnRequest?.WorkPlanItemId is { } workPlanItemId)
+        var requestedWorkPlanItemId = spawnRequest is null
+            ? workPlanItemAssociation?.WorkPlanItemId
+            : spawnRequest.WorkPlanItemId;
+        if (requestedWorkPlanItemId is { } workPlanItemId)
         {
+            CoordinationIdentity.ValidateIdentity(workPlanItemId, nameof(workPlanItemId));
             if (workPlanItemAssociation is null ||
                 workPlanItemAssociation.WorkPlanItemId != workPlanItemId ||
                 workPlanItemAssociation.DecisionStateVersion < 1 ||
@@ -874,6 +879,8 @@ internal sealed class CoordinationOwnerStore
             if (existing.ParentSessionId != parent.SessionId ||
                 existing.WriterIssuer != actor.Issuer || existing.WriterSubject != actor.Subject ||
                 existing.LifecycleState != "active")
+                throw new CoordinationException("child_session_conflict", StatusCodes.Status409Conflict);
+            if (existing.WorkPlanItemId != workPlanItemAssociation?.WorkPlanItemId)
                 throw new CoordinationException("child_session_conflict", StatusCodes.Status409Conflict);
             var requestId = await FindRequestIdAsync(
                 connection, transaction, parent.ProjectId, parent.RunId,

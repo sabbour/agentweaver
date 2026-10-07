@@ -2,13 +2,13 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Identity broker secret redemption",
-  "alt": "Identity.Broker validates bearer and required claims. Invalid tokens return 401 and invalid requests return 400 without redemption; valid requests build trusted actor context, check the exact grant around exact-version Key Vault access, and invalidate credentials on postcheck failure or after the response.",
+  "alt": "Identity.Broker validates bearer and required claims. Invalid tokens return 401 and invalid requests return 400 without redemption. Valid requests check the exact grant around exact-version Key Vault access and invalidate credentials on failure or after the response. Separate runtime grants do not widen secret redemption or project roles. The auth-first library consumes an independently verified nonce before native SDK binding. After SDK preparation it compares the current registration, verifies the observe grant, and checks lifetimes and cancellation immediately before session.create. The validated bearer and observe credential protect immutable Orchestrator source writes. Events accepts only the source receipt reference for accounting. The combined local harness is not cloud deployment or paid model proof.",
   "autonumber": true,
   "participants": [
     {
       "id": "identity-broker",
       "label": "Identity.Broker",
-      "subLabel": "TrustedActorContext from claims; host supplies IGrantAuthority",
+      "subLabel": "Validated subject; separate runtime nonce store",
       "icon": "server",
       "fluentIcon": "identity",
       "badge": {

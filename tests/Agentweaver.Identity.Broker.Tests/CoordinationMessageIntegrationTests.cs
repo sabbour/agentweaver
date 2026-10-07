@@ -53,8 +53,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    [Fact]
-    public async Task BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending()
+    [Theory]
+    [InlineData(false, null)]
+    [InlineData(true, null)]
+    [InlineData(false, "grant")]
+    [InlineData(false, "head")]
+    [InlineData(false, "lease")]
+    public async Task BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+        bool revokeSourceBeforeSdk, string? sourceLoss)
     {
         using var signingCertificate = X509CertificateLoader.LoadPkcs12FromFile(
             _signingCertificate.PfxPath,
@@ -1156,13 +1162,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ProjectAuthorityResourceType.Project,
             project.ProjectId,
             ProjectAuthorityRole.Orchestrator);
+        using (var unconfirmedItem = await SendJsonAsync(
+                   orchestrator, HttpMethod.Post,
+                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
+                   runToken, new RegisterChildRequest("unconfirmed-child", "foreign-item")))
+            await AssertStatusAsync(unconfirmedItem, HttpStatusCode.Conflict);
 
         using var childResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
             runToken,
-            new RegisterChildRequest("child"));
+            new RegisterChildRequest("child", "implement-1"));
         await AssertStatusAsync(childResponse, HttpStatusCode.Created);
         var child = await ReadJsonAsync<RegisteredChild>(childResponse);
 
@@ -1171,7 +1182,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
             runToken,
-            new RegisterChildRequest("child"));
+            new RegisterChildRequest("child", "implement-1"));
         await AssertStatusAsync(childReplay, HttpStatusCode.Created);
         Assert.Equal(child, await ReadJsonAsync<RegisteredChild>(childReplay));
 
@@ -1242,6 +1253,50 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(AddressedMessageStatus.Delivered, presented.Status);
         Assert.Equal("active", boundary.ExecutionState);
 
+        var runtimeOwnerPath =
+            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/runtime-owner-context";
+        using (var runtimeOwnerResponse = await SendAsync(
+                   orchestrator, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]))
+        {
+            await AssertStatusAsync(runtimeOwnerResponse, HttpStatusCode.OK);
+            Assert.True(runtimeOwnerResponse.Headers.CacheControl?.NoStore);
+            var runtimeOwner = await ReadJsonAsync<RuntimeOwnerContext>(runtimeOwnerResponse);
+            Assert.Equal(1, runtimeOwner.ContractVersion);
+            Assert.Equal(currentRunnerSubject, runtimeOwner.ActorId);
+            Assert.Equal(TenantId, runtimeOwner.TenantId);
+            Assert.Equal(project.ProjectId, runtimeOwner.ProjectId);
+            Assert.Equal(RunId, runtimeOwner.RunId);
+            Assert.Equal("child", runtimeOwner.SessionId);
+            Assert.Equal("test-agent", runtimeOwner.AgentId);
+            Assert.Equal("platform-model", runtimeOwner.ModelSelectionReference);
+            Assert.Equal(child.ExecutionFence, runtimeOwner.ExecutionFence);
+            Assert.Equal(boundary.LogicalTurnOrdinal, runtimeOwner.LogicalTurnOrdinal);
+            Assert.Equal(boundary.StateVersion, runtimeOwner.OwnerStateVersion);
+            Assert.Equal(15, runtimeOwner.DecisionStateVersion);
+            var expectedTurnBytes = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                Contract = "agentweaver.runtime-turn.v1",
+                ProjectId = project.ProjectId,
+                RunId,
+                SessionId = "child",
+                ExecutionFence = child.ExecutionFence,
+                LogicalTurnOrdinal = boundary.LogicalTurnOrdinal
+            });
+            Assert.Equal("turn-" + Convert.ToHexStringLower(
+                System.Security.Cryptography.SHA256.HashData(expectedTurnBytes)), runtimeOwner.TurnId);
+            using var replayedOwner = await SendAsync(
+                orchestrator, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]);
+            await AssertStatusAsync(replayedOwner, HttpStatusCode.OK);
+            Assert.Equal(runtimeOwner, await ReadJsonAsync<RuntimeOwnerContext>(replayedOwner));
+            await VerifyRunBoundRuntimeRegistrationWithCurrentEnvironmentAsync(
+                ownerSchema, signingKey, projects, eventsFactory, runToken, runtimeOwner,
+                runnerMembership.MembershipId, sandboxProvider, revokeSourceBeforeSdk, sourceLoss);
+        }
+        using (var unmappedOwner = await SendAsync(
+                   orchestrator, HttpMethod.Get,
+                   $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/runtime-owner-context",
+                   runToken, [TenantId]))
+            await AssertStatusAsync(unmappedOwner, HttpStatusCode.Conflict);
         using var secondChildResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
@@ -1305,10 +1360,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                        BaseAddress = new Uri("https://orchestrator.test")
                    }))
         {
-            var runtimeOwnerPath =
+            var childTwoRuntimeOwnerPath =
                 $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child-two/runtime-owner-context";
             var runtimeOwnerTask = SendAsync(
-                runtimeOwnerClient, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]);
+                runtimeOwnerClient, HttpMethod.Get, childTwoRuntimeOwnerPath, runToken, [TenantId]);
             try
             {
                 await selectionPause.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
@@ -3119,7 +3174,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Func<HttpMessageHandler> projectsHandler,
         Func<HttpMessageHandler> eventsHandler,
         IObjectStore? objectStore = null,
-        ICoordinatorSandboxResourceProvider? sandboxProvider = null)
+        ICoordinatorSandboxResourceProvider? sandboxProvider = null,
+        Func<HttpMessageHandler>? environmentHandler = null,
+        Func<HttpMessageHandler>? runtimeUsageHandler = null)
         : WebApplicationFactory<OrchestratorHost::Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -3137,7 +3194,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["ProjectsConfig:AuthorizationContext:OwnerBaseAddress"] = "https://projects.test/",
                     ["ProjectsConfig:AuthorizationContext:Audience"] = "https://api.test",
                     ["EventsAndSessions:Authorization:OwnerBaseAddress"] = "https://events.test/",
-                    ["EventsAndSessions:Authorization:Audience"] = "https://api.test"
+                    ["EventsAndSessions:Authorization:Audience"] = "https://api.test",
+                    ["Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress"] =
+                        environmentHandler is null ? null : "https://environment.test/",
+                    ["Orchestrator:RuntimeUsage:BrokerOwnerAddress"] =
+                        runtimeUsageHandler is null ? null : "https://broker.test/"
                 }));
             builder.ConfigureTestServices(services =>
             {
@@ -3150,6 +3211,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     .ConfigurePrimaryHttpMessageHandler(projectsHandler);
                 services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.EventsAddressedMessageClient>()
                     .ConfigurePrimaryHttpMessageHandler(eventsHandler);
+                if (environmentHandler is not null)
+                    services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.RuntimeEnvironmentContextClient>()
+                        .ConfigurePrimaryHttpMessageHandler(environmentHandler);
+                if (runtimeUsageHandler is not null)
+                    services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.RuntimeUsageBrokerClient>()
+                        .ConfigurePrimaryHttpMessageHandler(runtimeUsageHandler);
                 if (objectStore is not null)
                     services.AddSingleton<IObjectStore>(objectStore);
                 if (sandboxProvider is not null)
@@ -3195,9 +3262,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         string schema,
         SecurityKey signingKey,
         Func<HttpMessageHandler> projectsHandler,
-        Func<HttpMessageHandler> orchestratorHandler)
+        Func<HttpMessageHandler> orchestratorHandler,
+        Func<HttpMessageHandler>? nativeUsageHandler = null)
         : WebApplicationFactory<EventsHost::Program>
     {
+        public string Schema { get; } = schema;
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             var databaseName = new NpgsqlConnectionStringBuilder(connectionString).Database
@@ -3214,7 +3284,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["EventsAndSessions:Provider:ResourceId"] = "postgres-test",
                     ["EventsAndSessions:Provider:DatabaseName"] = databaseName,
                     ["EventsAndSessions:Provider:ResourceGeneration"] = "1",
-                    ["EventsAndSessions:Provider:Schema"] = schema,
+                    ["EventsAndSessions:Provider:Schema"] = Schema,
                     ["EventsAndSessions:Provider:OptionsRevision"] = "integration-v1",
                     ["EventsAndSessions:Messaging:OptionsRevision"] = "integration-messaging-v1",
                     ["EventsAndSessions:Knowledge:BaseAddress"] = "https://knowledge.test/",
@@ -3224,7 +3294,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["ProjectsConfig:AuthorizationContext:OwnerBaseAddress"] = "https://projects.test/",
                     ["ProjectsConfig:AuthorizationContext:Audience"] = "https://api.test",
                     ["EventsAndSessions:OrchestratorOwner:OwnerBaseAddress"] = "https://orchestrator.test/",
-                    ["EventsAndSessions:OrchestratorOwner:Audience"] = "https://api.test"
+                    ["EventsAndSessions:OrchestratorOwner:Audience"] = "https://api.test",
+                    ["EventsAndSessions:RuntimeUsage:Enabled"] = nativeUsageHandler is null ? "false" : "true"
                 }));
             builder.ConfigureTestServices(services =>
             {
@@ -3239,6 +3310,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         EventsHost::Agentweaver.EventsAndSessions.ICoordinationOwnerClient,
                         EventsHost::Agentweaver.EventsAndSessions.CoordinationOwnerClient>()
                     .ConfigurePrimaryHttpMessageHandler(orchestratorHandler);
+                if (nativeUsageHandler is not null)
+                    services.AddHttpClient("NativeUsageReceiptClient")
+                        .ConfigurePrimaryHttpMessageHandler(nativeUsageHandler);
             });
         }
     }

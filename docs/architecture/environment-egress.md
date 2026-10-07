@@ -11,6 +11,14 @@ the [foundation overview](./overview.md#workspace-volume-lifecycle) summarizes t
 volume lifecycle, pinned release binding, and Replace cleanup guarantees.
 Neither candidate is deployed by this source change.
 
+The same owner schema now contains the current Sandbox lease source primitive.
+The placement read verifies its active lifecycle, full owner tuple, provider reference,
+lease revision, expiry, and separate provider/current fences. It rereads the lease
+after the final awaited authorization check. Profile lookup matches that exact
+provider reference against server configuration; it does not deliver a configure nonce.
+Public placement/profile reads keep the existing `WriteProjects` gate. The separate
+run-bound read-only lookup is integration work, not an egress mutation permission.
+
 ## Ownership and operation
 
 `EnvironmentEgressManager` is the operation entry point. Each apply, verify, revoke, or reconciliation reads the current caller from Projects & Config at
@@ -171,6 +179,28 @@ sequenceDiagram
 ```
 
 ## Integration and evidence boundary
+
+### Runtime bootstrap profile candidate
+
+The separate runtime bootstrap profile registry belongs to Environment. A
+profile identifies fixed HTTPS configure and observation endpoints for an exact
+tenant, project, run, Environment, and Sandbox resource UID/generation.
+Unknown profiles or a different placement fail explicitly.
+
+The runtime profile route uses the canonical `EnvironmentSandboxManager` placement reader.
+Its callback retains the actual lease transaction while it reads the current
+Orchestrator work item and resolves the registered profile.
+It does not request the full runtime registration recursively or dispatch provider effects.
+The internal route requires current `ReadRunSelection` for the exact signed run.
+The public placement route still requires `WriteProjects`.
+Run-bound tokens do not gain public write permission.
+
+A profile match does not create a lease, prove current owner authority, or
+authorize an SDK session. Delivery must verify the Identity pending nonce and
+fresh Projects, Orchestrator, and lease state before and after transport.
+The local integration harness covers nonce delivery and native SDK source accounting.
+It does not prove cloud deployment. See the
+[separate runtime credential contract](../reference/contracts#runtime-credential-source-candidate).
 
 The Environment-owned Sandbox composition propagates these selector labels
 into the owner-specific Sandbox template and checks them on the actual Pod. The

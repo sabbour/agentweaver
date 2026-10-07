@@ -59,6 +59,11 @@ public sealed class SecretCredential
         get { lock (_sync) return _expiresAt; }
     }
 
+    public bool IsUsable()
+    {
+        lock (_sync) return _value is not null && _timeProvider.GetUtcNow() < _expiresAt;
+    }
+
     // Narrow metadata on the same credential so backend invalidation still applies.
     public void LimitLifetime(DateTimeOffset expiresAt)
     {

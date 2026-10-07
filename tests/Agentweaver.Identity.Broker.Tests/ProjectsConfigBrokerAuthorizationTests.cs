@@ -33,7 +33,8 @@ using Xunit;
 namespace Agentweaver.Identity.Broker.Tests;
 
 [Collection("IdentityBrokerPostgres")]
-public sealed partial class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixture postgres)
+public sealed partial class ProjectsConfigBrokerAuthorizationTests(
+    PostgresContainerFixture postgres, Xunit.Abstractions.ITestOutputHelper output)
     : IAsyncLifetime
 {
     private static readonly JsonSerializerOptions AuthorizationJsonOptions = new(JsonSerializerDefaults.Web)
@@ -63,12 +64,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(PostgresConta
     private IdentityBrokerWebApplicationFactory _brokerFactory = null!;
     private HttpClient _fakeIdpClient = null!;
     private string _connectionString = string.Empty;
+    private NpgsqlDataSource _nativeDataSource = null!;
     private (string PfxPath, string Password) _signingCertificate;
     private int _subjectSequence;
 
     public async Task InitializeAsync()
     {
         _connectionString = await postgres.CreateMigratedDatabaseAsync();
+        _nativeDataSource = NpgsqlDataSource.Create(_connectionString);
         _fakeIdp = await FakeIdentityProvider.StartAsync();
         _signingCertificate = TestSigningCertificate.Create();
         _brokerFactory = new IdentityBrokerWebApplicationFactory(
@@ -89,13 +92,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(PostgresConta
 
     public async Task DisposeAsync()
     {
+        var before = await PostgresContainerFixture.CountConnectionsAsync(_connectionString);
         _fakeIdpClient.Dispose();
         await _brokerFactory.DisposeAsync();
+        await _nativeDataSource.DisposeAsync();
         await _fakeIdp.DisposeAsync();
         if (File.Exists(_signingCertificate.PfxPath))
             File.Delete(_signingCertificate.PfxPath);
         if (Directory.Exists(_signingCertificate.PfxPath + ".keys"))
             Directory.Delete(_signingCertificate.PfxPath + ".keys", recursive: true);
+        var after = await PostgresContainerFixture.CountConnectionsAsync(_connectionString);
+        Console.WriteLine($"Native fixture owned connections: before cleanup={before}, after cleanup={after}.");
+        Assert.Equal(0, after);
     }
 
     [Fact]

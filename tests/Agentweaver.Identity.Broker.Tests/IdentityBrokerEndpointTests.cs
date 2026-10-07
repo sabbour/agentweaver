@@ -317,6 +317,34 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task RepeatedBrokerHostsDisposeTheirOwnedConnectionPools()
+    {
+        var connectionString = await _postgres.CreateMigratedDatabaseAsync();
+        var before = await PostgresContainerFixture.CountConnectionsAsync(connectionString);
+        for (var iteration = 0; iteration < 3; iteration++)
+        {
+            var factory = new IdentityBrokerWebApplicationFactory(
+                connectionString, _fakeIdp, signingCertificate: _signingCertificate);
+            long during;
+            await using (factory)
+            {
+                using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+                {
+                    AllowAutoRedirect = false,
+                    BaseAddress = new Uri("https://broker.test.local"),
+                });
+                using var response = await client.GetAsync("/health/ready");
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                during = await PostgresContainerFixture.CountConnectionsAsync(connectionString);
+                Assert.True(during > before);
+            }
+            var after = await PostgresContainerFixture.CountConnectionsAsync(connectionString);
+            Console.WriteLine($"Broker pool iteration {iteration + 1}: before={before}, during={during}, after={after}.");
+            Assert.Equal(before, after);
+        }
+    }
+
+    [Fact]
     public async Task Persistence_UserAndAuthorizationSurviveHostRestart()
     {
         var (code, verifier) = await RunHappyPathAuthorizeAsync();

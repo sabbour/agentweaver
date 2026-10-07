@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
+using Agentweaver.EventsAndSessions.Cost;
 using Azure.Core;
 using Agentweaver.Providers;
 using Agentweaver.Telemetry;
@@ -124,16 +125,29 @@ var provider = new NativePostgresSessionsProvider();
 var registration = provider.CreateRegistration(options);
 var messagingProvider = new NativePostgresMessagingProvider();
 var messagingRegistration = messagingProvider.CreateRegistration(messagingOptions);
+var costOptions = CopilotCostProviderOptions.FromConfiguration(
+    builder.Configuration.GetSection("EventsAndSessions:Cost:Copilot"));
+var costProvider = costOptions is null ? null : new CopilotCostProvider(costOptions);
+var registrations = new List<ProviderRegistration> { registration, messagingRegistration };
+if (costProvider is not null)
+{
+    registrations.Add(costProvider.CreateRegistration());
+    builder.Services.AddSingleton(costProvider);
+    builder.Services.AddSingleton<ICostProvider>(costProvider);
+    builder.Services.AddSingleton<ICostProviderBinder, CopilotCostProviderBinder>();
+}
 var permittedOverrides = projectOverrides.Values.Distinct(StringComparer.Ordinal)
     .Select(providerId => new ProviderOverridePermission(ProviderSeam.Sessions, providerId))
     .ToArray();
 var catalogResult = ProviderCatalog.Create(
-    [registration, messagingRegistration],
+    registrations,
     [
         new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId),
         new ProviderSelection(ProviderSeam.Messaging, NativePostgresMessagingProvider.ProviderId)
     ],
-    permittedOverrides);
+    permittedOverrides,
+    meterSourceSelections: costProvider is null ? []
+        : [new(CopilotCostProvider.MeterSource, CopilotCostProvider.ProviderId)]);
 if (!catalogResult.IsSuccess)
     throw new InvalidOperationException("The Sessions provider catalog configuration is invalid.");
 var resolver = new ProviderResolver(catalogResult.Value!);
@@ -141,6 +155,7 @@ builder.Services.AddSingleton(provider);
 builder.Services.AddSingleton(messagingProvider);
 builder.Services.AddSingleton(catalogResult.Value!);
 builder.Services.AddSingleton(resolver);
+var nativeUsageEnabled = builder.Services.AddNativeUsageConsumer(builder.Configuration);
 builder.Services.AddSingleton<IReadOnlyDictionary<string, string>>(projectOverrides);
 builder.Services.AddSingleton<SessionsProviderBindingService>();
 builder.Services.AddSingleton<ISessionsProviderBinder>(services =>
@@ -181,6 +196,8 @@ app.MapGet("/health/ready", async (CancellationToken ct) =>
 app.MapEventsAndSessionsEndpoints();
 app.MapAcceptedEffectEndpoints();
 app.MapAddressedMessageEndpoints();
+if (nativeUsageEnabled)
+    app.MapNativeUsageEndpoints();
 app.Run();
 
 static string Required(IConfiguration configuration, string key) =>

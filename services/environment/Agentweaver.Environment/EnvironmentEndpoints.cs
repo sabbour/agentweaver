@@ -1,6 +1,8 @@
 using System.Net.Http.Headers;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Providers.Storage.AzureFiles;
+using Microsoft.AspNetCore.Authentication;
 
 namespace Agentweaver.Environment;
 
@@ -125,6 +127,61 @@ public static class EnvironmentEndpoints
                 }
             })
             .RequireAuthorization();
+
+        endpoints.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}",
+            async (
+                string projectId,
+                string runId,
+                string environmentId,
+                string sessionId,
+                string profileId,
+                HttpContext context,
+                [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimePlacementReader reader,
+                [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeBootstrapProfileRegistry profiles,
+                [Microsoft.AspNetCore.Mvc.FromServices] TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                if (!TryReadCaller(context, out var caller))
+                    return Results.Unauthorized();
+                var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
+                if (!authentication.Succeeded || authentication.Properties?.ExpiresUtc is not { } expiresAt ||
+                    expiresAt <= timeProvider.GetUtcNow())
+                    return Results.Unauthorized();
+                var bearer = new SecretCredential(caller!.BearerToken, expiresAt, timeProvider);
+                try
+                {
+                    var bootstrap = await reader.GetBootstrapContextAsync(
+                        new(bearer, caller.TenantSelector), projectId, runId, sessionId, environmentId,
+                        profileId, profiles, cancellationToken)
+                        .ConfigureAwait(false);
+                    return bootstrap is null ? Results.NotFound() : Results.Ok(bootstrap);
+                }
+                catch (ProjectsConfigApiException exception)
+                {
+                    return ToProjectAuthorizationResult(exception);
+                }
+                catch (RuntimeAuthorizationException exception)
+                {
+                    return Results.Conflict(new { code = exception.Code });
+                }
+                catch (EnvironmentLifecycleException exception)
+                {
+                    return Results.Json(new { code = exception.Code, message = exception.Message },
+                        statusCode: exception.Code == "environment_unknown"
+                            ? StatusCodes.Status404NotFound : StatusCodes.Status409Conflict);
+                }
+                catch (HttpRequestException)
+                {
+                    return Results.Json(new { code = "runtime_placement_owner_unavailable" },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                finally
+                {
+                    bearer.Invalidate();
+                }
+            }).RequireAuthorization();
 
         var workspaceVolumes = endpoints.MapGroup(
                 "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes")
@@ -279,6 +336,7 @@ public static class EnvironmentEndpoints
             EnvironmentSandboxManager manager,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
@@ -296,6 +354,7 @@ public static class EnvironmentEndpoints
             EnvironmentSandboxManager manager,
             CancellationToken cancellationToken) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
                 return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
@@ -582,7 +641,7 @@ public static class EnvironmentEndpoints
         return Results.Json(operation, statusCode: status);
     }
 
-    private static IResult ToProjectAuthorizationResult(ProjectsConfigApiException exception)
+    internal static IResult ToProjectAuthorizationResult(ProjectsConfigApiException exception)
     {
         var status = exception.Code switch
         {

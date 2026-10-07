@@ -155,7 +155,7 @@ public sealed record AcceptedRoot(
     long LogicalTurnOrdinal,
     string ExecutionState);
 
-public sealed record RegisterChildRequest(string SessionId);
+public sealed record RegisterChildRequest(string SessionId, string? WorkPlanItemId = null);
 
 public enum CoordinationSessionKind
 {

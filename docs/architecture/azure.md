@@ -85,6 +85,15 @@ AKS also enables the Key Vault CSI provider and secret rotation with `enableSecr
 
 ## Network and acceptance checks
 
+The canonical Identity PostgreSQL grant definition includes the four runtime
+grant tables. The existing runtime role can read and insert audit rows and can
+update grant heads through CAS. It cannot delete these records, update audit
+rows, write migration history, or create schema objects. The verifier checks
+all 14 exact tables and their migration-role ownership.
+This is a source definition tested with disposable restricted PostgreSQL
+principals. It creates no new Azure identity or live role grant and does not
+run the operator bootstrap.
+
 AKS exposes a public API endpoint protected by managed Entra authentication and Azure RBAC; local accounts are disabled. The cluster keeps Azure Linux nodes, Cilium networking, OIDC/workload identity, and ACNS security with observability disabled. The source leaves `kubernetesVersion` empty. Runtime acceptance requires Kubernetes 1.29 or later.
 
 The base NetworkPolicy denies traffic by default. The Foundation Probe overlay grants its own egress. The base does not provide telemetry exporter egress.

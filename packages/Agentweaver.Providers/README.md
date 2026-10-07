@@ -33,9 +33,12 @@ Configure Cost with `ProviderMeterSourceSelection`; `ResolveCost` selects one
 enabled provider for each explicit meter-source key and checks the requested
 adapter version, options schema, and advertised capabilities. Projects & Config
 uses this path to persist source-keyed candidates in immutable run selections.
-Candidates do not prove an effective SDK model, trusted producer, live provider,
-resource negotiation, or pricing. Cost-specific binding and pricing remain
-separate consumer work.
+`PinCost` uses the existing resource-negotiation path and rejects changed source
+selection or configuration. `VerifyCost` rejects a missing source or changed
+provider identity, version, configuration revision, or capability requirements.
+The Cost adapter also verifies the exact resource generation and rate card.
+Neither a candidate nor a Cost binding proves an effective SDK model or trusted
+usage producer.
 
 Per-application Application Hosting remains unsupported;
 the single-provider `Resolve` also explicitly returns `UnsupportedCardinality`

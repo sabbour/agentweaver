@@ -173,7 +173,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         var grantsApplied = await ApplyRuntimeGrantsIfMigratedAsync(databaseConnection,
             options.RuntimeRole, options.MigrationRole, cancellationToken).ConfigureAwait(false);
         Console.WriteLine(grantsApplied
-            ? $"IDENTITY_POSTGRES_RUNTIME_GRANTS_APPLIED runtimeRole={options.RuntimeRole} explicitDmlTables=9 historySelect=TRUE historyWrite=FALSE schemaCreate=FALSE"
+            ? $"IDENTITY_POSTGRES_RUNTIME_GRANTS_APPLIED runtimeRole={options.RuntimeRole} explicitDmlTables=13 runtimeGrantDelete=FALSE runtimeAuditUpdate=FALSE historySelect=TRUE historyWrite=FALSE schemaCreate=FALSE"
             : "IDENTITY_POSTGRES_RUNTIME_GRANTS_PENDING migrationHistory=absent");
         Console.WriteLine($"IDENTITY_POSTGRES_BOOTSTRAP_OK database={options.DatabaseName} schema=identity_broker");
     }
@@ -201,12 +201,20 @@ internal static class IdentityBrokerPostgresBootstrapCommand
             .Select(match => match.Groups[1].Value).Distinct(StringComparer.Ordinal).ToArray();
         var statements = Regex.Matches(definition, @"SELECT format\([\s\S]*?\) \\gexec")
             .Select(match => match.Value.Replace(" \\gexec", "", StringComparison.Ordinal)).ToArray();
-        if (tables.Length != 10 || !tables.Contains("__ef_migrations_history", StringComparer.Ordinal) ||
-            statements.Length != 8)
+        string[] requiredTables =
+        [
+            "broker_users", "pending_authorizations", "secret_grant_heads", "secret_grant_revisions",
+            "secret_grant_operations", "OpenIddictApplications", "OpenIddictAuthorizations",
+            "OpenIddictScopes", "OpenIddictTokens", "__ef_migrations_history",
+            "runtime_grant_heads", "runtime_grant_revisions", "runtime_grant_operations",
+            "runtime_grant_operation_receipts"
+        ];
+        if (!tables.ToHashSet(StringComparer.Ordinal).SetEquals(requiredTables) ||
+            statements.Length != 12)
             throw new InvalidOperationException("The canonical Identity runtime grant contract is malformed.");
 
         await using (var ownership = new NpgsqlCommand("""
-            SELECT count(*) = 10
+            SELECT count(*) = @tableCount
             FROM pg_catalog.pg_class relation
             JOIN pg_catalog.pg_namespace schema ON schema.oid = relation.relnamespace
             JOIN pg_catalog.pg_roles owner ON owner.oid = relation.relowner
@@ -215,6 +223,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
             """, connection, transaction))
         {
             ownership.Parameters.AddWithValue("tables", tables);
+            ownership.Parameters.AddWithValue("tableCount", requiredTables.Length);
             ownership.Parameters.AddWithValue("migrationRole", migrationRole);
             if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
                 throw new InvalidOperationException("The exact post-migration tables are missing or have a different owner.");
@@ -232,17 +241,20 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         foreach (var table in tables)
         {
             var history = table == "__ef_migrations_history";
+            var runtimeGrant = table.StartsWith("runtime_grant_", StringComparison.Ordinal);
             await using var readback = new NpgsqlCommand("""
                 SELECT has_table_privilege(@runtimeRole, @relation, 'SELECT')
-                  AND has_table_privilege(@runtimeRole, @relation, 'INSERT') = @dml
-                  AND has_table_privilege(@runtimeRole, @relation, 'UPDATE') = @dml
-                  AND has_table_privilege(@runtimeRole, @relation, 'DELETE') = @dml
+                  AND has_table_privilege(@runtimeRole, @relation, 'INSERT') = @insert
+                  AND has_table_privilege(@runtimeRole, @relation, 'UPDATE') = @update
+                  AND has_table_privilege(@runtimeRole, @relation, 'DELETE') = @delete
                   AND NOT has_table_privilege(@runtimeRole, @relation, 'TRUNCATE,REFERENCES,TRIGGER')
                   AND NOT has_schema_privilege(@runtimeRole, 'identity_broker', 'CREATE')
                 """, connection, transaction);
             readback.Parameters.AddWithValue("runtimeRole", runtimeRole);
             readback.Parameters.AddWithValue("relation", $"identity_broker.{QuoteIdentifier(table)}");
-            readback.Parameters.AddWithValue("dml", !history);
+            readback.Parameters.AddWithValue("insert", !history);
+            readback.Parameters.AddWithValue("update", !history && (!runtimeGrant || table == "runtime_grant_heads"));
+            readback.Parameters.AddWithValue("delete", !history && !runtimeGrant);
             if (await readback.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
                 throw new InvalidOperationException("The exact Identity runtime table privileges did not read back.");
         }

@@ -19,7 +19,9 @@ public enum ProviderErrorCode
     OptionsSchemaMismatch,
     CapabilityUnavailable,
     ResourceMismatch,
-    InvalidNegotiation
+    InvalidNegotiation,
+    MeterSourceMismatch,
+    PinnedBindingMismatch
 }
 
 public sealed record ProviderError(ProviderErrorCode Code, string Message);

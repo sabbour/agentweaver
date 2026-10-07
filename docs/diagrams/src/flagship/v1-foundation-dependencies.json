@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "V1 services, contracts, and adapters",
-  "alt": "Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator/Core candidates; policy adapters and owner flow; journal evidence and addressed-message delivery; Azure Files/Kubernetes, Azure Blob, and Key Vault adapters. Mapped session context is checked against current owner state and authority, not proof of SDK execution or accounting; public Environment run-bound enrollment remains denied and internal lookup is read-only. PolicyEvaluation writes require trusted Orchestrator receipts. AzureBlobObjectStore and AzureKeyVaultSecretRedemption implement their provider interfaces. Source structure, not deployment topology.",
+  "alt": "Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator/Core candidates and their provider adapters. The runtime library connects native SDK callbacks to authenticated Orchestrator receipts. Events fetches receipt references and commits immutable Cost accounting. Environment retains its canonical placement lease during internal lookup and denies public run-bound enrollment. The journal requires trusted Orchestrator receipts for PolicyEvaluation writes. This source structure does not prove deployment, paid model execution, or physical runtime recovery.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -126,7 +126,7 @@
     {
       "id": "events-and-sessions",
       "label": "Events & Sessions",
-      "subLabel": "PostgreSQL journal, policy evidence, and messages.",
+      "subLabel": "Journal, policy evidence, messages, usage storage.",
       "meta": "Agentweaver.EventsAndSessions",
       "icon": "server",
       "fluentIcon": "api",

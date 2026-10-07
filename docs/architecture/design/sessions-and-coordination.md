@@ -88,6 +88,61 @@ owner writes; stale or revoked requests leave no new binding. If no registered
 adapter can provide the first negotiation, the plan request returns `503`; no
 synthetic resource or generation is created.
 
+### Runtime registration and accounting source candidate
+
+The Orchestrator runtime registration store creates server-owned identities and
+immutable binding revisions. Its raw storage read is not authorization.
+The authenticated owner adapter must compare current Projects selection,
+execution fence, session/work item, Environment lease, and fixed profile.
+Core execution fences, placement generations, and Environment provider/current
+fences remain distinct.
+
+The source registration adapter derives its binding from the current owner context
+and the Environment-owned lease/profile context. Callers submit only an Environment
+ID and registered profile ID. Provider identity, lease revision, lifecycle generation,
+expiry, model reference, and turn identity are not configure-body authority.
+The registration transaction repeats current authority after database waits.
+
+Public Environment placement reads retain `WriteProjects`. Current Projects
+policy deliberately excludes that permission from run-bound tokens, including project
+owners. The separate internal lookup uses existing `ReadRunSelection` for the exact run.
+It reuses the canonical manager's retained lease callback for current owner context
+and the registered profile. This read does not grant configure or delivery authority.
+Identity's separate pending nonce still protects delivery.
+
+Child registration can bind a confirmed WorkPlan item. The owner transaction
+checks its current decision version, selection hash, and fence before storing
+that association. Unmapped legacy children remain usable for existing operations
+but cannot provide runtime ownership. The authenticated `runtime-owner-context`
+GET derives agent, model reference, and deterministic turn identity from the
+current accepted selection, confirmed plan, and active child turn. It rechecks
+the root decision and current Projects authority before returning.
+
+The `Agentweaver.AgentRuntime` library uses the pinned native Copilot SDK.
+Its model catalog, effective model ID, SDK session ID/version, nullable
+measurements, and already-weighted nano-AIU come from that SDK. Credential
+values remain in protected memory. The library is not an AgentHost executable,
+scheduler, or new provider resolver.
+
+The auth-first library hook consumes the delivered configure nonce before binding.
+It reads the model reference from the current registration, not the configure body.
+It exchanges the consumed nonce for a source credential and checks current authority
+before and after native session creation. It returns one fully initialized immutable
+session; failures dispose the SDK session and revoke or invalidate the source credential.
+The final creation check follows SDK preparation: current registration comparison,
+observe-grant verification, then immediate lifetime and cancellation checks.
+Usage reads also check current registration and source authority.
+
+The runtime library registers actual SDK facts and commits callbacks to the Orchestrator.
+The source writer rechecks the observe grant and current registration after database waits.
+Its immutable source receipt preserves the nullable native measurements and weighted nano-AIU.
+Events accepts only the receipt ID, fetches trusted owner evidence, and commits
+the immutable price, rate card, ledger, source hash, and inbox together.
+The combined local harness covers successful accounting and authority loss before
+and during SDK preparation, or during source transaction waits.
+It does not prove deployed dispatch or paid model execution.
+See the [runtime credential contract](../../reference/contracts#runtime-credential-source-candidate).
+
 ## Today in 0.x
 
 Paths refer to the 0.x code on the `dev` branch. In 0.x, an AgentHost agent turn is a
