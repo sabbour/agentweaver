@@ -97,6 +97,8 @@ They check each table's statement trigger and attempt dependent, multi-table, an
 
 The fixture disposes the receiver before its caller credential and HTTP transport.
 Failure output retains the exercise error and cleanup errors.
+Direct console stages identify pending owner requests, SQL waits, native SDK responses,
+and cleanup when a test aborts before Xunit reports a result.
 
 The canonical Sandbox integration also covers public write versus internal run-read
 permission, three current-authority reads, and retained-lease protection against competing retirement.

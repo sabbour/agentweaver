@@ -92,6 +92,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                     if (parameters.ValueKind == JsonValueKind.Array && parameters.GetArrayLength() > 0)
                         parameters = parameters[0];
                     Requests.Enqueue((method, parameters.Clone()));
+                    Console.WriteLine($"Controlled native SDK {DateTimeOffset.UtcNow:O}: {method} received.");
                     object result;
                     switch (method)
                     {
@@ -148,6 +149,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                             throw new InvalidOperationException($"Unexpected actual SDK method: {method}");
                     }
                     await WriteAsync(new { jsonrpc = "2.0", id = id.Clone(), result });
+                    Console.WriteLine($"Controlled native SDK {DateTimeOffset.UtcNow:O}: {method} response completed.");
                     if (method == "session.create" && EmitUsageAfterCreate)
                         await EmitUsageAsync(UsageData());
                 }
@@ -159,6 +161,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
         finally
         {
             _socket?.Dispose();
+            Console.WriteLine($"Controlled native SDK {DateTimeOffset.UtcNow:O}: transport server stopped.");
         }
     }
 
@@ -204,6 +207,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        Console.WriteLine($"Controlled native SDK {DateTimeOffset.UtcNow:O}: transport disposal begin.");
         await _stop.CancelAsync();
         _listener.Stop();
         try
@@ -215,6 +219,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
             _socket?.Dispose();
             _writes.Dispose();
             _stop.Dispose();
+            Console.WriteLine($"Controlled native SDK {DateTimeOffset.UtcNow:O}: transport disposal completed.");
         }
     }
 }

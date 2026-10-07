@@ -59,9 +59,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             owner.TenantId, owner.ProjectId, owner.RunId, "runtime-environment");
         var routes = new Dictionary<string, Func<HttpMessageHandler>>(StringComparer.Ordinal);
         var failures = new ConcurrentQueue<string>();
+        TraceNativeStage(failures, $"Environment startup begin ({sourceLoss ?? "positive"}).");
         await using var environment = await RuntimePlacementTestServer.StartAsync(
             _connectionString, signingKey, projects.CreateHandler, environmentOwner,
             candidate, selectionDocument.RootElement.Clone(), () => new RuntimeServiceRouter(routes, failures));
+        TraceNativeStage(failures, "Environment startup completed.");
         routes.Add("environment.test", environment.CreateHandler);
         using var runtimeConfiguration = new TemporaryEnvironment(new Dictionary<string, string?>
         {
@@ -96,8 +98,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         routes.Add("orchestrator.test", () => factory.Server.CreateHandler());
         var enrollmentPath = $"/internal/projects/{owner.ProjectId}/runs/{owner.RunId}" +
             $"/coordination/sessions/{owner.SessionId}/runtime-registrations";
+        TraceNativeStage(failures, "Runtime registration begin.");
         using var response = await SendJsonAsync(client, HttpMethod.Post, enrollmentPath,
             runToken, new RegisterRuntimeRequest(environmentOwner.EnvironmentId, "runtime-profile"));
+        TraceNativeStage(failures, $"Runtime registration returned {(int)response.StatusCode}.");
         await AssertStatusAsync(response, HttpStatusCode.OK);
         Assert.True(response.Headers.CacheControl?.NoStore);
         var registration = await response.Content.ReadFromJsonAsync<RuntimeRegistration>(CoordinationJsonOptions);
@@ -125,6 +129,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
             registration, signingKey, runToken, routes, failures, projects, events.Schema, ownerSchema,
             revokeSourceBeforeSdk, sourceLoss, environment);
+        TraceNativeStage(failures, "Runtime exercise and explicit cleanup completed.");
     }
 
     private async Task VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
@@ -134,6 +139,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         string? sourceLoss, RuntimePlacementTestServer environment)
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        TraceNativeStage(failures, "Broker startup begin.");
         await using var brokerFactory = new IdentityBrokerWebApplicationFactory(
             _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
             configure: settings =>
@@ -158,6 +164,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             AllowAutoRedirect = false, BaseAddress = new Uri("https://broker.test/")
         });
+        TraceNativeStage(failures, "Broker startup completed.");
         routes.Add("broker.test", () => brokerFactory.Server.CreateHandler());
         Func<HttpRequestMessage, HttpResponseMessage, CancellationToken, Task>? inspectOwnerResponse = null;
         Func<HttpRequestMessage, HttpResponseMessage, CancellationToken, Task>? inspectRuntimeResponse = null;
@@ -172,6 +179,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         };
         await using var receiver = new RuntimeBootstrapReceiver(
             registration, currentOwner, broker, broker.BaseAddress!, TimeProvider.System);
+        TraceNativeStage(failures, "Receiver host startup begin.");
         using var host = await new HostBuilder().ConfigureWebHost(web =>
         {
             web.UseTestServer();
@@ -192,6 +200,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     endpoints.MapRuntimeBootstrapReceiver(registration.Binding.ConfigureEndpoint, receiver));
             });
         }).StartAsync();
+        TraceNativeStage(failures, "Receiver host startup completed.");
         routes.Add("runtime.test", () => host.GetTestServer().CreateHandler());
         var bearer = new SecretCredential(runToken, registration.ExpiresAt);
         var primaryFailure = await Record.ExceptionAsync(async () =>
@@ -203,8 +212,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var configuration = "{}"u8.ToArray();
             var input = new RuntimeBootstrapRequest(
                 registration.RuntimeInstanceId, Guid.NewGuid(), RuntimeContractValidation.Hash(configuration));
+            TraceNativeStage(failures, "Bootstrap delivery begin.");
             using var deliveryResponse = await SendJsonAsync(
                 broker, HttpMethod.Post, "/internal/runtime/bootstrap/request", runToken, input);
+            TraceNativeStage(failures, $"Bootstrap delivery returned {(int)deliveryResponse.StatusCode}.");
             Assert.True(deliveryResponse.StatusCode == HttpStatusCode.OK,
                 await deliveryResponse.Content.ReadAsStringAsync() + "\n" + string.Join('\n', failures));
             var delivered = await deliveryResponse.Content.ReadFromJsonAsync<RuntimeBootstrapDeliveryReceipt>(
@@ -214,8 +225,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             failures.Enqueue($"After delivery: {elapsed.Elapsed}");
             output.WriteLine(failures.Last());
             Assert.Equal(registration.RuntimeInstanceId, delivered.RuntimeInstanceId);
+            TraceNativeStage(failures, "Bootstrap replay begin.");
             var replay = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
                 broker, broker.BaseAddress!, "/internal/runtime/bootstrap/request", actor, input, default);
+            TraceNativeStage(failures, "Bootstrap replay completed.");
             Assert.Equal(delivered, replay);
             Assert.Equal(RuntimeBootstrapReceiverState.Pending, receiver.State);
             var factory = new RuntimeCopilotSessionFactory(
@@ -355,9 +368,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 output.WriteLine($"Actual creation-authority loss {sourceLoss ?? "pre-SDK revoke"} denied with zero native sessions, source writes, or accounting: {elapsed.Elapsed}");
                 return;
             }
+            TraceNativeStage(failures, "Native configure begin.");
             var session = await receiver.ConfigureAsync(
                 bootstrap, configuration, Guid.NewGuid(), Guid.NewGuid(),
                 RuntimeCopilotSessionTests.SdkCredential(), timeout.Token);
+            TraceNativeStage(failures, "Native configure completed.");
             Assert.Equal(RuntimeBootstrapReceiverState.Ready, receiver.State);
             failures.Enqueue($"After SDK configure: {elapsed.Elapsed}");
             output.WriteLine(failures.Last());
@@ -370,7 +385,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             {
                 await VerifyNativeSourceAuthorityAfterWaitAsync(
                     sourceLoss, session, sourceClient, runtimeBroker, receiver, environment, ownerSchema,
-                    projects, runToken, timeout.Token);
+                    projects, runToken, failures, timeout.Token);
                 return;
             }
             await using var usage = session.CommitUsageAsync(sourceClient, timeout.Token).GetAsyncEnumerator();
@@ -410,14 +425,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 accepted, signingKey, runToken, projects, routes, failures, eventsSchema);
             output.WriteLine($"After actual Events priced ACK: {elapsed.Elapsed}");
         });
+        TraceNativeStage(failures, $"Primary exercise completed: {primaryFailure?.ToString() ?? "success"}");
+        TraceNativeStage(failures, "Receiver cleanup begin.");
         var receiverCleanupFailure = await Record.ExceptionAsync(() => receiver.DisposeAsync().AsTask());
+        TraceNativeStage(failures, $"Receiver cleanup completed: {receiverCleanupFailure?.ToString() ?? "success"}");
         bearer.Invalidate();
+        TraceNativeStage(failures, "Receiver host stop begin.");
         var hostCleanupFailure = await Record.ExceptionAsync(() => host.StopAsync());
+        TraceNativeStage(failures, $"Receiver host stop completed: {hostCleanupFailure?.ToString() ?? "success"}");
         var lifecycleFailures = new[] { primaryFailure, receiverCleanupFailure, hostCleanupFailure }
             .OfType<Exception>().ToArray();
         if (lifecycleFailures.Length > 0)
             Assert.Fail(new AggregateException("Native runtime proof and cleanup failed.", lifecycleFailures)
                 + "\n" + string.Join('\n', failures));
+    }
+
+    private static void TraceNativeStage(ConcurrentQueue<string> failures, string stage)
+    {
+        var message = $"Native fixture {DateTimeOffset.UtcNow:O}: {stage}";
+        failures.Enqueue(message);
+        Console.WriteLine(message);
     }
 
     private async Task VerifyNativeUsageAccountingAsync(
@@ -516,7 +543,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 !routes.TryGetValue(endpoint.Host, out var handler))
                 throw new InvalidOperationException("The exact test service route is not registered.");
             using var invoker = new HttpMessageInvoker(handler());
+            TraceNativeStage(failures, $"HTTP begin {request.Method} {endpoint.Host}{endpoint.AbsolutePath}; " +
+                $"cancellable={cancellationToken.CanBeCanceled}, cancelled={cancellationToken.IsCancellationRequested}.");
             var response = await invoker.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            TraceNativeStage(failures, $"HTTP response {request.Method} {endpoint.Host}{endpoint.AbsolutePath}: " +
+                $"{(int)response.StatusCode}, elapsed={elapsed.Elapsed}.");
             if (elapsed.Elapsed > TimeSpan.FromMilliseconds(500))
                 failures.Enqueue($"{endpoint.Host}{endpoint.AbsolutePath}: took {elapsed.Elapsed}");
             if (!response.IsSuccessStatusCode)
@@ -524,6 +555,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     await response.Content.ReadAsStringAsync(cancellationToken));
             if (afterResponse is not null)
                 await afterResponse(request, response, cancellationToken);
+            TraceNativeStage(failures, $"HTTP completed {request.Method} {endpoint.Host}{endpoint.AbsolutePath}.");
             return response;
         }
     }
@@ -618,9 +650,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     private async Task VerifyNativeSourceAuthorityAfterWaitAsync(
         string loss, AuthorizedRuntimeSession session, RuntimeUsageSourceHttpClient sourceClient,
         RuntimeBrokerCredentialClient broker, RuntimeBootstrapReceiver receiver, RuntimePlacementTestServer environment,
-        string schema, ProjectsConfigResourceServer projects, string runToken, CancellationToken cancellationToken)
+        string schema, ProjectsConfigResourceServer projects, string runToken, ConcurrentQueue<string> failures,
+        CancellationToken cancellationToken)
     {
+        TraceNativeStage(failures, $"Source {loss} registration begin.");
         await sourceClient.RegisterAsync(session, cancellationToken);
+        TraceNativeStage(failures, $"Source {loss} registration completed.");
         await using var lockConnection = new NpgsqlConnection(_connectionString);
         await lockConnection.OpenAsync(cancellationToken);
         await using var transaction = await lockConnection.BeginTransactionAsync(cancellationToken);
@@ -631,10 +666,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             if (loss == "head")
                 acquire.Parameters.AddWithValue("runtime", session.Registration.RuntimeInstanceId.ToString("D"));
+            TraceNativeStage(failures, $"Source {loss} SQL lock acquisition begin.");
             await acquire.ExecuteNonQueryAsync(cancellationToken);
+            TraceNativeStage(failures, $"Source {loss} SQL lock acquired.");
         }
         await using var observations = session.CommitUsageAsync(sourceClient, cancellationToken).GetAsyncEnumerator();
         var append = observations.MoveNextAsync().AsTask();
+        TraceNativeStage(failures, $"Source {loss} append started; waiting for actual PostgreSQL contention.");
         try
         {
             await using var observer = new NpgsqlConnection(_connectionString);
@@ -653,6 +691,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 if (!waiting)
                     await Task.Delay(20, cancellationToken);
             }
+            TraceNativeStage(failures, $"Source {loss} actual PostgreSQL wait confirmed; revocation begin.");
             switch (loss)
             {
                 case "grant":
@@ -682,15 +721,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 default:
                     throw new InvalidOperationException("Unknown native source authority-loss case.");
             }
+            TraceNativeStage(failures, $"Source {loss} revocation completed.");
         }
         finally
         {
+            TraceNativeStage(failures, $"Source {loss} SQL rollback begin.");
             await transaction.RollbackAsync(CancellationToken.None);
+            TraceNativeStage(failures, $"Source {loss} SQL rollback completed.");
         }
+        TraceNativeStage(failures, $"Source {loss} denial await begin.");
         var denial = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => append);
+        TraceNativeStage(failures, $"Source {loss} denial returned {denial.Code}.");
         Assert.Equal("runtime_owner_denied", denial.Code);
         await AssertNativeSourceCountsAsync(schema, 1, 0);
+        TraceNativeStage(failures, $"Source {loss} receiver revocation cleanup begin.");
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.DisposeAsync().AsTask());
+        TraceNativeStage(failures, $"Source {loss} receiver revocation cleanup completed.");
         Assert.Equal(RuntimeBootstrapReceiverState.Disposed, receiver.State);
         output.WriteLine($"Native source {loss} loss after actual PostgreSQL wait denies without observation or accounting.");
     }
