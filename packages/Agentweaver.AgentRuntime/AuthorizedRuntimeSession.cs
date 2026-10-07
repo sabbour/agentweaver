@@ -55,6 +55,22 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             RuntimeCredentialPurpose.Observe, SourceGrant.Audience, SourceGrant.ConfigurationHash,
             _sourceCredential);
 
+    public async IAsyncEnumerable<RuntimeUsageSourceReceipt> CommitUsageAsync(
+        RuntimeUsageSourceHttpClient source,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        await source.RegisterAsync(this, cancellationToken).ConfigureAwait(false);
+        await foreach (var observation in _session.ReadUsageAsync(cancellationToken).ConfigureAwait(false))
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            RuntimeSessionBootstrap.RequireCurrent(Registration, _actor, _timeProvider);
+            if (!_sourceCredential.IsUsable())
+                throw new RuntimeAuthorizationException("runtime_credential_unavailable");
+            yield return await source.AppendAsync(this, observation, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)

@@ -200,17 +200,24 @@ public sealed class RuntimeGrantAuthority(
         VerifiedRuntimeProof verified, CancellationToken cancellationToken)
     {
         var proof = verified.Proof;
-        var registration = await RequireCurrentForProofAsync(verified, cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var current = await LockCurrentAsync(proof.GrantId, cancellationToken);
-        await VerifyOriginalAsync(verified, registration, cancellationToken);
+        var original = await VerifyStoredProofAsync(verified, cancellationToken);
         RequireCurrentProof(current, proof, RuntimeCredentialState.Active);
+        RequireLive(original);
+        RequireLive(current);
+        RequireProofUsable(verified);
         await RequireDeliveryAsync(current, cancellationToken);
-        await RequireSameCurrentAsync(registration, cancellationToken);
+        var registration = await RequireCurrentAsync(proof.RuntimeInstanceId, cancellationToken);
+        if (original.RegistrationRevision != registration.Revision ||
+            original.RegistrationHash != RuntimeContractValidation.RegistrationHash(registration))
+            throw Denied("runtime_registration_stale");
+        RequireProofUsable(verified);
+        RequireLive(original);
         RequireLive(current);
         await transaction.CommitAsync(cancellationToken);
-        await transaction.DisposeAsync();
-        await RequireCurrentForProofAsync(verified, cancellationToken);
+        RequireProofUsable(verified);
+        RequireLive(current);
         return Receipt(current);
     }
 

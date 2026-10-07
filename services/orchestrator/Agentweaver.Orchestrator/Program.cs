@@ -96,6 +96,7 @@ builder.Services.AddHttpClient<EventsAddressedMessageClient>()
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
 builder.Services.AddTransient<IExecutableActionPolicyEvaluationJournal>(services =>
     services.GetRequiredService<EventsAddressedMessageClient>());
+var runtimeUsageEnabled = builder.Services.AddRuntimeUsageSource(builder.Configuration);
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
 {
@@ -139,6 +140,8 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
 app.MapCoordinationEndpoints();
 if (runtimeRegistrationEnabled)
     app.MapRuntimeRegistrationEndpoints();
+if (runtimeUsageEnabled)
+    app.MapRuntimeUsageSourceEndpoints();
 app.Run();
 
 static string Required(IConfiguration configuration, string key) =>

@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography.X509Certificates;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Agentweaver.Identity;
 using Agentweaver.Providers.Storage.AzureFiles;
 using Azure.Core;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -85,7 +86,26 @@ builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
     builder.Configuration.GetSection("Environment:RuntimeBootstrap:Profiles")
         .Get<EnvironmentRuntimeBootstrapProfileRegistration[]>() ?? []));
+var runtimeOrchestratorAddress = builder.Configuration["Environment:RuntimeBootstrap:OrchestratorOwnerAddress"];
+var runtimeBrokerAddress = builder.Configuration["Environment:RuntimeBootstrap:BrokerOwnerAddress"];
+var runtimeBootstrapEnabled = runtimeOrchestratorAddress is not null || runtimeBrokerAddress is not null;
+if (runtimeBootstrapEnabled)
+{
+    var runtimeDeliveryOptions = new EnvironmentRuntimeBootstrapDeliveryOptions(
+        RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(
+            runtimeOrchestratorAddress ?? throw new InvalidOperationException(
+                "Environment Runtime bootstrap requires an Orchestrator owner address."))),
+        RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(
+            runtimeBrokerAddress ?? throw new InvalidOperationException(
+                "Environment Runtime bootstrap requires a Broker owner address."))));
+    builder.Services.AddSingleton(runtimeDeliveryOptions);
+    builder.Services.AddHttpClient<EnvironmentRuntimeBootstrapDelivery>(client =>
+        client.Timeout = TimeSpan.FromSeconds(20))
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+}
 builder.Services.AddSingleton(ciliumOptions);
+builder.Services.AddHttpClient<EnvironmentRuntimeOwnerContextClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
 builder.Services.AddHttpClient<IProjectsConfigClient, ProjectsConfigHttpClient>(client =>
 {
     client.BaseAddress = projectsBaseAddress;
@@ -126,6 +146,8 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 var app = builder.Build();
+if (runtimeBootstrapEnabled)
+    app.MapEnvironmentRuntimeBootstrap();
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 var dbOptions = app.Services.GetRequiredService<DbContextOptions<EnvironmentDbContext>>();
 await EnvironmentMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);

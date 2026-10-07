@@ -1,5 +1,10 @@
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
+using Agentweaver.EventsAndSessions.Cost;
+using Agentweaver.Identity;
+using Agentweaver.Providers;
+using System.Collections.Immutable;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Security.Cryptography;
 using System.Text;
 using Npgsql;
@@ -31,6 +36,101 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         await using var command = new NpgsqlCommand(
             $"DROP SCHEMA IF EXISTS \"{_schema}\" CASCADE", connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    [Fact]
+    public async Task NativeConsumerCommitsPriceLedgerRateCardInboxAndReceiptOnceAcrossRestart()
+    {
+        var receipt = NativeReceipt();
+        var consumer = NativeConsumer();
+        var first = await consumer.AppendAsync(receipt, _ => Task.CompletedTask, default);
+        Assert.False(first.IsDuplicate);
+        Assert.Equal(0.00123456725m, first.Accounting.Amount);
+        Assert.Equal(CostDisposition.Estimate, first.Accounting.Disposition);
+        var restarted = NativeConsumer();
+        var replays = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
+            restarted.AppendAsync(receipt, _ => Task.CompletedTask, default)));
+        Assert.All(replays, replay =>
+        {
+            Assert.True(replay.IsDuplicate);
+            Assert.Equal(first.Accounting, replay.Accounting);
+        });
+        var changedUsage = receipt.Usage with
+        {
+            Measurement = receipt.Usage.Measurement with { CacheWriteTokens = 6 }
+        };
+        await Assert.ThrowsAsync<UsageLedgerConflictException>(() => restarted.AppendAsync(receipt with
+        {
+            Usage = changedUsage,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(receipt.Registration, changedUsage)
+        }, _ => Task.CompletedTask, default));
+        var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        Assert.Equal(1, totals.Events);
+        var agent = Assert.Single(totals.Agents);
+        Assert.Equal(5, agent.CacheWriteTokens);
+        Assert.Null(agent.RequestCount);
+        Assert.Equal(0.00123456725m, Assert.Single(totals.Amounts).Amount);
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var counts = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{_schema}".usage_ledger),
+                   (SELECT count(*) FROM "{_schema}".usage_rate_cards),
+                   (SELECT count(*) FROM "{_schema}".usage_run_cost_bindings),
+                   (SELECT count(*) FROM "{_schema}".usage_source_receipts),
+                   (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts
+                    WHERE consumer_id = 'events.native-sdk-usage.v1')
+            """, connection);
+        await using var reader = await counts.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.All(Enumerable.Range(0, 5), column => Assert.Equal(1L, reader.GetInt64(column)));
+    }
+
+    [Fact]
+    public async Task NativeConsumerAuthorityFailureAfterLedgerWaitRollsBackEveryAccountingArtifact()
+    {
+        var receipt = NativeReceipt();
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => NativeConsumer().AppendAsync(
+            receipt, _ => throw new RuntimeAuthorizationException("runtime_usage_authority_denied"), default));
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var counts = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{_schema}".usage_ledger),
+                   (SELECT count(*) FROM "{_schema}".usage_rate_cards),
+                   (SELECT count(*) FROM "{_schema}".usage_run_cost_bindings),
+                   (SELECT count(*) FROM "{_schema}".usage_source_receipts),
+                   (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts
+                    WHERE consumer_id = 'events.native-sdk-usage.v1')
+            """, connection);
+        await using (var reader = await counts.ExecuteReaderAsync())
+        {
+            Assert.True(await reader.ReadAsync());
+            Assert.All(Enumerable.Range(0, 5), column => Assert.Equal(0L, reader.GetInt64(column)));
+        }
+        Assert.False((await NativeConsumer().AppendAsync(
+            receipt, _ => Task.CompletedTask, default)).IsDuplicate);
+    }
+
+    [Fact]
+    public async Task NativeConsumerKeepsMissingMeasurementsAndUnknownRatesUnpricedAndRejectsByok()
+    {
+        var receipt = NativeReceipt(missingMeasurements: true, modelId: "unknown-native-model");
+        var accepted = await NativeConsumer().AppendAsync(receipt, _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, accepted.Accounting.Disposition);
+        Assert.Equal("model-rate-unavailable", accepted.Accounting.UnpricedReason);
+        Assert.Null(accepted.Accounting.Amount);
+        var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        var agent = Assert.Single(totals.Agents);
+        Assert.Null(agent.RequestCount);
+        Assert.Null(agent.InputTokens);
+        Assert.Null(agent.CacheWriteTokens);
+        Assert.Null(agent.DurationMilliseconds);
+        var byok = receipt.Usage with
+        {
+            SdkSource = receipt.Usage.SdkSource! with { SourceMode = "byok" }
+        };
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => NativeConsumer().AppendAsync(receipt with
+        {
+            Usage = byok, CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(receipt.Registration, byok)
+        }, _ => Task.CompletedTask, default));
+        Assert.Equal(1, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
     }
 
     [Fact]
@@ -404,6 +504,54 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             attribution,
             measurement: measurement);
         await _ledger.AppendAsync(usage, UsageContractTests.Binding(), price);
+    }
+
+    private NativeUsageReceiptConsumer NativeConsumer()
+    {
+        var options = new PostgresSessionsProviderOptions(
+            "native-postgres", "test", 1, _schema, "native-options", 1);
+        var provider = new CopilotCostProvider(new(
+            "native-cost", 1, "cost-options-v1", 1,
+            new("native-copilot-card", "1", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000m,
+                ImmutableDictionary<string, decimal>.Empty.Add("native-model", 2.5m))));
+        var catalog = ProviderCatalog.Create(
+            [provider.CreateRegistration()], [], [],
+            meterSourceSelections: [new(SdkMeterSources.CopilotNanoAiu, CopilotCostProvider.ProviderId)]);
+        Assert.True(catalog.IsSuccess, catalog.Error?.Message);
+        var binder = new CopilotCostProviderBinder(
+            provider, new(catalog.Value!), NullLogger<CopilotCostProviderBinder>.Instance);
+        return new(_fixture.DataSource, options, _ledger, provider, binder);
+    }
+
+    private static RuntimeUsageSourceReceipt NativeReceipt(
+        bool missingMeasurements = false, string modelId = "native-model")
+    {
+        var registration = new RuntimeRegistration(
+            Guid.NewGuid(), 1,
+            new("https://broker.test/", Guid.NewGuid().ToString("D"), "tenant-1", "project-1", "run-1",
+                "session-1", "agent-1", "native-turn", 1, 1, 1, "selection-1", new string('a', 64), 1,
+                "environment", "placement", 1, "profile", new("https://runtime.test/configure"),
+                new("https://orchestrator.test/internal/runtime/observations"))
+            {
+                ModelSelectionReference = "native-model-selection", PlacementProviderId = "sandbox",
+                EnvironmentLifecycleGeneration = 1, EnvironmentLeaseRevision = 2,
+                EnvironmentCurrentFencingGeneration = 3, EnvironmentProviderFencingGeneration = 3
+            }, RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(1));
+        var source = new SdkSessionFacts(
+            registration.RuntimeInstanceId, $"agentweaver-runtime-{registration.RuntimeInstanceId:D}",
+            "1.0.11", "runtime-v1", "native-model-selection", modelId, new string('b', 64),
+            2.5m, "hosted-copilot", SdkMeterSources.CopilotNanoAiu, registration.Binding.AcceptedSelectionHash, 1);
+        var eventId = Guid.NewGuid().ToString("D");
+        var observation = new SdkUsageObservation(
+            SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, eventId),
+            eventId, source.SdkSessionId, DateTimeOffset.UtcNow, modelId,
+            missingMeasurements ? null : 17, missingMeasurements ? null : 11,
+            missingMeasurements ? null : 7, missingMeasurements ? null : 5,
+            missingMeasurements ? null : 3, missingMeasurements ? null : 1234567.25m,
+            missingMeasurements ? null : 12.5m);
+        var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
+        return new(1, Guid.NewGuid(), registration, usage,
+            RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
     }
 
     private async Task CreateSessionAsync(string projectId, string runId, string sessionId)

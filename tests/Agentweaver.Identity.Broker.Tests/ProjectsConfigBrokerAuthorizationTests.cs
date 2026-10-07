@@ -33,7 +33,8 @@ using Xunit;
 namespace Agentweaver.Identity.Broker.Tests;
 
 [Collection("IdentityBrokerPostgres")]
-public sealed partial class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixture postgres)
+public sealed partial class ProjectsConfigBrokerAuthorizationTests(
+    PostgresContainerFixture postgres, Xunit.Abstractions.ITestOutputHelper output)
     : IAsyncLifetime
 {
     private static readonly JsonSerializerOptions AuthorizationJsonOptions = new(JsonSerializerDefaults.Web)

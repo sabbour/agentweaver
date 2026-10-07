@@ -13,6 +13,29 @@ public sealed record CopilotCostProviderOptions(
     public const int CurrentOptionsSchemaVersion = 1;
     public const decimal NanoAiuPerAiCredit = 1_000_000_000m;
 
+    public static CopilotCostProviderOptions? FromConfiguration(IConfigurationSection section)
+    {
+        if (!section.Exists())
+            return null;
+        var card = section.GetRequiredSection(nameof(RateCard));
+        var options = new CopilotCostProviderOptions(
+            section[nameof(ResourceId)] ?? string.Empty,
+            section.GetValue<long>(nameof(ResourceGeneration)),
+            section[nameof(OptionsRevision)] ?? string.Empty,
+            section.GetValue<int>(nameof(OptionsSchemaVersion)),
+            new CostRateCard(
+                card[nameof(CostRateCard.Id)] ?? string.Empty,
+                card[nameof(CostRateCard.Version)] ?? string.Empty,
+                card[nameof(CostRateCard.MeterSource)] ?? string.Empty,
+                card[nameof(CostRateCard.Unit)] ?? string.Empty,
+                card.GetValue<decimal>(nameof(CostRateCard.NanoUnitsPerUnit)),
+                (card.GetSection(nameof(CostRateCard.ModelMultipliers))
+                    .Get<Dictionary<string, decimal>>() ?? [])
+                    .ToImmutableDictionary(StringComparer.Ordinal)));
+        options.Validate();
+        return options;
+    }
+
     public void Validate()
     {
         if (!IsToken(ResourceId, 256) || ResourceGeneration < 1 ||

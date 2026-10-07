@@ -212,7 +212,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 model_multipliers, canonical_input, payload)
             VALUES (@card_id, @version, @meter_source, @unit, @nano_units_per_unit,
                 @model_multipliers, @canonical_input, @payload)
-            ON CONFLICT (card_id, version) DO NOTHING
+            ON CONFLICT DO NOTHING
             """, connection, transaction))
         {
             insert.Parameters.AddWithValue("card_id", NpgsqlDbType.Varchar, card.Id);

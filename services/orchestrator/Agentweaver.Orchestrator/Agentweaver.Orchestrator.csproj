@@ -25,5 +25,6 @@
     <EmbeddedResource Include="Migrations\003_accepted_run_selection_context.sql" />
     <EmbeddedResource Include="Migrations\004_runtime_owner_context.sql" />
     <EmbeddedResource Include="Migrations\runtime_registration.sql" />
+    <EmbeddedResource Include="Migrations\006_runtime_usage_source.sql" />
   </ItemGroup>
 </Project>

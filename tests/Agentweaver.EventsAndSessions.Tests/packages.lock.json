@@ -695,12 +695,19 @@
         "type": "Project",
         "dependencies": {
           "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Identity": "[0.0.0, )",
           "Agentweaver.Persistence.Postgres": "[0.0.0, )",
           "Agentweaver.Providers": "[0.0.0, )",
           "Agentweaver.Telemetry": "[0.0.0, )",
           "Azure.Identity": "[1.17.1, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
           "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
+        }
+      },
+      "agentweaver.identity": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )"
         }
       },
       "agentweaver.persistence.postgres": {

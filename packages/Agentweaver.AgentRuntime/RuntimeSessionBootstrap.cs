@@ -50,12 +50,16 @@ public sealed class RuntimeSessionBootstrap(
                 source.Receipt.Audience != registration.Binding.ObservationEndpoint)
                 throw new RuntimeAuthorizationException("runtime_source_credential_unavailable");
             var sourceProof = SourceProof(source);
-            await broker.VerifySourceAsync(sourceProof, cancellationToken);
             await RequireUnchangedAsync(registration, cancellationToken);
+            var verifiedSource = await broker.VerifySourceAsync(sourceProof, cancellationToken);
+            RequireRegistrationReceipt(verifiedSource, registration);
+            if (!source.Credential.IsUsable() || !sdkCredential.IsUsable())
+                throw new RuntimeAuthorizationException("runtime_credential_unavailable");
             session = await sessions.CreateHostedAsync(
                 registration, modelReference, sdkCredential, cancellationToken);
-            await broker.VerifySourceAsync(sourceProof, cancellationToken);
             await RequireUnchangedAsync(registration, cancellationToken);
+            verifiedSource = await broker.VerifySourceAsync(sourceProof, cancellationToken);
+            RequireRegistrationReceipt(verifiedSource, registration);
             cancellationToken.ThrowIfCancellationRequested();
             if (!source.Credential.IsUsable() || !sdkCredential.IsUsable())
                 throw new RuntimeAuthorizationException("runtime_credential_unavailable");

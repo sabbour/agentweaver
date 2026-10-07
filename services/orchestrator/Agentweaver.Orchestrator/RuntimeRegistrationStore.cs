@@ -92,11 +92,15 @@ internal sealed class RuntimeRegistrationStore
         return registered;
     }
 
-    internal async Task<RuntimeRegistration?> ReadAsync(Guid runtimeInstanceId, CancellationToken cancellationToken)
+    internal async Task<RuntimeRegistration?> ReadAsync(
+        Guid runtimeInstanceId, CancellationToken cancellationToken,
+        Func<RuntimeRegistration, CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         if (runtimeInstanceId == Guid.Empty)
             throw new RuntimeAuthorizationException("runtime_registration_invalid");
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = revalidateCurrentAuthority is null
+            ? null : await connection.BeginTransactionAsync(cancellationToken);
         await using var command = new NpgsqlCommand($"""
             SELECT revision.runtime_instance_id, revision.revision, revision.binding_json,
                    revision.binding_hash, revision.state, revision.expires_at
@@ -105,10 +109,23 @@ internal sealed class RuntimeRegistrationStore
               ON revision.runtime_instance_id = head.runtime_instance_id
              AND revision.revision = head.current_revision
             WHERE head.runtime_instance_id = @runtime
-            """, connection);
+            {(revalidateCurrentAuthority is null ? "" : "FOR SHARE OF head")}
+            """, connection, transaction);
         command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, runtimeInstanceId);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? ReadRegistration(reader) : null;
+        RuntimeRegistration? registration;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+            registration = await reader.ReadAsync(cancellationToken) ? ReadRegistration(reader) : null;
+        if (registration is not null && revalidateCurrentAuthority is not null)
+        {
+            RequireAvailable(registration);
+            await revalidateCurrentAuthority(registration, cancellationToken).ConfigureAwait(false);
+            RequireAvailable(registration);
+        }
+        if (transaction is not null)
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        if (registration is not null && revalidateCurrentAuthority is not null)
+            RequireAvailable(registration);
+        return registration;
     }
 
     internal async Task<RuntimeRegistration> RevokeAsync(

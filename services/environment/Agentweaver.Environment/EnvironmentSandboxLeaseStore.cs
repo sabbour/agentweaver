@@ -148,6 +148,47 @@ public sealed class EnvironmentSandboxLeaseStore(
     }
 
 
+    public async Task<TResult> GetCurrentAsync<TResult>(
+        EnvironmentGenerationFence fence,
+        Func<SandboxLeaseSnapshot?, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        ArgumentNullException.ThrowIfNull(callback);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
+            connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
+        await RequireActiveOwnerAsync(connection, transaction, fence, cancellationToken).ConfigureAwait(false);
+        var lease = await ReadCurrentAsync(
+            connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
+        var result = await callback(lease, cancellationToken).ConfigureAwait(false);
+        var currentLease = await ReadCurrentAsync(
+            connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
+        if (!SameLeaseVersion(lease, currentLease))
+            throw new EnvironmentLifecycleException(
+                "sandbox_lease_stale",
+                "The current Sandbox lease changed during the owner-scoped read.");
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    private static bool SameLeaseVersion(
+        SandboxLeaseSnapshot? left, SandboxLeaseSnapshot? right) =>
+        left is null
+            ? right is null
+            : right is not null &&
+              left.Fence == right.Fence &&
+              left.ResourceGeneration == right.ResourceGeneration &&
+              left.OperationId == right.OperationId &&
+              left.LeaseRevision == right.LeaseRevision &&
+              left.ProviderFencingGeneration == right.ProviderFencingGeneration &&
+              left.CurrentFencingGeneration == right.CurrentFencingGeneration &&
+              left.State == right.State &&
+              left.IsCurrent == right.IsCurrent &&
+              left.LeaseExpiresAt == right.LeaseExpiresAt &&
+              left.UpdatedAt == right.UpdatedAt;
+
     public async Task<SandboxLeaseSnapshot> CompleteProvisionAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,

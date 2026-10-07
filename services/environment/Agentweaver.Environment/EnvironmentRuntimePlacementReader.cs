@@ -24,36 +24,78 @@ public sealed class EnvironmentRuntimePlacementReader(
     IEnvironmentLifecycleStore lifecycleStore,
     ISandboxLeaseStore leaseStore,
     EnvironmentEgressManager egressManager,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    EnvironmentRuntimeOwnerContextClient? runtimeOwner = null)
 {
     public async Task<EnvironmentRuntimeBootstrapContext?> GetBootstrapContextAsync(
-        CurrentCallerRequest caller, string projectId, string runId, string environmentId,
+        RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
         string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
         CancellationToken cancellationToken)
     {
-        var placement = await GetCurrentPlacementAsync(
-            caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
-        if (placement is null)
-            return null;
-        var owner = new EnvironmentOwnerIdentity(placement.TenantId, projectId, runId, environmentId);
-        var profile = profiles.Resolve(owner, profileId, placement.Resource);
-        return new(
-            1, placement.TenantId, projectId, runId, environmentId,
-            placement.LifecycleGeneration, placement.CurrentFencingGeneration,
-            placement.ProviderFencingGeneration, placement.LeaseRevision, placement.LeaseExpiresAt,
-            placement.Resource, placement.Endpoint, placement.Placement,
-            profile.ProfileId, profile.ConfigureEndpoint, profile.ObservationEndpoint);
+        if (runtimeOwner is null)
+            throw new RuntimeAuthorizationException("runtime_owner_context_unavailable");
+        RuntimeContractValidation.ValidateIdentifier(sessionId);
+        return await ReadCurrentPlacementCoreAsync<EnvironmentRuntimeBootstrapContext?>(
+            new(actor.Bearer.GetValue(), actor.TenantSelector), projectId, runId, environmentId,
+            runBoundRead: true, async (placement, token) =>
+            {
+                if (placement is null)
+                    return null;
+                var ownerContext = await runtimeOwner.ReadAsync(actor, projectId, runId, sessionId, token)
+                    .ConfigureAwait(false);
+                if (ownerContext.ContractVersion != 1 || ownerContext.TenantId != placement.TenantId ||
+                    ownerContext.ProjectId != projectId || ownerContext.RunId != runId ||
+                    ownerContext.SessionId != sessionId || !actor.Bearer.IsUsable() ||
+                    placement.LeaseExpiresAt <= timeProvider.GetUtcNow())
+                    throw new RuntimeAuthorizationException("runtime_owner_context_stale");
+                var owner = new EnvironmentOwnerIdentity(placement.TenantId, projectId, runId, environmentId);
+                var profile = profiles.Resolve(owner, profileId, placement.Resource);
+                return new EnvironmentRuntimeBootstrapContext(
+                    1, placement.TenantId, projectId, runId, environmentId,
+                    placement.LifecycleGeneration, placement.CurrentFencingGeneration,
+                    placement.ProviderFencingGeneration, placement.LeaseRevision, placement.LeaseExpiresAt,
+                    placement.Resource, placement.Endpoint, placement.Placement,
+                    profile.ProfileId, profile.ConfigureEndpoint, profile.ObservationEndpoint)
+                {
+                    RuntimeOwnerContext = ownerContext
+                };
+            }, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentPlacementAsync(
+    public Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentPlacementAsync(
         CurrentCallerRequest caller,
         string projectId,
         string runId,
         string environmentId,
+        CancellationToken cancellationToken) =>
+        ReadCurrentPlacementCoreAsync(
+            caller, projectId, runId, environmentId, runBoundRead: false,
+            (placement, _) => Task.FromResult(placement), cancellationToken);
+
+    internal Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentRunBoundPlacementAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        CancellationToken cancellationToken) =>
+        ReadCurrentPlacementCoreAsync(
+            caller, projectId, runId, environmentId, runBoundRead: true,
+            (placement, _) => Task.FromResult(placement), cancellationToken);
+
+    private async Task<TResult> ReadCurrentPlacementCoreAsync<TResult>(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        bool runBoundRead,
+        Func<EnvironmentSandboxPlacementProjectionV1?, CancellationToken, Task<TResult>> project,
         CancellationToken cancellationToken)
     {
-        var authorization = await egressManager.GetAuthorizedRunEnvironmentControlAsync(
-            caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+        var authorization = runBoundRead
+            ? await egressManager.GetAuthorizedRunEnvironmentPlacementReadAsync(
+                caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false)
+            : await egressManager.GetAuthorizedRunEnvironmentControlAsync(
+                caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
         var lifecycle = await lifecycleStore.GetAsync(authorization.Owner, cancellationToken).ConfigureAwait(false)
             ?? throw new EnvironmentLifecycleException(
                 "environment_unknown",
@@ -61,20 +103,29 @@ public sealed class EnvironmentRuntimePlacementReader(
         await lifecycleStore.RequireActiveAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
         var lease = await leaseStore.GetCurrentAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
         await lifecycleStore.RequireActiveAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
-        await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
-            caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
-        var currentLease = await leaseStore.GetCurrentAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
-        if (!SameCurrentPlacementLease(lease, currentLease))
-            throw new EnvironmentLifecycleException(
-                "sandbox_lease_stale",
-                "The current Sandbox lease changed while its placement was being authorized.");
-        return currentLease is null
-            ? null
-            : ProjectCurrentPlacement(
-                authorization.Owner,
-                lifecycle.Fence,
-                currentLease,
-                timeProvider.GetUtcNow());
+        if (runBoundRead)
+            await egressManager.EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
+                caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
+        else
+            await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
+                caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
+        return await leaseStore.GetCurrentAsync(
+            lifecycle.Fence, async (currentLease, token) =>
+            {
+                if (!SameCurrentPlacementLease(lease, currentLease))
+                    throw new EnvironmentLifecycleException(
+                        "sandbox_lease_stale",
+                        "The current Sandbox lease changed while its placement was being authorized.");
+                if (runBoundRead)
+                    await egressManager.EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
+                        caller, authorization.Owner, authorization.Authorization, token).ConfigureAwait(false);
+                else
+                    await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
+                        caller, authorization.Owner, authorization.Authorization, token).ConfigureAwait(false);
+                var projection = currentLease is null ? null : ProjectCurrentPlacement(
+                    authorization.Owner, lifecycle.Fence, currentLease, timeProvider.GetUtcNow());
+                return await project(projection, token).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
     }
 
     internal static EnvironmentSandboxPlacementProjectionV1 ProjectCurrentPlacement(

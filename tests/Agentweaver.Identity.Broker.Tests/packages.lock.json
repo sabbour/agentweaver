@@ -1298,6 +1298,7 @@
         "type": "Project",
         "dependencies": {
           "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Identity": "[0.0.0, )",
           "Agentweaver.Persistence.Postgres": "[0.0.0, )",
           "Agentweaver.Providers": "[0.0.0, )",
           "Agentweaver.Telemetry": "[0.0.0, )",

@@ -53,8 +53,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    [Fact]
-    public async Task BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+        bool revokeSourceBeforeSdk)
     {
         using var signingCertificate = X509CertificateLoader.LoadPkcs12FromFile(
             _signingCertificate.PfxPath,
@@ -1285,9 +1288,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 orchestrator, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]);
             await AssertStatusAsync(replayedOwner, HttpStatusCode.OK);
             Assert.Equal(runtimeOwner, await ReadJsonAsync<RuntimeOwnerContext>(replayedOwner));
-            await VerifyRunBoundRuntimeRegistrationIsDeniedByEnvironmentControlPolicyAsync(
+            await VerifyRunBoundRuntimeRegistrationWithCurrentEnvironmentAsync(
                 ownerSchema, signingKey, projects, eventsFactory, runToken, runtimeOwner,
-                runnerMembership.MembershipId, sandboxProvider);
+                runnerMembership.MembershipId, sandboxProvider, revokeSourceBeforeSdk);
         }
         using (var unmappedOwner = await SendAsync(
                    orchestrator, HttpMethod.Get,
@@ -1718,7 +1721,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Func<HttpMessageHandler> eventsHandler,
         IObjectStore? objectStore = null,
         ICoordinatorSandboxResourceProvider? sandboxProvider = null,
-        Func<HttpMessageHandler>? environmentHandler = null)
+        Func<HttpMessageHandler>? environmentHandler = null,
+        Func<HttpMessageHandler>? runtimeUsageHandler = null)
         : WebApplicationFactory<OrchestratorHost::Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -1738,7 +1742,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["EventsAndSessions:Authorization:OwnerBaseAddress"] = "https://events.test/",
                     ["EventsAndSessions:Authorization:Audience"] = "https://api.test",
                     ["Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress"] =
-                        environmentHandler is null ? null : "https://environment.test/"
+                        environmentHandler is null ? null : "https://environment.test/",
+                    ["Orchestrator:RuntimeUsage:BrokerOwnerAddress"] =
+                        runtimeUsageHandler is null ? null : "https://broker.test/"
                 }));
             builder.ConfigureTestServices(services =>
             {
@@ -1754,6 +1760,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 if (environmentHandler is not null)
                     services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.RuntimeEnvironmentContextClient>()
                         .ConfigurePrimaryHttpMessageHandler(environmentHandler);
+                if (runtimeUsageHandler is not null)
+                    services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.RuntimeUsageBrokerClient>()
+                        .ConfigurePrimaryHttpMessageHandler(runtimeUsageHandler);
                 if (objectStore is not null)
                     services.AddSingleton<IObjectStore>(objectStore);
                 if (sandboxProvider is not null)
@@ -1799,9 +1808,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         string schema,
         SecurityKey signingKey,
         Func<HttpMessageHandler> projectsHandler,
-        Func<HttpMessageHandler> orchestratorHandler)
+        Func<HttpMessageHandler> orchestratorHandler,
+        Func<HttpMessageHandler>? nativeUsageHandler = null)
         : WebApplicationFactory<EventsHost::Program>
     {
+        public string Schema { get; } = schema;
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             var databaseName = new NpgsqlConnectionStringBuilder(connectionString).Database;
@@ -1817,7 +1829,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["EventsAndSessions:Provider:ResourceId"] = "postgres-test",
                     ["EventsAndSessions:Provider:DatabaseName"] = databaseName,
                     ["EventsAndSessions:Provider:ResourceGeneration"] = "1",
-                    ["EventsAndSessions:Provider:Schema"] = schema,
+                    ["EventsAndSessions:Provider:Schema"] = Schema,
                     ["EventsAndSessions:Provider:OptionsRevision"] = "integration-v1",
                     ["EventsAndSessions:Messaging:OptionsRevision"] = "integration-messaging-v1",
                     ["EventsAndSessions:Knowledge:BaseAddress"] = "https://knowledge.test/",
@@ -1827,7 +1839,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["ProjectsConfig:AuthorizationContext:OwnerBaseAddress"] = "https://projects.test/",
                     ["ProjectsConfig:AuthorizationContext:Audience"] = "https://api.test",
                     ["EventsAndSessions:OrchestratorOwner:OwnerBaseAddress"] = "https://orchestrator.test/",
-                    ["EventsAndSessions:OrchestratorOwner:Audience"] = "https://api.test"
+                    ["EventsAndSessions:OrchestratorOwner:Audience"] = "https://api.test",
+                    ["EventsAndSessions:RuntimeUsage:Enabled"] = nativeUsageHandler is null ? "false" : "true"
                 }));
             builder.ConfigureTestServices(services =>
             {
@@ -1842,6 +1855,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         EventsHost::Agentweaver.EventsAndSessions.ICoordinationOwnerClient,
                         EventsHost::Agentweaver.EventsAndSessions.CoordinationOwnerClient>()
                     .ConfigurePrimaryHttpMessageHandler(orchestratorHandler);
+                if (nativeUsageHandler is not null)
+                    services.AddHttpClient("NativeUsageReceiptClient")
+                        .ConfigurePrimaryHttpMessageHandler(nativeUsageHandler);
             });
         }
     }

@@ -1,4 +1,5 @@
 using Agentweaver.Abstractions;
+using System.Text.Json.Serialization;
 
 namespace Agentweaver.Identity;
 
@@ -18,4 +19,8 @@ public sealed record EnvironmentRuntimeBootstrapContext(
     SandboxPlacementReference Placement,
     string ProfileId,
     Uri ConfigureEndpoint,
-    Uri ObservationEndpoint);
+    Uri ObservationEndpoint)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeOwnerContext? RuntimeOwnerContext { get; init; }
+}

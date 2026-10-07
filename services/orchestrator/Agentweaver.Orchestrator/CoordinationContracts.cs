@@ -165,14 +165,6 @@ internal sealed record SessionRuntimeOwnerState(
     string AcceptedSelectionHash, long ExecutionFence, long LogicalTurnOrdinal,
     long StateVersion, string RuntimeTurnId);
 
-public sealed record RuntimeOwnerContext(
-    int ContractVersion, string ActorIssuer, string ActorId, string TenantId,
-    string ProjectId, string RunId, string SessionId, string AgentId,
-    string ModelSelectionReference, string TurnId, long ProjectRevision,
-    long ProjectConfigurationRevision, long PlatformRuntimeRevision,
-    string ContextRevision, string AcceptedSelectionHash, long ExecutionFence,
-    long LogicalTurnOrdinal, long OwnerStateVersion, long DecisionStateVersion);
-
 public sealed record RegisteredChild(
     SessionIdentity Identity,
     string ParentSessionId,

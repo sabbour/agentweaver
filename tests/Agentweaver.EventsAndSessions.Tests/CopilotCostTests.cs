@@ -4,6 +4,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions.Cost;
 using Agentweaver.Providers;
 using Agentweaver.Telemetry;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -61,6 +62,55 @@ public sealed class CopilotCostTests
     private static UsageModelBinding Model(
         string id = "gpt-4o", string source = CopilotCostProvider.MeterSource) =>
         new("model-reference", id, source, "model-selection-r7");
+
+    [Fact]
+    public void ReadsConfiguredRateCardIntoAnImmutableExactModelSnapshot()
+    {
+        var values = ConfigurationValues();
+        var section = new ConfigurationBuilder().AddInMemoryCollection(values)
+            .Build().GetSection("Cost");
+        var options = CopilotCostProviderOptions.FromConfiguration(section);
+        Assert.NotNull(options);
+        Assert.Equal(Options(), options with { RateCard = Options().RateCard });
+        Assert.Equal(Options().RateCard,
+            options.RateCard with { ModelMultipliers = Options().RateCard.ModelMultipliers });
+        Assert.Equal(3m, options.RateCard.ModelMultipliers["gpt-4o"]);
+        Assert.Equal(2m, options.RateCard.ModelMultipliers["gpt-4.1"]);
+        Assert.False(options.RateCard.ModelMultipliers.ContainsKey("GPT-4O"));
+        section["RateCard:ModelMultipliers:gpt-4o"] = "99";
+        Assert.Equal(3m, options.RateCard.ModelMultipliers["gpt-4o"]);
+        Assert.Null(CopilotCostProviderOptions.FromConfiguration(
+            new ConfigurationBuilder().Build().GetSection("Cost")));
+    }
+
+    [Theory]
+    [InlineData("Cost:ResourceGeneration", null)]
+    [InlineData("Cost:OptionsSchemaVersion", "2")]
+    [InlineData("Cost:RateCard:NanoUnitsPerUnit", "2000000000")]
+    [InlineData("Cost:RateCard:ModelMultipliers:gpt-4o", "0")]
+    public void RejectsInvalidConfiguredRatesInsteadOfUsingDefaults(string key, string? value)
+    {
+        var values = ConfigurationValues();
+        values[key] = value;
+        var section = new ConfigurationBuilder().AddInMemoryCollection(values)
+            .Build().GetSection("Cost");
+        Assert.Throws<ArgumentException>(() => CopilotCostProviderOptions.FromConfiguration(section));
+    }
+
+    private static Dictionary<string, string?> ConfigurationValues() => new()
+    {
+        ["Cost:ResourceId"] = "copilot-meter-resource",
+        ["Cost:ResourceGeneration"] = "7",
+        ["Cost:OptionsRevision"] = "copilot-options-v1",
+        ["Cost:OptionsSchemaVersion"] = "1",
+        ["Cost:RateCard:Id"] = "copilot-aic-v1",
+        ["Cost:RateCard:Version"] = "1",
+        ["Cost:RateCard:MeterSource"] = CopilotCostProvider.MeterSource,
+        ["Cost:RateCard:Unit"] = CopilotCostProvider.AiCreditUnit,
+        ["Cost:RateCard:NanoUnitsPerUnit"] = "1000000000",
+        ["Cost:RateCard:ModelMultipliers:gpt-4o"] = "3",
+        ["Cost:RateCard:ModelMultipliers:gpt-4.1"] = "2"
+    };
 
     [Fact]
     public void PricesAlreadyWeightedNanoAiuExactlyWithoutReweightingOrTruncation()

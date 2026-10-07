@@ -413,6 +413,15 @@ public interface ISandboxLeaseStore
         EnvironmentGenerationFence fence,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Runs an owner-scoped read while retaining the active Environment owner lock.
+    /// The callback must not recursively call this reader or perform provider effects.
+    /// </summary>
+    Task<TResult> GetCurrentAsync<TResult>(
+        EnvironmentGenerationFence fence,
+        Func<SandboxLeaseSnapshot?, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken);
+
     Task<SandboxLeaseSnapshot> CompleteProvisionAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
