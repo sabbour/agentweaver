@@ -1462,6 +1462,8 @@ export interface SteerCoordinatorRequest {
   kind: SteerKind;
   target_child_run_id?: string;
   instruction?: string;
+  output_revision_id?: string;
+  review_request_id?: string;
 }
 
 // POST /api/runs/{coordinatorRunId}/steer response body.
@@ -1547,6 +1549,7 @@ export type AssemblyReviewDecision = 'approve' | 'request_changes' | 'decline';
 
 // POST /api/runs/{coordinatorRunId}/assembly/review body — backend contract.
 export interface AssemblyReviewRequest {
+  review_request_id: string;
   output_revision_id: string;
   approved: boolean;
   request_changes?: boolean;

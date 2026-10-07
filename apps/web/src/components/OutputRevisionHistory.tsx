@@ -57,23 +57,30 @@ export function OutputRevisionHistory({
       {error && <p role="alert">Exact output version unavailable: {error}</p>}
       {history.length === 0 && !error && <p>No output versions yet.</p>}
       <ul>
-        {history.map((revision) => (
-          <li key={revision.revision_id}>
-            <button type="button" onClick={() => void inspect(revision.revision_id)}>
-              Output version {revision.lifecycle_generation}
-              {revision.revision_id === currentReviewRevisionId ? ' · Under review' : ''}
-            </button>
-            <details>
-              <summary>Version details</summary>
-              <p>Revision ID: <code>{revision.revision_id}</code></p>
-              {revision.accepted_no_change && <p>Accepted with no changes</p>}
-            </details>
-          </li>
-        ))}
+        {history.map((revision, index) => {
+          const versionNumber = history.length - index;
+          return (
+            <li key={revision.revision_id}>
+              <button type="button" onClick={() => void inspect(revision.revision_id)}>
+                Output version {versionNumber}
+                {revision.revision_id === currentReviewRevisionId ? ' · Under review' : ''}
+              </button>
+              <details>
+                <summary>Version details</summary>
+                <p>Revision ID: <code>{revision.revision_id}</code></p>
+                {revision.accepted_no_change && <p>Accepted with no changes</p>}
+              </details>
+            </li>
+          );
+        })}
       </ul>
       {selected && (
         <div>
-          <h4>Output version {selected.lifecycle_generation}</h4>
+          <h4>
+            Output version {history.length - history.findIndex(
+              (revision) => revision.revision_id === selected.revision_id,
+            )}
+          </h4>
           <p>Tree: {selected.tree_hash} · workflow: {selected.workflow_digest ?? 'unavailable'}</p>
           <p>Diff SHA-256: {selected.diff_sha256}</p>
           {selected.diff !== undefined && <pre>{selected.diff}</pre>}

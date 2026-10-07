@@ -1378,10 +1378,12 @@ export class AgentweaverApiClient {
     coordinatorRunId: string,
     decision: AssemblyReviewDecision,
     outputRevisionId: string,
+    reviewRequestId: string,
     comment?: string,
     providerKey?: string,
   ): Promise<void> {
     const body: AssemblyReviewRequest = {
+      review_request_id: reviewRequestId,
       output_revision_id: outputRevisionId,
       approved: decision === 'approve',
       request_changes: decision === 'request_changes',

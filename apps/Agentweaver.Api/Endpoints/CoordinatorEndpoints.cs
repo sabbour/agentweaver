@@ -724,7 +724,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
                 request.Instruction ?? string.Empty,
                 caller.User,
                 run.ProjectId is null ? caller.GitHubLogin : run.SubmittingUser,
-                ct, request.OutputRevisionId);
+                ct, request.OutputRevisionId, request.ReviewRequestId);
 
             var statusCode = directive.Status == SteeringStatus.Deferred
                 ? StatusCodes.Status202Accepted
@@ -833,7 +833,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             Feedback: request.Feedback,
             TargetFiles: request.TargetFiles,
             Reviewer: CallerDisplayName(caller),
-            OutputRevisionId: request.OutputRevisionId);
+            OutputRevisionId: request.OutputRevisionId,
+            ReviewRequestId: request.ReviewRequestId ?? coordinatorRunId);
 
         var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
             scopeFactory,
@@ -863,9 +864,19 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
                         message = "The active coordinator will consume this review decision shortly.",
                     },
                     statusCode: StatusCodes.Status202Accepted),
+            AssemblyReviewDeliveryResult.PreservedDecisionRecorded =>
+                Results.Json(
+                    new
+                    {
+                        runId = coordinatorRunId,
+                        accepted = true,
+                        deferred = true,
+                        message = "Decision recorded for this output version. The run remains failed; retry is required before assembly can continue.",
+                    },
+                    statusCode: StatusCodes.Status202Accepted),
             AssemblyReviewDeliveryResult.Forbidden => ForbiddenError(),
             AssemblyReviewDeliveryResult.StaleRevision =>
-                Results.Conflict(new { error = "stale_output_revision", message = "Review the current output revision before deciding." }),
+                Results.Conflict(new { error = "stale_output_revision", message = "This review request or output version is no longer current. Refresh before deciding." }),
             _ => NoAssemblyReviewPending(),
         };
     }

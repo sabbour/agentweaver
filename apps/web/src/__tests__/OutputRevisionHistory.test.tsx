@@ -27,7 +27,13 @@ it('loads exact historic files and compares a predecessor without following the 
     tree_content_sha256: 'hash', output_kind: 'collective', merged_commit_hash: 'commit',
     created_at: '2026-09-28T00:00:00Z',
   };
-  vi.mocked(apiClient.getOutputRevisionHistory).mockResolvedValue([revision]);
+  const previous: OutputRevision = {
+    ...revision,
+    revision_id: 'old',
+    predecessor_revision_id: null,
+    created_at: '2026-09-27T00:00:00Z',
+  };
+  vi.mocked(apiClient.getOutputRevisionHistory).mockResolvedValue([revision, previous]);
   vi.mocked(apiClient.getOutputRevision).mockResolvedValue(revision);
   vi.mocked(apiClient.compareOutputRevisions).mockResolvedValue({
     before_revision_id: 'old', after_revision_id: 'new',
@@ -38,7 +44,9 @@ it('loads exact historic files and compares a predecessor without following the 
   });
 
   render(<OutputRevisionHistory runId="run" currentReviewRevisionId="new" />);
+  expect(await screen.findByRole('button', { name: 'Output version 1' })).toBeTruthy();
   fireEvent.click(await screen.findByRole('button', { name: 'Output version 2 · Under review' }));
+  expect(await screen.findByRole('heading', { name: 'Output version 2' })).toBeTruthy();
   expect(screen.getByText('new')).toBeTruthy();
   await screen.findByText('Changed since old');
   fireEvent.click(screen.getByRole('button', { name: 'file.txt (3 bytes)' }));

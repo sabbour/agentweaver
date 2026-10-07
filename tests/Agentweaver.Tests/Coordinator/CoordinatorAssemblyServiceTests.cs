@@ -468,7 +468,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         // The escalation opens the human-review gate; the human APPROVES → assembly completes (merge).
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId));
         await route;
 
@@ -1527,7 +1527,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await SetSubtaskStatusAsync(subtaskIds[1], SubtaskStatus.AssembleReady);
 
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -1553,7 +1553,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
 
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -1664,7 +1664,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _pipeline.IntegrationBuildThrowsRemaining = 0;
 
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -1744,7 +1744,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             .Should().Be(RunStatus.AwaitingReview);
         _streamStore.Get(coordinatorRunId)!.IsAwaitingReview.Should().BeTrue();
 
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -1806,7 +1806,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             "the review row must be persisted BEFORE WorkPlans.Status flips to InReview, so no peer-pod " +
             "reconciler sweep can ever observe InReview with no backing review row and wrongly re-arm assembly");
 
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId));
         await run;
@@ -1842,10 +1842,20 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         // Exhaust the autonomous budget so the human reset is observable (6 → reset 0 → one steer → 1).
         await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 0);
+        var review = await CoordinatorAssemblyReviewPersistence.GetAsync(
+            _scopeFactory, coordinatorRunId, default);
+        var currentRevisionId = (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId;
+        Func<Task> staleRequest = () => steering.SteerAsync(
+            coordinatorRunId, "redirect", null, "Please fix the signup validation.", "alice",
+            ct: cts.Token,
+            outputRevisionId: currentRevisionId,
+            reviewRequestId: "superseded-review-request");
+        await staleRequest.Should().ThrowAsync<RunOutputRevisionUnavailableException>();
 
         var view = await steering.SteerAsync(
             coordinatorRunId, "redirect", null, "Please fix the signup validation.", "alice", ct: cts.Token,
-            outputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId);
+            outputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId,
+            reviewRequestId: review!.ReviewRequestId);
 
         view.Kind.Should().Be("redirect");
         view.Status.Should().Be(SteeringStatus.Relayed,
@@ -1885,11 +1895,14 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), cts.Token);
         await WaitUntilArmedAsync(coordinatorRunId);
         await SetPlanSteeringStateAsync(workPlanId, steeringIterations: 6, humanReviewRoundTrips: 0);
+        var review = await CoordinatorAssemblyReviewPersistence.GetAsync(
+            _scopeFactory, coordinatorRunId, default);
 
         var view = await steering.SteerAsync(
             coordinatorRunId, "amend", null, "Also cover the empty-email edge case.", "alice",
             ct: cts.Token,
-            outputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId);
+            outputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId,
+            reviewRequestId: review!.ReviewRequestId);
 
         view.Kind.Should().Be("amend");
         view.Status.Should().Be(SteeringStatus.Relayed);
@@ -1945,7 +1958,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         }
 
         // Clean up the still-parked loop so the test disposes deterministically.
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -1989,7 +2002,8 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var steering = NewSteeringWithReviewGate();
         var view = await steering.SteerAsync(
             coordinatorRunId, "redirect", null, "Please also fix the signup validation.", "alice",
-            outputRevisionId: revisionId);
+            outputRevisionId: revisionId,
+            reviewRequestId: coordinatorRunId);
 
         view.Kind.Should().Be("redirect");
         view.Status.Should().Be(SteeringStatus.Superseded,
@@ -2035,7 +2049,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         // The pipeline arms the review gate when it reaches the review stage; approve it.
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -2130,7 +2144,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         await InvokeEnsurePreviewApplicabilityRecordedAsync(
             coordinatorRunId, workPlanId, reviewed.TreeHash, current.Diff!);
         PreviewApplicabilityState(coordinatorRunId).Should().Be("preview_required");
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: reviewed.RevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -2425,7 +2439,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         // Default FakePipeline integration result has a non-empty diff ⇒ HasChanges == true.
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -2466,7 +2480,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -2881,7 +2895,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
         _pipeline.IntegrationBuilds.Should().Be(0, "recovery should re-arm the review gate from persisted state");
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null, TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
         await run;
@@ -3594,7 +3608,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: false, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -3622,7 +3636,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -3666,7 +3680,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -3711,7 +3725,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var run = sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -3769,7 +3783,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -3820,6 +3834,76 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task PreservedReviewDecision_IsBoundToRequestRevisionAndFence_WithoutResumingFailedAssembly()
+    {
+        var coordinatorRunId = RunId.New().ToString();
+        await SeedCoordinatorRunAsync(coordinatorRunId);
+        var (workPlanId, _) = await SeedPlanAsync(coordinatorRunId,
+            new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
+        await SetPlanReviewStateAsync(workPlanId);
+        var revisionId = await SeedCollectiveCandidateAsync(
+            coordinatorRunId, workPlanId, "reviewed-tree", "reviewed diff");
+        var requestId = await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory,
+            coordinatorRunId,
+            "alice",
+            "agentweaver/integration/" + coordinatorRunId,
+            "reviewed-tree",
+            revisionId,
+            assemblyFencingToken: 0,
+            default);
+        _streamStore.Create(coordinatorRunId, "alice");
+
+        await _sut.FailAssemblyAsync(Context(coordinatorRunId), "assembly_rearm_exhausted", default);
+
+        var decision = new AssemblyReviewDecision(
+            Approved: false,
+            RequestChanges: true,
+            Feedback: "Tighten the error handling.",
+            TargetFiles: null,
+            Reviewer: "alice",
+            OutputRevisionId: revisionId,
+            ReviewRequestId: requestId);
+        (await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
+            _scopeFactory, _reviewGate, coordinatorRunId,
+            decision with { ReviewRequestId = "older-request" }, "alice", null, default))
+            .Should().Be(AssemblyReviewDeliveryResult.StaleRevision);
+
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(p => p.Id == workPlanId);
+            plan.AssemblyFencingToken = 1;
+            await db.SaveChangesAsync();
+        }
+        (await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
+            _scopeFactory, _reviewGate, coordinatorRunId, decision, "alice", null, default))
+            .Should().Be(AssemblyReviewDeliveryResult.StaleRevision);
+
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+            var plan = await db.WorkPlans.SingleAsync(p => p.Id == workPlanId);
+            plan.AssemblyFencingToken = 0;
+            await db.SaveChangesAsync();
+        }
+        (await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
+            _scopeFactory, _reviewGate, coordinatorRunId, decision, "alice", null, default))
+            .Should().Be(AssemblyReviewDeliveryResult.PreservedDecisionRecorded);
+
+        (await _assemblyStore.GetAsync(workPlanId, default))!.Status.Should().Be(WorkPlanStatus.AssemblyFailed);
+        (await _runStore.GetAsync(RunId.Parse(coordinatorRunId), default))!.Status.Should().Be(RunStatus.Failed);
+        _reviewGate.IsArmed(coordinatorRunId).Should().BeFalse();
+        _pipeline.Merges.Should().Be(0);
+        var savedReview = await CoordinatorAssemblyReviewPersistence.GetAsync(
+            _scopeFactory, coordinatorRunId, default);
+        savedReview!.DecisionSubmittedAt.Should().NotBeNull();
+        savedReview.ReviewRequestId.Should().Be(requestId);
+        savedReview.OutputRevisionId.Should().Be(revisionId);
+        savedReview.AssemblyFencingToken.Should().Be(0);
+    }
+
+    [Fact]
     public async Task FailAssembly_WithNoOpenReviewGate_ClearsRecord_AndDoesNotEmitReviewPreserved()
     {
         // When there is no OPEN gate (the human already decided — DecisionSubmittedAt set), a failure
@@ -3830,11 +3914,10 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             new[] { SubtaskStatus.Completed, SubtaskStatus.AssembleReady });
         await SetPlanReviewStateAsync(workPlanId);
         _streamStore.Create(coordinatorRunId, "alice");
-        await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
-            _scopeFactory, coordinatorRunId,
+        await SeedDeferredAssemblyDecisionAsync(
+            coordinatorRunId,
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
-                TargetFiles: null, Reviewer: "alice"),
-            default);
+                TargetFiles: null, Reviewer: "alice"));
 
         await _sut.FailAssemblyAsync(Context(coordinatorRunId), "some_failure", default);
 
@@ -3908,7 +3991,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
 
         var run = _sut.RunAssemblyAsync(Context(coordinatorRunId), default);
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -3964,7 +4047,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             _streamStore.Create(runId, "alice");
             var assembly = _sut.RunAssemblyAsync(Context(runId), default);
             await WaitUntilArmedAsync(runId);
-            _reviewGate.TrySubmit(runId, "alice",
+            SubmitReview(runId, "alice",
                 new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                     TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(runId)))!.CurrentOutputRevisionId))
                 .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -4203,7 +4286,7 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         var context = new CoordinatorDispatchContext(coordinatorRunId, "repo", "main", "alice", projectId);
         var run = _sut.RunAssemblyAsync(context, default);
         await WaitUntilArmedAsync(coordinatorRunId);
-        _reviewGate.TrySubmit(coordinatorRunId, "alice",
+        SubmitReview(coordinatorRunId, "alice",
             new AssemblyReviewDecision(Approved: true, RequestChanges: false, Feedback: null,
                 TargetFiles: null, Reviewer: "alice", OutputRevisionId: (await _runStore.GetAsync(RunId.Parse(coordinatorRunId)))!.CurrentOutputRevisionId))
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
@@ -4275,7 +4358,9 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         // into the shared CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync helper, which delegates
         // durable persistence to PersistDecisionAsync. Assert against that canonical persistence method.
         await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
-            _scopeFactory, coordinatorRunId, decision, CancellationToken.None).ConfigureAwait(false);
+            _scopeFactory, coordinatorRunId,
+            await BindReviewDecisionAsync(coordinatorRunId, decision).ConfigureAwait(false),
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task InvokeParkBuildTestInfrastructureFailureAsync(
@@ -4584,6 +4669,34 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
         _reviewGate.IsArmed(coordinatorRunId).Should().BeTrue("the pipeline should arm the review gate");
     }
 
+    private AssemblyReviewSubmitResult SubmitReview(
+        string coordinatorRunId,
+        string callerUser,
+        AssemblyReviewDecision decision)
+    {
+        var review = CoordinatorAssemblyReviewPersistence.GetAsync(
+            _scopeFactory, coordinatorRunId, default).GetAwaiter().GetResult();
+        return _reviewGate.TrySubmit(coordinatorRunId, callerUser, decision with
+        {
+            ReviewRequestId = review?.ReviewRequestId,
+            AssemblyFencingToken = review?.AssemblyFencingToken,
+        });
+    }
+
+    private async Task<AssemblyReviewDecision> BindReviewDecisionAsync(
+        string coordinatorRunId,
+        AssemblyReviewDecision decision)
+    {
+        var review = await CoordinatorAssemblyReviewPersistence.GetAsync(
+            _scopeFactory, coordinatorRunId, default);
+        return decision with
+        {
+            OutputRevisionId = decision.OutputRevisionId ?? review?.OutputRevisionId,
+            ReviewRequestId = decision.ReviewRequestId ?? review?.ReviewRequestId,
+            AssemblyFencingToken = decision.AssemblyFencingToken ?? review?.AssemblyFencingToken,
+        };
+    }
+
     private async Task SeedInboxEntryAsync(
         string projectId,
         string coordinatorRunId,
@@ -4801,7 +4914,12 @@ public sealed class CoordinatorAssemblyServiceTests : IAsyncDisposable
             _scopeFactory, coordinatorRunId, CancellationToken.None);
         await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
             _scopeFactory, coordinatorRunId,
-            decision with { OutputRevisionId = pending?.OutputRevisionId }, CancellationToken.None);
+            decision with
+            {
+                OutputRevisionId = pending?.OutputRevisionId,
+                ReviewRequestId = pending?.ReviewRequestId,
+                AssemblyFencingToken = pending?.AssemblyFencingToken,
+            }, CancellationToken.None);
     }
 
     private async Task SeedCoordinatorRunAsync(

@@ -85,13 +85,14 @@ describe('AgentweaverApiClient assembly review contract', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = new AgentweaverApiClient('https://api.example.test', 'session-token');
 
-    await client.reviewAssembly('run-1', 'approve', 'output-revision-1');
+    await client.reviewAssembly('run-1', 'approve', 'output-revision-1', 'review-request-1');
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/runs/run-1/assembly/review');
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toEqual({
       output_revision_id: 'output-revision-1',
+      review_request_id: 'review-request-1',
       approved: true,
       request_changes: false,
     });
