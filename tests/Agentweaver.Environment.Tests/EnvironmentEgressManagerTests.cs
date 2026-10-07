@@ -1336,6 +1336,7 @@ public sealed class EnvironmentEgressManagerTests
             EnvironmentGenerationFence environmentFence,
             bool effectMayHaveApplied,
             ProviderResourceRef? providerResource,
+            WorkspaceVolumeProviderBindingSnapshot? providerBinding,
             bool effectVerified,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -1361,6 +1362,7 @@ public sealed class EnvironmentEgressManagerTests
             EnvironmentGenerationFence environmentFence,
             bool effectMayHaveApplied,
             ProviderResourceRef? providerResource,
+            WorkspaceVolumeProviderBindingSnapshot? providerBinding,
             bool effectVerified,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
@@ -1519,6 +1521,30 @@ public sealed class EnvironmentEgressManagerTests
         public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeReleaseReconciledAsync(
             Guid operationId,
             EnvironmentGenerationFence environmentFence,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<EnvironmentWorkspaceVolumeCleanupLease?> ClaimWorkspaceVolumeCleanupAsync(
+            EnvironmentGenerationFence environmentFence,
+            Guid? sourceReplaceOperationId,
+            TimeSpan leaseDuration,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<EnvironmentWorkspaceVolumeCleanupStatus> CompleteWorkspaceVolumeCleanupAsync(
+            EnvironmentWorkspaceVolumeCleanupLease lease,
+            WorkspaceVolumeReleaseReceipt receipt,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task ReleaseWorkspaceVolumeCleanupLeaseAsync(
+            EnvironmentWorkspaceVolumeCleanupLease lease,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<EnvironmentWorkspaceVolumeCleanupStatus?> GetWorkspaceVolumeCleanupStatusAsync(
+            EnvironmentGenerationFence environmentFence,
+            Guid sourceReplaceOperationId,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

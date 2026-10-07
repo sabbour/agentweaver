@@ -1,0 +1,167 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Storage volume provisioning, replacement cleanup, and attachment negotiation",
+  "alt": "Environment provisions an Environment-scoped Azure Files PVC, verifies its real claim and PV identities, and pins the actual Storage resource and Kubernetes target identity. A Replace atomically pins the new generation and queues cleanup for the exact old claim and PV using the original provider binding; the provider verifies claim and PV absence before returning Released. Release is blocked while bound or attached. Cleanup does not prove Azure data erasure. Attachment remains capability negotiation only and does not mount or dispatch the volume.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "storage-caller",
+      "label": "Environment Core + owner store",
+      "subLabel": "Storage API and owner CAS",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Core", "tone": "neutral" }
+    },
+    {
+      "id": "azure-files",
+      "label": "Azure Files CSI",
+      "subLabel": "Storage provider",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": { "text": "Provider", "tone": "teal" }
+    },
+    {
+      "id": "kubernetes",
+      "label": "Kubernetes API",
+      "subLabel": "StorageClass, PVC, PV",
+      "icon": "box",
+      "fluentIcon": "container",
+      "library": "kubernetes",
+      "badge": { "text": "Cluster", "tone": "marigold" }
+    },
+    {
+      "id": "sandbox",
+      "label": "Sandbox provider",
+      "subLabel": "Actual resource and profile",
+      "icon": "bot",
+      "fluentIcon": "window",
+      "badge": { "text": "Provider", "tone": "teal" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": ["storage-caller", "azure-files"],
+      "label": "Provider options contain identities and revision IDs, never credentials. Each volume generation pins its Kubernetes target identity."
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "azure-files",
+      "label": "ProvisionAsync(spec, resourceGeneration, idempotencyKey)",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "azure-files",
+      "to": "kubernetes",
+      "label": "Read StorageClass; ensure Environment- and generation-specific PVC",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "PVC provisioning",
+      "sections": [
+        {
+          "label": "Pending, failed, or timeout",
+          "steps": [
+            {
+              "type": "message",
+              "from": "kubernetes",
+              "to": "azure-files",
+              "label": "Pending claim or operation failure",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "azure-files",
+              "to": "storage-caller",
+              "label": "Wait, then return an explicit condition/error",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        },
+        {
+          "label": "Bound",
+          "steps": [
+            {
+              "type": "message",
+              "from": "kubernetes",
+              "to": "azure-files",
+              "label": "Bound PVC with actual UID and PV name",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "azure-files",
+              "to": "kubernetes",
+              "label": "Read PV; verify claim UID; apply reclaim policy with UID test",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "kubernetes",
+              "to": "azure-files",
+              "label": "PV claim identity and reclaim-policy readback",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "azure-files",
+              "to": "storage-caller",
+              "label": "WorkspaceVolumeResource(actual PVC UID, resourceGeneration, capabilities)",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "sandbox",
+      "label": "Get actual Sandbox resource and profile",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "sandbox",
+      "to": "storage-caller",
+      "label": "Actual Sandbox ID, generation, and capabilities",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "storage-caller",
+      "label": "Negotiate mount, actual resources, fence, and data generation",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "storage-caller",
+      "label": "Pin candidate to actual PVC UID, resourceGeneration, capabilities",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["azure-files", "storage-caller"],
+      "label": "Replace pins both generations; cleanup verifies exact claim/PV absence. Release requires Unbind and Detach; no mount or data-erasure proof."
+    }
+  ]
+}

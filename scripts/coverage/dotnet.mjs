@@ -21,6 +21,7 @@ const suites = [
   ['events-and-sessions', 'Agentweaver.EventsAndSessions.Tests'],
   ['environment', 'Agentweaver.Environment.Tests'],
   ['knowledge', 'Agentweaver.Knowledge.Tests'],
+  ['azure-files', 'Agentweaver.Providers.Storage.AzureFiles.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
@@ -39,6 +40,7 @@ const expectedAssemblies = [
   'Agentweaver.EventsAndSessions',
   'Agentweaver.Environment',
   'Agentweaver.Knowledge',
+  'Agentweaver.Providers.Storage.AzureFiles',
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 

@@ -5,6 +5,12 @@ candidate for compiling and reconciling Cilium egress intent. It is not a
 deployed service, does not label or provision AgentHost pods, and does not prove
 that the Cilium datapath enforces a policy.
 
+The same Environment service candidate also owns workspace-volume lifecycle routes
+and registers the Azure Files CSI Storage provider. This page covers only egress;
+the [foundation overview](./overview.md#workspace-volume-lifecycle) summarizes the
+volume lifecycle, pinned release binding, and Replace cleanup guarantees.
+Neither candidate is deployed by this source change.
+
 ## Ownership and operation
 
 `EnvironmentEgressManager` is the operation entry point. Each apply, verify, revoke, or reconciliation reads the current caller from Projects & Config at
