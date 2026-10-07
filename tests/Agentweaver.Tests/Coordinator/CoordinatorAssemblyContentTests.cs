@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Agentweaver.Api.Coordinator;
 using Agentweaver.Api.Git;
 using Agentweaver.Api.Infrastructure;
+using Agentweaver.Api.Memory;
 using Agentweaver.Domain;
 using Agentweaver.Tests.Helpers;
 
@@ -53,11 +54,11 @@ public sealed class CoordinatorAssemblyContentTests : IDisposable
     }
 
     [Fact]
-    public async Task AssemblyContent_ReturnsBlobFromIntegrationBranch_AndEnforcesWhitelistAndOwner()
+    public async Task AssemblyContent_UsesPersistedAttemptBranch_AndEnforcesWhitelistAndOwner()
     {
         var repoPath = CreateTempGitRepo();
         var runId = RunId.New();
-        var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(runId.ToString());
+        var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(runId.ToString(), "17");
 
         // Build the integration branch with ONE changed file (feature.txt) off main — exactly as the
         // collective assembly does in production, via the real WorktreeManager.
@@ -67,9 +68,10 @@ public sealed class CoordinatorAssemblyContentTests : IDisposable
         build.Outcome.Should().Be(IntegrationBranchOutcome.Built);
 
         await InsertCoordinatorRunAsync(runId, repoPath, "main");
+        await InsertWorkPlanAsync(runId, integrationBranch);
 
         // (1) A path in the collective changed set returns 200 + the blob content from the branch tip
-        //     (the bug was a 409 here because the coordinator owns no worktree).
+        //     using the attempt-specific integration ref persisted on the work plan.
         var ok = await _owner.GetAsync($"/api/runs/{runId}/assembly/content/feature.txt");
         ok.StatusCode.Should().Be(HttpStatusCode.OK,
             "the Preview tab must read coordinator content from the integration branch, not 409");
@@ -85,6 +87,15 @@ public sealed class CoordinatorAssemblyContentTests : IDisposable
             "clicking unchanged files in the full integration-branch Files tree must not 404");
         var unchanged = await notInSet.Content.ReadFromJsonAsync<JsonElement>();
         unchanged.GetProperty("content").GetString().Should().Be("initial content");
+
+        var workspace = await _owner.GetFromJsonAsync<JsonElement[]>($"/api/runs/{runId}/assembly/workspace");
+        workspace!.Select(node => node.GetProperty("path").GetString()).Should().Contain("feature.txt");
+
+        var files = await _owner.GetFromJsonAsync<JsonElement[]>($"/api/runs/{runId}/assembly/files");
+        files!.Select(file => file.GetProperty("path").GetString()).Should().Contain("feature.txt");
+
+        var fileDiff = await _owner.GetAsync($"/api/runs/{runId}/assembly/files/feature.txt");
+        fileDiff.StatusCode.Should().Be(HttpStatusCode.OK);
 
         // (3) Owner enforcement — a non-owner gets 404, mirroring the sibling assembly endpoints.
         var foreign = await _other.GetAsync($"/api/runs/{runId}/assembly/content/feature.txt");
@@ -124,6 +135,39 @@ public sealed class CoordinatorAssemblyContentTests : IDisposable
             AgentName         = "Coordinator",
             WorkflowRunId     = null,
         });
+    }
+
+    private async Task InsertWorkPlanAsync(RunId runId, string integrationBranch)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var spec = new OutcomeSpec
+        {
+            ProjectId = "proj-x",
+            CoordinatorRunId = runId.ToString(),
+            Goal = "g",
+            DesiredOutcome = "o",
+            Scope = "s",
+            Assumptions = "a",
+            Status = "confirmed",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.OutcomeSpecs.Add(spec);
+        await db.SaveChangesAsync();
+
+        db.WorkPlans.Add(new WorkPlan
+        {
+            OutcomeSpecId = spec.Id,
+            ProjectId = "proj-x",
+            CoordinatorRunId = runId.ToString(),
+            IntegrationBranch = integrationBranch,
+            Status = "complete",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await db.SaveChangesAsync();
     }
 
     // ── git setup (mirrors IntegrationBranchBuilderTests) ─────────────────────────────────────
