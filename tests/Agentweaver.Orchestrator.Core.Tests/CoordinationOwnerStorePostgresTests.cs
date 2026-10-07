@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator;
 using Npgsql;
@@ -40,21 +41,25 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     private CoordinationOwnerStore _store = null!;
     private readonly CoordinationActor _actor = new(
         "https://identity.example/", Guid.NewGuid().ToString("D"));
-    private readonly EffectiveRunSelection _selection = CreateSelection();
+    private readonly AuthorizedRunSelection _selection;
     private SessionIdentity _root;
     private AcceptedRoot _acceptedRoot = null!;
     private RegisteredChild _child = null!;
 
-    public CoordinationOwnerStorePostgresTests(CoordinationPostgresFixture fixture) => _fixture = fixture;
+    public CoordinationOwnerStorePostgresTests(CoordinationPostgresFixture fixture)
+    {
+        _fixture = fixture;
+        _selection = CreateSelection(_actor);
+    }
 
     public async Task InitializeAsync()
     {
         await CoordinationOwnerMigrator.MigrateAsync(_fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(_fixture.DataSource, _schema);
         _store = new CoordinationOwnerStore(_fixture.DataSource, _schema);
-        _root = new SessionIdentity(_selection.ProjectId, _selection.RunId, "root");
+        _root = new SessionIdentity(_selection.Selection.ProjectId, _selection.Selection.RunId, "root");
         _acceptedRoot = await _store.AcceptRootAsync(_actor, _selection, _root.SessionId, CancellationToken.None);
-        _child = await _store.RegisterChildAsync(_actor, _root, "child", CancellationToken.None);
+        _child = await _store.RegisterChildAsync(_actor, _root, "child", 100, 32, CancellationToken.None);
     }
 
     public async Task DisposeAsync()
@@ -72,12 +77,12 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(_acceptedRoot, replay);
 
         var childReplay = await _store.RegisterChildAsync(
-            _actor, _root, _child.Identity.SessionId, CancellationToken.None);
+            _actor, _root, _child.Identity.SessionId, 100, 32, CancellationToken.None);
         Assert.Equal(_child, childReplay);
 
         var otherActor = _actor with { Subject = Guid.NewGuid().ToString("D") };
         var unauthorized = await Assert.ThrowsAsync<CoordinationException>(() =>
-            _store.RegisterChildAsync(otherActor, _root, "forged-child", CancellationToken.None));
+            _store.RegisterChildAsync(otherActor, _root, "forged-child", 100, 32, CancellationToken.None));
         Assert.Equal(403, unauthorized.StatusCode);
 
         var conflictingRoot = await Assert.ThrowsAsync<CoordinationException>(() =>
@@ -299,16 +304,30 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         return document.RootElement.Clone();
     }
 
-    private static EffectiveRunSelection CreateSelection()
+    private static AuthorizedRunSelection CreateSelection(CoordinationActor actor)
     {
         using var snapshot = JsonDocument.Parse("""{"source":"projects-config"}""");
-        return new EffectiveRunSelection(
-            "project-1",
-            Guid.NewGuid().ToString("D"),
-            1,
-            1,
-            1,
-            "context-v1",
-            snapshot.RootElement.Clone());
+        var selection = new EffectiveRunSelection(
+                "project-1",
+                Guid.NewGuid().ToString("D"),
+                1,
+                1,
+                1,
+                "context-v1",
+                snapshot.RootElement.Clone());
+        return new AuthorizedRunSelection(
+            selection,
+            new ProjectsAuthorizationContext(
+                1,
+                actor.Issuer,
+                actor.Subject,
+                "tenant-1",
+                1,
+                selection.ProjectId,
+                selection.RunId,
+                ImmutableArray.Create(new ProjectsAuthority(
+                    "project",
+                    selection.ProjectId,
+                    ImmutableArray.Create(new ProjectsPermissionGrant("acceptRunSelection", 1))))));
     }
 }

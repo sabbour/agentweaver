@@ -44,10 +44,15 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
 
 The initial P0 delivery contains provider descriptor and binding contracts, a pure
 catalog/resolver, conformance-focused tests, and build/release validation. The v1 source
-now also includes an unpublished Events & Sessions service candidate for the first P1
-journal slice. The service can be built and tested, but is not deployed or published;
-the source does not provision Azure resources or include the AgentHost, product API,
-web UI, or product MCP server.
+also includes unpublished Events & Sessions and Orchestrator service candidates. The
+Orchestrator source now covers typed coordinator decisions and gates, durable MAF
+checkpoints, immutable accepted-run Sandbox binding metadata, and owner-issued
+grant/receipt records. Non-empty or fixed-work plans require a server-registered
+Sandbox resource adapter; without one, the host fails closed with `503`. This source
+does not include a production Sandbox provisioner or the full dispatch engine, and
+the positive Events receipt consumer remains separate work. These services can be
+built and tested, but are not deployed or published; the source does not provision
+Azure resources or include the AgentHost, product API, web UI, or product MCP server.
 
 See the [Events & Sessions journal](docs/architecture/events-sessions.md) for its
 implemented contract, PostgreSQL ownership, provider pin, and current limits.

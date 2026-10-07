@@ -52,44 +52,92 @@ internal sealed class CoordinationOwnerStore
 
     public async Task<AcceptedRoot> AcceptRootAsync(
         CoordinationActor actor,
-        EffectiveRunSelection selection,
+        AuthorizedRunSelection selection,
         string sessionId,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(selection);
+        var effectiveSelection = selection.Selection;
+        if (selection.Authorization.ContractVersion != 1 ||
+            selection.Authorization.Issuer != actor.Issuer ||
+            selection.Authorization.ActorId != actor.Subject ||
+            string.IsNullOrWhiteSpace(selection.Authorization.TenantId) ||
+            selection.Authorization.BoundProjectId != effectiveSelection.ProjectId ||
+            selection.Authorization.BoundRunId != effectiveSelection.RunId ||
+            selection.Authorization.MembershipRevision < 1 ||
+            selection.Authorization.EffectiveAuthority.IsDefault ||
+            !selection.Authorization.EffectiveAuthority.Any(authority =>
+                authority.ResourceType == "project" &&
+                authority.ResourceId == effectiveSelection.ProjectId &&
+                !authority.Permissions.IsDefault &&
+                authority.Permissions.Any(permission =>
+                    permission.Permission == "acceptRunSelection" &&
+                    permission.RoleRevision > 0)))
+            throw new CoordinationException(
+                "run_selection_permission_denied", StatusCodes.Status403Forbidden);
         CoordinationIdentity.ValidateIdentity(sessionId, nameof(sessionId));
-        ValidateSelection(selection);
+        ValidateSelection(effectiveSelection);
 
-        var snapshot = selection.Snapshot.GetRawText();
+        var snapshot = effectiveSelection.Snapshot.GetRawText();
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(snapshot)));
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_runs}
                 (project_id, run_id, accepted_selection, accepted_selection_hash,
-                 accepted_by_issuer, accepted_by_subject)
-            VALUES (@project, @run, @selection, @hash, @issuer, @subject)
+                 accepted_by_issuer, accepted_by_subject, tenant_id)
+            VALUES (@project, @run, @selection, @hash, @issuer, @subject, @tenant)
             ON CONFLICT (project_id, run_id) DO NOTHING
             """, connection, transaction))
         {
-            AddRunScope(insert, selection.ProjectId, selection.RunId);
+            AddRunScope(insert, effectiveSelection.ProjectId, effectiveSelection.RunId);
             insert.Parameters.AddWithValue("selection", NpgsqlDbType.Jsonb, snapshot);
             insert.Parameters.AddWithValue("hash", NpgsqlDbType.Varchar, hash);
             insert.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
             insert.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
+            insert.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, selection.Authorization.TenantId);
             await insert.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        await using (var bindTenant = new NpgsqlCommand($"""
+            UPDATE {_runs}
+            SET tenant_id = @tenant
+            WHERE project_id = @project AND run_id = @run
+              AND tenant_id IS NULL
+              AND accepted_selection_hash = @hash
+              AND accepted_by_issuer = @issuer
+              AND accepted_by_subject = @subject
+            """, connection, transaction))
+        {
+            AddRunScope(bindTenant, effectiveSelection.ProjectId, effectiveSelection.RunId);
+            bindTenant.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, selection.Authorization.TenantId);
+            bindTenant.Parameters.AddWithValue("hash", NpgsqlDbType.Varchar, hash);
+            bindTenant.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
+            bindTenant.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
+            await bindTenant.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         var acceptedRun = await ReadAcceptedRunAsync(
-            connection, transaction, selection.ProjectId, selection.RunId, forUpdate: true, cancellationToken)
+            connection,
+            transaction,
+            effectiveSelection.ProjectId,
+            effectiveSelection.RunId,
+            forUpdate: true,
+            cancellationToken)
             .ConfigureAwait(false);
         if (acceptedRun.SelectionHash != hash || acceptedRun.AcceptedIssuer != actor.Issuer ||
-            acceptedRun.AcceptedSubject != actor.Subject)
+            acceptedRun.AcceptedSubject != actor.Subject ||
+            acceptedRun.TenantId != selection.Authorization.TenantId)
             throw new CoordinationException("accepted_run_conflict", StatusCodes.Status409Conflict);
 
         var root = await ReadRootSessionAsync(
-            connection, transaction, selection.ProjectId, selection.RunId, forUpdate: true, cancellationToken)
+            connection,
+            transaction,
+            effectiveSelection.ProjectId,
+            effectiveSelection.RunId,
+            forUpdate: true,
+            cancellationToken)
             .ConfigureAwait(false);
         if (root is null)
         {
@@ -98,14 +146,19 @@ internal sealed class CoordinationOwnerStore
                     (project_id, run_id, session_id, parent_session_id, writer_issuer, writer_subject, execution_fence)
                 VALUES (@project, @run, @session, NULL, @issuer, @subject, @fence)
                 """, connection, transaction);
-            AddRunScope(insertSession, selection.ProjectId, selection.RunId);
+            AddRunScope(insertSession, effectiveSelection.ProjectId, effectiveSelection.RunId);
             insertSession.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, sessionId);
             insertSession.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
             insertSession.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
             insertSession.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, acceptedRun.Fence);
             await insertSession.ExecuteNonQueryAsync(cancellationToken);
             root = await ReadRootSessionAsync(
-                connection, transaction, selection.ProjectId, selection.RunId, forUpdate: false, cancellationToken)
+                connection,
+                transaction,
+                effectiveSelection.ProjectId,
+                effectiveSelection.RunId,
+                forUpdate: false,
+                cancellationToken)
                 .ConfigureAwait(false);
         }
         if (root is null || root.SessionId != sessionId ||
@@ -114,8 +167,8 @@ internal sealed class CoordinationOwnerStore
 
         await transaction.CommitAsync(cancellationToken);
         return new AcceptedRoot(
-            selection.ProjectId,
-            selection.RunId,
+            effectiveSelection.ProjectId,
+            effectiveSelection.RunId,
             root.SessionId,
             acceptedRun.Fence,
             acceptedRun.StateVersion,
@@ -127,10 +180,15 @@ internal sealed class CoordinationOwnerStore
         CoordinationActor actor,
         SessionIdentity parent,
         string childSessionId,
+        int maxChildren,
+        int maxConcurrentChildren,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(actor);
         CoordinationIdentity.ValidateIdentity(childSessionId, nameof(childSessionId));
+        if (maxChildren is < 0 or > 100 ||
+            maxConcurrentChildren is < 1 or > 32)
+            throw new CoordinationException("run_child_limit_invalid", StatusCodes.Status502BadGateway);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var run = await ReadAcceptedRunAsync(
@@ -163,6 +221,37 @@ internal sealed class CoordinationOwnerStore
                 parent.SessionId,
                 requestId,
                 existing.ExecutionFence);
+        }
+
+        await using (var countChildren = new NpgsqlCommand($"""
+            SELECT count(*)::integer
+            FROM {_sessions}
+            WHERE project_id = @project AND run_id = @run
+              AND parent_session_id IS NOT NULL
+            """, connection, transaction))
+        {
+            AddRunScope(countChildren, parent.ProjectId, parent.RunId);
+            var currentChildren = Convert.ToInt32(
+                await countChildren.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+                System.Globalization.CultureInfo.InvariantCulture);
+            if (currentChildren >= maxChildren)
+                throw new CoordinationException(
+                    "run_child_limit_exceeded", StatusCodes.Status409Conflict);
+        }
+        await using (var countActiveChildren = new NpgsqlCommand($"""
+            SELECT count(*)::integer
+            FROM {_sessions}
+            WHERE project_id = @project AND run_id = @run
+              AND parent_session_id IS NOT NULL AND lifecycle_state = 'active'
+            """, connection, transaction))
+        {
+            AddRunScope(countActiveChildren, parent.ProjectId, parent.RunId);
+            var activeChildren = Convert.ToInt32(
+                await countActiveChildren.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+                System.Globalization.CultureInfo.InvariantCulture);
+            if (activeChildren >= maxConcurrentChildren)
+                throw new CoordinationException(
+                    "run_concurrent_child_limit_exceeded", StatusCodes.Status409Conflict);
         }
 
         await using (var insertSession = new NpgsqlCommand($"""
@@ -1111,7 +1200,7 @@ internal sealed class CoordinationOwnerStore
     {
         await using var command = new NpgsqlCommand($"""
             SELECT accepted_selection_hash, accepted_by_issuer, accepted_by_subject,
-                execution_fence, logical_turn_ordinal, execution_state, state_version
+                execution_fence, logical_turn_ordinal, execution_state, state_version, tenant_id
             FROM {_runs}
             WHERE project_id = @project AND run_id = @run
             {(forUpdate ? "FOR UPDATE" : string.Empty)}
@@ -1127,7 +1216,8 @@ internal sealed class CoordinationOwnerStore
             reader.GetInt64(3),
             reader.GetInt64(4),
             reader.GetString(5),
-            reader.GetInt64(6));
+            reader.GetInt64(6),
+            reader.GetString(7));
     }
 
     private async Task<SessionRow> ReadSessionAsync(
@@ -1503,7 +1593,8 @@ internal sealed class CoordinationOwnerStore
         long Fence,
         long LogicalTurnOrdinal,
         string ExecutionState,
-        long StateVersion);
+        long StateVersion,
+        string TenantId);
 
     private sealed record SessionRow(
         string SessionId,

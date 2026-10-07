@@ -124,6 +124,23 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void ValidatesOptionalDefaultWorkflowIdentifier()
+    {
+        var configuration = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            DefaultWorkflowId = "workflow.default",
+        });
+        Assert.Equal("workflow.default", configuration.DefaultWorkflowId);
+
+        var error = Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.Validate(new ProjectConfiguration
+            {
+                DefaultWorkflowId = "not a stable identifier",
+            }));
+        Assert.Equal(StatusCodes.Status400BadRequest, error.StatusCode);
+    }
+
+    [Fact]
     public void RejectsNullConfigurationEntriesAsClientErrors()
     {
         var providerError = Assert.Throws<ProjectConfigException>(() =>

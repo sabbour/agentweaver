@@ -95,7 +95,9 @@ artifact-reference, and cache-reference payloads. Event version 2 adds the
 purpose-built `PolicyEvaluation` payload; existing version-1 payloads remain
 appendable and replayable. The generic run-scoped append path rejects every
 `PolicyEvaluation` event: matching the authenticated actor does not prove that
-Orchestrator Core wrote the decision, and no trusted writer path is wired yet. The
+Orchestrator Core wrote the decision. The Orchestrator now owns current grants and
+redacted receipt records, but the reserved receipt-backed Events consumer remains
+separate #1846 work; generic append is still not a trusted writer path. The
 event envelope binds project/run/session; its payload stores only bounded actor,
 tenant/step, grant reference/revision, purpose/action/fence, typed
 outcome/reason, and provider/options identity metadata. It has no free-form error
@@ -113,10 +115,11 @@ with identical canonical event content returns the original event; reusing its
 identity with different content in the same run is a conflict. PostgreSQL, not an
 in-process counter or channel, assigns the authoritative ordered position.
 
-When the trusted Orchestrator Core writer path is implemented, the action guard must
+When the reserved receipt-backed consumer is implemented, the action guard must
 await a successful durable append before performing a protected effect. An append
 failure is an error, never an allow; the event is evidence only and cannot grant
-authority by itself. Until then, a missing or unwired writer path must fail closed.
+authority by itself. Until #1846 wires that consumer, guarded effects requiring
+PolicyEvaluation journal evidence remain fail closed.
 
 Run replay returns a bounded, run-ordered page spanning all sessions; session replay
 returns only that session's events at their run positions. Run cursors are bound to a

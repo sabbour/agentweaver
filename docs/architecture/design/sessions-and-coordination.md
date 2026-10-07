@@ -20,26 +20,44 @@
 
 ## Current v1 source slice
 
-The repository now contains unpublished Events & Sessions and Orchestrator service
+The repository contains unpublished Events & Sessions and Orchestrator service
 candidates. Events & Sessions supplies provider-neutral versioned event contracts, an
 authoritative PostgreSQL run journal with transactional append, one ordered position
 across every session in a project/run, bounded run or session replay, reconnectable
 live cursors, immutable native Sessions provider pins, and addressed-message storage.
-The Orchestrator owns root/child session relationships, execution fences, request
-state, parent notifications, turn-boundary operations, and the durable owner outbox.
-It checks current Projects & Config authority and accepted run selection; Events
-validates message admission against the exact owner outbox record and rechecks owner
-bindings for claim, presentation, and acknowledgment.
+The Orchestrator owns root/child session relationships, execution fences, typed
+decision and gate state, workflow position, MAF checkpoints, parent notifications,
+turn-boundary operations, and the durable owner outbox. It checks current Projects &
+Config authority and accepted run selection; Events validates message admission
+against the exact owner outbox record and rechecks owner bindings for claim,
+presentation, and acknowledgment.
 
-This is a limited source slice, not the entire P1 design. The owner can synchronously
-admit and present messages at an explicit turn boundary, and a valid correlated reply
-makes request input available on admission without approving its gate. The boundary
-response is replayable for its original state version; a blocked session resumes only
-when a pending wake exists. Progress stays in sender history and is not presented as
-recipient input. Automatic AgentHost scheduling, a background delivery relay, gate
-approval decisions, MAF checkpoints, consistency manifests, Knowledge records, and
-product UI/MCP integration remain outside this slice. See the
+The owner persists accepted definitions, decisions, pending gate request IDs, step
+position, and child references in its PostgreSQL schema. Its MAF checkpoint refers to
+an opaque Object Store SDK cache blob with SDK version and pinned-model metadata; a
+missing or incompatible cache triggers explicit journal-based context rebuilding,
+never external-effect replay. A valid correlated reply makes request input available
+without approving its gate, and acknowledgment remains receipt-only. Automatic
+AgentHost scheduling, a background delivery relay, consistency manifests, Knowledge
+records, the full dispatch engine, and product UI/MCP integration remain outside this
+slice. The Orchestrator also owns current grant and redacted PolicyEvaluation receipt
+production; the positive receipt consumer in Events & Sessions remains #1846 work
+after #1848 admission. See the
 [implemented journal and owner contract](../../architecture/events-sessions.md).
+
+When a non-empty or fixed-work plan needs isolation, the Orchestrator persists the
+accepted Sandbox candidate and adapter-returned negotiation as an immutable
+project/run context bound to the selection hash, configuration revisions, and
+execution fence in the same owner transaction as the CAS-winning plan decision,
+gate, grants, and outbox. The registered adapter resolves an already existing resource;
+this Orchestrator boundary does not provision or release Sandbox resources. A
+restored decision envelope cannot supply its own pin: the new host reloads that
+tuple, checks the accepted selection and role context, and rebuilds the binding
+through the current catalog and `ProviderResolver.Pin` without calling the adapter
+again. Projects authority is refreshed after provider/context waits and before the
+owner writes; stale or revoked requests leave no new binding. If no registered
+adapter can provide the first negotiation, the plan request returns `503`; no
+synthetic resource or generation is created.
 
 ## Today in 0.x
 

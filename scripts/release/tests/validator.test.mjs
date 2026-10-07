@@ -30,6 +30,7 @@ const projectReferences = new Map([
     '..\\Agentweaver.Orchestrator.Core\\Agentweaver.Orchestrator.Core.csproj',
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
   ]],
   ['Agentweaver.EventsAndSessions', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
@@ -101,6 +102,7 @@ test('the Orchestrator host is registered as a baseline service with all project
     ['Agentweaver.Orchestrator.Core', ['0.0.0']],
     ['Agentweaver.Abstractions', ['0.0.0']],
     ['Agentweaver.Persistence.Postgres', ['0.0.0']],
+    ['Agentweaver.Providers', ['0.0.0']],
   ]);
   assert.equal(check(fixture).stage, 'draft');
 });

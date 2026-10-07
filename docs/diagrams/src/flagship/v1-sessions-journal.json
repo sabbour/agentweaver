@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Sessions journal, accepted facts, and owner delivery",
-  "alt": "Events & Sessions negotiates and pins the native PostgreSQL provider, persists sessions, and serves ordered event replay. Knowledge receipts append separate project facts. Orchestrator owner messages are presented at fenced turn boundaries. Generic callers cannot write PolicyEvaluation without trusted Core provenance.",
+  "alt": "Projects & Config validates current permission and accepted run selection. Events & Sessions pins the journal, commits accepted facts, and serves ordered replay. After a fresh authority check and owner CAS, the Orchestrator commits the trusted accepted-run Sandbox binding with the winning plan decision, gate, grants, and outbox (its adapter only resolves existing resources), persists owner receipts and fenced message delivery; generic PolicyEvaluation append remains denied until #1846's trusted consumer.",
   "autonumber": true,
   "participants": [
     {
@@ -141,7 +141,12 @@
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
-      "label": "Reject PolicyEvaluation: run scope and actor=sub do not prove trusted Core-writer provenance."
+      "label": "Generic PolicyEvaluation append fails closed: actor=sub/run scope do not prove Core provenance; #1846 receipt consumer is not wired."
+    },
+    {
+      "type": "activation",
+      "participant": "api",
+      "action": "start"
     },
     {
       "type": "message",

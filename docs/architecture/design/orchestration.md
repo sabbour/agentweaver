@@ -101,24 +101,41 @@ generated workflows.
 
 The pure `Agentweaver.Orchestrator.Core` domain library validates built-in and
 generated catalogs before creating a versioned definition snapshot. It validates
-WorkPlans only against such a snapshot; an invalid definition or plan produces
-structured reasons and no snapshot value. Generated definitions remain marked for
-first-use confirmation. The library does not dispatch work, persist a
-journal/checkpoint, resolve Projects settings, or transport approvals; those
-runtime consumers are separate slices.
+typed outcome, selection, WorkPlan, and revision proposals against those snapshots;
+invalid definitions and plans return structured reasons and no snapshot value.
+Generated definitions remain marked for first-use confirmation. The Orchestrator
+owner persists accepted definitions and decisions, exact-request gate state, workflow
+position, and MAF checkpoints in its own PostgreSQL schema. The full dispatch engine
+remains a separate slice.
+
+Non-empty or fixed-work plans also require a trusted Sandbox binding. The owner
+validates the accepted candidate against the server catalog, asks its registered
+resource adapter to resolve an existing resource and return the original
+`ResourceNegotiation`, then pins it through `ProviderResolver`. Resolution is
+preparatory only: this Orchestrator slice does not provision or release Sandbox
+resources. After provider and child-limit waits, the route refreshes Projects
+authority and the owner checks the current selection, execution fence, and decision
+version before writing. The winning owner transaction commits the accepted
+selection hash, revisions, fence, candidate, resource, negotiated capabilities,
+decision, gate, grants, and outbox together. A revoked or stale request writes none
+of that state, while concurrent idempotent retries share the CAS winner.
+Decision-envelope restore reads that row, verifies the current
+accepted selection, role context, and catalog, then reconstructs and revalidates
+the exact pin without renegotiating. A missing catalog, adapter, candidate, or
+valid negotiation returns `503`; no default or caller-supplied resource is
+substituted. This source does not register a production Sandbox resource adapter.
 
 The library also contains the source-only `AgtPolicyProvider`, an AGT 4.0.0
 platform-singleton adapter backed by YAML policies, and `ExecutableActionGuard`. The
-guard requires an injected current grant-owner lookup and matches its validated grant
-descriptor to the authenticated caller's HTTPS issuer and subject, project/run/session/step,
-action, purpose, and execution fence before applying AGT as an additional restriction.
-The caller's subject and project/run claims must share one authenticated identity and issuer.
-Missing, duplicate, cross-issuer, or invalid grant state denies; provider or journal errors
-prevent the protected callback. The
-current generic Sessions append path rejects PolicyEvaluation events because it does
-not establish trusted Core-writer provenance, and no current grant owner or trusted
-writer is wired. Therefore the source guard cannot authorize protected effects yet;
-call sites remain separate work.
+guard uses the Orchestrator-owned current-grant lookup and redacted receipt writer.
+It matches the grant to the authenticated caller's HTTPS issuer and subject,
+project/run/session/step, action, purpose, and execution fence before applying AGT
+as an additional restriction. The caller's subject and project/run claims must share
+one authenticated identity and issuer. Missing, duplicate, cross-issuer, stale, or
+expired grants deny. Protected effects recheck current authority, grant state, and
+fence after awaits. The current generic Sessions append path still rejects
+PolicyEvaluation events; the reserved receipt-backed Events consumer is retained
+work under #1846, so this source does not claim positive journal ingestion.
 
 ### Outcome, selection, and confirmation
 

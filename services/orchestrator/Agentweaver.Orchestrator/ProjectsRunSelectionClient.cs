@@ -20,7 +20,33 @@ internal sealed class ProjectsRunSelectionClient(
         HttpContext context,
         string projectId,
         string runId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) =>
+        (await ReadSelectionWithAuthorityAsync(
+            context, projectId, runId, "acceptRunSelection", cancellationToken).ConfigureAwait(false)).Selection;
+
+    public async Task<EffectiveRunSelection> ReadSelectionForReadAsync(
+        HttpContext context,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken) =>
+        (await ReadSelectionWithAuthorityAsync(
+            context, projectId, runId, "readRunSelection", cancellationToken).ConfigureAwait(false)).Selection;
+
+    public Task<AuthorizedRunSelection> ReadAcceptedSelectionWithAuthorityAsync(
+        HttpContext context,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken) =>
+        ReadSelectionWithAuthorityAsync(
+            context, projectId, runId, "acceptRunSelection", cancellationToken, refreshAuthority: true);
+
+    private async Task<AuthorizedRunSelection> ReadSelectionWithAuthorityAsync(
+        HttpContext context,
+        string projectId,
+        string runId,
+        string requiredPermission,
+        CancellationToken cancellationToken,
+        bool refreshAuthority = false)
     {
         var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
         CoordinationIdentity.RequireScopes(context.User);
@@ -46,7 +72,7 @@ internal sealed class ProjectsRunSelectionClient(
                 authority.ResourceId == projectId &&
                 !authority.Permissions.IsDefault &&
                 authority.Permissions.Any(permission =>
-                    permission.Permission == "acceptRunSelection" && permission.RoleRevision > 0)))
+                    permission.Permission == requiredPermission && permission.RoleRevision > 0)))
             throw new CoordinationException("run_selection_permission_denied", StatusCodes.Status403Forbidden);
 
         using var request = new HttpRequestMessage(
@@ -92,14 +118,35 @@ internal sealed class ProjectsRunSelectionClient(
                 string.IsNullOrWhiteSpace(contextRevision.GetString()))
                 throw new CoordinationException(
                     "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
-            return new EffectiveRunSelection(
-                projectId,
-                runId,
-                projectRevisionValue,
-                configRevisionValue,
-                platformRevisionValue,
-                contextRevision.GetString()!,
-                root.Clone());
+            if (refreshAuthority)
+            {
+                authorization = await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken)
+                    .ConfigureAwait(false);
+                if (authorization.ContractVersion != 1 ||
+                    authorization.Issuer != options.Issuer ||
+                    authorization.ActorId != caller.Subject ||
+                    authorization.BoundProjectId != projectId ||
+                    authorization.BoundRunId != runId ||
+                    authorization.MembershipRevision < 1 ||
+                    authorization.EffectiveAuthority.IsDefault ||
+                    !authorization.EffectiveAuthority.Any(authority =>
+                        authority.ResourceType == "project" &&
+                        authority.ResourceId == projectId &&
+                        !authority.Permissions.IsDefault &&
+                        authority.Permissions.Any(permission =>
+                            permission.Permission == requiredPermission && permission.RoleRevision > 0)))
+                    throw new CoordinationException("run_selection_permission_denied", StatusCodes.Status403Forbidden);
+            }
+            return new AuthorizedRunSelection(
+                new EffectiveRunSelection(
+                    projectId,
+                    runId,
+                    projectRevisionValue,
+                    configRevisionValue,
+                    platformRevisionValue,
+                    contextRevision.GetString()!,
+                    root.Clone()),
+                authorization);
         }
     }
 

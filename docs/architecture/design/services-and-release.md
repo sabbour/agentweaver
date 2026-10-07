@@ -125,7 +125,7 @@ flowchart LR
 | Gateway/BFF | HTTP REST and server-sent events (SSE) for web and CLI; authentication entry, route dispatch, and authorized projections. | Agent execution or an application provider's viewer identity decisions. |
 | Identity | OpenIddict broker, MCP OAuth, purpose-bound run tokens, `SecretRef` redemption, and scoped gateway credential injection. This is the trust boundary. | Long-lived agent secrets in a run database or image. |
 | Projects & Config | Project lifecycle and revisioned configuration, casting/charters, blueprint/workflow references, skill settings, model-selection references, project provider overrides, platform runtime defaults, egress narrowing, validated run limits, and its own tenant memberships, resource-role assignments, and authorization audit. | Identity issuance, provider catalog registrations, repository/workflow materialization, raw credentials, or final provisioned-resource pins. |
-| Orchestrator | Runs, Microsoft Agent Framework (MAF) workflows, session tree and coordination verbs, typed coordinator decisions, OutcomeSpec and WorkPlan, approval and question gates, checkpoints, recovery, consistency manifest, and run-limit budget enforcement. | The run journal's storage or direct cross-schema updates. |
+| Orchestrator | Runs, Microsoft Agent Framework (MAF) workflows, session tree and coordination verbs, typed coordinator decisions, OutcomeSpec and WorkPlan, approval and question gates, immutable accepted-run Sandbox binding metadata, checkpoints, recovery, consistency manifest, and run-limit budget enforcement. | The run journal's storage, Sandbox resource provisioning, or direct cross-schema updates. |
 | Environment manager | Sandbox, Snapshots, Storage, Network Policy, and Application Hosting adapters; leases and fencing; egress verification; startup phases; retention, reclaim, application deployments, and control-plane image publication. | Viewer authentication or a workflow's publish decision. |
 | Source Control & Merge | Git workspace preparation, diff and assembly, merge locks, pull requests, webhooks, backlog intake, and the Source Control provider seam. | Platform-wide project identity. |
 | Knowledge | Memory and session-context records, decisions and proposals, prompt composition, and Memory adapters. | Repository files as an authoritative memory database. |
@@ -134,6 +134,11 @@ flowchart LR
 | Web frontend | Agentweaver's own run/chat interface and surface panel, A2UI renderer, and MCP Apps host bridge. | Durable backend authority or a copied Copilot application UX. |
 
 Projects & Config owns a PostgreSQL schema for configuration and authorization. It resolves the validated issuer and local subject to an active membership and current resource roles; tokens and checked tenant selectors do not grant roles. Runtime database credentials can read authority records but cannot mutate them. A separate privileged source path provisions memberships and roles and revokes them with revision checks, immutable audit, and a last-Owner invariant. Privileged resource services obtain fresh, effective caller permissions from `GET /api/authorization/context` for each operation; they do not maintain separate membership/role records, caches, or authorization pins. The Orchestrator supplies a trusted, revisioned run-selection context; the service checks project and platform revisions, resolves project model settings before platform defaults without fallback from an unavailable explicit setting, resolves provider candidates through the provider catalog contract, and enforces egress and run-limit narrowing. The returned immutable snapshot records candidates and selection revisions, not provisioned resources or authorization. Consumers pin final resource identity and negotiated capabilities only after provisioning.
+
+For typed coordinator plans, the registered Sandbox adapter resolves an already
+existing resource; it does not create or release one. After fresh Projects authority
+and owner selection/fence checks, the immutable binding is committed in the same
+transaction as the CAS-winning plan decision and its gate, grant, and outbox state.
 
 The Orchestrator owns the session tree, coordination verbs, and gates; Events & Sessions owns
 journal append, addressed-message records, and delivery state. Their collaboration uses versioned
@@ -147,11 +152,14 @@ The current v1 source includes unpublished `Agentweaver.EventsAndSessions` and
 journal, ordered replay across sessions, durable session-provider pins, and addressed-message
 delivery state. The Orchestrator owns root/child session relationships, current Projects &
 Config authorization checks, a durable owner message outbox, explicit turn-boundary
-operations, and parent notifications. Admission validates the exact owner outbox message and
-current session relationship and fences; admitting a valid correlated reply exposes input
-without approving a gate. The services connect through protected HTTP contracts, not a shared
-transaction. There is no background message relay or automatic AgentHost scheduler. Usage
-accounting and product AgentHost/Gateway integration remain future work.
+operations, parent notifications, typed decision/gate persistence, and MAF checkpoints.
+It also owns current executable-grant lookup and redacted PolicyEvaluation receipt
+production. Admission validates the exact owner outbox message and current session
+relationship and fences; acknowledging a correlated reply exposes input without approving
+a gate. The services connect through protected HTTP contracts, not a shared transaction.
+The reserved positive Events receipt consumer remains #1846 work after #1848 admission.
+There is no background message relay, automatic AgentHost scheduler, or full dispatch engine.
+Usage accounting and product AgentHost/Gateway integration remain future work.
 
 The Gateway and Identity boundary makes viewer authorization independent of the chosen [Application
 Hosting](applications-and-surfaces.md#application-hosting) provider. The first-party MCP server uses
@@ -375,10 +383,11 @@ service, with its Dockerfile, chart, and service version. Shared .NET contracts 
 CI path filters limit unrelated builds without weakening integration checks on the tested release
 set.
 
-The initial `services/orchestrator/Agentweaver.Orchestrator.Core` component is a
-pure domain library for workflow catalog and WorkPlan validation, not an executable
-service. The typed decision API, Projects resolution, journal, checkpoint host, and
-dispatch runtime remain owned integration work.
+The `services/orchestrator/Agentweaver.Orchestrator.Core` component remains a pure
+domain library for typed decision and workflow validation, not an executable service.
+The Orchestrator host now supplies typed decision/gate APIs, current grant and receipt
+ownership, and durable MAF checkpoints. The full dispatch runtime remains owned
+integration work.
 
 The AgentHost, Tool & MCP gateway, app router, and other versioned data-plane images participate in
 the same release composition. A hosted application is output of a workflow, not a platform release

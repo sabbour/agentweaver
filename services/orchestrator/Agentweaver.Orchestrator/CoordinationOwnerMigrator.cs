@@ -48,12 +48,21 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version != 1))
+        if (applied.Any(version => version is not (1 or 2 or 3)) ||
+            (applied.Contains(2) && !applied.Contains(1)) ||
+            (applied.Contains(3) && !applied.Contains(2)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
-        if (!applied.Contains(1))
+        foreach (var version in new[] { 1, 2, 3 }.Where(version => !applied.Contains(version)))
         {
+            var migrationName = version switch
+            {
+                1 => "coordination_owner",
+                2 => "typed_decisions_and_checkpoints",
+                3 => "accepted_run_selection_context",
+                _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
+            };
             await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
-                "Agentweaver.Orchestrator.Migrations.001_coordination_owner.sql")
+                $"Agentweaver.Orchestrator.Migrations.{version:000}_{migrationName}.sql")
                 ?? throw new InvalidOperationException("The coordination owner migration resource is missing.");
             using var text = new StreamReader(resource);
             var sql = (await text.ReadToEndAsync(cancellationToken))
@@ -61,7 +70,7 @@ public static class CoordinationOwnerMigrator
             await using (var migration = new NpgsqlCommand(sql, connection, transaction))
                 await migration.ExecuteNonQueryAsync(cancellationToken);
             await using (var record = new NpgsqlCommand(
-                $"INSERT INTO {quotedSchema}.coordination_schema_migrations (version) VALUES (1)",
+                $"INSERT INTO {quotedSchema}.coordination_schema_migrations (version) VALUES ({version})",
                 connection, transaction))
                 await record.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -81,7 +90,9 @@ public static class CoordinationOwnerMigrator
         await using var command = new NpgsqlCommand($"""
             SELECT
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 1),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 2),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 3),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -91,7 +102,14 @@ public static class CoordinationOwnerMigrator
                 to_regclass(@requests) IS NOT NULL,
                 to_regclass(@notifications) IS NOT NULL,
                 to_regclass(@outbox) IS NOT NULL,
-                to_regclass(@inbox) IS NOT NULL
+                to_regclass(@inbox) IS NOT NULL,
+                to_regclass(@decisions) IS NOT NULL,
+                to_regclass(@decisionOutbox) IS NOT NULL,
+                to_regclass(@gates) IS NOT NULL,
+                to_regclass(@grants) IS NOT NULL,
+                to_regclass(@receipts) IS NOT NULL,
+                to_regclass(@checkpoints) IS NOT NULL,
+                to_regclass(@selectionContexts) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
@@ -100,11 +118,21 @@ public static class CoordinationOwnerMigrator
         command.Parameters.AddWithValue("notifications", NpgsqlDbType.Text, $"{schema}.parent_notifications");
         command.Parameters.AddWithValue("outbox", NpgsqlDbType.Text, $"{schema}.outbox_events");
         command.Parameters.AddWithValue("inbox", NpgsqlDbType.Text, $"{schema}.consumer_inbox_receipts");
+        command.Parameters.AddWithValue("decisions", NpgsqlDbType.Text, $"{schema}.coordinator_decisions");
+        command.Parameters.AddWithValue(
+            "decisionOutbox", NpgsqlDbType.Text, $"{schema}.coordinator_decision_outbox");
+        command.Parameters.AddWithValue("gates", NpgsqlDbType.Text, $"{schema}.coordinator_gates");
+        command.Parameters.AddWithValue("grants", NpgsqlDbType.Text, $"{schema}.executable_action_grants");
+        command.Parameters.AddWithValue("receipts", NpgsqlDbType.Text, $"{schema}.policy_evaluation_receipts");
+        command.Parameters.AddWithValue("checkpoints", NpgsqlDbType.Text, $"{schema}.maf_workflow_checkpoints");
+        command.Parameters.AddWithValue(
+            "selectionContexts", NpgsqlDbType.Text, $"{schema}.coordinator_run_selection_contexts");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) ||
-            reader.GetInt64(0) != 1 || reader.GetInt64(1) != 0 ||
-            reader.GetInt64(2) != 1 || reader.GetInt64(3) != 1 || reader.GetInt64(4) != 0 ||
-            Enumerable.Range(5, 7).Any(column => !reader.GetBoolean(column)))
+            reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
+            reader.GetInt64(3) != 0 ||
+            reader.GetInt64(4) != 1 || reader.GetInt64(5) != 1 || reader.GetInt64(6) != 0 ||
+            Enumerable.Range(7, 14).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }
