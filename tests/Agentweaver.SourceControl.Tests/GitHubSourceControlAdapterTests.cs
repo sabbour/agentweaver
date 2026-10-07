@@ -47,6 +47,34 @@ public sealed class GitHubSourceControlAdapterTests
         Assert.DoesNotContain("transient-token", credential.ToString());
     }
 
+    [Theory]
+    [InlineData("\"has_issues\":true", true)]
+    [InlineData("\"has_issues\":false", false)]
+    [InlineData("", false)]
+    [InlineData("\"has_issues\":\"true\"", false)]
+    public async Task IssueWriteRequiresExplicitRepositoryIssueAvailability(
+        string issueMetadata,
+        bool issueWriteAvailable)
+    {
+        var repository = issueMetadata.Length == 0
+            ? RepositoryJson.Replace("\"has_issues\":true,", string.Empty, StringComparison.Ordinal)
+            : RepositoryJson.Replace("\"has_issues\":true", issueMetadata, StringComparison.Ordinal);
+        var adapter = CreateAdapter(new StubHandler((_, _) =>
+            Task.FromResult(JsonResponse(repository))));
+
+        var negotiation = await adapter.NegotiateRepositoryAsync(
+            ResolveCandidate(CreateResolver()),
+            new SourceControlRepositoryIdentity("octo", "widget"),
+            NewCredential(),
+            CancellationToken.None);
+
+        Assert.Equal(issueWriteAvailable,
+            negotiation.Resource.Capabilities.Contains(SourceControlCapabilities.IssueWrite));
+        Assert.Contains(SourceControlCapabilities.PullRequestWrite, negotiation.Resource.Capabilities);
+        Assert.Contains(SourceControlCapabilities.Merge, negotiation.Resource.Capabilities);
+        Assert.Contains(SourceControlCapabilities.RepositoryRead, negotiation.Resource.Capabilities);
+    }
+
     [Fact]
     public async Task CreateIssueUsesPinnedRepositoryAndReturnsStructuredIssue()
     {
@@ -74,6 +102,26 @@ public sealed class GitHubSourceControlAdapterTests
         Assert.Equal("Bug", issue.Title);
         Assert.Equal(new Uri("https://github.com/octo/widget/issues/17"), issue.HtmlUrl);
         Assert.Equal("open", issue.State);
+    }
+
+    [Fact]
+    public async Task CreateIssueDeniesWhenPinnedRepositoryDoesNotAdvertiseIssueWrite()
+    {
+        var calls = 0;
+        var adapter = CreateAdapter(new StubHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(JsonResponse("{}"));
+        }));
+
+        var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
+            () => adapter.CreateIssueAsync(
+                CreateContext("run-1", SourceControlCapabilities.RepositoryRead),
+                new SourceControlIssueRequest("Bug", "Details"),
+                CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.InvalidBinding, exception.Code);
+        Assert.Equal(0, calls);
     }
 
     [Fact]
@@ -116,7 +164,7 @@ public sealed class GitHubSourceControlAdapterTests
             {
                 1 => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
                     { Content = new StringContent("{\"message\":\"Validation failed\"}") },
-                2 => JsonResponse("[" + PullRequestJson(7, HeadSha, BaseSha) + "]"),
+                2 => JsonResponse("[" + OpenPullRequestListItemJson(7, HeadSha, BaseSha) + "]"),
                 _ => throw new InvalidOperationException("Unexpected GitHub request.")
             });
         });
@@ -164,6 +212,52 @@ public sealed class GitHubSourceControlAdapterTests
             () => adapter.CreateOrReusePullRequestAsync(context, request, CancellationToken.None));
 
         Assert.Equal(SourceControlFailureCode.PullRequestMismatch, exception.Code);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task CreatePullRequestRejectsMalformedOpenListItem()
+    {
+        var calls = 0;
+        var handler = new StubHandler((_, _) => Task.FromResult(++calls switch
+        {
+            1 => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity),
+            2 => JsonResponse("[{\"number\":7,\"state\":\"open\"}]"),
+            _ => throw new InvalidOperationException("Unexpected GitHub request.")
+        }));
+        var adapter = CreateAdapter(handler);
+        var context = CreateContext("run-1", SourceControlCapabilities.PullRequestWrite);
+        var request = new SourceControlPullRequestRequest(
+            "Feature", null, "feature", HeadSha, "main", BaseSha, Draft: false);
+
+        var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
+            () => adapter.CreateOrReusePullRequestAsync(context, request, CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.InvalidResponse, exception.Code);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task CreatePullRequestRejectsNonBooleanMergedValueInOpenListItem()
+    {
+        var calls = 0;
+        var malformedItem = OpenPullRequestListItemJson(7, HeadSha, BaseSha)
+            .Replace("\"state\":\"open\"", "\"state\":\"open\",\"merged\":\"false\"", StringComparison.Ordinal);
+        var handler = new StubHandler((_, _) => Task.FromResult(++calls switch
+        {
+            1 => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity),
+            2 => JsonResponse("[" + malformedItem + "]"),
+            _ => throw new InvalidOperationException("Unexpected GitHub request.")
+        }));
+        var adapter = CreateAdapter(handler);
+        var context = CreateContext("run-1", SourceControlCapabilities.PullRequestWrite);
+        var request = new SourceControlPullRequestRequest(
+            "Feature", null, "feature", HeadSha, "main", BaseSha, Draft: false);
+
+        var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
+            () => adapter.CreateOrReusePullRequestAsync(context, request, CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.InvalidResponse, exception.Code);
         Assert.Equal(2, calls);
     }
 
@@ -217,11 +311,12 @@ public sealed class GitHubSourceControlAdapterTests
             CancellationToken.None);
 
         Assert.True(result.IsReady);
-        Assert.Equal(4, calls.Count);
+        Assert.Equal(5, calls.Count);
         Assert.Equal(
             [
                 "/repos/octo/widget/pulls/7",
                 "/repos/octo/widget/rules/branches/main",
+                "/repos/octo/widget/branches/main/protection",
                 "/repos/octo/widget/commits/" + HeadSha + "/check-runs",
                 "/repos/octo/widget/commits/" + HeadSha + "/status"
             ],
@@ -230,6 +325,104 @@ public sealed class GitHubSourceControlAdapterTests
         Assert.Equal(17, result.RequiredChecks[0].AppId);
         Assert.Equal(HeadSha, result.RequiredChecks[0].CommitSha);
         Assert.Equal(SourceControlCheckEvidenceSource.CheckRun, result.RequiredChecks[0].Source);
+    }
+
+    [Fact]
+    public async Task MergeReadinessIncludesClassicBranchProtectionChecks()
+    {
+        const string classicProtection =
+            "{\"required_status_checks\":{\"strict\":true,\"contexts\":[\"classic-ci\"]," +
+            "\"checks\":[{\"context\":\"classic-ci\",\"app_id\":17}]}}";
+        var handler = ReadinessHandler(
+            [],
+            "[]",
+            CheckRunsJson(HeadSha, CheckRunJson("classic-ci", HeadSha, "completed", "success", 17)),
+            CommitStatusesJson(HeadSha),
+            classicProtection: classicProtection);
+        var adapter = CreateAdapter(handler);
+
+        var result = await adapter.ReadMergeReadinessAsync(
+            CreateContext("run-1", SourceControlCapabilities.Merge),
+            ReadinessRequest(),
+            CancellationToken.None);
+
+        Assert.True(result.IsReady);
+        var check = Assert.Single(result.RequiredChecks);
+        Assert.Equal("classic-ci", check.Context);
+        Assert.Equal(17, check.AppId);
+        Assert.Equal(HeadSha, check.CommitSha);
+    }
+
+    [Fact]
+    public async Task MergeReadinessCombinesClassicAndRulesetRequiredChecks()
+    {
+        const string classicProtection =
+            "{\"required_status_checks\":{\"strict\":true,\"contexts\":[\"classic-ci\"]," +
+            "\"checks\":[{\"context\":\"classic-ci\",\"app_id\":17}]}}";
+        var handler = ReadinessHandler(
+            [],
+            RequiredStatusChecksJson("ruleset-ci", "18"),
+            CheckRunsJson(
+                HeadSha,
+                CheckRunJson("classic-ci", HeadSha, "completed", "success", 17),
+                CheckRunJson("ruleset-ci", HeadSha, "completed", "success", 18)),
+            CommitStatusesJson(HeadSha),
+            classicProtection: classicProtection);
+        var adapter = CreateAdapter(handler);
+
+        var result = await adapter.ReadMergeReadinessAsync(
+            CreateContext("run-1", SourceControlCapabilities.Merge),
+            ReadinessRequest(),
+            CancellationToken.None);
+
+        Assert.True(result.IsReady);
+        Assert.Equal(
+            ["classic-ci", "ruleset-ci"],
+            result.RequiredChecks.Select(check => check.Context).Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden, "{\"message\":\"forbidden\"}")]
+    [InlineData(HttpStatusCode.InternalServerError, "{\"message\":\"unavailable\"}")]
+    [InlineData(HttpStatusCode.NotFound, "{\"message\":\"Not Found\"}")]
+    [InlineData(HttpStatusCode.NotFound, "not JSON")]
+    [InlineData(HttpStatusCode.OK, "{\"required_status_checks\":{}}")]
+    [InlineData(HttpStatusCode.OK, "{\"required_status_checks\":[]}")]
+    [InlineData(HttpStatusCode.OK, "{\"required_status_checks\":{\"checks\":\"bad\",\"contexts\":[]}}")]
+    public async Task MergeReadinessFailsClosedForUnknownClassicProtection(
+        HttpStatusCode status,
+        string responseBody)
+    {
+        var handler = new StubHandler((request, _) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/repos/octo/widget/pulls/7")
+                return Task.FromResult(JsonResponse(PullRequestJson(7, HeadSha, BaseSha)));
+            if (path == "/repos/octo/widget/rules/branches/main")
+                return Task.FromResult(JsonResponse("[]"));
+            if (path == "/repos/octo/widget/branches/main/protection")
+                return Task.FromResult(new HttpResponseMessage(status)
+                {
+                    Content = new StringContent(responseBody, Encoding.UTF8, "application/json")
+                });
+            throw new InvalidOperationException("Unexpected GitHub request.");
+        });
+        var adapter = CreateAdapter(handler);
+
+        var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
+            () => adapter.ReadMergeReadinessAsync(
+                CreateContext("run-1", SourceControlCapabilities.Merge),
+                ReadinessRequest(),
+                CancellationToken.None));
+
+        Assert.True(new[]
+        {
+                SourceControlFailureCode.CapabilityUnavailable,
+                SourceControlFailureCode.PermissionDenied,
+                SourceControlFailureCode.RemoteUnavailable
+            }.Contains(exception.Code));
+        if (status == HttpStatusCode.NotFound)
+            Assert.Equal(SourceControlFailureCode.CapabilityUnavailable, exception.Code);
     }
 
     [Theory]
@@ -287,6 +480,47 @@ public sealed class GitHubSourceControlAdapterTests
 
         Assert.True(result.IsReady);
         Assert.Equal(SourceControlCheckEvidenceSource.CommitStatus, Assert.Single(result.RequiredChecks).Source);
+    }
+
+    [Fact]
+    public async Task MergeReadinessKeepsAmbiguousCheckRunsUnknown()
+    {
+        var handler = ReadinessHandler(
+            [],
+            RequiredStatusChecksJson("ci/build", "17"),
+            CheckRunsJson(
+                HeadSha,
+                CheckRunJson("ci/build", HeadSha, "completed", "success", 17),
+                CheckRunJson("ci/build", HeadSha, "completed", "success", 17)),
+            CommitStatusesJson(HeadSha));
+        var adapter = CreateAdapter(handler);
+
+        var result = await adapter.ReadMergeReadinessAsync(
+            CreateContext("run-1", SourceControlCapabilities.Merge),
+            ReadinessRequest(),
+            CancellationToken.None);
+
+        Assert.False(result.IsReady);
+        Assert.Equal(SourceControlCheckState.Unknown, Assert.Single(result.RequiredChecks).State);
+    }
+
+    [Fact]
+    public async Task MergeReadinessRejectsMalformedCheckRunsWrapper()
+    {
+        var handler = ReadinessHandler(
+            [],
+            RequiredStatusChecksJson("ci/build", "17"),
+            "{\"total_count\":1,\"check_runs\":\"not-an-array\"}",
+            CommitStatusesJson(HeadSha));
+        var adapter = CreateAdapter(handler);
+
+        var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
+            () => adapter.ReadMergeReadinessAsync(
+                CreateContext("run-1", SourceControlCapabilities.Merge),
+                ReadinessRequest(),
+                CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.CapabilityUnavailable, exception.Code);
     }
 
     [Fact]
@@ -404,15 +638,48 @@ public sealed class GitHubSourceControlAdapterTests
         Assert.Equal(SourceControlFailureCode.InvalidBinding, exception.Code);
     }
 
+    [Fact]
+    public void SignedWebhookAcceptsRepositoryIdentityCasingVariant()
+    {
+        var payload = Encoding.UTF8.GetBytes(
+            "{\"repository\":{\"id\":123,\"full_name\":\"Octo/Widget\"}," +
+            "\"action\":\"synchronize\",\"pull_request\":{\"number\":7," +
+            "\"head\":{\"sha\":\"" + HeadSha + "\"},\"base\":{\"sha\":\"" + BaseSha + "\"}}}");
+        var secret = Encoding.UTF8.GetBytes("webhook-secret");
+        var signature = "sha256=" +
+                        Convert.ToHexString(HMACSHA256.HashData(secret, payload)).ToLowerInvariant();
+        var credential = NewCredential("webhook-secret");
+
+        Assert.True(GitHubWebhookSignatureVerifier.VerifyRawBody(payload, signature, credential));
+        var envelope = GitHubWebhookSignatureVerifier.ParseVerifiedPayload(
+            payload,
+            Guid.NewGuid().ToString(),
+            "pull_request",
+            new SourceControlRepositoryIdentity("octo", "widget"),
+            123);
+
+        Assert.Equal("Octo/Widget", envelope.Repository.FullName);
+    }
+
     private static string RepositoryJson =>
         "{\"id\":123,\"full_name\":\"octo/widget\",\"default_branch\":\"main\"," +
         "\"private\":false,\"created_at\":\"2020-01-01T00:00:00Z\"," +
+        "\"has_issues\":true," +
         "\"permissions\":{\"pull\":true,\"push\":true}}";
 
     private static string PullRequestJson(long number, string headSha, string baseSha) =>
         "{\"number\":" + number +
         ",\"html_url\":\"https://github.com/octo/widget/pull/" + number +
         "\",\"state\":\"open\",\"merged\":false," +
+        "\"head\":{\"ref\":\"feature\",\"sha\":\"" + headSha +
+        "\",\"repo\":{\"full_name\":\"octo/widget\"}}," +
+        "\"base\":{\"ref\":\"main\",\"sha\":\"" + baseSha +
+        "\",\"repo\":{\"full_name\":\"octo/widget\"}}}";
+
+    private static string OpenPullRequestListItemJson(long number, string headSha, string baseSha) =>
+        "{\"number\":" + number +
+        ",\"html_url\":\"https://github.com/octo/widget/pull/" + number +
+        "\",\"state\":\"open\"," +
         "\"head\":{\"ref\":\"feature\",\"sha\":\"" + headSha +
         "\",\"repo\":{\"full_name\":\"octo/widget\"}}," +
         "\"base\":{\"ref\":\"main\",\"sha\":\"" + baseSha +
@@ -426,7 +693,7 @@ public sealed class GitHubSourceControlAdapterTests
         "{\"context\":\"" + context + "\",\"integration_id\":" + appId + "}]}}]";
 
     private static string CheckRunsJson(string sha, params string[] checkRuns) =>
-        "{\"sha\":\"" + sha + "\",\"total_count\":" + checkRuns.Length +
+        "{\"total_count\":" + checkRuns.Length +
         ",\"check_runs\":[" + string.Join(",", checkRuns) + "]}";
 
     private static string CheckRunJson(
@@ -454,7 +721,8 @@ public sealed class GitHubSourceControlAdapterTests
         string rules,
         string checkRuns,
         string statuses,
-        string? pullRequest = null) =>
+        string? pullRequest = null,
+        string? classicProtection = null) =>
         new((request, _) =>
         {
             var path = request.RequestUri!.AbsolutePath;
@@ -464,6 +732,15 @@ public sealed class GitHubSourceControlAdapterTests
                 "/repos/octo/widget/pulls/7" =>
                     JsonResponse(pullRequest ?? PullRequestJson(7, HeadSha, BaseSha)),
                 "/repos/octo/widget/rules/branches/main" => JsonResponse(rules),
+                "/repos/octo/widget/branches/main/protection" => classicProtection is null
+                    ? new HttpResponseMessage(HttpStatusCode.NotFound)
+                    {
+                        Content = new StringContent(
+                            "{\"message\":\"Branch not protected\"}",
+                            Encoding.UTF8,
+                            "application/json")
+                    }
+                    : JsonResponse(classicProtection),
                 var value when value.EndsWith("/check-runs", StringComparison.Ordinal) =>
                     JsonResponse(checkRuns),
                 var value when value.EndsWith("/status", StringComparison.Ordinal) =>

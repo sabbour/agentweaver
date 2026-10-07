@@ -465,9 +465,120 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             }
         }
 
+        using var protectionResponse = await SendAsync(
+            HttpMethod.Get,
+            RepositoryUri(
+                context.Repository,
+                "branches/" + Uri.EscapeDataString(baseBranch) + "/protection"),
+            context.Credential,
+            content: null,
+            cancellationToken).ConfigureAwait(false);
+        if (protectionResponse.StatusCode == HttpStatusCode.NotFound)
+        {
+            if (!await IsUnprotectedBranchResponseAsync(protectionResponse, cancellationToken)
+                    .ConfigureAwait(false))
+                throw UnavailableMergeEvidence(
+                    "GitHub classic branch protection could not be verified.");
+        }
+        else
+        {
+            EnsureMergeEvidenceSuccess(protectionResponse, "GitHub classic branch protection read");
+            using var protectionDocument = await ReadJsonAsync(
+                protectionResponse, cancellationToken).ConfigureAwait(false);
+            ParseClassicRequiredChecks(protectionDocument.RootElement, requirements);
+        }
+
         return requirements
             .Distinct()
             .ToImmutableArray();
+    }
+
+    private static void ParseClassicRequiredChecks(
+        JsonElement protection,
+        ImmutableArray<RequiredCheck>.Builder requirements)
+    {
+        if (protection.ValueKind != JsonValueKind.Object ||
+            !protection.TryGetProperty("required_status_checks", out var statusChecks))
+            throw UnavailableMergeEvidence(
+                "GitHub returned incomplete classic branch-protection requirements.");
+        if (statusChecks.ValueKind == JsonValueKind.Null)
+            return;
+        if (statusChecks.ValueKind != JsonValueKind.Object)
+            throw UnavailableMergeEvidence(
+                "GitHub returned malformed classic required status checks.");
+
+        var checkContexts = new HashSet<string>(StringComparer.Ordinal);
+        if (statusChecks.TryGetProperty("checks", out var checks))
+        {
+            if (checks.ValueKind != JsonValueKind.Array)
+                throw UnavailableMergeEvidence(
+                    "GitHub returned malformed classic required check identities.");
+            foreach (var check in checks.EnumerateArray())
+            {
+                if (check.ValueKind != JsonValueKind.Object ||
+                    !check.TryGetProperty("context", out var contextValue) ||
+                    contextValue.ValueKind != JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(contextValue.GetString()) ||
+                    !check.TryGetProperty("app_id", out var appValue))
+                    throw UnavailableMergeEvidence(
+                        "GitHub returned an incomplete classic required check identity.");
+
+                long? appId;
+                if (appValue.ValueKind == JsonValueKind.Null)
+                    appId = null;
+                else if (appValue.TryGetInt64(out var parsedAppId) && parsedAppId > 0)
+                    appId = parsedAppId;
+                else
+                    throw UnavailableMergeEvidence(
+                        "GitHub returned an invalid classic required check app identity.");
+
+                var context = contextValue.GetString()!;
+                checkContexts.Add(context);
+                requirements.Add(new RequiredCheck(context, appId));
+            }
+        }
+
+        if (statusChecks.TryGetProperty("contexts", out var contexts))
+        {
+            if (contexts.ValueKind != JsonValueKind.Array)
+                throw UnavailableMergeEvidence(
+                    "GitHub returned malformed classic required check contexts.");
+            foreach (var contextValue in contexts.EnumerateArray())
+            {
+                if (contextValue.ValueKind != JsonValueKind.String ||
+                    string.IsNullOrWhiteSpace(contextValue.GetString()))
+                    throw UnavailableMergeEvidence(
+                        "GitHub returned an invalid classic required check context.");
+                var context = contextValue.GetString()!;
+                if (!checkContexts.Contains(context))
+                    requirements.Add(new RequiredCheck(context, AppId: null));
+            }
+        }
+
+        if (!statusChecks.TryGetProperty("checks", out _) &&
+            !statusChecks.TryGetProperty("contexts", out _))
+            throw UnavailableMergeEvidence(
+                "GitHub returned no classic required check identities.");
+    }
+
+    private static async Task<bool> IsUnprotectedBranchResponseAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var document = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
+            var root = document.RootElement;
+            return root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("message", out var message) &&
+                message.ValueKind == JsonValueKind.String &&
+                string.Equals(message.GetString(), "Branch not protected", StringComparison.Ordinal);
+        }
+        catch (SourceControlOperationException exception)
+            when (exception.Code == SourceControlFailureCode.InvalidResponse)
+        {
+            return false;
+        }
     }
 
     private static void ParseRequiredStatusChecks(
@@ -571,9 +682,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         using var document = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object ||
-            !root.TryGetProperty("sha", out var shaValue) ||
-            shaValue.ValueKind != JsonValueKind.String ||
-            !string.Equals(shaValue.GetString(), expectedHeadSha, StringComparison.OrdinalIgnoreCase) ||
             !root.TryGetProperty("total_count", out var totalValue) ||
             !totalValue.TryGetInt32(out var totalCount) ||
             totalCount < 0 ||
@@ -750,8 +858,7 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             throw InvalidResponse("GitHub returned an invalid pull request lookup response.");
 
         var candidates = document.RootElement.EnumerateArray()
-            .Select(element => ParsePullRequest(
-                element, context.Repository, SourceControlPullRequestDisposition.Observed))
+            .Select(element => ParseOpenPullRequestListItem(element, context.Repository))
             .ToArray();
         var exact = candidates.Where(candidate =>
                 string.Equals(
@@ -775,6 +882,20 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 SourceControlFailureCode.PullRequestMismatch,
                 "An open pull request exists for the requested branches but its head or base revision differs.");
         return null;
+    }
+
+    private static SourceControlPullRequest ParseOpenPullRequestListItem(
+        JsonElement root,
+        SourceControlRepositoryIdentity expectedRepository)
+    {
+        var pullRequest = ParsePullRequest(
+            root,
+            expectedRepository,
+            SourceControlPullRequestDisposition.Observed,
+            allowOpenListItem: true);
+        if (!string.Equals(pullRequest.State, "open", StringComparison.Ordinal) || pullRequest.Merged)
+            throw InvalidResponse("GitHub returned a non-open pull request in its open pull request list.");
+        return pullRequest;
     }
 
     private async Task<RepositoryInfo> ReadRepositoryAsync(
@@ -810,7 +931,8 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             ReadRequiredBoolean(root, "private"),
             createdAt,
             canPull,
-            canPush);
+            canPush,
+            ReadOptionalBoolean(root, "has_issues"));
     }
 
     private static ImmutableHashSet<string> GetNegotiatedCapabilities(RepositoryInfo info)
@@ -825,7 +947,8 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         }
         if (info.CanPush)
         {
-            capabilities.Add(SourceControlCapabilities.IssueWrite);
+            if (info.HasIssues)
+                capabilities.Add(SourceControlCapabilities.IssueWrite);
             capabilities.Add(SourceControlCapabilities.PullRequestWrite);
             capabilities.Add(SourceControlCapabilities.Merge);
         }
@@ -950,25 +1073,39 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
     private static SourceControlPullRequest ParsePullRequest(
         JsonElement root,
         SourceControlRepositoryIdentity expectedRepository,
-        SourceControlPullRequestDisposition disposition)
+        SourceControlPullRequestDisposition disposition,
+        bool allowOpenListItem = false)
     {
         var head = ReadObject(root, "head");
         var @base = ReadObject(root, "base");
         EnsureRepositoryMatches(expectedRepository, ReadRepositoryName(head));
         EnsureRepositoryMatches(expectedRepository, ReadRepositoryName(@base));
-        if (!root.TryGetProperty("merged", out var merged) ||
-            merged.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        var state = ReadRequiredString(root, "state");
+        bool merged;
+        if (root.TryGetProperty("merged", out var mergedValue))
+        {
+            if (mergedValue.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw InvalidResponse("GitHub returned an invalid pull request merge state.");
+            merged = mergedValue.GetBoolean();
+        }
+        else if (allowOpenListItem && state == "open")
+        {
+            merged = false;
+        }
+        else
+        {
             throw InvalidResponse("GitHub returned a pull request without a merge state.");
+        }
 
         return new SourceControlPullRequest(
             ReadPositiveInt64(root, "number"),
             ReadGitHubUrl(root, "html_url"),
-            ReadRequiredString(root, "state"),
+            state,
             ReadRequiredString(head, "ref"),
             ReadRequiredString(head, "sha"),
             ReadRequiredString(@base, "ref"),
             ReadRequiredString(@base, "sha"),
-            merged.ValueKind == JsonValueKind.True,
+            merged,
             disposition);
     }
 
@@ -1197,7 +1334,8 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         bool IsPrivate,
         DateTimeOffset CreatedAt,
         bool CanPull,
-        bool CanPush);
+        bool CanPush,
+        bool HasIssues);
 
     private sealed record RequiredCheck(string Context, long? AppId);
 

@@ -1488,11 +1488,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(PostgresConta
         string path,
         string token,
         IReadOnlyList<string>? tenantSelectors,
-        string? roleHeader = null)
+        string? roleHeader = null,
+        CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(method, path);
         AddBearerAndTenant(request, token, tenantSelectors, roleHeader);
-        return await client.SendAsync(request);
+        return await client.SendAsync(request, cancellationToken);
     }
 
     private static void AddBearerAndTenant(

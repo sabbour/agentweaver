@@ -22,6 +22,14 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 | Azure tooling tests | Target, source, digest, command, and acceptance guards through fake `az` and `git` executors. | A live Azure call or provisioned resource. |
 | Foundation Probe tests | Receipt and token checks, provider pins, exact-version Key Vault read, owned Blob cleanup, PostgreSQL effects, and trace evidence. | Azure resource access or Identity broker redemption. |
 
+Source Control regressions cover GitHub's actual PR-list and check-runs response shapes,
+ruleset and classic branch-protection requirements, and repository issue availability.
+PostgreSQL tests cover case-insensitive repository-name matching while retaining exact
+provider IDs. Broker integration tests exercise the webhook route through actual Kestrel:
+an authenticated, correctly signed body over 64 KiB succeeds and a body over 1 MiB is
+rejected. Merge settlement coverage cancels the caller after GitHub accepts the merge and
+checks that the merged SHA remains durable and can be replayed from another host.
+
 ## Run tests
 
 Use the .NET 10 SDK selected by `global.json`, Node.js 24, and a Docker-compatible engine. PostgreSQL integration tests start their own disposable container.

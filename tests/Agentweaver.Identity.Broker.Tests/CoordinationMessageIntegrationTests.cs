@@ -21,7 +21,10 @@ using Agentweaver.SourceControl;
 using EventsHost::Agentweaver.EventsAndSessions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -353,6 +356,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var sourceControlGitHub = new ControlledGitHubApi(sourceControlSecretBackend.Value);
         var sourceControlRequestBarrier = new ControlledRequestBarrier();
         var mergeStartedSelectionBarrier = new ControlledRequestBarrier();
+        var postMergeSettlementBarrier = new ControlledRequestBarrier();
+        async Task PauseProjectsRequestsAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await mergeStartedSelectionBarrier.PauseIfMatchedAsync(request, cancellationToken)
+                .ConfigureAwait(false);
+            await postMergeSettlementBarrier.PauseIfMatchedAsync(request, cancellationToken)
+                .ConfigureAwait(false);
+        }
         sourceControlGitHub.BeforeResponseAsync = sourceControlRequestBarrier.PauseIfMatchedAsync;
         using var workspaceFiles = new SourceControlTemporaryDirectory();
         var checkoutRepositoryPath = Path.Combine(workspaceFiles.Path, "checkout-origin");
@@ -367,7 +380,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             () => new RequestCountingHandler(
                 projects.CreateHandler(),
                 () => Interlocked.Increment(ref projectsOwnerRequests),
-                mergeStartedSelectionBarrier.PauseIfMatchedAsync),
+                PauseProjectsRequestsAsync),
             () => new OwnerForkRaceHandler(
                 new CapturingHandler(
                     eventsFactoryReference!.Server.CreateHandler(),
@@ -788,6 +801,82 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(
             webhookCountAfterFirstDelivery,
             await ReadWebhookDeliveryCountAsync(_connectionString, ownerSchema, project.ProjectId));
+
+        var kestrelBuilder = WebApplication.CreateBuilder();
+        kestrelBuilder.WebHost.ConfigureKestrel(server =>
+            server.Limits.MaxRequestBodySize = 64 * 1024);
+        kestrelBuilder.WebHost.UseUrls("http://127.0.0.1:0");
+        var sourceControlOwnerServices = orchestratorFactory.Services;
+        using var kestrelActionGuardScope = sourceControlOwnerServices.CreateScope();
+        kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<OrchestratorOptions>());
+        kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<ProjectsRunSelectionClient>());
+        kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<CoordinatorDecisionOwnerStore>());
+        kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<SourceControlOwnerStore>());
+        kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<SourceControlSecretRedemptionClient>());
+        kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<ProviderCatalog>());
+        kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<ProviderResolver>());
+        kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<ISourceControlAdapter>());
+        kestrelBuilder.Services.AddSingleton(
+            kestrelActionGuardScope.ServiceProvider.GetRequiredService<ExecutableActionGuard>());
+        kestrelBuilder.Services.AddSingleton(sourceControlOwnerServices.GetRequiredService<AgtPolicyProvider>());
+        kestrelBuilder.Services.AddSingleton(TimeProvider.System);
+        AddJwtBearer(kestrelBuilder.Services, signingKey);
+        kestrelBuilder.Services.AddAuthorization();
+        await using (var kestrelApp = kestrelBuilder.Build())
+        {
+            kestrelApp.UseAuthentication();
+            kestrelApp.UseAuthorization();
+            kestrelApp.MapSourceControlEndpoints();
+            await kestrelApp.StartAsync();
+            var kestrelAddress = kestrelApp.Services.GetRequiredService<IServer>()
+                .Features.Get<IServerAddressesFeature>()?.Addresses.Single()
+                ?? throw new InvalidOperationException("Kestrel did not publish its listening address.");
+            using var kestrelOrchestrator = new HttpClient
+            {
+                BaseAddress = new Uri(kestrelAddress)
+            };
+            var largeWebhook = Encoding.UTF8.GetBytes(
+                "{\"repository\":{\"id\":12345,\"full_name\":\"octo/agentweaver\"}," +
+                "\"action\":\"synchronize\",\"pull_request\":{\"number\":17," +
+                "\"head\":{\"sha\":\"" + sourceHeadSha + "\"}," +
+                "\"base\":{\"sha\":\"" + sourceBaseSha + "\"}},\"padding\":\"" +
+                new string('x', 70_000) + "\"}");
+            Assert.InRange(largeWebhook.Length, 64 * 1024 + 1, 1024 * 1024);
+            using (var largeWebhookResponse = await SendSignedWebhookRelayAsync(
+                       kestrelOrchestrator,
+                       webhookPath,
+                       runToken,
+                       TenantId,
+                       Guid.NewGuid().ToString("D"),
+                       "pull_request",
+                       largeWebhook,
+                       sourceControlSecretBackend.Value))
+                Assert.Equal(HttpStatusCode.Accepted, largeWebhookResponse.StatusCode);
+
+            var tooLargeWebhook = Encoding.UTF8.GetBytes(
+                "{\"repository\":{\"id\":12345,\"full_name\":\"octo/agentweaver\"}," +
+                "\"action\":\"synchronize\",\"padding\":\"" +
+                new string('x', 1024 * 1024) + "\"}");
+            Assert.True(tooLargeWebhook.Length > 1024 * 1024);
+            using (var tooLargeResponse = await SendSignedWebhookRelayAsync(
+                       kestrelOrchestrator,
+                       webhookPath,
+                       runToken,
+                       TenantId,
+                       Guid.NewGuid().ToString("D"),
+                       "pull_request",
+                       tooLargeWebhook,
+                       sourceControlSecretBackend.Value))
+                Assert.Equal(HttpStatusCode.RequestEntityTooLarge, tooLargeResponse.StatusCode);
+        }
 
         var outcomeProposal = new ProposeCoordinatorOutcomeRequest(
             1,
@@ -2119,7 +2208,61 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ProjectAuthorityRole.Orchestrator);
         }
 
-        Assert.Equal(3, sourceControlGitHub.MergeRequestCount);
+        var (cancelledMergeIntentId, _) =
+            await CreateApprovedMergeIntentAsync("source-control-merge-client-cancellation");
+        var mergeCountBeforeCancellation = sourceControlGitHub.MergeRequestCount;
+        postMergeSettlementBarrier.Arm((request, _) => Task.FromResult(
+            request.RequestUri?.AbsolutePath == "/api/authorization/context" &&
+            sourceControlGitHub.MergeRequestCount == mergeCountBeforeCancellation + 1));
+        using (var callerCancellation = new CancellationTokenSource())
+        {
+            var cancelledMerge = SendAsync(
+                orchestrator,
+                HttpMethod.Post,
+                mergeIntentPath + "/" + cancelledMergeIntentId + "/execute",
+                runToken,
+                [TenantId],
+                cancellationToken: callerCancellation.Token);
+            await postMergeSettlementBarrier.WaitUntilPausedAsync()
+                .WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(mergeCountBeforeCancellation + 1, sourceControlGitHub.MergeRequestCount);
+            callerCancellation.Cancel();
+            postMergeSettlementBarrier.Release();
+            try
+            {
+                using var cancelledResponse = await cancelledMerge.WaitAsync(TimeSpan.FromSeconds(30));
+            }
+            catch (OperationCanceledException) when (callerCancellation.IsCancellationRequested)
+            {
+            }
+        }
+
+        var cancellationDeadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        var cancelledMergeState = await ReadMergeIntentStateAsync(cancelledMergeIntentId);
+        while (cancelledMergeState.State != "merged" && DateTimeOffset.UtcNow < cancellationDeadline)
+        {
+            await Task.Delay(25);
+            cancelledMergeState = await ReadMergeIntentStateAsync(cancelledMergeIntentId);
+        }
+        Assert.Equal("merged", cancelledMergeState.State);
+        Assert.Equal("cccccccccccccccccccccccccccccccccccccccc", cancelledMergeState.MergeSha);
+        Assert.Equal(mergeCountBeforeCancellation + 1, sourceControlGitHub.MergeRequestCount);
+        using (var cancellationReplay = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   mergeIntentPath + "/" + cancelledMergeIntentId + "/execute",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, cancellationReplay.StatusCode);
+            var result = await ReadJsonAsync<JsonElement>(cancellationReplay);
+            Assert.Equal("merged", result.GetProperty("state").GetString());
+            Assert.Equal(
+                "cccccccccccccccccccccccccccccccccccccccc",
+                result.GetProperty("mergeSha").GetString());
+        }
+
+        Assert.Equal(4, sourceControlGitHub.MergeRequestCount);
         await using (var restartedOrchestratorFactory = new OrchestratorIntegrationFactory(
                          _connectionString,
                          ownerSchema,
@@ -2127,7 +2270,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                          () => new RequestCountingHandler(
                              projects.CreateHandler(),
                              () => Interlocked.Increment(ref projectsOwnerRequests),
-                             mergeStartedSelectionBarrier.PauseIfMatchedAsync),
+                             PauseProjectsRequestsAsync),
                          () => eventsFactory.Server.CreateHandler(),
                          cacheObjectStore,
                          sandboxProvider,
@@ -2152,6 +2295,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                    mergeIntentPath + "/" + postEffectRevocationIntentId + "/execute",
                    runToken,
                    [TenantId]))
+        using (var restartedCancelledMergeReplay = await SendAsync(
+                   restartedOrchestrator,
+                   HttpMethod.Post,
+                   mergeIntentPath + "/" + cancelledMergeIntentId + "/execute",
+                   runToken,
+                   [TenantId]))
         {
             Assert.Equal(HttpStatusCode.OK, restartedConcurrentMergeReplay.StatusCode);
             var concurrentResult = await ReadJsonAsync<JsonElement>(restartedConcurrentMergeReplay);
@@ -2165,8 +2314,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(
                 "cccccccccccccccccccccccccccccccccccccccc",
                 result.GetProperty("mergeSha").GetString());
+            Assert.Equal(HttpStatusCode.OK, restartedCancelledMergeReplay.StatusCode);
+            var cancelledResult = await ReadJsonAsync<JsonElement>(restartedCancelledMergeReplay);
+            Assert.Equal("merged", cancelledResult.GetProperty("state").GetString());
+            Assert.Equal(
+                "cccccccccccccccccccccccccccccccccccccccc",
+                cancelledResult.GetProperty("mergeSha").GetString());
         }
-        Assert.Equal(3, sourceControlGitHub.MergeRequestCount);
+        Assert.Equal(4, sourceControlGitHub.MergeRequestCount);
 
         var registrationEffectsBeforeRevocation = await ReadChildRegistrationEffectsAsync(
             _connectionString, ownerSchema, project.ProjectId);
@@ -4732,6 +4887,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 return Json(HttpStatusCode.OK,
                     "{\"id\":12345,\"full_name\":\"octo/agentweaver\",\"default_branch\":\"main\"," +
                     "\"private\":false,\"created_at\":\"2020-01-01T00:00:00Z\"," +
+                    "\"has_issues\":true," +
                     "\"permissions\":{\"pull\":true,\"push\":true}}");
 
             if (request.Method == HttpMethod.Post &&
@@ -4762,6 +4918,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             if (request.Method == HttpMethod.Get &&
                 uri.AbsolutePath == "/repos/octo/agentweaver/rules/branches/main")
                 return Json(HttpStatusCode.OK, "[]");
+
+            if (request.Method == HttpMethod.Get &&
+                uri.AbsolutePath == "/repos/octo/agentweaver/branches/main/protection")
+                return Json(HttpStatusCode.NotFound, "{\"message\":\"Branch not protected\"}");
 
             if (request.Method == HttpMethod.Put &&
                 uri.AbsolutePath == "/repos/octo/agentweaver/pulls/17/merge")

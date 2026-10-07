@@ -7,11 +7,13 @@ using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
 using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Orchestrator;
 
 internal static class SourceControlEndpoints
 {
+    private static readonly TimeSpan MergeSettlementTimeout = TimeSpan.FromSeconds(30);
     private static readonly JsonSerializerOptions ProviderSelectionJsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
@@ -34,7 +36,8 @@ internal static class SourceControlEndpoints
         sourceControl.MapPost("/merge-intents", PrepareMergeIntentAsync);
         sourceControl.MapGet("/merge-intents/{intentId}", ReadMergeIntentAsync);
         sourceControl.MapPost("/merge-intents/{intentId}/execute", ExecuteMergeIntentAsync);
-        sourceControl.MapPost("/webhook-relay", ReceiveRelayedGitHubWebhookAsync);
+        sourceControl.MapPost("/webhook-relay", ReceiveRelayedGitHubWebhookAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
         app.MapPost("/api/source-control/github/webhook", RejectDirectGitHubWebhookAsync)
             .RequireAuthorization();
         return app;
@@ -984,23 +987,41 @@ internal static class SourceControlEndpoints
                             state, null, authorityFailure?.Code ?? exception.Code.ToString());
                     }
 
-                    var postMergeAuthorityFailure = await GetMergeAuthorityFailureAsync(
-                        context,
-                        actor,
-                        identity,
-                        selection,
-                        lockedIntent with { State = "merge_started" },
-                        projects,
-                        decisions,
-                        grantOwner,
-                        token).ConfigureAwait(false);
+                    CoordinationException? postMergeAuthorityFailure;
+                    var authorityObservationTimedOut = false;
+                    using (var authoritySettlement = new CancellationTokenSource(MergeSettlementTimeout))
+                    {
+                        try
+                        {
+                            postMergeAuthorityFailure = await GetMergeAuthorityFailureAsync(
+                                context,
+                                actor,
+                                identity,
+                                selection,
+                                lockedIntent with { State = "merge_started" },
+                                projects,
+                                decisions,
+                                grantOwner,
+                                authoritySettlement.Token).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (authoritySettlement.IsCancellationRequested)
+                        {
+                            postMergeAuthorityFailure = null;
+                            authorityObservationTimedOut = true;
+                        }
+                    }
+
+                    using var durableSettlement = new CancellationTokenSource(MergeSettlementTimeout);
                     await sourceControlOwner.RecordMergeOutcomeAsync(
                         identity,
                         lockedIntent.IntentId,
                         "merged",
                         outcome.MergeSha,
-                        failureCode: postMergeAuthorityFailure?.Code,
-                        token).ConfigureAwait(false);
+                        failureCode: postMergeAuthorityFailure?.Code ??
+                                     (authorityObservationTimedOut
+                                         ? "post_merge_authority_observation_timeout"
+                                         : null),
+                        durableSettlement.Token).ConfigureAwait(false);
                     return new SourceControlMergeExecutionResult(
                         "merged", outcome.MergeSha, postMergeAuthorityFailure?.Code);
                 },

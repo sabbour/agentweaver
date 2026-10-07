@@ -61,6 +61,11 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             var savedPin = await sourceStore.PersistRepositoryPinAsync(
                 actor, identity, selection, pin, current.StateVersion, CancellationToken.None);
             Assert.Equal(pin.PinId, savedPin.PinId);
+            var casingVariantPin = CreatePin(
+                acceptedRun, providerResolver, new SourceControlRepositoryIdentity("Octo", "Repo"));
+            var sameRepositoryPin = await sourceStore.PersistRepositoryPinAsync(
+                actor, identity, selection, casingVariantPin, current.StateVersion, CancellationToken.None);
+            Assert.Equal(pin.Repository, sameRepositoryPin.Repository);
 
             var saved = await sourceStore.PersistMergeIntentAsync(
                 actor, identity, selection, intentRequest, "idempotency-1", CancellationToken.None);
@@ -89,7 +94,7 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
                 Guid.NewGuid().ToString(),
                 "pull_request",
                 "opened",
-                pin.Repository,
+                new SourceControlRepositoryIdentity("Octo", "Repo"),
                 pin.ProviderRepositoryId,
                 intentRequest.PullRequest.Number,
                 intentRequest.PullRequest.HeadSha,
@@ -113,6 +118,38 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
                 webhookHash,
                 current.StateVersion,
                 CancellationToken.None));
+            var wrongRepository = webhook with
+            {
+                DeliveryId = Guid.NewGuid().ToString(),
+                Repository = new SourceControlRepositoryIdentity("octo", "other")
+            };
+            var wrongRepositoryException = await Assert.ThrowsAsync<CoordinationException>(() =>
+                sourceStore.RecordWebhookDeliveryAsync(
+                    actor,
+                    identity,
+                    selection,
+                    acceptedPin,
+                    wrongRepository,
+                    webhookHash,
+                    current.StateVersion,
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status409Conflict, wrongRepositoryException.StatusCode);
+            var wrongRepositoryId = webhook with
+            {
+                DeliveryId = Guid.NewGuid().ToString(),
+                ProviderRepositoryId = pin.ProviderRepositoryId + 1
+            };
+            var wrongRepositoryIdException = await Assert.ThrowsAsync<CoordinationException>(() =>
+                sourceStore.RecordWebhookDeliveryAsync(
+                    actor,
+                    identity,
+                    selection,
+                    acceptedPin,
+                    wrongRepositoryId,
+                    webhookHash,
+                    current.StateVersion,
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status409Conflict, wrongRepositoryIdException.StatusCode);
             var replayConflict = await Assert.ThrowsAsync<CoordinationException>(() =>
                 sourceStore.RecordWebhookDeliveryAsync(
                     actor,
@@ -295,7 +332,8 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
 
     private static SourceControlRepositoryPin CreatePin(
         SourceControlAcceptedRunBinding acceptedRun,
-        ProviderResolver resolver)
+        ProviderResolver resolver,
+        SourceControlRepositoryIdentity? repository = null)
     {
         var candidate = Assert.IsType<ProviderCandidate>(resolver.Resolve(new ProviderResolutionRequest(
             ProviderSeam.SourceControl,
@@ -316,7 +354,7 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             "source-pin-test",
             acceptedRun,
             binding,
-            new SourceControlRepositoryIdentity("octo", "repo"),
+            repository ?? new SourceControlRepositoryIdentity("octo", "repo"),
             new SourceControlCredentialReference(
                 new SecretRef("github-api-v1", "version-1"),
                 SourceControlSecretPurposes.Api),

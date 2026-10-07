@@ -405,7 +405,7 @@ internal sealed class SourceControlOwnerStore(
             connection, transaction, identity, selectionHash, cancellationToken).ConfigureAwait(false);
         if (storedPin is null ||
             !SamePin(storedPin, pin) ||
-            pin.Repository != envelope.Repository ||
+            !SameRepositoryIdentity(pin.Repository, envelope.Repository) ||
             pin.ProviderRepositoryId != envelope.ProviderRepositoryId)
             throw new CoordinationException(
                 "source_control_webhook_binding_changed", StatusCodes.Status409Conflict);
@@ -1225,7 +1225,7 @@ internal sealed class SourceControlOwnerStore(
         stored.PinId == proposed.PinId &&
         stored.AcceptedRun == proposed.AcceptedRun &&
         SameProviderBinding(stored.ProviderBinding, proposed.ProviderBinding) &&
-        stored.Repository == proposed.Repository &&
+        SameRepositoryIdentity(stored.Repository, proposed.Repository) &&
         SameCredential(stored.ApiCredential, proposed.ApiCredential) &&
         SameCredential(stored.CheckoutCredential, proposed.CheckoutCredential) &&
         SameCredential(stored.WebhookCredential, proposed.WebhookCredential) &&
@@ -1233,6 +1233,12 @@ internal sealed class SourceControlOwnerStore(
         stored.DefaultBranch == proposed.DefaultBranch &&
         stored.IsPrivate == proposed.IsPrivate &&
         stored.PinnedAt == proposed.PinnedAt;
+
+    private static bool SameRepositoryIdentity(
+        SourceControlRepositoryIdentity left,
+        SourceControlRepositoryIdentity right) =>
+        string.Equals(left.Owner, right.Owner, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(left.Name, right.Name, StringComparison.OrdinalIgnoreCase);
 
     private static bool SameProviderBinding(
         PinnedProviderBinding left,

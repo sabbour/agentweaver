@@ -793,11 +793,18 @@ supports issue and pull-request operations, reads review and exact-commit merge-
 merge requests with the expected head SHA. Effective branch rules and required checks fail closed when
 unknown or unsupported. The expected base SHA is a fresh preflight under the retained PostgreSQL
 repository lock; GitHub's merge request does not provide an atomic expected-base comparison.
+Required checks combine repository rulesets and classic branch protection. Check-run responses are parsed
+from GitHub's wrapper and item schemas, and only evidence for the exact pinned head SHA is accepted.
+Issue-write capability is negotiated only when GitHub reports that issues are enabled for the repository.
+Open pull-request list entries may omit the `merged` field; reuse still requires one exact repository,
+head branch, and base match. Repository owner and name comparisons are case-insensitive, while the provider
+repository ID remains exact.
 Authority or grant revocation before the merge request becomes a persisted conflict with
 no merge write, including a failed recheck after `merge_started`. Once the provider
 accepts the merge, Orchestrator retains the true merged state and SHA even if authority
-changes afterward; replay from another host reads the persisted result without issuing
-another merge request.
+changes afterward or the request caller disconnects; bounded owner-controlled settlement persists the
+merge result independently of request cancellation, and replay from another host reads the persisted
+result without issuing another merge request.
 
 If an approved intent's fence becomes stale while execution waits for the repository lock,
 the execution path rechecks current Projects authority, Core decision state, and the exact
@@ -827,11 +834,12 @@ workspace routes. If it is absent, those routes return unavailable rather than u
 directory. Workspace diffs are bounded; absolute workspace paths are returned only to the authenticated
 run-scoped caller and are not persisted in owner records.
 
-The authenticated run-bound webhook relay accepts bounded raw payload bytes plus GitHub delivery, event,
+The authenticated run-bound webhook relay accepts raw payloads up to 1 MiB plus GitHub delivery, event,
 and signature headers. It verifies HMAC over those exact bytes, matches the repository name and provider ID
 to the immutable pin, refreshes Projects/Core authority, and records a durable repository-scoped delivery
 identity. Identical delivery replays are idempotent; changed payload or foreign binding conflicts. This
-endpoint records the delivery only; it does not start a workflow. The public GitHub POST path is denied
+route-specific limit does not change the default 64 KiB limit on other routes. The relay records the
+delivery only; it does not start a workflow. The public GitHub POST path is denied
 because the base has no trusted relay identity; deployment and direct GitHub delivery remain unavailable
 until such a relay is separately approved and deployed.
 
@@ -840,7 +848,7 @@ not a deployed service or public webhook endpoint.
 
 <p align="center">
   <a href="../../diagrams/flagship/v1-source-control-owner-flow.png">
-    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration stores one repository and ID/version-only API, checkout, and webhook SecretRefs; Broker credentials are temporary. Typed GitHub issue, pull-request, and review operations use the pinned provider binding, while each run gets an isolated workspace and bounded diff. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; direct GitHub posts are rejected. Merge requires server-read pull-request facts, immutable intent, typed approval, current authority and grant, exact-head required checks, and a PostgreSQL repository lock. Pre-effect revocation becomes a persisted conflict without a merge write; post-effect revocation retains the true merge SHA for safe replay. The expected base is preflight-only; uncertain remote outcomes remain explicit." />
+    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration stores one repository and ID/version-only API, checkout, and webhook SecretRefs; Broker credentials are temporary. Issue-write requires GitHub issues to be enabled, repository names compare case-insensitively, and provider IDs remain exact. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay." />
   </a>
 </p>
 <p align="center" class="aw-diagram-links"><a href="../../diagrams/flagship/v1-source-control-owner-flow.png">Open full-size PNG</a> · <a href="../../diagrams/drawio/generated/flagship/v1-source-control-owner-flow.drawio">Open editable draw.io source</a></p>
