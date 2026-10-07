@@ -24,6 +24,7 @@ public sealed class SessionsProviderBindingService : ISessionsProviderBinder
     private readonly ProviderResolver _resolver;
     private readonly PostgresSessionsProviderOptions _options;
     private readonly NpgsqlDataSource _dataSource;
+    private readonly ISessionsJournal _journal;
     private readonly IReadOnlyDictionary<string, string> _projectOverrides;
 
     public SessionsProviderBindingService(
@@ -32,6 +33,7 @@ public sealed class SessionsProviderBindingService : ISessionsProviderBinder
         ProviderResolver resolver,
         PostgresSessionsProviderOptions options,
         NpgsqlDataSource dataSource,
+        ISessionsJournal journal,
         IReadOnlyDictionary<string, string>? projectOverrides = null)
     {
         _provider = provider;
@@ -39,6 +41,7 @@ public sealed class SessionsProviderBindingService : ISessionsProviderBinder
         _resolver = resolver;
         _options = options;
         _dataSource = dataSource;
+        _journal = journal;
         _projectOverrides = projectOverrides ?? ImmutableDictionary<string, string>.Empty;
     }
 
@@ -49,6 +52,17 @@ public sealed class SessionsProviderBindingService : ISessionsProviderBinder
         if (!SessionIdentityClaims.TryGetScope(principal, out var scope) || scope is null)
             throw new SessionAuthenticationException();
         var runScope = scope.Value;
+        try
+        {
+            var pinned = await _journal.GetRunProviderBindingAsync(
+                principal, runScope.ProjectId, runScope.RunId, cancellationToken).ConfigureAwait(false);
+            await VerifyPinnedAsync(principal, pinned, cancellationToken).ConfigureAwait(false);
+            return pinned;
+        }
+        catch (SessionNotFoundException)
+        {
+        }
+
         _projectOverrides.TryGetValue(runScope.ProjectId, out var overrideId);
         var result = await _provider.ResolveNegotiateAndPinAsync(
             _resolver,

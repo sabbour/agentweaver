@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.EventsAndSessions;
 
@@ -15,6 +16,7 @@ public static class SessionsEndpoints
 
         endpoints.MapPost("/{sessionId}", CreateAsync);
         endpoints.MapPost("/{sessionId}/events", AppendAsync);
+        endpoints.MapPost("/{sessionId}/policy-evaluations", AppendPolicyEvaluationAsync);
         endpoints.MapGet("/{sessionId}/events", ReplayAsync);
         endpoints.MapGet("/{sessionId}/events/live", SubscribeAsync);
 
@@ -50,6 +52,42 @@ public static class SessionsEndpoints
             await bindings.VerifyPinnedAsync(context.User, binding, cancellationToken);
             var result = await journal.AppendAsync(context.User, sessionId, input, cancellationToken);
             return Results.Json(result, JsonOptions, statusCode: result.IsDuplicate
+                ? StatusCodes.Status200OK : StatusCodes.Status201Created);
+        }, cancellationToken);
+
+    private static async Task<IResult> AppendPolicyEvaluationAsync(
+        HttpContext context,
+        string sessionId,
+        PolicyEvaluationReceiptReferenceRequest request,
+        [FromServices] PostgresSessionsJournal journal,
+        ISessionsProviderBinder bindings,
+        [FromServices] ICoordinationOwnerClient owner,
+        CancellationToken cancellationToken) =>
+        await ExecuteAsync(async () =>
+        {
+            if (request.ReceiptId == Guid.Empty)
+                throw new ArgumentException("A policy receipt identity is required.", nameof(request));
+            var binding = await journal.GetProviderBindingAsync(context.User, sessionId, cancellationToken);
+            await bindings.VerifyPinnedAsync(context.User, binding, cancellationToken);
+            if (!binding.NegotiatedCapabilities.Contains(SessionsCapabilities.PolicyEvaluations))
+                throw new SessionProviderBindingConflictException(
+                    "The pinned Sessions provider did not negotiate policy evaluation receipts.");
+            var identity = new SessionIdentity(binding.ProjectId, binding.RunId, sessionId);
+            var receipt = await owner.ReadPolicyEvaluationReceiptAsync(
+                context, identity, request.ReceiptId, cancellationToken);
+            await owner.ValidatePolicyEvaluationReceiptAdmissionAsync(
+                context, identity, request.ReceiptId, cancellationToken);
+            var result = await journal.AppendPolicyEvaluationAsync(
+                context.User,
+                sessionId,
+                receipt,
+                token => owner.ValidatePolicyEvaluationReceiptAdmissionAsync(
+                    context, identity, request.ReceiptId, token),
+                cancellationToken);
+            context.Response.Headers.CacheControl = "no-store";
+            var acknowledgment = new PolicyEvaluationAppendAcknowledgment(
+                receipt.ReceiptId, identity, result.Event.Position, result.IsDuplicate);
+            return Results.Json(acknowledgment, JsonOptions, statusCode: result.IsDuplicate
                 ? StatusCodes.Status200OK : StatusCodes.Status201Created);
         }, cancellationToken);
 
@@ -184,6 +222,10 @@ public static class SessionsEndpoints
         catch (SessionAuthenticationException)
         {
             return Results.Json(new { error = "invalid_run_claims" }, statusCode: StatusCodes.Status401Unauthorized);
+        }
+        catch (CoordinationOwnerClientException exception)
+        {
+            return Results.Json(new { error = exception.Code }, statusCode: exception.StatusCode);
         }
         catch (SessionAccessDeniedException)
         {

@@ -127,15 +127,23 @@ substituted. This source does not register a production Sandbox resource adapter
 
 The library also contains the source-only `AgtPolicyProvider`, an AGT 4.0.0
 platform-singleton adapter backed by YAML policies, and `ExecutableActionGuard`. The
-guard uses the Orchestrator-owned current-grant lookup and redacted receipt writer.
-It matches the grant to the authenticated caller's HTTPS issuer and subject,
-project/run/session/step, action, purpose, and execution fence before applying AGT
-as an additional restriction. The caller's subject and project/run claims must share
-one authenticated identity and issuer. Missing, duplicate, cross-issuer, stale, or
-expired grants deny. Protected effects recheck current authority, grant state, and
-fence after awaits. The current generic Sessions append path still rejects
-PolicyEvaluation events; the reserved receipt-backed Events consumer is retained
-work under #1846, so this source does not claim positive journal ingestion.
+guard requires an injected current grant-owner lookup and matches its validated grant
+descriptor to the authenticated caller's HTTPS issuer and subject, project/run/session/step,
+action, purpose, and execution fence before applying AGT as an additional restriction.
+The caller's subject and project/run claims must share one authenticated identity and issuer.
+Missing, duplicate, cross-issuer, or invalid grant state denies; provider or journal errors
+prevent the protected callback. For a successful Allow, the guard waits for a durable
+PolicyEvaluation journal acknowledgment and rechecks current authority, grant state,
+and fence before invoking the protected callback. Events accepts only an immutable
+Orchestrator receipt reference, rejects generic PolicyEvaluation appends, and
+revalidates current admission inside its transaction before commit. Deny and Error
+receipts do not require an active Allow grant, but admission still requires current
+Core write authority, accepted selection, and matching actor/tenant. They remain
+immutable evidence and do not authorize effects. These source contracts do not claim
+that downstream protected-effect call sites are wired. The owner receipt writer
+performs the same actor and current `acceptRunSelection`/selection checks immediately
+before committing its receipt after the owner grant-row lock; Allow additionally
+rechecks its exact active grant, expiry, and fence.
 
 ### Outcome, selection, and confirmation
 

@@ -103,6 +103,38 @@ public interface IExecutableActionSourceReceiptWriter
         CancellationToken cancellationToken = default);
 }
 
+public sealed record ExecutableActionPolicyEvaluationReceipt(
+    Guid ReceiptId,
+    string SessionId,
+    string StepId,
+    ExecutableActionGrantReference GrantReference,
+    string Purpose,
+    string ActionId,
+    PolicyEvaluationOutcome Outcome,
+    PolicyEvaluationReasonCode ReasonCode,
+    long Fence,
+    string ProviderId,
+    string AdapterVersion,
+    int OptionsSchemaVersion,
+    string OptionsRevision);
+
+public interface IExecutableActionPolicyEvaluationReceiptWriter
+{
+    Task<ExecutableActionSourceReceiptWriteResult> StoreAsync(
+        ExecutableActionPolicyEvaluationReceipt receipt,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record ExecutableActionPolicyEvaluationAppendResult(bool IsDuplicate);
+
+public interface IExecutableActionPolicyEvaluationJournal
+{
+    Task<ExecutableActionPolicyEvaluationAppendResult> AppendReceiptAsync(
+        SessionIdentity identity,
+        Guid receiptId,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record ExecutableActionInvocation(
     ClaimsPrincipal Caller,
     string SessionId,
@@ -123,10 +155,11 @@ public sealed record ExecutableActionGuardResult<T>(
 public sealed class ExecutableActionGuard(
     AgtPolicyProvider? policyProvider,
     AgtPolicyProviderOptions? policyOptions,
-    ISessionsJournal? sessionsJournal,
+    IExecutableActionPolicyEvaluationJournal? policyJournal,
     IExecutableActionGrantOwnerLookup? grantOwnerLookup = null,
     TimeProvider? timeProvider = null,
-    IExecutableActionSourceReceiptWriter? sourceReceiptWriter = null)
+    IExecutableActionSourceReceiptWriter? sourceReceiptWriter = null,
+    IExecutableActionPolicyEvaluationReceiptWriter? evaluationReceiptWriter = null)
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
@@ -138,9 +171,7 @@ public sealed class ExecutableActionGuard(
         ArgumentNullException.ThrowIfNull(invocation);
         ArgumentNullException.ThrowIfNull(protectedEffect);
 
-        if (policyProvider is null ||
-            policyOptions is null ||
-            sessionsJournal is null)
+        if (policyProvider is null || policyOptions is null || policyJournal is null)
             return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
         if (grantOwnerLookup is null)
             return Deny<T>(PolicyEvaluationReasonCode.NoEffectiveGrant);
@@ -175,9 +206,23 @@ public sealed class ExecutableActionGuard(
             case ExecutableActionGrantLookupStatus.Unknown:
             case ExecutableActionGrantLookupStatus.Revoked:
             case ExecutableActionGrantLookupStatus.Expired:
-                return Deny<T>(PolicyEvaluationReasonCode.NoEffectiveGrant);
+                return await RecordNonAllowAsync<T>(
+                    invocation,
+                    projectId,
+                    runId,
+                    PolicyEvaluationOutcome.Deny,
+                    PolicyEvaluationReasonCode.NoEffectiveGrant,
+                    policyOptions,
+                    cancellationToken).ConfigureAwait(false);
             case ExecutableActionGrantLookupStatus.Stale:
-                return Deny<T>(PolicyEvaluationReasonCode.StaleFence);
+                return await RecordNonAllowAsync<T>(
+                    invocation,
+                    projectId,
+                    runId,
+                    PolicyEvaluationOutcome.Deny,
+                    PolicyEvaluationReasonCode.StaleFence,
+                    policyOptions,
+                    cancellationToken).ConfigureAwait(false);
             case ExecutableActionGrantLookupStatus.Error:
                 return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
             case ExecutableActionGrantLookupStatus.Current when lookup.Grant is not null:
@@ -211,8 +256,17 @@ public sealed class ExecutableActionGuard(
                     ["fence"] = grant.Fence
                 }));
         if (decision.Outcome != PolicyEvaluationOutcome.Allow)
-            return new ExecutableActionGuardResult<T>(
-                decision.Outcome, decision.ReasonCode, EffectInvoked: false, default);
+            return await RecordNonAllowAsync<T>(
+                invocation,
+                projectId,
+                runId,
+                decision.Outcome,
+                decision.ReasonCode,
+                decision.ProviderId,
+                decision.AdapterVersion.ToString(),
+                decision.OptionsSchemaVersion,
+                decision.OptionsRevision,
+                cancellationToken).ConfigureAwait(false);
 
         if (sourceReceiptWriter is null)
             return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
@@ -255,48 +309,21 @@ public sealed class ExecutableActionGuard(
         if (authorityError is not null)
             return AuthorizationResult<T>(authorityError.Value);
 
-        var evidence = new PolicyEvaluationSessionPayload(
-            grant.ActorId,
-            grant.TenantId,
-            grant.StepId,
-            grant.Reference.GrantId,
-            grant.Reference.Revision,
-            grant.Purpose,
-            invocation.ActionId,
-            PolicyEvaluationOutcome.Allow,
-            PolicyEvaluationReasonCode.Allowed,
-            grant.Fence,
-            decision.ProviderId,
-            decision.AdapterVersion.ToString(),
-            decision.OptionsSchemaVersion,
-            decision.OptionsRevision);
-        var append = new AppendSessionEvent(
-            invocation.EventId,
-            SessionsContractVersions.CurrentSchemaVersion,
-            SessionsContractVersions.PolicyEvaluationEventVersion,
-            evidence);
-
-        SessionAppendResult appended;
+        ExecutableActionPolicyEvaluationAppendResult appended;
         try
         {
-            appended = await sessionsJournal.AppendAsync(
-                invocation.Caller, invocation.SessionId, append, cancellationToken).ConfigureAwait(false);
+            appended = await policyJournal.AppendReceiptAsync(
+                new SessionIdentity(projectId, runId, invocation.SessionId),
+                invocation.EventId,
+                cancellationToken).ConfigureAwait(false);
         }
-        catch (SessionAccessDeniedException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             return Error<T>(PolicyEvaluationReasonCode.EvaluationFailed);
-        }
-        catch (SessionEventConflictException)
-        {
-            return Error<T>(PolicyEvaluationReasonCode.EvaluationFailed);
-        }
-        catch (SessionNotFoundException)
-        {
-            return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
-        }
-        catch (SessionPinnedProviderUnavailableException)
-        {
-            return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
         }
 
         if (appended.IsDuplicate)
@@ -314,6 +341,101 @@ public sealed class ExecutableActionGuard(
             PolicyEvaluationReasonCode.Allowed,
             EffectInvoked: true,
             effectResult);
+    }
+
+    private async Task<ExecutableActionGuardResult<T>> RecordNonAllowAsync<T>(
+        ExecutableActionInvocation invocation,
+        string projectId,
+        string runId,
+        PolicyEvaluationOutcome outcome,
+        PolicyEvaluationReasonCode reasonCode,
+        AgtPolicyProviderOptions options,
+        CancellationToken cancellationToken) =>
+        await RecordNonAllowAsync<T>(
+            invocation,
+            projectId,
+            runId,
+            outcome,
+            reasonCode,
+            AgtPolicyProvider.ProviderId,
+            AgtPolicyProvider.AdapterVersion.ToString(),
+            options.OptionsSchemaVersion,
+            options.OptionsRevision,
+            cancellationToken).ConfigureAwait(false);
+
+    private async Task<ExecutableActionGuardResult<T>> RecordNonAllowAsync<T>(
+        ExecutableActionInvocation invocation,
+        string projectId,
+        string runId,
+        PolicyEvaluationOutcome outcome,
+        PolicyEvaluationReasonCode reasonCode,
+        string providerId,
+        string adapterVersion,
+        int optionsSchemaVersion,
+        string optionsRevision,
+        CancellationToken cancellationToken)
+    {
+        if (outcome is not (PolicyEvaluationOutcome.Deny or PolicyEvaluationOutcome.Error) ||
+            evaluationReceiptWriter is null ||
+            policyJournal is null ||
+            policyOptions is null ||
+            !IsMatchingPolicyBinding(invocation.PolicyBinding, runId, policyOptions))
+            return Error<T>(PolicyEvaluationReasonCode.ProviderUnavailable);
+
+        ExecutableActionSourceReceiptWriteResult? stored;
+        try
+        {
+            stored = await evaluationReceiptWriter.StoreAsync(
+                new ExecutableActionPolicyEvaluationReceipt(
+                    invocation.EventId,
+                    invocation.SessionId,
+                    invocation.StepId,
+                    invocation.GrantReference,
+                    invocation.Purpose,
+                    invocation.ActionId,
+                    outcome,
+                    reasonCode,
+                    invocation.Fence,
+                    providerId,
+                    adapterVersion,
+                    optionsSchemaVersion,
+                    optionsRevision),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return Error<T>(PolicyEvaluationReasonCode.EvaluationFailed);
+        }
+
+        if (stored?.Status != ExecutableActionSourceReceiptWriteStatus.Stored)
+            return Error<T>(stored?.Status == ExecutableActionSourceReceiptWriteStatus.Unavailable
+                ? PolicyEvaluationReasonCode.ProviderUnavailable
+                : PolicyEvaluationReasonCode.EvaluationFailed);
+
+        ExecutableActionPolicyEvaluationAppendResult appended;
+        try
+        {
+            appended = await policyJournal.AppendReceiptAsync(
+                new SessionIdentity(projectId, runId, invocation.SessionId),
+                invocation.EventId,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return Error<T>(PolicyEvaluationReasonCode.EvaluationFailed);
+        }
+
+        return appended.IsDuplicate
+            ? Error<T>(PolicyEvaluationReasonCode.EvaluationFailed)
+            : new ExecutableActionGuardResult<T>(outcome, reasonCode, EffectInvoked: false, default);
     }
 
     private static bool IsValidInvocation(ExecutableActionInvocation invocation) =>
@@ -413,7 +535,7 @@ public sealed class ExecutableActionGuard(
             return PolicyEvaluationReasonCode.NoEffectiveGrant;
 
         if (options is not null &&
-            !IsMatchingPolicyBinding(invocation.PolicyBinding, grant, options))
+            !IsMatchingPolicyBinding(invocation.PolicyBinding, runId, options))
             return PolicyEvaluationReasonCode.ProviderUnavailable;
 
         if (expectedGrant is not null && !SameGrant(grant, expectedGrant))
@@ -466,10 +588,10 @@ public sealed class ExecutableActionGuard(
 
     private static bool IsMatchingPolicyBinding(
         PinnedProviderBinding? binding,
-        ValidatedExecutableActionGrant grant,
+        string runId,
         AgtPolicyProviderOptions options) =>
         binding is not null &&
-        binding.RunId == grant.RunId &&
+        binding.RunId == runId &&
         binding.Seam == ProviderSeam.Policy &&
         binding.ProviderId == AgtPolicyProvider.ProviderId &&
         binding.AdapterVersion == AgtPolicyProvider.AdapterVersion &&

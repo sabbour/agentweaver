@@ -6,9 +6,9 @@ accepted-effect fact stream; it is not a deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal, serves ordered run-event replay, appends Knowledge-owned accepted-effect receipts as project facts, and presents Orchestrator owner-outbox messages at fenced turn boundaries. Generic callers cannot write PolicyEvaluation without trusted Core-writer provenance." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal, serves ordered run-event replay, appends Knowledge-owned accepted-effect receipts as project facts, presents Orchestrator owner-outbox messages at fenced turn boundaries, and admits PolicyEvaluation only from immutable Orchestrator receipts after current Core and owner-session validation, repeated after SQL lock waits." />
   </a>
-  <figcaption>Run-bound session events, project-scoped facts, and addressed messages have separate addresses and storage. The host rejects PolicyEvaluation writes without trusted Core-writer provenance. The figure describes source behavior, not a deployment topology.</figcaption>
+  <figcaption>Run-bound session events, project-scoped facts, and addressed messages have separate addresses and storage. Generic PolicyEvaluation appends are rejected; the receipt-reference route fetches immutable Orchestrator evidence and revalidates admission before commit. The figure describes source behavior, not a deployment topology.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
 
@@ -93,15 +93,31 @@ Event contracts are versioned independently by schema and event version. Event
 version 1 supports typed turn, tool-call, accepted-decision, accepted-effect,
 artifact-reference, and cache-reference payloads. Event version 2 adds the
 purpose-built `PolicyEvaluation` payload; existing version-1 payloads remain
-appendable and replayable. The generic run-scoped append path rejects every
-`PolicyEvaluation` event: matching the authenticated actor does not prove that
-Orchestrator Core wrote the decision. The Orchestrator now owns current grants and
-redacted receipt records, but the reserved receipt-backed Events consumer remains
-separate #1846 work; generic append is still not a trusted writer path. The
-event envelope binds project/run/session; its payload stores only bounded actor,
-tenant/step, grant reference/revision, purpose/action/fence, typed
-outcome/reason, and provider/options identity metadata. It has no free-form error
-field or space for rule text, tool arguments, prompts, or credentials. Large
+appendable and replayable. `PolicyEvaluation` events use a dedicated
+receipt-reference route; the generic run-scoped append path still rejects every
+such event because actor equality does not prove Orchestrator Core provenance.
+`POST /internal/sessions/{sessionId}/policy-evaluations` accepts only an immutable
+receipt ID. Events verifies the pinned provider capability, fetches the committed
+receipt from the fixed Orchestrator owner, and asks that owner to validate the
+receipt against current admission authority. Every outcome requires current Core
+write authority and accepted selection, plus a matching actor/tenant and active owner
+session/run with the same writer and execution fence. After the owner-row check can wait
+on PostgreSQL locks, the owner reads current Core authority and selection again before
+admission succeeds. For Allow, it also rechecks grant scope/revision, expiry, and fence.
+Deny and Error receipts may reference an issued inactive grant, but remain immutable
+owner facts and cannot authorize an effect.
+
+Events repeats the owner admission check from inside the PostgreSQL transaction
+before commit, including for an identical retry. The owner repeats current Core
+authority and accepted-selection checks after owner-row lock waits. The transaction commits the
+PolicyEvaluation event, inbox identity, run position, object references, and outbox
+records together. If the recheck fails, those writes roll back. After commit, Events
+returns a no-store acknowledgment containing the receipt identity and durable event
+position; a new append returns `201`, an identical retry returns `200`, and
+conflicting reuse fails. The event envelope binds project/run/session; its payload
+stores only bounded actor, tenant/step, grant reference/revision, purpose/action/fence,
+typed outcome/reason, and provider/options identity metadata. It has no free-form
+error field or space for rule text, tool arguments, prompts, or credentials. Large
 content in other event kinds is represented by opaque `ObjectKey` references with a
 purpose, optional byte length, and retention metadata; the service does not store
 referenced bytes or credentials.
@@ -115,11 +131,17 @@ with identical canonical event content returns the original event; reusing its
 identity with different content in the same run is a conflict. PostgreSQL, not an
 in-process counter or channel, assigns the authoritative ordered position.
 
-When the reserved receipt-backed consumer is implemented, the action guard must
-await a successful durable append before performing a protected effect. An append
-failure is an error, never an allow; the event is evidence only and cannot grant
-authority by itself. Until #1846 wires that consumer, guarded effects requiring
-PolicyEvaluation journal evidence remain fail closed.
+The Orchestrator receipt writer rechecks the actual request actor, current Projects
+`acceptRunSelection` authority, and accepted selection after owner-row lock waits and
+immediately before committing the owner receipt, after its grant-row lock and insert.
+This also applies when a receipt ID already exists. An Allow also requires the exact
+current grant, expiry, fence, and selection; Deny/Error may refer to an issued inactive
+grant but still require current Core write authority and active owner session/run
+authority. The Core action guard
+then awaits the durable Events acknowledgment and rechecks current authority, grant
+state, and fence after that await. Any failed owner check, journal append, or
+post-ack recheck prevents the protected effect; evidence alone cannot grant
+authority. Downstream protected-effect call sites are not claimed to be wired.
 
 Run replay returns a bounded, run-ordered page spanning all sessions; session replay
 returns only that session's events at their run positions. Run cursors are bound to a
