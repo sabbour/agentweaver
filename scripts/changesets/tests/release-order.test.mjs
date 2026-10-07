@@ -12,6 +12,7 @@ test("release runbook requires exact-SHA E2E acceptance before preparation and p
 
   const inOrder = [
     "npm run release:plan",
+    "npm run release:plan -- --target X.Y.Z",
     "Create `release/vX.Y.Z`",
     "npm run azure:deploy-from-commit -- <candidate-sha>",
     "npm run azure:verify",
@@ -33,6 +34,11 @@ test("release runbook requires exact-SHA E2E acceptance before preparation and p
   const publishing = runbook.split("## Publishing and deploying\n")[1];
   assert.match(publishing, /Do not publish until the exact-SHA candidate deployment and its\s+representative integration and feature-specific API\/UI acceptance have passed/);
   assert.ok(publishing.indexOf("After publication, reconcile the milestones") > publishing.indexOf("npm run release:publish"));
+  assert.match(preparation, /`--expected` remains an assertion/);
+  assert.match(preparation, /newer than both `VERSION` and the\s+latest published tag/);
+  assert.match(preparation, /Omitting `--target` preserves the native Changesets patch\/minor\s+result/);
+  assert.match(preparation, /that invocation stops before\s+applying release metadata/);
+  assert.match(preparation, /npm run release:prepare -- --expected X\.Y\.Z --target X\.Y\.Z/);
   assert.doesNotMatch(runbook, /local.k3s/i);
   for (const file of ["docs/guide/architecture-aks.md", "docs/guide/deployment-aks.md", "docs/guide/operations.md"]) {
     assert.doesNotMatch(fs.readFileSync(path.join(root, file), "utf8"), /local.k3s/i, `${file} must not offer a local k3s release route`);

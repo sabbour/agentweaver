@@ -58,6 +58,21 @@ from its exact matching section; do not run another changelog generator.
    forward-port. Never bypass that guard: create a short-lived branch from
    current `dev`, run `npm run release:sync-dev -- <release-preparation-sha>`,
    merge that PR, and plan again.
+   By default, Changesets selects the minimum version implied by the pending
+   fragments. When a release is intentionally targeting a later patch in that
+   same major/minor series, pass the exact target to the planner:
+
+   ```bash
+   npm run release:plan -- --target X.Y.Z
+   ```
+
+   `--target` must be a stable `X.Y.Z` version in the native plan's major/minor
+   series, at least the native minimum, and newer than both `VERSION` and the
+   latest published tag. `--expected` remains an assertion that the prepared
+   version and `release/vX.Y.Z` branch match; it does not select or force a
+   version. Omitting `--target` preserves the native Changesets patch/minor
+   result. Native dependent-package range updates are retained, and the target
+   is applied consistently to planned fixed or linked package groups.
 2. Create `release/vX.Y.Z` from that SHA and soak it. After stabilization fixes
    are committed, record the exact candidate SHA and deploy it before preparing
    release metadata or creating any release identity:
@@ -83,6 +98,12 @@ from its exact matching section; do not run another changelog generator.
    npm run release:prepare -- --expected X.Y.Z
    ```
 
+   If the plan used an explicit target, pass it again during preparation:
+
+   ```bash
+   npm run release:prepare -- --expected X.Y.Z --target X.Y.Z
+   ```
+
 4. Review and commit `VERSION`, package mirrors, `CHANGELOG.md`, and consumed
    fragments as `chore(release): prepare vX.Y.Z`.
 5. Push the release branch.
@@ -100,6 +121,11 @@ from its exact matching section; do not run another changelog generator.
    repair. To inspect without the merge, run
    `npm run release:prepare -- --expected X.Y.Z --no-ancestry-merge`. The command
    fails and prints the same `git merge` command.
+   If `release:prepare` creates the ancestry merge, that invocation stops before
+   applying release metadata. Re-run it on the clean merged tree so Changesets
+   recalculates the plan against any newly merged package manifests, workspace
+   configuration, or changesets; update the target and expected release branch
+   if the native minimum changed.
 
    CI enforces this rule on `release/*` pull requests into `main`.
 6. Promote the prepared branch to `main` through a green PR using a **merge

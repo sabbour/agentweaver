@@ -2,12 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assertVersionMirrors,
+  applyExplicitReleaseTarget,
   compareSemver,
   extractChangelogSection,
   hasChangesetExemption,
   isReleaseMetadataOnly,
   isReleaseRelevant,
   latestPublishedVersion,
+  parseReleaseTarget,
   parseChangesetFragment,
   releaseBranchVersion,
   synchronizePackageLockVersion,
@@ -40,6 +42,170 @@ test("published release state requires dev forward-port before another release",
     /not newer than published/,
   );
   assert.doesNotThrow(() => validatePublishedReleaseState("0.32.5", "0.32.6", "0.32.5"));
+});
+
+test("release target parsing accepts one separated option and rejects malformed forms", () => {
+  assert.equal(parseReleaseTarget([]), undefined);
+  assert.equal(parseReleaseTarget(["--target", "0.34.2"]), "0.34.2");
+  assert.throws(() => parseReleaseTarget(["--target"]), /Use --target X\.Y\.Z/);
+  assert.throws(() => parseReleaseTarget(["--target", "--expected"]), /Use --target X\.Y\.Z/);
+  assert.throws(() => parseReleaseTarget(["--target=0.34.2"]), /Use --target X\.Y\.Z/);
+  assert.throws(() => parseReleaseTarget(["--target", "0.34.2", "--target", "0.34.3"]), /only once/);
+});
+
+test("release targets preserve the native minimum and only adjust an eligible package release", () => {
+  const releasePlan = {
+    releases: [{ name: "agentweaver", oldVersion: "0.34.0", newVersion: "0.34.1" }],
+  };
+
+  assert.equal(applyExplicitReleaseTarget(releasePlan, undefined, "0.34.0", "0.34.0"), undefined);
+  assert.equal(releasePlan.releases[0].newVersion, "0.34.1");
+  assert.deepEqual(
+    applyExplicitReleaseTarget(releasePlan, "0.34.2", "0.34.0", "0.34.0"),
+    { nativeVersion: "0.34.1" },
+  );
+  assert.equal(releasePlan.releases[0].newVersion, "0.34.2");
+});
+
+test("release targets preserve native fixed and linked package groups", () => {
+  for (const groupType of ["fixed", "linked"]) {
+    const releasePlan = {
+      releases: [
+        { name: "agentweaver", oldVersion: "0.34.0", newVersion: "0.34.1" },
+        { name: "agentweaver-cli", oldVersion: "0.34.0", newVersion: "0.34.1" },
+      ],
+    };
+    const config = {
+      fixed: groupType === "fixed" ? [["agentweaver", "agentweaver-cli"]] : [],
+      linked: groupType === "linked" ? [["agentweaver", "agentweaver-cli"]] : [],
+    };
+
+    applyExplicitReleaseTarget(releasePlan, "0.34.2", "0.34.0", "0.34.0", config);
+    assert.deepEqual(
+      releasePlan.releases.map((release) => release.newVersion),
+      ["0.34.2", "0.34.2"],
+      `${groupType} members in the native plan must receive the same target`,
+    );
+  }
+});
+
+test("release targets reject an incomplete native fixed group without mutating the plan", () => {
+  const releasePlan = {
+    releases: [{ name: "agentweaver", oldVersion: "0.34.0", newVersion: "0.34.1" }],
+  };
+  const before = structuredClone(releasePlan);
+
+  assert.throws(
+    () => applyExplicitReleaseTarget(
+      releasePlan,
+      "0.34.2",
+      "0.34.0",
+      "0.34.0",
+      { fixed: [["agentweaver", "agentweaver-cli"]], linked: [] },
+    ),
+    /fixed release group is missing 'agentweaver-cli'/,
+  );
+  assert.deepEqual(releasePlan, before);
+});
+
+test("inactive linked packages do not activate unrelated fixed groups", () => {
+  const releasePlan = {
+    releases: [{ name: "agentweaver", oldVersion: "0.34.0", newVersion: "0.34.1" }],
+  };
+
+  applyExplicitReleaseTarget(releasePlan, "0.34.2", "0.34.0", "0.34.0", {
+    fixed: [["linked-peer", "fixed-peer"]],
+    linked: [["agentweaver", "linked-peer"]],
+  });
+  assert.equal(releasePlan.releases[0].newVersion, "0.34.2");
+});
+
+test("invalid release targets are rejected without changing the native plan", () => {
+  const cases = [
+    {
+      name: "malformed",
+      target: "0.34",
+      nativeVersion: "0.34.1",
+      currentVersion: "0.34.0",
+      publishedVersion: "0.34.0",
+      error: /X\.Y\.Z format/,
+    },
+    {
+      name: "leading-zero component",
+      target: "0.34.02",
+      nativeVersion: "0.34.1",
+      currentVersion: "0.34.0",
+      publishedVersion: "0.34.0",
+      error: /no leading zeroes/,
+    },
+    {
+      name: "unsafe numeric component",
+      target: "0.9007199254740992.0",
+      nativeVersion: "0.34.1",
+      currentVersion: "0.34.0",
+      publishedVersion: "0.34.0",
+      error: /safe integer components/,
+    },
+    {
+      name: "equal to current",
+      target: "0.34.0",
+      nativeVersion: "0.34.1",
+      currentVersion: "0.34.0",
+      publishedVersion: "0.34.0",
+      error: /newer than current version/,
+    },
+    {
+      name: "lower than current",
+      target: "0.33.9",
+      nativeVersion: "0.34.1",
+      currentVersion: "0.34.0",
+      publishedVersion: "0.33.8",
+      error: /newer than current version/,
+    },
+    {
+      name: "already published",
+      target: "0.34.1",
+      nativeVersion: "0.34.2",
+      currentVersion: "0.34.0",
+      publishedVersion: "0.34.1",
+      error: /newer than latest published/,
+    },
+    {
+      name: "wrong major/minor series",
+      target: "0.35.0",
+      nativeVersion: "0.34.1",
+      currentVersion: "0.34.0",
+      publishedVersion: "0.34.0",
+      error: /native release series/,
+    },
+    {
+      name: "below native minimum",
+      target: "0.34.1",
+      nativeVersion: "0.34.2",
+      currentVersion: "0.34.0",
+      publishedVersion: "0.34.0",
+      error: /below Changesets' required native bump/,
+    },
+  ];
+
+  for (const scenario of cases) {
+    const releasePlan = {
+      releases: [{ name: "agentweaver", oldVersion: "0.34.0", newVersion: scenario.nativeVersion }],
+    };
+    const before = structuredClone(releasePlan);
+
+    assert.throws(
+      () => applyExplicitReleaseTarget(
+        releasePlan,
+        scenario.target,
+        scenario.currentVersion,
+        scenario.publishedVersion,
+      ),
+      scenario.error,
+      scenario.name,
+    );
+    assert.deepEqual(releasePlan, before, `${scenario.name} must not modify the native plan`);
+  }
 });
 
 test("version mirrors require VERSION, package.json, and lockfile to match", () => {
