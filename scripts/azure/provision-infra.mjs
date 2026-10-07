@@ -52,6 +52,7 @@ import * as azDefault from "./lib/az.mjs";
 import * as promptDefault from "./lib/prompt.mjs";
 import { resolveGitHubRepository } from "./lib/github.mjs";
 import { resolveConfig, loadParamsFile } from "./lib/config.mjs";
+import { validateEntraAppRegistration } from "./lib/entra-app-registration.mjs";
 import { stageRepoAppPrivateKeyFile } from "./lib/repo-app-secret.mjs";
 import { resolveVariables, DEFAULTS, DEFAULT_REPO_ROOT, validateQualifiedImageReference } from "./variables.mjs";
 
@@ -273,6 +274,9 @@ Flags:
                                Key Vault certificate name whose latest two usable versions encrypt protocol artifacts.
   --repo-app-private-key-file <path>
                                GitHub Repo App PEM file to import into the canonical Key Vault secret.
+  Entra preflight is read-only and runs before cluster, identity, database, image, or deploy mutations.
+  Configure/reconcile the app first with:
+    npm run azure:setup-entra-app -- --app-id <ENTRA_CLIENT_ID> --redirect-uri <callback-uri>
   -h, --help                  Show this help.
 
 Config precedence: flags > env > params-file > detected defaults > prompt.
@@ -829,6 +833,16 @@ export async function run(opts = {}) {
     RECOVER_REPO_APP_PRIVATE_KEY: Boolean(flags.RECOVER_REPO_APP_PRIVATE_KEY),
     repoRoot,
   };
+
+  if (String(config.AUTH_MODE).toLowerCase() === "entra") {
+    log.section("Validating Entra sign-in registration");
+    await validateEntraAppRegistration({
+      appId: config.ENTRA_CLIENT_ID,
+      tenantId: config.ENTRA_TENANT_ID,
+      exec,
+    });
+    log.ok("Configured Entra tenant, public client, delegated self-resource scope, preauthorization, and v2 tokens verified.");
+  }
 
   log.step(1, 9, "Creating cluster (ACR + AKS)");
   await createCluster.run(cfg, { exec, log });

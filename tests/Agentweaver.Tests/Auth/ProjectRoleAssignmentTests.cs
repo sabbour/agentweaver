@@ -58,6 +58,48 @@ public sealed class ProjectRoleAssignmentTests : IClassFixture<EntraWebApplicati
     }
 
     [Fact]
+    public async Task CreateRoleAssignment_CanonicalizesObjectIdAndMatchesEntraSubject()
+    {
+        using var owner = CreateClient(OwnerOid, PlatformRoles.ProjectCreator);
+        using var viewer = CreateClient(ViewerOid, PlatformRoles.Viewer);
+        var projectId = await CreateProjectAsync(owner);
+        var uppercaseObjectId = Guid.Parse(ViewerOid).ToString("D").ToUpperInvariant();
+
+        var grant = await owner.PostAsJsonAsync($"/api/projects/{projectId}/role-assignments", new
+        {
+            principal_id = uppercaseObjectId,
+            role = "Viewer",
+        });
+
+        grant.StatusCode.Should().Be(HttpStatusCode.OK);
+        var assignment = await grant.Content.ReadFromJsonAsync<JsonElement>();
+        assignment.GetProperty("principal_id").GetString().Should().Be(ViewerOid);
+        (await viewer.GetAsync($"/api/projects/{projectId}/memory")).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Theory]
+    [InlineData("member@example.invalid")]
+    [InlineData("not-an-object-id")]
+    public async Task CreateRoleAssignment_RejectsEmailOrNonObjectIdInput(string principalId)
+    {
+        using var owner = CreateClient(OwnerOid, PlatformRoles.ProjectCreator);
+        var projectId = await CreateProjectAsync(owner);
+
+        var response = await owner.PostAsJsonAsync($"/api/projects/{projectId}/role-assignments", new
+        {
+            principal_id = principalId,
+            role = "Viewer",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("Entra user's object ID");
+        using var scope = _factory.Services.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IProjectRoleAssignmentStore>();
+        (await store.ListByProjectAsync(ProjectId.Parse(projectId))).Should().NotContain(
+            assignment => assignment.PrincipalId == principalId);
+    }
+
+    [Fact]
     public async Task RevokeRoleAssignment_RemovesAccess_OnSubsequentRequest()
     {
         using var owner = CreateClient(OwnerOid, PlatformRoles.ProjectCreator);

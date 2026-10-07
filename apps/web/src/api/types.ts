@@ -1055,8 +1055,6 @@ export interface ProjectRoleAssignment {
 export interface CreateProjectRoleAssignmentRequest {
   principal_id: string;
   role: string;
-  display_name?: string | null;
-  email?: string | null;
 }
 
 export interface ProjectAccessOverview {

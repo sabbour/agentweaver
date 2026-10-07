@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Agentweaver.Api.Auth;
 using Agentweaver.Api.Endpoints;
 using Agentweaver.Api.Memory;
@@ -326,12 +327,23 @@ public sealed class EntraSignInEndpointsTests
         callbackResponse.Headers.Location!.ToString().Should()
             .Contain("reason=sign_in_failed")
             .And.NotContain("sensitive-provider-detail");
+
+        var callbackLog = factory.Logs.Entries.Single(entry =>
+            entry.Category == typeof(EntraOAuthRedirectService).FullName &&
+            entry.Properties.TryGetValue("Stage", out var stage) &&
+            Equals(stage, "token_exchange"));
+        callbackLog.Properties["Reason"].Should().Be("exchange_failed");
+        callbackLog.Properties["RequestId"].Should().NotBeNull();
+        callbackLog.Message.Should().NotContain("sensitive-provider-detail")
+            .And.NotContain("invalid_grant")
+            .And.Contain("token_exchange")
+            .And.Contain("exchange_failed");
     }
 
     [Fact]
     public async Task Callback_WhenProviderReturnsUnknownError_RedactsItFromFrontendRedirect()
     {
-        await using var factory = new EntraSignInWebApplicationFactory();
+        await using var factory = new LoggingEntraWebApplicationFactory();
         var client = factory.CreateClient(NoRedirectNoCookies);
         var authorizeResponse = await client.GetAsync("/auth/entra/authorize");
         var state = EntraOAuthStateCookie.ExtractState(authorizeResponse.Headers.Location!.ToString());
@@ -346,6 +358,13 @@ public sealed class EntraSignInEndpointsTests
         response.Headers.Location!.ToString().Should()
             .Contain("reason=sign_in_failed")
             .And.NotContain("sensitive_provider_detail");
+        var callbackLog = factory.Logs.Entries.Single(entry =>
+            entry.Category == typeof(EntraOAuthRedirectService).FullName &&
+            entry.Properties.TryGetValue("Reason", out var reason) &&
+            Equals(reason, "provider_error"));
+        callbackLog.Properties["Stage"].Should().Be("provider_response");
+        callbackLog.Properties["RequestId"].Should().NotBeNull();
+        callbackLog.Message.Should().NotContain("sensitive_provider_detail");
     }
 
     [Fact]
@@ -518,6 +537,8 @@ public sealed class EntraSignInEndpointsTests
 
     private sealed class FailingTokenRedemptionEntraWebApplicationFactory : EntraWebApplicationFactory
     {
+        public CapturingLoggerProvider Logs { get; } = new();
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             base.ConfigureWebHost(builder);
@@ -527,6 +548,7 @@ public sealed class EntraSignInEndpointsTests
                     ["Auth:Entra:RedirectUri"] = EntraSignInWebApplicationFactory.RedirectUriValue,
                     ["Auth:Entra:FrontendUrl"] = EntraSignInWebApplicationFactory.FrontendUrlValue,
                 }));
+            builder.ConfigureLogging(logging => logging.AddProvider(Logs));
             builder.ConfigureServices(services =>
                 services.AddHttpClient("entra-oidc")
                     .ConfigurePrimaryHttpMessageHandler(() => new TokenRedemptionFailureHandler()));
@@ -543,6 +565,60 @@ public sealed class EntraSignInEndpointsTests
                         System.Text.Encoding.UTF8,
                         "application/json"),
                 });
+        }
+    }
+
+    private sealed class LoggingEntraWebApplicationFactory : EntraWebApplicationFactory
+    {
+        public CapturingLoggerProvider Logs { get; } = new();
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+                base.ConfigureWebHost(builder);
+                builder.ConfigureAppConfiguration((_, configuration) =>
+                    configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Auth:Entra:RedirectUri"] = EntraSignInWebApplicationFactory.RedirectUriValue,
+                        ["Auth:Entra:FrontendUrl"] = EntraSignInWebApplicationFactory.FrontendUrlValue,
+                    }));
+                builder.ConfigureLogging(logging => logging.AddProvider(Logs));
+        }
+    }
+
+    private sealed record CapturedLog(
+        string Category,
+        LogLevel Level,
+        IReadOnlyDictionary<string, object?> Properties,
+        string Message);
+
+    private sealed class CapturingLoggerProvider : ILoggerProvider
+    {
+        private readonly List<CapturedLog> _entries = [];
+        public IReadOnlyList<CapturedLog> Entries => _entries;
+        public ILogger CreateLogger(string categoryName) => new CapturingLogger(this, categoryName);
+        public void Dispose() { }
+
+        private sealed class CapturingLogger(CapturingLoggerProvider owner, string categoryName) : ILogger
+        {
+                public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+                public bool IsEnabled(LogLevel logLevel) => true;
+
+                public void Log<TState>(
+                    LogLevel logLevel,
+                    EventId eventId,
+                    TState state,
+                    Exception? exception,
+                    Func<TState, Exception?, string> formatter)
+                {
+                    var properties = state is IEnumerable<KeyValuePair<string, object?>> values
+                        ? values.ToDictionary(pair => pair.Key, pair => pair.Value)
+                        : new Dictionary<string, object?>();
+                    owner._entries.Add(new CapturedLog(
+                        categoryName,
+                        logLevel,
+                        properties,
+                        formatter(state, exception)));
+                }
         }
     }
 }

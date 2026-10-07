@@ -403,6 +403,38 @@ frontend origin from `HOST`; it never falls back to localhost and refuses to ren
 managed domain or resulting public hostname is absent or malformed. The Entra app registration
 must separately contain the same public callback URL.
 
+Before provisioning or deploying an Entra-enabled installation, reconcile the exact
+registration with the repository setup command:
+
+```bash
+npm run azure:setup-entra-app -- \
+  --app-id "$ENTRA_CLIENT_ID" \
+  --redirect-uri "https://<public-host>/auth/entra/callback"
+```
+
+The setup command is idempotent. It ensures the enabled delegated
+`access_as_user` API scope, the app's own delegated self-resource permission,
+self-client preauthorization for that scope, public-client PKCE configuration,
+`api.requestedAccessTokenVersion: 2`, and adds `api://<client-id>` only when no
+API identifier URI is already set, while preserving unrelated registration
+settings. Entra self-client preauthorization marks this client as already
+approved for `access_as_user`, suppressing that user's consent prompt; this
+scope does not require a separate global-admin consent operation. The OAuth
+delegated permission enables the sign-in token request; it is not an App Role
+assignment and does not authorize Agentweaver actions. Platform App Roles
+authorize those actions separately.
+
+`azure:provision-infra`, `azure:deploy-from-local`, and non-dry-run
+`azure:deploy-from-release` read-only validate the active CLI tenant and exact
+registration before cloud or image mutations. If Graph reads are denied, sign
+in to the configured tenant with an operator already allowed to read that exact
+app registration; do not add a directory-wide Graph permission. For
+`AADSTS650057`, reconcile the registration and verify the self-resource scope,
+preauthorization, and v2 token setting before testing a newly assigned user.
+See [Authentication](./authentication.md#entra-registration-and-access) for
+the first-user verification, role distinction, and project-membership Object ID
+workflow.
+
 If your tenant allows password credentials and you want confidential-client redemption, set
 the Entra client secret locally with user-secrets:
 

@@ -28,9 +28,23 @@ Required local tools:
 | Node.js 20+ with `npm` or `pnpm` | run the deployment commands |
 | `gh` CLI, authenticated (`gh auth status`) | release publication and published-release validation |
 
-Configure a Microsoft Entra application with the deployed
-`https://<gateway-host>/auth/entra/callback` redirect URI. Provide its application
-and tenant IDs through the params file or the `--entra-client-id` and
+Configure the exact Microsoft Entra application before deployment. Reconcile its
+deployed `publicClient` callback and sign-in permissions with:
+
+```bash
+npm run azure:setup-entra-app -- \
+  --app-id "$ENTRA_CLIENT_ID" \
+  --redirect-uri "https://<gateway-host>/auth/entra/callback"
+```
+
+The setup command is idempotent and preserves unrelated app registration
+settings. It configures Agentweaver's delegated `access_as_user` self-resource
+permission, self-client preauthorization, and v2 access-token setting; it adds
+`api://<client-id>` only when the app has no API identifier URI. Entra treats
+that self-client preauthorization as approval for this delegated scope, so a
+separate global-admin consent operation is not required for it. App Roles
+remain a separate authorization requirement. Provide the same application and
+tenant IDs through the params file or the `--entra-client-id` and
 `--entra-tenant-id` flags.
 
 ## Commands
@@ -51,6 +65,14 @@ optional GitHub Repo App private-key PEM file, then provisions the cluster,
 identity, monitoring, durable OAuth signing and encryption certificates,
 PostgreSQL, builds and pushes images, verifies provenance, deploys, and
 verifies the result — printing an outputs summary at the end (never secrets).
+
+Provisioning, local deployments, and non-dry-run release deployments perform a
+read-only preflight of the active Azure CLI tenant and exact Entra app registration
+before creating infrastructure, building/importing images, or applying
+manifests. A failed or unreadable registration stops the run without those
+mutations. Follow the actionable error to log in to the configured tenant or
+run `azure:setup-entra-app`; do not rely on a prior user's consent as the
+registration check.
 
 For non-interactive use, pass flags, environment variables, and/or a params
 file (see [`scripts/azure/params.example.json`](https://github.com/sabbour/agentweaver/blob/dev/scripts/azure/params.example.json)):
@@ -379,6 +401,7 @@ described above.
 | Gateway not programmed | `kubectl describe gateway agentweaver-gateway -n agentweaver` |
 | ImagePullBackOff | confirm ACR attach and the selected deployment command pushed the image tag |
 | API/MCP auth failures | confirm Entra client/tenant IDs, canonical OAuth public origin, both configured Key Vault certificate families/versions, and readable `ghtok-repo-app-private-key` |
+| Entra sign-in returns `AADSTS650057` | Reconcile with `npm run azure:setup-entra-app -- --app-id "$ENTRA_CLIENT_ID" --redirect-uri "https://<gateway-host>/auth/entra/callback"`; verify the app has enabled delegated `access_as_user`, its own client/scope entry in `requiredResourceAccess`, self-client preauthorization for that scope, and `api.requestedAccessTokenVersion=2`. Then verify sign-in with a newly assigned user. |
 | AgentHost pods not ready | `kubectl describe sandboxwarmpool agentweaver-agent-host -n agentweaver` and check `kata-vm-isolation` runtime |
 | Worker AgentHost launch fails with Sandbox GET 403 | Check `kubectl auth can-i get sandboxes.agents.x-k8s.io -n agentweaver --as=system:serviceaccount:agentweaver:agentweaver-worker`; redeploy the worker namespaced Role/RoleBinding if denied. Do not bypass binding attestation. |
 | Warm-pool image verification fails despite ready replicas | Inspect `status.selector` with `kubectl get sandboxwarmpool agentweaver-agent-host -n agentweaver -o json`, then query its selected pods; check membership, readiness, and image digests. Let the controller replace pods; do not delete them manually. |
