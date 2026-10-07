@@ -31,6 +31,20 @@
       }
     },
     {
+      "name": "v1-environment-sandbox-lifecycle",
+      "area": "architecture",
+      "disposition": "retain",
+      "owner": null,
+      "replacement": null,
+      "notes": "Environment Sandbox owner lease, verified readiness, recovery, and placement-only retirement.",
+      "paths": {
+        "input": "docs/diagrams/src/flagship/v1-environment-sandbox-lifecycle.json",
+        "drawio": "docs/diagrams/drawio/generated/flagship/v1-environment-sandbox-lifecycle.drawio",
+        "png": "docs/diagrams/flagship/v1-environment-sandbox-lifecycle.png",
+        "hash": "docs/diagrams/flagship/v1-environment-sandbox-lifecycle.hash.txt"
+      }
+    },
+    {
       "name": "v1-identity-redemption",
       "area": "architecture",
       "disposition": "retain",

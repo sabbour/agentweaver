@@ -22,6 +22,7 @@ public sealed class EnvironmentLifecycleStore(
     private const string LifecycleOperations = $"{Schema}.\"lifecycle_operations\"";
     private const string OwnerEffects = $"{Schema}.\"owner_effects\"";
     private const string WorkspaceVolumeCleanup = $"{Schema}.\"workspace_volume_cleanup\"";
+    private const string SandboxLeases = $"{Schema}.\"sandbox_leases\"";
 
     public async Task<EnvironmentLifecycleSnapshot?> GetAsync(
         EnvironmentOwnerIdentity owner,
@@ -85,6 +86,12 @@ public sealed class EnvironmentLifecycleStore(
 
         if (request.TargetState == EnvironmentLifecycleState.Released)
             await EnsureOwnerResourcesReleasedAsync(
+                connection,
+                transaction,
+                request.Owner,
+                cancellationToken).ConfigureAwait(false);
+        else if (request.ExpectedLifecycleGeneration > 0)
+            await EnsureSandboxReleasedBeforeFenceAdvanceAsync(
                 connection,
                 transaction,
                 request.Owner,
@@ -2279,12 +2286,39 @@ public sealed class EnvironmentLifecycleStore(
                       AND run_id = @run_id AND environment_id = @environment_id
                       AND state <> 'Completed'
                 )
+                OR EXISTS (
+                    SELECT 1 FROM {SandboxLeases}
+                    WHERE tenant_id = @tenant_id AND project_id = @project_id
+                      AND run_id = @run_id AND environment_id = @environment_id
+                      AND lease_state NOT IN ('Released', 'Failed')
+                )
             """, connection, transaction);
         AddOwnerParameters(command, owner);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
             throw new EnvironmentLifecycleException(
                 "environment_resources_not_released",
                 "Environment release requires every owner-recorded provider effect to be released or reconciled first.");
+    }
+
+    private static async Task EnsureSandboxReleasedBeforeFenceAdvanceAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {SandboxLeases}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                 AND run_id = @run_id AND environment_id = @environment_id
+                 AND lease_state NOT IN ('Released', 'Failed')
+            )
+            """, connection, transaction);
+        AddOwnerParameters(command, owner);
+        if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
+            throw new EnvironmentLifecycleException(
+                "environment_sandbox_lease_active",
+                "Environment lifecycle generation cannot advance while a Sandbox lease is not fully retired.");
     }
 
     private static async Task<EnvironmentLifecycleSnapshot?> ReadOwnerAsync(
@@ -2349,7 +2383,7 @@ public sealed class EnvironmentLifecycleStore(
             "The expected Environment lifecycle generation is stale.");
     }
 
-    private static async Task AcquireOwnerLockAsync(
+    internal static async Task AcquireOwnerLockAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         EnvironmentOwnerIdentity owner,

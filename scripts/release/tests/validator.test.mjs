@@ -45,7 +45,11 @@ const projectReferences = new Map([
   ['Agentweaver.Environment', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Providers.Sandbox.AgentSandbox\\Agentweaver.Providers.Sandbox.AgentSandbox.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers.Storage.AzureFiles\\Agentweaver.Providers.Storage.AzureFiles.csproj',
+  ]],
+  ['Agentweaver.Providers.Sandbox.AgentSandbox', [
+    '..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
   ]],
   ['Agentweaver.Providers.Storage.AzureFiles', [
     '..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',

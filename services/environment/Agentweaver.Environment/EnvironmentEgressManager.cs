@@ -710,6 +710,66 @@ public sealed class EnvironmentEgressManager(
         return new AuthorizedSelection(authorization, selection);
     }
 
+    internal Task<AuthorizedSelection> GetAuthorizedRunSelectionAsync(
+        CurrentCallerRequest caller,
+        EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken) =>
+        GetAuthorizedSelectionAsync(caller, owner, cancellationToken);
+
+    internal async Task<CiliumPolicyObservation> VerifyNetworkForSandboxAsync(
+        CurrentCallerRequest caller,
+        EnvironmentGenerationFence fence,
+        AuthorizedSelection selection,
+        long policyGeneration,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(fence);
+        ArgumentNullException.ThrowIfNull(selection);
+        if (policyGeneration < 1 ||
+            selection.Authorization.TenantId != fence.Owner.TenantId ||
+            selection.ProjectId != fence.Owner.ProjectId ||
+            selection.RunId != fence.Owner.RunId)
+            throw new ArgumentException("Sandbox Network verification scope is invalid.");
+
+        await lifecycleStore.RequireActiveAsync(fence, cancellationToken).ConfigureAwait(false);
+        CompiledEgressIntent intent;
+        try
+        {
+            intent = Compile(selection);
+        }
+        catch (EgressCompilationException exception)
+        {
+            throw new CiliumPolicyException(exception.Code, exception.Message);
+        }
+        _ = ResolveNetworkProvider(selection, providerOptions, cilium, intent);
+        var selector = EnvironmentEgressSelector.Create(
+            fence.Owner.EnvironmentId,
+            selection.TenantId,
+            fence.Owner.ProjectId,
+            fence.Owner.RunId,
+            providerOptions.Namespace);
+        await lifecycleStore.RequireVerifiedNetworkPolicyGenerationAsync(
+            fence,
+            $"{selector.Namespace}/{selector.PolicyName}",
+            policyGeneration,
+            cancellationToken).ConfigureAwait(false);
+        var observation = await cilium.VerifyAsync(
+            selector, intent, policyGeneration, cancellationToken).ConfigureAwait(false);
+        if (!observation.ObjectVerified)
+            throw new CiliumPolicyException(
+                "policy_generation_unverified",
+                "The exact Cilium policy generation is not present; Sandbox readiness is withheld.");
+        await lifecycleStore.RequireActiveAsync(fence, cancellationToken).ConfigureAwait(false);
+        await EnsureAuthorizationUnchangedAsync(
+            caller,
+            fence.Owner,
+            selection.Authorization,
+            requireRunSelection: true,
+            cancellationToken).ConfigureAwait(false);
+        return observation;
+    }
+
     private async Task<ProjectAuthorizationContextResponse> GetAuthorizedProjectContextAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
@@ -726,7 +786,7 @@ public sealed class EnvironmentEgressManager(
         return authorization;
     }
 
-    private async Task EnsureAuthorizationUnchangedAsync(
+    internal async Task EnsureAuthorizationUnchangedAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
         ProjectAuthorizationContextResponse original,
@@ -818,7 +878,7 @@ public sealed class EnvironmentEgressManager(
             ? "authorization_changed"
             : exception.Code;
 
-    private static bool SameAuthorizationContext(
+    internal static bool SameAuthorizationContext(
         ProjectAuthorizationContextResponse left,
         ProjectAuthorizationContextResponse right)
     {
@@ -1061,7 +1121,7 @@ public sealed class EnvironmentEgressManager(
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{kind}\0{requestIdempotencyKey}"))).ToLowerInvariant();
 
-    private sealed record AuthorizedSelection(
+    internal sealed record AuthorizedSelection(
         ProjectAuthorizationContextResponse Authorization,
         EffectiveNetworkPolicySelection RunSelection)
     {

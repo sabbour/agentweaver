@@ -234,6 +234,76 @@ public static class EnvironmentEndpoints
             }, cancellationToken).ConfigureAwait(false);
         });
 
+        var sandboxes = endpoints.MapGroup(
+                "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox")
+            .RequireAuthorization();
+        sandboxes.MapPost("/provision", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            SandboxProvisionApiRequest request,
+            HttpContext context,
+            EnvironmentSandboxManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+            {
+                var result = await manager.ProvisionAsync(
+                    caller!, projectId, runId, environmentId, request, cancellationToken).ConfigureAwait(false);
+                return ToSandboxResult(result);
+            }, cancellationToken).ConfigureAwait(false);
+        });
+        sandboxes.MapGet("/", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            long networkPolicyGeneration,
+            HttpContext context,
+            EnvironmentSandboxManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+                ToSandboxResult(await manager.InspectAsync(
+                    caller!, projectId, runId, environmentId, networkPolicyGeneration, cancellationToken)
+                    .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
+        });
+        sandboxes.MapPost("/abandon", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            SandboxAbandonApiRequest request,
+            HttpContext context,
+            EnvironmentSandboxManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+                ToSandboxResult(await manager.AbandonAsync(
+                    caller!, projectId, runId, environmentId, request, cancellationToken)
+                    .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
+        });
+        sandboxes.MapPost("/reconcile", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            long? networkPolicyGeneration,
+            HttpContext context,
+            EnvironmentSandboxManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+                ToSandboxResult(await manager.ReconcileAsync(
+                    caller!, projectId, runId, environmentId, networkPolicyGeneration, cancellationToken)
+                    .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
+        });
+
         return endpoints;
     }
 
@@ -346,6 +416,76 @@ public static class EnvironmentEndpoints
                 new { code = "upstream_timeout" },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
+    }
+
+    private static async Task<IResult> ExecuteSandboxApiAsync(
+        Func<Task<IResult>> operation,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await operation().ConfigureAwait(false);
+        }
+        catch (ProjectsConfigApiException exception)
+        {
+            return ToProjectAuthorizationResult(exception);
+        }
+        catch (EnvironmentLifecycleException exception)
+        {
+            var status = exception.Code is "environment_unknown" or
+                "sandbox_lease_unknown" or "sandbox_operation_unknown" or "workspace_volume_unknown"
+                    ? StatusCodes.Status404NotFound
+                    : StatusCodes.Status409Conflict;
+            return Results.Json(new { code = exception.Code, message = exception.Message }, statusCode: status);
+        }
+        catch (SandboxProviderException exception)
+        {
+            return Results.Json(
+                new { code = exception.Code },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (CiliumPolicyException exception)
+        {
+            return Results.Json(
+                new { code = exception.Code, message = exception.Message },
+                statusCode: StatusCodes.Status422UnprocessableEntity);
+        }
+        catch (ArgumentException exception)
+        {
+            return Results.BadRequest(new { code = "invalid_sandbox_request", message = exception.Message });
+        }
+        catch (NotSupportedException exception)
+        {
+            return Results.UnprocessableEntity(
+                new { code = "sandbox_operation_unsupported", message = exception.Message });
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Results.Conflict(new { code = "sandbox_state_conflict", message = exception.Message });
+        }
+        catch (HttpRequestException)
+        {
+            return Results.Json(
+                new { code = "upstream_unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(
+                new { code = "upstream_timeout" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+    }
+
+    private static IResult ToSandboxResult(EnvironmentSandboxResult? result)
+    {
+        if (result is null)
+            return Results.NotFound();
+        var status = result.ReadyForDispatch ||
+                     result.State is SandboxLeaseState.Released or SandboxLeaseState.Failed
+            ? StatusCodes.Status200OK
+            : StatusCodes.Status202Accepted;
+        return Results.Json(result, statusCode: status);
     }
 
     internal static IResult ToAzureFilesCsiErrorResult(AzureFilesCsiException exception)

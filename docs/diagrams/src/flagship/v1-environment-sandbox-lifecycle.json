@@ -1,0 +1,219 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Environment Sandbox lease, readiness, recovery, and retirement",
+  "alt": "Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before dispatch. It records an owner-fenced lease and immutable provider request, then provisions and observes the exact agent-sandbox resources. ReadyForDispatch requires the same verified network generation and actual Pod/PVC/isolation evidence. Retirement advances the owner fence and releases only Sandbox placement; Workspace retention is unchanged.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "environment",
+      "label": "Environment owner",
+      "subLabel": "Manager and PostgreSQL lease CAS",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Owner", "tone": "neutral" }
+    },
+    {
+      "id": "projects",
+      "label": "Projects & Config",
+      "subLabel": "Fresh authority and run selection",
+      "icon": "key",
+      "fluentIcon": "identity",
+      "badge": { "text": "Authority", "tone": "lavender" }
+    },
+    {
+      "id": "prerequisites",
+      "label": "Workspace / Cilium checks",
+      "subLabel": "Exact PVC and policy generations",
+      "icon": "route",
+      "fluentIcon": "network",
+      "badge": { "text": "Inputs", "tone": "teal" }
+    },
+    {
+      "id": "provider-api",
+      "label": "Agent Sandbox / Kubernetes",
+      "subLabel": "Pinned v1beta1 adapter and resource API",
+      "icon": "bot",
+      "fluentIcon": "window",
+      "badge": { "text": "Provider", "tone": "teal" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": ["environment", "projects"],
+      "label": "The Environment owner already exists. Lease admission is per Environment; it is not a cluster-wide resource quota."
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "projects",
+      "label": "Read fresh WriteProjects + ReadRunSelection; resolve exact owner and exclusive Sandbox candidate",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "projects",
+      "to": "environment",
+      "label": "Current authorization and immutable run selection (no-store)",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "prerequisites",
+      "label": "Read exact ready Workspace resource/data generation and pinned Storage binding",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "prerequisites",
+      "label": "Verify current owner policy object and requested generation",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "Reserve idempotent lease under owner lock; persist selection/options/request snapshot and positive fences",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "One current lease admitted; provider request is write-once",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "projects",
+      "label": "Recheck current authority and selection before dispatch",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "provider-api",
+      "label": "Provision with exact owner, resource/provider fences, candidate, PVC negotiation, and egress selectors",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "provider-api",
+      "to": "provider-api",
+      "label": "Verify RuntimeClass/PVC; create owner-specific template, zero-replica pool, and v1beta1 claim",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "provider-api",
+      "to": "provider-api",
+      "label": "Exact resource UIDs, claim, Sandbox and actual Pod observations",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "prerequisites",
+      "label": "Reverify same policy generation after provider observation",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "projects",
+      "label": "Recheck authorization and immutable selection before reporting readiness",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["environment", "provider-api"],
+      "label": "Dispatch readiness requires the exact PVC, VM isolation, and policy generation. This slice has no AgentHost configure handshake or Core run pin."
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Retire or recover exact owner lease",
+      "sections": [
+        {
+          "label": "Explicit authorized abandon",
+          "steps": [
+            {
+              "type": "message",
+              "from": "environment",
+              "to": "projects",
+              "label": "Read fresh authority and immutable selection",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "environment",
+              "to": "environment",
+              "label": "CAS retire exact resource/fence; increment current fence and block revival",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "environment",
+              "to": "provider-api",
+              "label": "Release exact original provider binding with idempotency key",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "provider-api",
+              "to": "provider-api",
+              "label": "Foreground delete with claim UID precondition; verify claim and children absent",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        },
+        {
+          "label": "Finished condition or interrupted provider call",
+          "steps": [
+            {
+              "type": "message",
+              "from": "provider-api",
+              "to": "environment",
+              "label": "Exact Finished=True evidence or exact ListOwned operation/fence result",
+              "line": "dashed",
+              "arrow": "open"
+            },
+            {
+              "type": "message",
+              "from": "environment",
+              "to": "environment",
+              "label": "Validate evidence/CAS or keep ambiguous lease current for reconciliation",
+              "line": "solid",
+              "arrow": "filled"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "note",
+      "over": ["environment", "prerequisites"],
+      "label": "Placement release does not release Environment lifecycle or Workspace data. Timeouts and failed lookups never prove run abandonment."
+    }
+  ]
+}
