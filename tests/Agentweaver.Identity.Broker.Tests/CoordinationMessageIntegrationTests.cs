@@ -808,36 +808,77 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(0L, await count.ExecuteScalarAsync());
         }
 
-        using var proposedPlan = await SendJsonAsync(
-            orchestrator,
-            HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/propose_work_plan",
-            runToken,
-            new ProposeCoordinatorWorkPlanRequest(
-                11, "work-plan-proposal-1", "work-plan-gate-1", acceptedPlan));
+        var effectsBeforeRevokedPlan = await ReadOwnerEffectCountsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        sandboxProvider.AfterNegotiationAsync = cancellationToken =>
+            RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerRole.AssignmentId,
+                runnerRole.Revision);
+        using (var revokedPlan = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/propose_work_plan",
+                   runToken,
+                   new ProposeCoordinatorWorkPlanRequest(
+                       11, "work-plan-revoked-1", "work-plan-revoked-gate-1", acceptedPlan)))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, revokedPlan.StatusCode);
+        }
+        Assert.Equal(
+            effectsBeforeRevokedPlan,
+            await ReadOwnerEffectCountsAsync(_connectionString, ownerSchema, project.ProjectId));
+        Assert.Equal(1, sandboxProvider.NegotiationCount);
+
+        runnerRole = await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            runnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+        var concurrentNegotiations = 0;
+        var bothNegotiationsReached = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        sandboxProvider.AfterNegotiationAsync = async cancellationToken =>
+        {
+            if (Interlocked.Increment(ref concurrentNegotiations) == 2)
+                bothNegotiationsReached.TrySetResult(true);
+            await bothNegotiationsReached.Task.WaitAsync(
+                TimeSpan.FromSeconds(20), cancellationToken).ConfigureAwait(false);
+        };
+        var proposalPath =
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/propose_work_plan";
+        var proposalRequest = new ProposeCoordinatorWorkPlanRequest(
+            11, "work-plan-proposal-1", "work-plan-gate-1", acceptedPlan);
+        var effectsBeforeConcurrentProposals = await ReadOwnerEffectCountsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        var proposalResponses = await Task.WhenAll(
+            SendJsonAsync(orchestrator, HttpMethod.Post, proposalPath, runToken, proposalRequest),
+            SendJsonAsync(orchestrator, HttpMethod.Post, proposalPath, runToken, proposalRequest));
+        using var proposedPlan = proposalResponses[0];
+        using var proposalReplay = proposalResponses[1];
+        sandboxProvider.AfterNegotiationAsync = null;
         Assert.True(
             proposedPlan.StatusCode == HttpStatusCode.OK,
             $"{proposedPlan.StatusCode}: {await proposedPlan.Content.ReadAsStringAsync()}");
+        Assert.Equal(HttpStatusCode.OK, proposalReplay.StatusCode);
         var proposedPlanResult =
             await ReadJsonAsync<CoordinatorDecisionOperationResponse>(proposedPlan);
+        var proposalReplayResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(proposalReplay);
         Assert.True(proposedPlanResult.Accepted);
         Assert.Equal(12, proposedPlanResult.StateVersion);
         Assert.Equal("work-plan-gate-1", proposedPlanResult.PendingGate?.RequestId);
-        Assert.Equal(1, sandboxProvider.NegotiationCount);
+        Assert.Equal(proposedPlanResult.DecisionId, proposalReplayResult.DecisionId);
+        Assert.Equal(proposedPlanResult.StateVersion, proposalReplayResult.StateVersion);
+        Assert.Equal(3, sandboxProvider.NegotiationCount);
+        var effectsAfterConcurrentProposals = await ReadOwnerEffectCountsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        Assert.Equal(effectsBeforeConcurrentProposals.Bindings + 1, effectsAfterConcurrentProposals.Bindings);
+        Assert.Equal(effectsBeforeConcurrentProposals.Decisions + 1, effectsAfterConcurrentProposals.Decisions);
+        Assert.Equal(effectsBeforeConcurrentProposals.Outbox + 1, effectsAfterConcurrentProposals.Outbox);
         await AssertAcceptedSandboxBindingAsync(
             _connectionString, ownerSchema, project.ProjectId, sandboxProvider.ResourceId);
-
-        using var confirmedPlan = await SendJsonAsync(
-            orchestrator,
-            HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/work-plan-gate-1/answer",
-            runToken,
-            new AnswerCoordinatorGateRequest(12, "work-plan-answer-1", "approve", null));
-        Assert.Equal(HttpStatusCode.OK, confirmedPlan.StatusCode);
-        var confirmedPlanResult =
-            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(confirmedPlan);
-        Assert.True(confirmedPlanResult.Accepted);
-        Assert.Equal(13, confirmedPlanResult.StateVersion);
 
         var restoringSandboxProvider = new ControlledSandboxResourceProvider();
         await using (var restoringFactory = new OrchestratorIntegrationFactory(
@@ -852,22 +893,37 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                    {
                        BaseAddress = new Uri("https://orchestrator.test")
                    }))
-        using (var assemblyRequest = await SendJsonAsync(
-                   restoredOrchestrator,
-                   HttpMethod.Post,
-                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/request_assembly",
-                   runToken,
-                   new RequestCoordinatorAssemblyRequest(
-                       13,
-                       "assembly-idempotency-1",
-                       new CoordinatorAssemblyRequest(
-                           "assembly-request-1",
-                           "generated-test",
-                           "1.0.0",
-                           "accepted-plan",
-                           "build-test",
-                           WorkflowPlatformGate.BuildTest))))
         {
+            using (var restoredGateAnswer = await SendJsonAsync(
+                       restoredOrchestrator,
+                       HttpMethod.Post,
+                       $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/work-plan-gate-1/answer",
+                       runToken,
+                       new AnswerCoordinatorGateRequest(12, "work-plan-answer-1", "approve", null)))
+            {
+                Assert.Equal(HttpStatusCode.OK, restoredGateAnswer.StatusCode);
+                var restoredGateResult =
+                    await ReadJsonAsync<CoordinatorDecisionOperationResponse>(restoredGateAnswer);
+                Assert.True(restoredGateResult.Accepted);
+                Assert.Equal(13, restoredGateResult.StateVersion);
+                Assert.Null(restoredGateResult.PendingGate);
+            }
+
+            using var assemblyRequest = await SendJsonAsync(
+                restoredOrchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/request_assembly",
+                runToken,
+                new RequestCoordinatorAssemblyRequest(
+                    13,
+                    "assembly-idempotency-1",
+                    new CoordinatorAssemblyRequest(
+                        "assembly-request-1",
+                        "generated-test",
+                        "1.0.0",
+                        "accepted-plan",
+                        "build-test",
+                        WorkflowPlatformGate.BuildTest)));
             Assert.Equal(HttpStatusCode.OK, assemblyRequest.StatusCode);
             var assemblyRequestResult =
                 await ReadJsonAsync<CoordinatorDecisionOperationResponse>(assemblyRequest);
@@ -912,7 +968,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.True(revisedPlanResult.Accepted);
         Assert.Equal(15, revisedPlanResult.StateVersion);
         Assert.Null(revisedPlanResult.PendingGate);
-        Assert.Equal(1, sandboxProvider.NegotiationCount);
+        Assert.Equal(3, sandboxProvider.NegotiationCount);
 
         using var childResponse = await SendJsonAsync(
             orchestrator,
@@ -1171,6 +1227,31 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     private static AgtPolicyProviderOptions ReceiptPolicyOptions() =>
         new("agt-policy-resource", 3, "agt-policy-receipt-v1", [ReceiptAllowPolicy]);
+
+    private static async Task<(long Bindings, long Decisions, long Outbox, long Grants)> ReadOwnerEffectCountsAsync(
+        string connectionString,
+        string schema,
+        string projectId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{schema}".coordinator_run_selection_contexts
+                    WHERE project_id = @project AND run_id = @run),
+                (SELECT count(*) FROM "{schema}".coordinator_decisions
+                    WHERE project_id = @project AND run_id = @run),
+                (SELECT count(*) FROM "{schema}".coordinator_decision_outbox
+                    WHERE project_id = @project AND run_id = @run),
+                (SELECT count(*) FROM "{schema}".executable_action_grants
+                    WHERE project_id = @project AND run_id = @run)
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
+    }
 
     private static async Task AssertAcceptedSandboxBindingAsync(
         string connectionString,
@@ -1523,8 +1604,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         public string ResourceId => "controlled-sandbox-resource";
         public int NegotiationCount => Volatile.Read(ref _negotiationCount);
         public ImmutableArray<string> IsolationChoices { get; } = ["isolated-worktree"];
+        public Func<CancellationToken, Task>? AfterNegotiationAsync { get; set; }
 
-        public Task<ProviderResult<ResourceNegotiation>> NegotiateAsync(
+        public async Task<ProviderResult<ResourceNegotiation>> NegotiateAsync(
             ProviderCandidate candidate,
             OrchestratorHost::Agentweaver.Orchestrator.EffectiveRunSelection selection,
             CancellationToken cancellationToken)
@@ -1532,16 +1614,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             cancellationToken.ThrowIfCancellationRequested();
             if (candidate.Seam != ProviderSeam.Sandbox || candidate.ProviderId != ProviderId ||
                 selection.RunId != RunId)
-                return Task.FromResult(ProviderResult<ResourceNegotiation>.Failure(
+                return ProviderResult<ResourceNegotiation>.Failure(
                     ProviderErrorCode.InvalidNegotiation,
-                    "The controlled Sandbox provider received an unexpected candidate."));
+                    "The controlled Sandbox provider received an unexpected candidate.");
 
             Interlocked.Increment(ref _negotiationCount);
-            return Task.FromResult(ProviderResult<ResourceNegotiation>.Success(
+            if (AfterNegotiationAsync is { } afterNegotiation)
+                await afterNegotiation(cancellationToken).ConfigureAwait(false);
+            return ProviderResult<ResourceNegotiation>.Success(
                 new ResourceNegotiation(
-                    new ProviderResourceRef(
-                        ProviderSeam.Sandbox, ProviderId, ResourceId, 7),
-                    candidate.RequiredCapabilities)));
+                    new ProviderResourceRef(ProviderSeam.Sandbox, ProviderId, ResourceId, 7),
+                    candidate.RequiredCapabilities));
         }
     }
 

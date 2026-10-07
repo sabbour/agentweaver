@@ -2,7 +2,7 @@
   "version": 2,
   "source": {
     "file": "v1-sessions-journal.json",
-    "sha256": "f959c0effc6ee199ef9cf1456d74bffc3c368f005402485102db79864ad577b4"
+    "sha256": "4dd54bf9632c45aaa28d6925e37ed13eb47c3b000d9a58759db6238c210e5b80"
   },
   "drawio": {
     "file": "v1-sessions-journal.drawio",

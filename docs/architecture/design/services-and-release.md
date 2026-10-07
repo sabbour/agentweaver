@@ -135,6 +135,11 @@ flowchart LR
 
 Projects & Config owns a PostgreSQL schema for configuration and authorization. It resolves the validated issuer and local subject to an active membership and current resource roles; tokens and checked tenant selectors do not grant roles. Runtime database credentials can read authority records but cannot mutate them. A separate privileged source path provisions memberships and roles and revokes them with revision checks, immutable audit, and a last-Owner invariant. Privileged resource services obtain fresh, effective caller permissions from `GET /api/authorization/context` for each operation; they do not maintain separate membership/role records, caches, or authorization pins. The Orchestrator supplies a trusted, revisioned run-selection context; the service checks project and platform revisions, resolves project model settings before platform defaults without fallback from an unavailable explicit setting, resolves provider candidates through the provider catalog contract, and enforces egress and run-limit narrowing. The returned immutable snapshot records candidates and selection revisions, not provisioned resources or authorization. Consumers pin final resource identity and negotiated capabilities only after provisioning.
 
+For typed coordinator plans, the registered Sandbox adapter resolves an already
+existing resource; it does not create or release one. After fresh Projects authority
+and owner selection/fence checks, the immutable binding is committed in the same
+transaction as the CAS-winning plan decision and its gate, grant, and outbox state.
+
 The Orchestrator owns the session tree, coordination verbs, and gates; Events & Sessions owns
 journal append, addressed-message records, and delivery state. Their collaboration uses versioned
 commands and events, not a shared context transaction. This preserves the product's [session and

@@ -243,7 +243,8 @@ internal sealed class CoordinatorDecisionOwnerStore
         WorkPlanRunSelectionContext? confirmedSelectionContext,
         WorkPlanRunSelectionContext? candidateSelectionContext,
         object? validatedTransitionValue,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PendingCoordinatorRunSelectionBinding? candidateRunSelectionBinding = null)
     {
         ValidateInput(actor, identity, selection);
         ArgumentNullException.ThrowIfNull(nextState);
@@ -254,6 +255,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             commandHash.Length != 64 ||
             !commandHash.All(Uri.IsHexDigit) ||
             nextState.Fence <= 0)
+            throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status400BadRequest);
+        if (candidateRunSelectionBinding is not null &&
+            (!transitionAccepted || candidateSelectionContext is null))
             throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status400BadRequest);
 
         var selectionHash = HashSelection(selection.Selection);
@@ -327,7 +331,11 @@ internal sealed class CoordinatorDecisionOwnerStore
             confirmedSelectionContext,
             candidateSelectionContext);
         var restored = await RestoreEnvelopeAsync(
-            mergedEnvelope, expectedBinding, selection.Selection, cancellationToken).ConfigureAwait(false);
+            mergedEnvelope,
+            expectedBinding,
+            selection.Selection,
+            cancellationToken,
+            candidateRunSelectionBinding?.Context).ConfigureAwait(false);
         if (!restored.IsValid)
             throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status409Conflict);
         var newState = restored.State!;
@@ -341,6 +349,15 @@ internal sealed class CoordinatorDecisionOwnerStore
         if (registeredChildren + plannedChildren > maxChildren)
             throw new CoordinationException(
                 "run_child_limit_exceeded", StatusCodes.Status409Conflict);
+
+        if (candidateRunSelectionBinding is not null)
+            await _runSelectionContexts.PersistBindingAsync(
+                connection,
+                transaction,
+                selection.Selection,
+                newState.Fence,
+                candidateRunSelectionBinding,
+                cancellationToken).ConfigureAwait(false);
 
         var payload = new PersistedDecisionPayload(
             mergedEnvelope,
@@ -908,15 +925,17 @@ internal sealed class CoordinatorDecisionOwnerStore
         CoordinatorDecisionStateEnvelope envelope,
         CoordinatorDecisionBinding expectedBinding,
         EffectiveRunSelection selection,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        WorkPlanRunSelectionContext? preparedSelectionContext = null)
     {
         var requiresBinding = envelope.ConfirmedSelectionContext?.IsolationProviderBinding is not null ||
                               envelope.CandidateSelectionContext?.IsolationProviderBinding is not null;
         if (!requiresBinding)
             return envelope.Restore(expectedBinding);
 
-        var trustedContext = await _runSelectionContexts.ReadAsync(
-            selection, expectedBinding.Fence, cancellationToken).ConfigureAwait(false);
+        var trustedContext = preparedSelectionContext ??
+                             await _runSelectionContexts.ReadAsync(
+                                 selection, expectedBinding.Fence, cancellationToken).ConfigureAwait(false);
         var trustedBinding = trustedContext?.IsolationProviderBinding;
         if (trustedContext is null || trustedBinding is null ||
             !MatchesSelectionContext(envelope.ConfirmedSelectionContext, trustedContext, expectedBinding.RunId) ||

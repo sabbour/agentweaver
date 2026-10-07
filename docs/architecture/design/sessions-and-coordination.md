@@ -48,11 +48,16 @@ after #1848 admission. See the
 When a non-empty or fixed-work plan needs isolation, the Orchestrator persists the
 accepted Sandbox candidate and adapter-returned negotiation as an immutable
 project/run context bound to the selection hash, configuration revisions, and
-execution fence. A restored decision envelope cannot supply its own pin: the new
-host reloads that tuple, checks the accepted selection and role context, and rebuilds
-the binding through the current catalog and `ProviderResolver.Pin` without calling
-the adapter again. If no registered adapter can provide the first negotiation, the
-plan request returns `503`; no synthetic resource or generation is created.
+execution fence in the same owner transaction as the CAS-winning plan decision,
+gate, grants, and outbox. The registered adapter resolves an already existing resource;
+this Orchestrator boundary does not provision or release Sandbox resources. A
+restored decision envelope cannot supply its own pin: the new host reloads that
+tuple, checks the accepted selection and role context, and rebuilds the binding
+through the current catalog and `ProviderResolver.Pin` without calling the adapter
+again. Projects authority is refreshed after provider/context waits and before the
+owner writes; stale or revoked requests leave no new binding. If no registered
+adapter can provide the first negotiation, the plan request returns `503`; no
+synthetic resource or generation is created.
 
 ## Today in 0.x
 

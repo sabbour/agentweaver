@@ -53,7 +53,11 @@ same caller bearer.
 Typed action mutations use strict request contracts, expected state versions, and
 idempotency keys. Proposing or revising non-empty or fixed work requires the server's
 accepted Sandbox binding; a missing registered adapter or negotiation returns `503`.
-The caller cannot submit a resource pin or override the durable binding.
+The registered adapter resolves, but does not provision or release, an existing
+resource. Projects authority is refreshed after resolution, then the accepted
+selection and execution fence are rechecked by the owner CAS. The immutable binding
+is committed with the winning decision, gate, grant, and outbox transaction. The
+caller cannot submit a resource pin or override the durable binding.
 
 | Method and path | Contract |
 | --- | --- |

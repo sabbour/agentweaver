@@ -110,15 +110,20 @@ remains a separate slice.
 
 Non-empty or fixed-work plans also require a trusted Sandbox binding. The owner
 validates the accepted candidate against the server catalog, asks its registered
-resource adapter for the original `ResourceNegotiation`, pins it through
-`ProviderResolver`, and persists the accepted selection hash, revisions, fence,
-candidate, resource, and negotiated capabilities in an immutable PostgreSQL row.
-Decision-envelope restore reads that row, verifies the current accepted selection,
-role context, and catalog, then reconstructs and revalidates the exact pin without
-renegotiating. Work-plan routes refresh Projects authority after the provider wait
-and child-limit check. A missing catalog, adapter, candidate, or valid negotiation
-returns `503`; no default or caller-supplied resource is substituted. This source
-does not register a production Sandbox provisioner.
+resource adapter to resolve an existing resource and return the original
+`ResourceNegotiation`, then pins it through `ProviderResolver`. Resolution is
+preparatory only: this Orchestrator slice does not provision or release Sandbox
+resources. After provider and child-limit waits, the route refreshes Projects
+authority and the owner checks the current selection, execution fence, and decision
+version before writing. The winning owner transaction commits the accepted
+selection hash, revisions, fence, candidate, resource, negotiated capabilities,
+decision, gate, grants, and outbox together. A revoked or stale request writes none
+of that state, while concurrent idempotent retries share the CAS winner.
+Decision-envelope restore reads that row, verifies the current
+accepted selection, role context, and catalog, then reconstructs and revalidates
+the exact pin without renegotiating. A missing catalog, adapter, candidate, or
+valid negotiation returns `503`; no default or caller-supplied resource is
+substituted. This source does not register a production Sandbox resource adapter.
 
 The library also contains the source-only `AgtPolicyProvider`, an AGT 4.0.0
 platform-singleton adapter backed by YAML policies, and `ExecutableActionGuard`. The

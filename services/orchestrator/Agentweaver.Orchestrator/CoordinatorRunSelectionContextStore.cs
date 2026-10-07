@@ -17,11 +17,25 @@ internal interface ICoordinatorSandboxResourceProvider
     string ProviderId { get; }
     ImmutableArray<string> IsolationChoices { get; }
 
+    // This boundary may resolve an existing registered resource, but must not provision or release one.
     Task<ProviderResult<ResourceNegotiation>> NegotiateAsync(
         ProviderCandidate candidate,
         EffectiveRunSelection selection,
         CancellationToken cancellationToken);
 }
+
+internal sealed record CoordinatorRunSelectionContextResolution(
+    WorkPlanRunSelectionContext Context,
+    PendingCoordinatorRunSelectionBinding? PendingBinding);
+
+internal sealed record PendingCoordinatorRunSelectionBinding(
+    EffectiveRunSelection Selection,
+    long ExecutionFence,
+    EffectiveProviderCandidate SelectedCandidate,
+    ResourceNegotiation Negotiation,
+    ImmutableArray<string> IsolationChoices,
+    ImmutableArray<RoleRunSelection> Roles,
+    WorkPlanRunSelectionContext Context);
 
 internal sealed class CoordinatorRunSelectionContextStore
 {
@@ -78,14 +92,14 @@ internal sealed class CoordinatorRunSelectionContextStore
         _providers = providerBuilder.ToImmutable();
     }
 
-    public async Task<WorkPlanRunSelectionContext> ResolveForPlanAsync(
+    public async Task<CoordinatorRunSelectionContextResolution> ResolveForPlanAsync(
         EffectiveRunSelection selection,
         long executionFence,
         CancellationToken cancellationToken)
     {
         var existing = await ReadAsync(selection, executionFence, cancellationToken).ConfigureAwait(false);
         if (existing is not null)
-            return existing;
+            return new CoordinatorRunSelectionContextResolution(existing, PendingBinding: null);
 
         var selected = ReadSelectedSandboxCandidate(selection.Snapshot);
         var candidate = ResolveCandidate(selected);
@@ -107,17 +121,16 @@ internal sealed class CoordinatorRunSelectionContextStore
 
         var baseContext = CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Snapshot);
         var roleContext = CreateAuthorizedRoles(baseContext.Roles, provider.IsolationChoices);
-        await InsertBindingAsync(
+        var context = new WorkPlanRunSelectionContext(roleContext, pinned.Value);
+        var pendingBinding = new PendingCoordinatorRunSelectionBinding(
             selection,
             executionFence,
             selected,
             negotiation,
             provider.IsolationChoices,
             roleContext,
-            cancellationToken).ConfigureAwait(false);
-
-        return await ReadAsync(selection, executionFence, cancellationToken).ConfigureAwait(false)
-            ?? throw BindingUnavailable("The accepted Sandbox binding could not be recovered after persistence.");
+            context);
+        return new CoordinatorRunSelectionContextResolution(context, pendingBinding);
     }
 
     public async Task<WorkPlanRunSelectionContext?> ReadAsync(
@@ -186,16 +199,24 @@ internal sealed class CoordinatorRunSelectionContextStore
         return new WorkPlanRunSelectionContext(persisted.Roles, pinned.Value);
     }
 
-    private async Task InsertBindingAsync(
+    internal async Task PersistBindingAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
         EffectiveRunSelection selection,
         long executionFence,
-        EffectiveProviderCandidate selected,
-        ResourceNegotiation negotiation,
-        ImmutableArray<string> isolationChoices,
-        ImmutableArray<RoleRunSelection> roles,
+        PendingCoordinatorRunSelectionBinding pendingBinding,
         CancellationToken cancellationToken)
     {
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(pendingBinding);
+        if (executionFence <= 0 ||
+            pendingBinding.ExecutionFence != executionFence ||
+            !SelectionMatches(pendingBinding.Selection, selection) ||
+            !RolesMatch(pendingBinding.Roles, pendingBinding.Context.Roles))
+            throw new CoordinationException(
+                "coordinator_sandbox_binding_stale", StatusCodes.Status409Conflict);
+
         await using var command = new NpgsqlCommand($"""
             INSERT INTO {_bindings}
                 (project_id, run_id, accepted_selection_hash, project_revision,
@@ -212,6 +233,7 @@ internal sealed class CoordinatorRunSelectionContextStore
                  @generation, @advertised, @required, @negotiated, @isolation_choices)
             ON CONFLICT (project_id, run_id) DO NOTHING
             """, connection);
+        command.Transaction = transaction;
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, selection.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, selection.RunId);
         command.Parameters.AddWithValue("selection_hash", NpgsqlDbType.Char, HashSelection(selection));
@@ -223,23 +245,41 @@ internal sealed class CoordinatorRunSelectionContextStore
         command.Parameters.AddWithValue("context_revision", NpgsqlDbType.Varchar, selection.ContextRevision);
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, executionFence);
         command.Parameters.AddWithValue(
-            "roles", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(roles, JsonOptions));
-        command.Parameters.AddWithValue("provider", NpgsqlDbType.Varchar, selected.ProviderId);
-        command.Parameters.AddWithValue("adapter_version", NpgsqlDbType.Varchar, selected.AdapterVersion);
-        command.Parameters.AddWithValue("schema_version", NpgsqlDbType.Integer, selected.OptionsSchemaVersion);
-        command.Parameters.AddWithValue("options_revision", NpgsqlDbType.Varchar, selected.OptionsRevision);
-        command.Parameters.AddWithValue("hosting", NpgsqlDbType.Varchar, selected.Hosting.ToString());
-        command.Parameters.AddWithValue("resource", NpgsqlDbType.Varchar, negotiation.Resource.ResourceId);
-        command.Parameters.AddWithValue("generation", NpgsqlDbType.Bigint, negotiation.Resource.Generation);
+            "roles", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(pendingBinding.Roles, JsonOptions));
         command.Parameters.AddWithValue(
-            "advertised", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(selected.AdvertisedCapabilities, JsonOptions));
+            "provider", NpgsqlDbType.Varchar, pendingBinding.SelectedCandidate.ProviderId);
         command.Parameters.AddWithValue(
-            "required", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(selected.RequiredCapabilities, JsonOptions));
+            "adapter_version", NpgsqlDbType.Varchar, pendingBinding.SelectedCandidate.AdapterVersion);
         command.Parameters.AddWithValue(
-            "negotiated", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(negotiation.Capabilities, JsonOptions));
+            "schema_version", NpgsqlDbType.Integer, pendingBinding.SelectedCandidate.OptionsSchemaVersion);
         command.Parameters.AddWithValue(
-            "isolation_choices", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(isolationChoices, JsonOptions));
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            "options_revision", NpgsqlDbType.Varchar, pendingBinding.SelectedCandidate.OptionsRevision);
+        command.Parameters.AddWithValue(
+            "hosting", NpgsqlDbType.Varchar, pendingBinding.SelectedCandidate.Hosting.ToString());
+        command.Parameters.AddWithValue(
+            "resource", NpgsqlDbType.Varchar, pendingBinding.Negotiation.Resource.ResourceId);
+        command.Parameters.AddWithValue(
+            "generation", NpgsqlDbType.Bigint, pendingBinding.Negotiation.Resource.Generation);
+        command.Parameters.AddWithValue(
+            "advertised",
+            NpgsqlDbType.Jsonb,
+            JsonSerializer.Serialize(pendingBinding.SelectedCandidate.AdvertisedCapabilities, JsonOptions));
+        command.Parameters.AddWithValue(
+            "required",
+            NpgsqlDbType.Jsonb,
+            JsonSerializer.Serialize(pendingBinding.SelectedCandidate.RequiredCapabilities, JsonOptions));
+        command.Parameters.AddWithValue(
+            "negotiated",
+            NpgsqlDbType.Jsonb,
+            JsonSerializer.Serialize(pendingBinding.Negotiation.Capabilities, JsonOptions));
+        command.Parameters.AddWithValue(
+            "isolation_choices",
+            NpgsqlDbType.Jsonb,
+            JsonSerializer.Serialize(pendingBinding.IsolationChoices, JsonOptions));
+        var inserted = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        if (inserted != 1)
+            throw new CoordinationException(
+                "coordinator_sandbox_binding_conflict", StatusCodes.Status409Conflict);
     }
 
     private ProviderCandidate ResolveCandidate(EffectiveProviderCandidate selected)
@@ -390,6 +430,15 @@ internal sealed class CoordinatorRunSelectionContextStore
 
     private static string HashSelection(EffectiveRunSelection selection) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(selection.Snapshot.GetRawText())));
+
+    private static bool SelectionMatches(EffectiveRunSelection first, EffectiveRunSelection second) =>
+        first.ProjectId == second.ProjectId &&
+        first.RunId == second.RunId &&
+        first.ProjectRevision == second.ProjectRevision &&
+        first.ProjectConfigurationRevision == second.ProjectConfigurationRevision &&
+        first.PlatformRuntimeRevision == second.PlatformRuntimeRevision &&
+        first.ContextRevision == second.ContextRevision &&
+        HashSelection(first) == HashSelection(second);
 
     private static bool IsStableIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&

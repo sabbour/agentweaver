@@ -297,10 +297,13 @@ public static class CoordinationEndpoints
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
 
-            var selectionContext = RequiresProviderBinding(current.State, request.Plan)
+            var selectionContextResolution = RequiresProviderBinding(current.State, request.Plan)
                 ? await runSelectionContexts.ResolveForPlanAsync(
                     selection.Selection, current.State.Fence, cancellationToken).ConfigureAwait(false)
-                : CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Selection.Snapshot);
+                : new CoordinatorRunSelectionContextResolution(
+                    CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Selection.Snapshot),
+                    PendingBinding: null);
+            var selectionContext = selectionContextResolution.Context;
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             var transition = CoordinatorDecisionFlow.ProposeWorkPlan(
@@ -339,7 +342,10 @@ public static class CoordinationEndpoints
                 confirmedSelectionContext: null,
                 candidateSelectionContext: transition.IsSuccess ? selectionContext : null,
                 validatedTransitionValue: transition.Value,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                candidateRunSelectionBinding: transition.IsSuccess
+                    ? selectionContextResolution.PendingBinding
+                    : null).ConfigureAwait(false);
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
@@ -366,10 +372,13 @@ public static class CoordinationEndpoints
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
 
-            var selectionContext = RequiresProviderBinding(current.State, request.RevisedPlan)
+            var selectionContextResolution = RequiresProviderBinding(current.State, request.RevisedPlan)
                 ? await runSelectionContexts.ResolveForPlanAsync(
                     selection.Selection, current.State.Fence, cancellationToken).ConfigureAwait(false)
-                : CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Selection.Snapshot);
+                : new CoordinatorRunSelectionContextResolution(
+                    CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Selection.Snapshot),
+                    PendingBinding: null);
+            var selectionContext = selectionContextResolution.Context;
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             var transition = CoordinatorDecisionFlow.ReviseWorkPlan(
@@ -408,7 +417,10 @@ public static class CoordinationEndpoints
                 confirmedSelectionContext: null,
                 candidateSelectionContext: transition.IsSuccess ? selectionContext : null,
                 validatedTransitionValue: transition.Value,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                candidateRunSelectionBinding: transition.IsSuccess
+                    ? selectionContextResolution.PendingBinding
+                    : null).ConfigureAwait(false);
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
