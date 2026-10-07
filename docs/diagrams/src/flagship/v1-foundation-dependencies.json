@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "V1 services, contracts, and adapters",
-  "alt": "Structural component view of the unpublished Events & Sessions service candidate and its Agentweaver.Abstractions, Providers, PostgreSQL, and Telemetry project references, including typed redacted PolicyEvaluation evidence in the native journal, alongside two adapter chains. AzureBlobObjectStore implements IObjectStore and accesses an Azure Blob container; AzureKeyVaultSecretRedemption implements ISecretRedemption and accesses Azure Key Vault. This is source structure, not deployment topology.",
+  "alt": "Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator/Core candidates; policy adapters, owner flow, journal evidence and addressed-message delivery; Azure Files/Kubernetes, Azure Blob, and Key Vault adapters. The journal rejects untrusted PolicyEvaluation writes. AzureBlobObjectStore and AzureKeyVaultSecretRedemption implement their provider interfaces. Source structure, not deployment topology.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -28,6 +28,24 @@
       "id": "journal-composition",
       "label": "Events & Sessions candidate",
       "subLabel": "Host and direct project references.",
+      "tier": 1
+    },
+    {
+      "id": "environment-composition",
+      "label": "Environment candidate",
+      "subLabel": "Lifecycle owner, egress, and Storage API.",
+      "tier": 1
+    },
+    {
+      "id": "knowledge-composition",
+      "label": "Knowledge candidate",
+      "subLabel": "Host and direct project references.",
+      "tier": 1
+    },
+    {
+      "id": "external-platforms",
+      "label": "External control planes",
+      "subLabel": "API surface only; not data-erasure proof.",
       "tier": 1
     }
   ],
@@ -102,7 +120,7 @@
     {
       "id": "events-and-sessions",
       "label": "Events & Sessions",
-      "subLabel": "PostgreSQL journal with PolicyEvaluation evidence.",
+      "subLabel": "PostgreSQL journal, policy evidence, and messages.",
       "meta": "Agentweaver.EventsAndSessions",
       "icon": "server",
       "fluentIcon": "api",
@@ -112,6 +130,100 @@
         "visible": true
       },
       "group": "journal-composition"
+    },
+    {
+      "id": "environment-dependencies",
+      "label": "Refs",
+      "subLabel": "Abstractions; Providers;\nAzure Files Storage",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "contracts + library",
+        "tone": "lavender",
+        "visible": true
+      },
+      "group": "environment-composition"
+    },
+    {
+      "id": "agentweaver-environment",
+      "label": "Environment",
+      "subLabel": "Owner lifecycle, egress, and workspace volumes.",
+      "meta": "Agentweaver.Environment",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": {
+        "text": "service candidate",
+        "tone": "teal",
+        "visible": true
+      },
+      "group": "environment-composition"
+    },
+    {
+      "id": "iworkspacevolumeprovider",
+      "label": "IWorkspaceVolumeProvider",
+      "subLabel": "Generation-scoped Storage contract.",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "interface",
+        "tone": "lavender",
+        "visible": true
+      },
+      "group": "contracts"
+    },
+    {
+      "id": "azure-files-volume-provider",
+      "label": "Azure Files CSI",
+      "subLabel": "Generation-pinned workspace volume adapter.",
+      "meta": "Agentweaver.Providers.Storage.AzureFiles",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "class / library",
+        "tone": "teal",
+        "visible": true
+      },
+      "group": "adapters"
+    },
+    {
+      "id": "kubernetes-storage-api",
+      "label": "Kubernetes API",
+      "subLabel": "StorageClass, PVC, and PV control plane.",
+      "icon": "box",
+      "library": "kubernetes",
+      "badge": {
+        "text": "external API",
+        "tone": "marigold",
+        "visible": true
+      },
+      "group": "external-platforms"
+    },
+    {
+      "id": "knowledge-dependencies",
+      "label": "Refs",
+      "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry",
+      "icon": "box",
+      "fluentIcon": "package",
+      "badge": {
+        "text": "contracts + libraries",
+        "tone": "lavender",
+        "visible": true
+      },
+      "group": "knowledge-composition"
+    },
+    {
+      "id": "knowledge-service",
+      "label": "Knowledge",
+      "subLabel": "Memory API and native PostgreSQL adapter candidate.",
+      "meta": "Agentweaver.Knowledge",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": {
+        "text": "service",
+        "tone": "teal",
+        "visible": true
+      },
+      "group": "knowledge-composition"
     },
     {
       "id": "azure-blob-container",
@@ -142,11 +254,57 @@
       "group": "azure-resources"
     }
   ],
+  "layoutSnapshot": {
+    "canvasWidth": 1838.96,
+    "canvasHeight": 2345.6,
+    "nodes": [
+      { "id": "iobjectstore", "type": "card", "position": { "x": 199.04, "y": 144 }, "data": { "label": "Agentweaver.Abstractions.IObjectStore", "subLabel": "Generic object-storage contract." } },
+      { "id": "isecretredemption", "type": "card", "position": { "x": 698, "y": 144 }, "data": { "label": "Agentweaver.Abstractions.ISecretRedemption", "subLabel": "Generic secret-redemption contract." } },
+      { "id": "iworkspacevolumeprovider", "type": "card", "position": { "x": 1196.96, "y": 144 }, "data": { "label": "IWorkspaceVolumeProvider", "subLabel": "Generation-scoped Storage contract." } },
+      { "id": "sessions-dependencies", "type": "card", "position": { "x": 396.4064, "y": 492.8 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry" } },
+      { "id": "events-and-sessions", "type": "card", "position": { "x": 999.5936, "y": 492.8 }, "data": { "label": "Events & Sessions", "subLabel": "PostgreSQL journal, policy evidence, and messages.", "meta": "Agentweaver.EventsAndSessions" } },
+      { "id": "environment-dependencies", "type": "card", "position": { "x": 396.4064, "y": 804.8 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nAzure Files Storage" } },
+      { "id": "agentweaver-environment", "type": "card", "position": { "x": 999.5936, "y": 790.8 }, "data": { "label": "Environment", "subLabel": "Owner lifecycle, egress, and workspace volumes.", "meta": "Agentweaver.Environment" } },
+      { "id": "knowledge-dependencies", "type": "card", "position": { "x": 396.4064, "y": 1099.2 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry" } },
+      { "id": "knowledge-service", "type": "card", "position": { "x": 999.5936, "y": 1099.2 }, "data": { "label": "Knowledge", "subLabel": "Memory API and native PostgreSQL adapter candidate.", "meta": "Agentweaver.Knowledge" } },
+      { "id": "azure-blob-object-store", "type": "card", "position": { "x": 199.04, "y": 1488.4 }, "data": { "label": "AzureBlobObjectStore", "subLabel": "Concrete object-store adapter.", "meta": "Library: Agentweaver.ObjectStore.AzureBlob" } },
+      { "id": "azure-key-vault-secret-redemption", "type": "card", "position": { "x": 698, "y": 1488.4 }, "data": { "label": "Key Vault\nadapter", "subLabel": "Does not authorize callers.", "meta": "Agentweaver.Secrets.AzureKeyVault" } },
+      { "id": "azure-files-volume-provider", "type": "card", "position": { "x": 1196.96, "y": 1488.4 }, "data": { "label": "Azure Files CSI", "subLabel": "Generation-pinned workspace volume adapter.", "meta": "Agentweaver.Providers.Storage.AzureFiles" } },
+      { "id": "azure-blob-container", "type": "card", "position": { "x": 448.52, "y": 1837.2 }, "data": { "label": "Azure Blob container", "subLabel": "External object-storage resource." } },
+      { "id": "azure-key-vault", "type": "card", "position": { "x": 947.48, "y": 1837.2 }, "data": { "label": "Azure Key Vault", "subLabel": "External secret store." } },
+      { "id": "kubernetes-storage-api", "type": "card", "position": { "x": 698, "y": 2117.6 }, "data": { "label": "Kubernetes API", "subLabel": "StorageClass, PVC, and PV control plane." } }
+    ]
+  },
   "edges": [
     {
       "from": "events-and-sessions",
       "to": "sessions-dependencies",
       "label": "references"
+    },
+    {
+      "from": "knowledge-service",
+      "to": "knowledge-dependencies",
+      "label": "references"
+    },
+    {
+      "from": "agentweaver-environment",
+      "to": "environment-dependencies",
+      "label": "references"
+    },
+    {
+      "from": "agentweaver-environment",
+      "to": "azure-files-volume-provider",
+      "label": "references"
+    },
+    {
+      "from": "iworkspacevolumeprovider",
+      "to": "azure-files-volume-provider",
+      "label": "implemented by"
+    },
+    {
+      "from": "azure-files-volume-provider",
+      "to": "kubernetes-storage-api",
+      "label": "calls"
     },
     {
       "from": "iobjectstore",

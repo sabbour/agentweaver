@@ -1,4 +1,5 @@
 using System.Data;
+using Agentweaver.Abstractions;
 using Agentweaver.Providers;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;

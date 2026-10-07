@@ -175,7 +175,7 @@
             {
               "type": "note",
               "over": ["probe-host", "provider-resolver"],
-              "label": "Foundation Probe and Orchestrator Core use this resolver. Core pins AGT Policy; that provider is not part of probe operations."
+              "label": "Foundation Probe and Orchestrator Core use this resolver. Core pins AGT Policy, not as a probe operation; Knowledge selects one Memory candidate per run."
             }
           ]
         },

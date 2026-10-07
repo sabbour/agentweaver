@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "PostgreSQL outbox producer and inbox consumer",
-  "alt": "Independent caller-owned producer and consumer transactions using PostgresOutbox. EnqueueAsync stores the event with producer state; AdmitAsync applies effects only for Admitted, skips duplicates, and acknowledges consumer delivery only after commit. The generic caller lane does not imply one product host.",
+  "alt": "Independent caller-owned producer and consumer transactions using PostgresOutbox. EnqueueAsync stores the event with producer state; AdmitAsync applies effects only for Admitted, skips duplicates, and acknowledges consumer delivery only after commit. ClaimOneAsync can lease a selected event only when it is next in its stream. The generic caller lane does not imply one product host.",
   "autonumber": true,
   "participants": [
     {
@@ -43,6 +43,11 @@
       "type": "note",
       "over": ["caller", "outbox"],
       "label": "Producer and consumer use independent caller-owned transactions; one shared caller lane does not imply one service."
+    },
+    {
+      "type": "note",
+      "over": ["caller", "outbox", "postgres"],
+      "label": "ClaimOneAsync leases one requested event only when no earlier event in that stream is undelivered; otherwise it returns null."
     },
     {
       "type": "message",

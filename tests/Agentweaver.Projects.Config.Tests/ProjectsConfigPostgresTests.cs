@@ -44,10 +44,25 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         var caller = await ResolveCallerAsync(
             db, "legacy-orchestrator-" + suffix, tenantId, ["api.read", "projects.orchestrator"]);
         var request = RunRequest(configuration.Revision, platform.Revision);
+        request = request with
+        {
+            Context = request.Context with
+            {
+                RequiredEgress =
+                [
+                    new NetworkEgressRule(
+                        NetworkEgressPurpose.PublicHttps,
+                        NetworkEgressDestinationKind.Fqdn,
+                        "api.example.com",
+                        443,
+                        EgressProtocol.Tcp),
+                ],
+            },
+        };
         var runId = "legacy-run-" + suffix;
         var legacyBytes = LegacyFingerprintBytes(project.ProjectId, runId, request);
         var expectedCanonical = $$"""
-            {"projectId":"{{project.ProjectId}}","runId":"{{runId}}","expectedProjectConfigRevision":{{configuration.Revision}},"expectedPlatformRuntimeRevision":{{platform.Revision}},"contextRevision":"provider-catalog-revision-1","modelReferences":["platform-model","project-model"],"providerRequirements":[{"seam":"sandbox","requiredAdapterVersion":"1.0.0","requiredOptionsSchemaVersion":1,"requiredCapabilities":["container.create"],"requiredL3L4Capabilities":[],"requiredL7Capabilities":[]}],"requiredEgress":[{"host":"api.example.com","port":443,"protocol":"tcp"}]}
+            {"projectId":"{{project.ProjectId}}","runId":"{{runId}}","expectedProjectConfigRevision":{{configuration.Revision}},"expectedPlatformRuntimeRevision":{{platform.Revision}},"contextRevision":"provider-catalog-revision-1","modelReferences":["platform-model","project-model"],"providerRequirements":[{"seam":"sandbox","requiredAdapterVersion":"1.0.0","requiredOptionsSchemaVersion":1,"requiredCapabilities":["container.create"],"requiredL3L4Capabilities":[],"requiredL7Capabilities":[]},{"seam":"networkPolicy","requiredAdapterVersion":"1.0.0","requiredOptionsSchemaVersion":1,"requiredCapabilities":[],"requiredL3L4Capabilities":["networkpolicy.cidr","networkpolicy.dns","networkpolicy.fqdn","networkpolicy.l3l4"],"requiredL7Capabilities":[]}],"requiredEgress":[{"host":"api.example.com","port":443,"protocol":"tcp"}]}
             """;
         Assert.Equal(Encoding.UTF8.GetBytes(expectedCanonical), legacyBytes);
         var legacyFingerprint = Convert.ToHexString(SHA256.HashData(legacyBytes)).ToLowerInvariant();
@@ -75,13 +90,16 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
                     },
                 },
             },
-            EgressAllowlist = new[] { new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp) },
+            EgressAllowlist = new[]
+            {
+                new { Host = "api.example.com", Port = 443, Protocol = EgressProtocol.Tcp.ToString() },
+            },
             RunLimits = new CopilotRunLimits
             {
                 MaxModelTurns = 6, MaxToolCalls = 100, MaxChildren = 0, MaxConcurrentChildren = 0,
                 MaxWallTimeSeconds = 3600, MaxPromptTokens = 20000,
             },
-            ProjectConfiguration = configuration.Configuration,
+            ProjectConfiguration = LegacyProjectConfiguration(configuration.Configuration),
         }, LegacyJsonOptions());
         Assert.DoesNotContain("\"meterSource\"", legacySnapshot);
         db.RunSelections.Add(new ProjectRunSelectionRecord
@@ -112,13 +130,20 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         Assert.Equal(storedBefore.SnapshotJson, storedAfter.SnapshotJson);
         Assert.Equal(storedBefore.CreatedAt, storedAfter.CreatedAt);
 
-        var freshRunId = "fresh-legacy-format-" + suffix;
+        var freshRunId = "fresh-structured-format-" + suffix;
         await service.AcceptRunSelectionAsync(
-            caller, project.ProjectId, freshRunId, request, CancellationToken.None);
+            caller,
+            project.ProjectId,
+            freshRunId,
+            RunRequest(configuration.Revision, platform.Revision),
+            CancellationToken.None);
         var fresh = await db.RunSelections.AsNoTracking().SingleAsync(item => item.RunId == freshRunId);
         Assert.Equal(
             Convert.ToHexString(SHA256.HashData(
-                LegacyFingerprintBytes(project.ProjectId, freshRunId, request))).ToLowerInvariant(),
+                StructuredFingerprintBytes(
+                    project.ProjectId,
+                    freshRunId,
+                    RunRequest(configuration.Revision, platform.Revision)))).ToLowerInvariant(),
             fresh.RequestFingerprint);
     }
 
@@ -310,7 +335,7 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
                 {
                     Context = request.Context with
                     {
-                        RequiredEgress = ImmutableArray.CreateRange(new ProjectEgressRule[] { null! }),
+                        RequiredEgress = ImmutableArray.CreateRange(new NetworkEgressRule[] { null! }),
                     },
                 },
                 CancellationToken.None));
@@ -319,10 +344,18 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         var selection = await service.AcceptRunSelectionAsync(
             orchestrator, project.ProjectId, "run-immutable-1", request, CancellationToken.None);
         Assert.Equal("project-model", selection.ModelSelection.Reference);
-        Assert.Equal("sandbox-project", Assert.Single(Assert.Single(selection.Providers).Candidates).ProviderId);
-        Assert.Equal("options-v3", Assert.Single(Assert.Single(selection.Providers).Candidates).OptionsRevision);
+        var sandboxSelection = Assert.Single(selection.Providers.Where(provider =>
+            provider.Seam == ProviderSeam.Sandbox));
+        Assert.Equal("sandbox-project", Assert.Single(sandboxSelection.Candidates).ProviderId);
+        Assert.Equal("options-v3", Assert.Single(sandboxSelection.Candidates).OptionsRevision);
         Assert.Equal(6, selection.RunLimits.MaxModelTurns);
-        Assert.Equal("api.example.com", Assert.Single(selection.EgressAllowlist).Host);
+        Assert.Equal("api.example.com", Assert.Single(selection.EgressAllowlist).Destination);
+        Assert.Equal(2, selection.EgressBaseline.Length);
+        Assert.Equal(NetworkEgressPurpose.ModelEndpoint, Assert.Single(selection.RequiredEgress).Purpose);
+        var networkSelection = Assert.Single(selection.Providers.Where(provider =>
+            provider.Seam == ProviderSeam.NetworkPolicy));
+        Assert.Equal(NetworkPolicyLayer.L3L4, Assert.Single(networkSelection.Candidates).Layer);
+        Assert.Equal("cilium", Assert.Single(networkSelection.Candidates).ProviderId);
 
         var unavailableRequest = RunRequest(configuration.Revision, platformRevision.Revision) with
         {
@@ -373,7 +406,9 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             orchestrator, project.ProjectId, "run-immutable-1", request, CancellationToken.None);
         Assert.Equal(selection.ProjectConfigurationRevision, replayed.ProjectConfigurationRevision);
         Assert.Equal(selection.ModelSelection.Reference, replayed.ModelSelection.Reference);
-        Assert.Equal("sandbox-project", Assert.Single(Assert.Single(replayed.Providers).Candidates).ProviderId);
+        Assert.Equal("sandbox-project", Assert.Single(
+            Assert.Single(replayed.Providers.Where(provider => provider.Seam == ProviderSeam.Sandbox))
+                .Candidates).ProviderId);
         var stored = await service.GetRunSelectionAsync(
             orchestrator, project.ProjectId, "run-immutable-1", CancellationToken.None);
         Assert.Equal(selection.ProjectConfigurationRevision, stored.ProjectConfigurationRevision);
@@ -751,10 +786,31 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             revision,
             1);
 
+        var networkCapabilities = ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            "networkpolicy.l3l4",
+            "networkpolicy.fqdn",
+            "networkpolicy.cidr",
+            "networkpolicy.dns");
         return Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
-            [Registration("sandbox-platform", "options-v1"), Registration("sandbox-project", "options-v3")],
+            [
+                Registration("sandbox-platform", "options-v1"),
+                Registration("sandbox-project", "options-v3"),
+                new ProviderRegistration(
+                    new ProviderDescriptor(
+                        ProviderSeam.NetworkPolicy,
+                        "cilium",
+                        new Version(1, 0, 0),
+                        1,
+                        ProviderHostingPattern.KubernetesController,
+                        networkCapabilities),
+                    true,
+                    "cilium-options-v1",
+                    1)
+            ],
             [new ProviderSelection(ProviderSeam.Sandbox, "sandbox-platform")],
-            [new ProviderOverridePermission(ProviderSeam.Sandbox, "sandbox-project")]).Value);
+            [new ProviderOverridePermission(ProviderSeam.Sandbox, "sandbox-project")],
+            layerSelections: [new ProviderLayerSelection(NetworkPolicyLayer.L3L4, "cilium")]).Value);
     }
 
     private static PlatformRuntimeDefaults PlatformDefaults() => new()
@@ -762,8 +818,8 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         ModelSelection = new ModelSelectionSettings("platform-model"),
         EgressBaseline =
         [
-            new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp),
-            new ProjectEgressRule("storage.example.com", 443, EgressProtocol.Tcp),
+            Fqdn(NetworkEgressPurpose.ModelEndpoint, "api.example.com"),
+            Fqdn(NetworkEgressPurpose.PackageRegistry, "storage.example.com"),
         ],
         RunLimits = new CopilotRunLimits
         {
@@ -780,7 +836,7 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
     {
         ModelSelection = new ModelSelectionSettings("project-model"),
         ProviderOverrides = [new ProjectProviderOverride(ProviderSeam.Sandbox, "sandbox-project")],
-        EgressNarrowing = [new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp)],
+        EgressNarrowing = [Fqdn(NetworkEgressPurpose.ModelEndpoint, "api.example.com")],
         RunLimits = new CopilotRunLimitOverrides
         {
             MaxModelTurns = 6,
@@ -813,11 +869,78 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
                 }).ToArray(),
             RequiredEgress = ProjectConfigurationValidator
                 .ValidateEgressRules(request.Context.RequiredEgress)
+                .Select(rule => new
+                {
+                    Host = rule.Destination,
+                    rule.Port,
+                    rule.Protocol,
+                })
                 .OrderBy(rule => rule.Host, StringComparer.Ordinal)
                 .ThenBy(rule => rule.Port).ThenBy(rule => rule.Protocol).ToArray(),
         };
         return JsonSerializer.SerializeToUtf8Bytes(canonical, LegacyJsonOptions());
     }
+
+    private static object LegacyProjectConfiguration(ProjectConfiguration configuration) => new
+    {
+        configuration.ModelSelection,
+        configuration.ProviderOverrides,
+        configuration.OrderedProviderOverrides,
+        configuration.AgentCharters,
+        configuration.Casting,
+        configuration.BlueprintWorkflowReferences,
+        configuration.Skills,
+        EgressNarrowing = configuration.EgressNarrowing?.Select(rule => new
+        {
+            Host = rule.Destination,
+            rule.Port,
+            rule.Protocol,
+        }).ToArray(),
+        configuration.RunLimits,
+    };
+
+    private static byte[] StructuredFingerprintBytes(
+        string projectId, string runId, AcceptRunSelectionRequest request)
+    {
+        var canonical = new
+        {
+            projectId,
+            runId,
+            request.ExpectedProjectConfigRevision,
+            request.ExpectedPlatformRuntimeRevision,
+            ContextRevision = request.Context.Revision,
+            ModelReferences = request.Context.AvailableModelSelectionReferences.Order(StringComparer.Ordinal).ToArray(),
+            ProviderRequirements = request.Context.ProviderRequirements
+                .OrderBy(item => item.Seam)
+                .ThenBy(item => item.MeterSource, StringComparer.Ordinal)
+                .Select(item => new StructuredProviderRequirementFingerprint(
+                    item.Seam,
+                    item.RequiredAdapterVersion,
+                    item.RequiredOptionsSchemaVersion,
+                    item.RequiredCapabilities.Order(StringComparer.Ordinal).ToArray(),
+                    item.RequiredL3L4Capabilities.Order(StringComparer.Ordinal).ToArray(),
+                    item.RequiredL7Capabilities.Order(StringComparer.Ordinal).ToArray(),
+                    item.MeterSource)).ToArray(),
+            RequiredEgress = ProjectConfigurationValidator
+                .ValidateEgressRules(request.Context.RequiredEgress)
+                .OrderBy(rule => rule.Purpose)
+                .ThenBy(rule => rule.DestinationKind)
+                .ThenBy(rule => rule.Destination, StringComparer.Ordinal)
+                .ThenBy(rule => rule.Port)
+                .ThenBy(rule => rule.Protocol)
+                .ToArray(),
+        };
+        return JsonSerializer.SerializeToUtf8Bytes(canonical, LegacyJsonOptions());
+    }
+
+    private sealed record StructuredProviderRequirementFingerprint(
+        ProviderSeam Seam,
+        string RequiredAdapterVersion,
+        int RequiredOptionsSchemaVersion,
+        string[] RequiredCapabilities,
+        string[] RequiredL3L4Capabilities,
+        string[] RequiredL7Capabilities,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MeterSource);
 
     private static JsonSerializerOptions LegacyJsonOptions()
     {
@@ -847,10 +970,25 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
                     RequiredOptionsSchemaVersion = 1,
                     RequiredCapabilities = ImmutableHashSet.Create(StringComparer.Ordinal, "container.create"),
                 },
+                new ProviderRequirement
+                {
+                    Seam = ProviderSeam.NetworkPolicy,
+                    RequiredAdapterVersion = "1.0.0",
+                    RequiredOptionsSchemaVersion = 1,
+                    RequiredL3L4Capabilities = ImmutableHashSet.Create(
+                        StringComparer.Ordinal,
+                        "networkpolicy.l3l4",
+                        "networkpolicy.fqdn",
+                        "networkpolicy.cidr",
+                        "networkpolicy.dns"),
+                },
             ],
-            RequiredEgress = [new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp)],
+            RequiredEgress = [Fqdn(NetworkEgressPurpose.ModelEndpoint, "api.example.com")],
         },
     };
+
+    private static NetworkEgressRule Fqdn(NetworkEgressPurpose purpose, string host) =>
+        new(purpose, NetworkEgressDestinationKind.Fqdn, host, 443, EgressProtocol.Tcp);
 }
 
 public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime

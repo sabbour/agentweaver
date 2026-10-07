@@ -26,6 +26,12 @@ const projectReferences = new Map([
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
   ]],
+  ['Agentweaver.Orchestrator', [
+    '..\\Agentweaver.Orchestrator.Core\\Agentweaver.Orchestrator.Core.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+  ]],
   ['Agentweaver.EventsAndSessions', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
@@ -35,6 +41,20 @@ const projectReferences = new Map([
   ['Agentweaver.Projects.Config', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+  ]],
+  ['Agentweaver.Environment', [
+    '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Providers.Storage.AzureFiles\\Agentweaver.Providers.Storage.AzureFiles.csproj',
+  ]],
+  ['Agentweaver.Providers.Storage.AzureFiles', [
+    '..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+  ]],
+  ['Agentweaver.Knowledge', [
+    '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
   ]],
 ]);
 const projects = new Map(fixture.components.map((component) => {
@@ -68,6 +88,22 @@ test('a library component may be checked in under services', () => {
   const orchestrator = fixture.components.find(component => component.id === 'Agentweaver.Orchestrator.Core');
   assert.equal(orchestrator.kind, 'library');
   assert.ok(orchestrator.project.startsWith('services/'));
+  assert.equal(check(fixture).stage, 'draft');
+});
+
+test('the Orchestrator host is registered as a baseline service with all project dependencies pinned', () => {
+  const host = fixture.components.find(component => component.id === 'Agentweaver.Orchestrator');
+  assert.equal(host.kind, 'service');
+  assert.equal(host.version, '0.0.0');
+  assert.equal(host.project, 'services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj');
+  assert.deepEqual(fixture.compatibility
+    .filter(({ consumer }) => consumer === host.id)
+    .map(({ dependency, versions }) => [dependency, versions]), [
+    ['Agentweaver.Orchestrator.Core', ['0.0.0']],
+    ['Agentweaver.Abstractions', ['0.0.0']],
+    ['Agentweaver.Persistence.Postgres', ['0.0.0']],
+    ['Agentweaver.Providers', ['0.0.0']],
+  ]);
   assert.equal(check(fixture).stage, 'draft');
 });
 

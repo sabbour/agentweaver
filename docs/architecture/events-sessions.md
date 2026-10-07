@@ -1,31 +1,69 @@
 # Events & Sessions journal
 
 The v1 source contains an unpublished `Agentweaver.EventsAndSessions` service
-candidate. It implements the initial native Sessions journal slice; it is not a
-deployed platform service.
+candidate. It implements the native Sessions journal and a separate project-scoped
+accepted-effect fact stream; it is not a deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="An authorized caller creates a session; the Events & Sessions host resolves and negotiates the native PostgreSQL Sessions provider, stores an immutable project/run provider pin, rejects PolicyEvaluation writes without trusted Core-writer provenance, and serves ordinary events through ordered replay or live subscriptions." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal, serves ordered run-event replay, appends Knowledge-owned accepted-effect receipts as project facts, presents Orchestrator owner-outbox messages at fenced turn boundaries, and admits PolicyEvaluation only from immutable Orchestrator receipts after current owner validation." />
   </a>
-  <figcaption>The current host validates project/run scope, pins one native Sessions provider per run, and uses PostgreSQL as the journal authority. Generic run-scoped append does not establish Orchestrator Core writer provenance, so it rejects PolicyEvaluation events. The figure describes source behavior, not a deployment topology.</figcaption>
+  <figcaption>Run-bound session events, project-scoped facts, and addressed messages have separate addresses and storage. Generic PolicyEvaluation appends are rejected; the receipt-reference route fetches immutable Orchestrator evidence and revalidates admission before commit. The figure describes source behavior, not a deployment topology.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
 
 ## Ownership and scope
 
-`Agentweaver.EventsAndSessions` owns the event journal, session records, immutable
-Sessions-provider bindings, and object-reference retention metadata in its PostgreSQL
-schema. The shared `Agentweaver.Persistence.Postgres` library supplies the
-transactional outbox and inbox; it does not own these domain tables. The service uses
-the existing provider catalog/resolver and telemetry helper. The provider-neutral
+`Agentweaver.EventsAndSessions` owns the run event journal, separate project-scoped
+accepted-effect facts, session records, immutable Sessions-provider bindings,
+object-reference retention metadata, and addressed-message records in its PostgreSQL
+schema. The Orchestrator owns run/session relationships,
+execution fences and turn state, coordination requests, parent notifications, and its
+durable message outbox. The shared `Agentweaver.Persistence.Postgres` library supplies
+the transactional outbox and inbox; it does not own these domain tables. The service
+uses the existing provider catalog/resolver and telemetry helper. The provider-neutral
 `ISessionsJournal` interface and `SessionSubscriptionRequest` contract live in
 `Agentweaver.Abstractions`; this service owns their PostgreSQL implementation.
 
-This slice does not implement the rest of the proposed service responsibilities:
-session-tree transitions, addressed-message delivery, usage accounting, consistency
-manifests, MAF checkpoints, AgentHost integration, or Gateway/UI/MCP routes. The
-broader Sessions and coordination design remains Proposed for those larger workflows.
+This source slice connects owner-validated addressed-message delivery to session
+turn-boundary requests. It does not implement the rest of the proposed platform:
+automatic AgentHost scheduling, a background delivery relay, gate approval decisions,
+usage accounting, consistency manifests, MAF checkpoints, or Gateway/UI/MCP routes.
+The broader Sessions and coordination design remains Proposed for those workflows.
+
+## Addressed-message owner integration
+
+The Orchestrator exposes protected root/child registration and session-scoped send,
+turn-boundary, turn-completion, notification, and acknowledgment routes. Before each
+operation it requires the current Projects & Config authorization context and accepted
+run selection; it does not trust token claims alone for current permission. It writes
+outbound messages to its durable owner outbox before synchronously admitting them to
+Events & Sessions. Events asks the Orchestrator to verify that the complete message
+matches that outbox record, that both sessions belong to the active run, and that
+sender/recipient writer and execution fences are current. It persists the journal
+reference and Events-side outbox/inbox transactionally.
+
+At an explicit owner turn-boundary request, the Orchestrator asks Events to claim and
+present the next addressed message. Events re-reads the current owner session binding
+for every operation and permits claim or presentation only while the owner reports
+`presenting`; acknowledgment remains available after that boundary under the current
+execution and claim fences. The owner records delivery and exposes parent notifications.
+The completed boundary result is stored with its request state version, so retrying the
+same request returns the same result without claiming another message. A blocked session
+can resume when a pending wake exists, and a wake received during presentation is not
+lost. `progress` messages remain in sender history but are not claimable as recipient
+input; idempotency is scoped to the sender run and session.
+When a valid correlated reply is admitted, the owner moves the matching pending request
+to `input_available`. Later acknowledgment records receipt only: it does not approve a
+gate or complete child work.
+Needs-input and error messages can set a pending wake. The owner drives these calls
+synchronously; no background relay or automatic AgentHost scheduler is included.
+
+The Broker-backed HTTP integration test exercises this path with a real Broker-issued
+run token, disposable PostgreSQL, accepted Projects selection, root/child registration,
+owner-outbox validation, delivery and journal mapping, turn-boundary presentation,
+fenced acknowledgment, parent notification, and permission revocation. It is an
+integration test of the source hosts, not evidence of a deployed service.
 
 ## Provider pin and session creation
 
@@ -55,13 +93,29 @@ Event contracts are versioned independently by schema and event version. Event
 version 1 supports typed turn, tool-call, accepted-decision, accepted-effect,
 artifact-reference, and cache-reference payloads. Event version 2 adds the
 purpose-built `PolicyEvaluation` payload; existing version-1 payloads remain
-appendable and replayable. The generic run-scoped append path rejects every
-`PolicyEvaluation` event: matching the authenticated actor does not prove that
-Orchestrator Core wrote the decision, and no trusted writer path is wired yet. The
-event envelope binds project/run/session; its payload stores only bounded actor,
-tenant/step, grant reference/revision, purpose/action/fence, typed
-outcome/reason, and provider/options identity metadata. It has no free-form error
-field or space for rule text, tool arguments, prompts, or credentials. Large
+appendable and replayable. `PolicyEvaluation` events use a dedicated
+receipt-reference route; the generic run-scoped append path still rejects every
+such event because actor equality does not prove Orchestrator Core provenance.
+`POST /internal/sessions/{sessionId}/policy-evaluations` accepts only an immutable
+receipt ID. Events verifies the pinned provider capability, fetches the committed
+receipt from the fixed Orchestrator owner, and asks that owner to validate the
+receipt against current admission authority. For an Allow receipt, the owner
+rechecks current Core write authority, accepted run selection, grant
+scope/revision, expiry, and execution fence. Every outcome also requires current
+Core write authority, accepted run selection, and matching actor/tenant. Deny and
+Error receipts do not require an active Allow grant, but remain same-actor immutable
+owner facts and cannot authorize an effect.
+
+Events repeats the owner admission check from inside the PostgreSQL transaction
+before commit, including for an identical retry. The transaction commits the
+PolicyEvaluation event, inbox identity, run position, object references, and outbox
+records together. If the recheck fails, those writes roll back. After commit, Events
+returns a no-store acknowledgment containing the receipt identity and durable event
+position; a new append returns `201`, an identical retry returns `200`, and
+conflicting reuse fails. The event envelope binds project/run/session; its payload
+stores only bounded actor, tenant/step, grant reference/revision, purpose/action/fence,
+typed outcome/reason, and provider/options identity metadata. It has no free-form
+error field or space for rule text, tool arguments, prompts, or credentials. Large
 content in other event kinds is represented by opaque `ObjectKey` references with a
 purpose, optional byte length, and retention metadata; the service does not store
 referenced bytes or credentials.
@@ -75,10 +129,15 @@ with identical canonical event content returns the original event; reusing its
 identity with different content in the same run is a conflict. PostgreSQL, not an
 in-process counter or channel, assigns the authoritative ordered position.
 
-When the trusted Orchestrator Core writer path is implemented, the action guard must
-await a successful durable append before performing a protected effect. An append
-failure is an error, never an allow; the event is evidence only and cannot grant
-authority by itself. Until then, a missing or unwired writer path must fail closed.
+The Orchestrator receipt writer rechecks the actual request actor, current Projects
+`acceptRunSelection` authority, and accepted selection immediately before committing
+the owner receipt, after its grant-row lock and insert. An Allow also requires the
+exact current grant, expiry, fence, and selection; Deny/Error may refer to an issued
+inactive grant but still require current Core write authority. The Core action guard
+then awaits the durable Events acknowledgment and rechecks current authority, grant
+state, and fence after that await. Any failed owner check, journal append, or
+post-ack recheck prevents the protected effect; evidence alone cannot grant
+authority. Downstream protected-effect call sites are not claimed to be wired.
 
 Run replay returns a bounded, run-ordered page spanning all sessions; session replay
 returns only that session's events at their run positions. Run cursors are bound to a
@@ -87,6 +146,35 @@ subscriptions poll durable journal state across service instances and emit NDJSO
 `SessionEventDelivery` records containing the event and its `nextCursor`. A client
 reconnects by passing that cursor unchanged; the numeric position alone is not the
 cursor contract.
+
+## Project accepted-effect facts
+
+`POST /internal/project-facts/accepted-effects` is separate from all session and run
+journal routes. Its request contains only the receipt ID, schema version, and event
+version. Events fetches the immutable committed receipt from the configured fixed
+HTTPS Knowledge address; callers cannot supply a source URL, payload, or accepted
+marker. Redirects are disabled.
+
+Events requires the caller's validated issuer and subject to match the original
+receipt, checks project/run bounds and rejects purpose-bound tokens. It forwards the
+caller bearer and optional tenant selector to Knowledge and Projects & Config, then
+requires fresh effective project `WriteProjects` permission. If a caller uses
+separate existing audience-correct tokens, the Knowledge token is forwarded only in
+the protected request to the fixed Knowledge owner; neither token is stored or
+logged.
+
+After validation, Events constructs the accepted-effect fact itself. In one
+PostgreSQL transaction it admits the receipt ID through the shared inbox, assigns a
+project-scoped sequence, and persists the immutable fact and acknowledgment. An
+identical retry returns the same acknowledgment; changed receipt content for the
+same ID conflicts. The acknowledgment binds the receipt ID and versions to the
+native fact ID, project, and sequence. No fact or inbox receipt is committed alone.
+
+These facts do not enter `session_events`, require or modify a Sessions provider pin,
+or claim a run/session transition. Knowledge uses a caller-driven relay and marks its
+outbox event delivered only after validating this durable acknowledgment. Failures
+leave delivery pending for a fresh authorized caller retry; there is no unattended
+relay worker.
 
 ## Schema and validation boundary
 
@@ -111,6 +199,8 @@ Use these separate settings:
 | --- | --- |
 | `ConnectionStrings:EventsAndSessions` | Runtime PostgreSQL endpoint, database, and least-privilege Entra role. |
 | `EventsAndSessions:Database:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Explicit workload identity for runtime database access. |
+| `EventsAndSessions:Knowledge:BaseAddress` | Required fixed absolute HTTPS Knowledge owner URI used to fetch committed accepted-effect receipts; redirects are rejected. |
+| `ProjectsConfig:BaseAddress` | Required fixed absolute HTTPS Projects & Config URI used to recheck current project authority; redirects are rejected. |
 | `ConnectionStrings:EventsAndSessionsMigration` | Migration PostgreSQL endpoint, database, and separately granted schema-owner role. |
 | `EventsAndSessions:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Explicit workload identity for the migration command only. |
 

@@ -11,7 +11,7 @@ public sealed class ProjectConfigurationValidatorTests
 {
     private static PlatformRuntimeDefaults PlatformDefaults() => new()
     {
-        EgressBaseline = [new ProjectEgressRule("API.Example.com.", 443, EgressProtocol.Tcp)],
+        EgressBaseline = [Fqdn("API.Example.com.")],
         RunLimits = new CopilotRunLimits
         {
             MaxModelTurns = 12,
@@ -23,22 +23,26 @@ public sealed class ProjectConfigurationValidatorTests
         },
     };
 
+    private static NetworkEgressRule Fqdn(string host, int port = 443) =>
+        new(NetworkEgressPurpose.ModelEndpoint, NetworkEgressDestinationKind.Fqdn,
+            host, port, EgressProtocol.Tcp);
+
     [Fact]
     public void NormalizesEgressAndAllowsOnlySubsetWithRequiredDestinations()
     {
         var baseline = ProjectConfigurationValidator.Validate(PlatformDefaults()).EgressBaseline;
-        Assert.Equal("api.example.com", Assert.Single(baseline).Host);
+        Assert.Equal("api.example.com", Assert.Single(baseline).Destination);
 
         var narrowed = ProjectConfigurationValidator.ResolveEgress(
             baseline,
-            [new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp)],
-            [new ProjectEgressRule("API.EXAMPLE.COM.", 443, EgressProtocol.Tcp)]);
+            [Fqdn("api.example.com")],
+            [Fqdn("API.EXAMPLE.COM.")]);
         Assert.Equal(baseline.ToArray(), narrowed.ToArray());
 
         var widened = Assert.Throws<ProjectConfigException>(() =>
             ProjectConfigurationValidator.ResolveEgress(
                 baseline,
-                [new ProjectEgressRule("other.example.com", 443, EgressProtocol.Tcp)],
+                [Fqdn("other.example.com")],
                 []));
         Assert.Equal(StatusCodes.Status400BadRequest, widened.StatusCode);
 
@@ -46,8 +50,45 @@ public sealed class ProjectConfigurationValidatorTests
             ProjectConfigurationValidator.ResolveEgress(
                 baseline,
                 [],
-                [new ProjectEgressRule("api.example.com", 443, EgressProtocol.Tcp)]));
+                [Fqdn("api.example.com")]));
         Assert.Equal(StatusCodes.Status400BadRequest, missingRequired.StatusCode);
+    }
+
+    [Fact]
+    public void ReadsLegacyRunSelectionEgressWithoutBroadeningItsEffectiveDestinations()
+    {
+        const string legacySnapshot = """
+            {
+              "projectId": "project",
+              "runId": "run",
+              "projectRevision": 1,
+              "projectConfigurationRevision": 1,
+              "platformRuntimeRevision": 1,
+              "contextRevision": "legacy-context",
+              "modelSelection": { "reference": "model" },
+              "providers": [],
+              "egressAllowlist": [
+                { "host": "API.Example.com.", "port": 443, "protocol": "tcp" }
+              ],
+              "runLimits": {},
+              "projectConfiguration": {
+                "egressNarrowing": [
+                  { "host": "API.Example.com.", "port": 443, "protocol": "tcp" }
+                ]
+              }
+            }
+            """;
+
+        var selection = ProjectsConfigService.DeserializeRunSelection(legacySnapshot);
+        var effectiveRule = Assert.Single(selection.EgressAllowlist);
+
+        Assert.Equal("api.example.com", effectiveRule.Destination);
+        Assert.Equal(NetworkEgressPurpose.PublicHttps, effectiveRule.Purpose);
+        Assert.Equal(NetworkEgressDestinationKind.Fqdn, effectiveRule.DestinationKind);
+        Assert.Equal(selection.EgressAllowlist, selection.EgressBaseline);
+        Assert.Equal(selection.EgressAllowlist, selection.ProjectEgressNarrowing);
+        Assert.Equal(selection.EgressAllowlist, selection.RequiredEgress);
+        Assert.Equal(effectiveRule, Assert.Single(selection.ProjectConfiguration.EgressNarrowing!.Value));
     }
 
     [Fact]
@@ -78,6 +119,23 @@ public sealed class ProjectConfigurationValidatorTests
             ProjectConfigurationValidator.Validate(new ProjectConfiguration
             {
                 ProviderOverrides = [new ProjectProviderOverride(ProviderSeam.Policy, "policy")],
+            }));
+        Assert.Equal(StatusCodes.Status400BadRequest, error.StatusCode);
+    }
+
+    [Fact]
+    public void ValidatesOptionalDefaultWorkflowIdentifier()
+    {
+        var configuration = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            DefaultWorkflowId = "workflow.default",
+        });
+        Assert.Equal("workflow.default", configuration.DefaultWorkflowId);
+
+        var error = Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.Validate(new ProjectConfiguration
+            {
+                DefaultWorkflowId = "not a stable identifier",
             }));
         Assert.Equal(StatusCodes.Status400BadRequest, error.StatusCode);
     }

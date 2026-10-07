@@ -2,6 +2,7 @@ extern alias ProjectsConfig;
 
 using System.Security.Cryptography;
 using Agentweaver.Identity;
+using Agentweaver.Providers;
 using ProjectsConfig::Agentweaver.Projects.Config;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -39,13 +40,15 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
     }
 
     public HttpClient Client => _client;
+    public HttpMessageHandler CreateHandler() => _host.GetTestServer().CreateHandler();
     public NpgsqlDataSource RuntimeDataSource => _dataSource;
     public NpgsqlDataSource PrivilegedFixtureDataSource => _privilegedDataSource;
 
     public static async Task<ProjectsConfigResourceServer> StartAsync(
         string connectionString,
         SecurityKey signingKey,
-        string audience = "https://api.test")
+        string audience = "https://api.test",
+        ProviderCatalog? providerCatalog = null)
     {
         var privilegedDataSource = NpgsqlDataSource.Create(connectionString);
         var privilegedDbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
@@ -71,7 +74,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);
         await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
 
-        var catalog = ProviderCatalogConfiguration.Load(new ConfigurationBuilder()
+        var catalog = providerCatalog ?? ProviderCatalogConfiguration.Load(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ProjectsConfig:ProviderCatalog:Registrations:0:Seam"] = "Sandbox",
@@ -93,6 +96,14 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             web.ConfigureServices(services =>
             {
                 services.AddRouting();
+                services.ConfigureHttpJsonOptions(json =>
+                {
+                    json.SerializerOptions.UnmappedMemberHandling =
+                        System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow;
+                    json.SerializerOptions.Converters.Add(
+                        new System.Text.Json.Serialization.JsonStringEnumConverter(
+                            System.Text.Json.JsonNamingPolicy.CamelCase));
+                });
                 services.AddSingleton(dataSource);
                 services.AddDbContext<ProjectsConfigDbContext>((_, options) =>
                     options.UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(

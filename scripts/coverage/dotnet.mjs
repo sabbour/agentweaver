@@ -19,9 +19,13 @@ const suites = [
   ['azure-blob', 'Agentweaver.ObjectStore.AzureBlob.Tests'],
   ['foundation-probe', 'Agentweaver.FoundationProbe.Tests'],
   ['events-and-sessions', 'Agentweaver.EventsAndSessions.Tests'],
+  ['environment', 'Agentweaver.Environment.Tests'],
+  ['knowledge', 'Agentweaver.Knowledge.Tests'],
+  ['azure-files', 'Agentweaver.Providers.Storage.AzureFiles.Tests'],
 ];
 const expectedAssemblies = [
   'Agentweaver.Abstractions',
+  'Agentweaver.Orchestrator',
   'Agentweaver.Orchestrator.Core',
   'Agentweaver.Providers',
   'Agentweaver.Persistence.Postgres',
@@ -34,6 +38,9 @@ const expectedAssemblies = [
   'Agentweaver.ObjectStore.AzureBlob',
   'Agentweaver.FoundationProbe',
   'Agentweaver.EventsAndSessions',
+  'Agentweaver.Environment',
+  'Agentweaver.Knowledge',
+  'Agentweaver.Providers.Storage.AzureFiles',
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 

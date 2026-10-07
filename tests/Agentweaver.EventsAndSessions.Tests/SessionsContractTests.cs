@@ -14,6 +14,17 @@ namespace Agentweaver.EventsAndSessions.Tests;
 public sealed class SessionsContractTests
 {
     [Fact]
+    public void AddressedMessagePersistenceIsNotAnExportedServiceApi()
+    {
+        var exportedTypes = typeof(PostgresAddressedMessageStore).Assembly.GetExportedTypes();
+
+        Assert.DoesNotContain(typeof(PostgresAddressedMessageStore), exportedTypes);
+        Assert.DoesNotContain(typeof(AddressedMessageException), exportedTypes);
+        Assert.DoesNotContain(typeof(MessagingProviderUnavailableException), exportedTypes);
+        Assert.DoesNotContain(typeof(MessagingProviderBindingConflictException), exportedTypes);
+    }
+
+    [Fact]
     public void PayloadKindsAreValidatedAndHaveNoCredentialBearingFields()
     {
         var payloads = new SessionEventPayload[]
@@ -25,6 +36,13 @@ public sealed class SessionsContractTests
             new AcceptedEffectSessionPayload("effect-1", "publish", Ref("effects/receipt")),
             new ArtifactReferenceSessionPayload(Ref("artifacts/result")),
             new CacheReferenceSessionPayload(Ref("cache/copilot"), "runtime-v1", "binding-1"),
+            new AddressedMessageSessionPayload(
+                Guid.NewGuid(),
+                new SessionIdentity("project-1", "run-1", "session-1"),
+                new SessionIdentity("project-1", "run-2", "session-2"),
+                Guid.NewGuid(),
+                1,
+                AddressedMessagePurpose.Handoff),
         };
 
         Assert.Equal(Enum.GetValues<SessionEventKind>(),
@@ -82,6 +100,52 @@ public sealed class SessionsContractTests
         Assert.DoesNotContain("ruleText", json, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"grantId\":\"grant-1\"", json, StringComparison.Ordinal);
         Assert.Contains("\"grantRevision\":\"revision-1\"", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AddressedMessagePayloadRejectsCrossProjectReferences()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            SessionEventPayloadValidation.ValidateAndGetReferences(
+                new AddressedMessageSessionPayload(
+                    Guid.NewGuid(),
+                    new SessionIdentity("project-1", "run-1", "session-1"),
+                    new SessionIdentity("project-2", "run-2", "session-2"),
+                    Guid.NewGuid(),
+                    1,
+                    AddressedMessagePurpose.Progress)));
+    }
+
+    [Fact]
+    public void AddressedMessageContractSeparatesUserQuoteAndCoordinatorInstructions()
+    {
+        using var payload = JsonDocument.Parse("""{"question":"Proceed?"}""");
+        var draft = new AddressedMessageDraft(
+            new SessionIdentity("project-1", "run-1", "session-1"),
+            new SessionIdentity("project-1", "run-2", "session-2"),
+            "message-key",
+            AddressedMessageDeliveryMode.Immediate,
+            AddressedMessagePurpose.NeedsInput,
+            AddressedMessageKind.Question,
+            payload.RootElement.Clone(),
+            SenderFence: 4,
+            RecipientFence: 9,
+            RequestId: "gate-42",
+            UserQuote: "Please check the deployment.",
+            CoordinatorInstructions: "Answer only from the recorded evidence.");
+
+        var normalized = AddressedMessageValidation.ValidateAndNormalize(draft);
+
+        Assert.Equal("Please check the deployment.", normalized.UserQuote);
+        Assert.Equal("Answer only from the recorded evidence.", normalized.CoordinatorInstructions);
+        Assert.NotEqual(normalized.UserQuote, normalized.CoordinatorInstructions);
+        Assert.Throws<ArgumentException>(() =>
+            AddressedMessageValidation.ValidateAndNormalize(draft with
+            {
+                Recipient = new SessionIdentity("project-2", "run-2", "session-2")
+            }));
+        Assert.Throws<ArgumentException>(() =>
+            AddressedMessageValidation.ValidateAndNormalize(draft with { RequestId = null }));
     }
 
     [Fact]
@@ -144,9 +208,7 @@ public sealed class SessionsContractTests
         Assert.Equal(ProviderSeam.Sessions, registration.Descriptor.Seam);
         Assert.Equal(NativePostgresSessionsProvider.ProviderId, registration.Descriptor.Id);
         Assert.Equal(SessionsCapabilities.All, registration.Descriptor.AdvertisedCapabilities);
-        Assert.DoesNotContain(
-            SessionsCapabilities.PolicyEvaluations,
-            registration.Descriptor.AdvertisedCapabilities);
+        Assert.Contains(SessionsCapabilities.PolicyEvaluations, registration.Descriptor.AdvertisedCapabilities);
         Assert.Equal("options-2026-10", registration.OptionsRevision);
 
         var catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
@@ -195,6 +257,40 @@ public sealed class SessionsContractTests
     {
         var invalid = Options() with { PollIntervalMilliseconds = 1 };
         Assert.Throws<ArgumentException>(invalid.Validate);
+        Assert.Throws<ArgumentException>(() =>
+            new NativePostgresMessagingProviderOptions("messaging-v1", ClaimLeaseSeconds: 1).Validate());
+    }
+
+    [Fact]
+    public void MessagingProviderIsPlatformSingletonAndCannotBeProjectOverridden()
+    {
+        var provider = new NativePostgresMessagingProvider();
+        var options = new NativePostgresMessagingProviderOptions("messaging-v1");
+        var registration = provider.CreateRegistration(options);
+        Assert.Equal(ProviderSeam.Messaging, registration.Descriptor.Seam);
+        Assert.Equal(AddressedMessageCapabilities.All, registration.Descriptor.AdvertisedCapabilities);
+
+        var catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [registration],
+            [new ProviderSelection(ProviderSeam.Messaging, NativePostgresMessagingProvider.ProviderId)],
+            []).Value);
+        var resolver = new ProviderResolver(catalog);
+        var defaultResult = resolver.Resolve(new ProviderResolutionRequest(
+            ProviderSeam.Messaging,
+            null,
+            NativePostgresMessagingProvider.AdapterVersion,
+            NativePostgresMessagingProvider.OptionsSchemaVersion,
+            AddressedMessageCapabilities.All));
+        Assert.True(defaultResult.IsSuccess);
+
+        var overrideResult = resolver.Resolve(new ProviderResolutionRequest(
+            ProviderSeam.Messaging,
+            NativePostgresMessagingProvider.ProviderId,
+            NativePostgresMessagingProvider.AdapterVersion,
+            NativePostgresMessagingProvider.OptionsSchemaVersion,
+            AddressedMessageCapabilities.All));
+        Assert.False(overrideResult.IsSuccess);
+        Assert.Equal(ProviderErrorCode.OverrideNotPermitted, overrideResult.Error!.Code);
     }
 
     private static SessionObjectReference Ref(string key) =>

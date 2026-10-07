@@ -1,4 +1,6 @@
 extern alias ProjectsConfig;
+extern alias EnvironmentService;
+extern alias KnowledgeService;
 
 using System.Collections.Immutable;
 using System.IdentityModel.Tokens.Jwt;
@@ -11,18 +13,27 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using Agentweaver.Persistence.Postgres;
+using Agentweaver.Providers;
+using KnowledgeService::Agentweaver.Knowledge;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using ProjectsConfig::Agentweaver.Projects.Config;
+using EnvironmentCaller = EnvironmentService::Agentweaver.Environment.CurrentCallerRequest;
+using EnvironmentProjectsConfigHttpClient = EnvironmentService::Agentweaver.Environment.ProjectsConfigHttpClient;
 using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
 
 [Collection("IdentityBrokerPostgres")]
-public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixture postgres)
+public sealed partial class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixture postgres)
     : IAsyncLifetime
 {
     private static readonly JsonSerializerOptions AuthorizationJsonOptions = new(JsonSerializerDefaults.Web)
@@ -97,7 +108,12 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         await AssertRuntimeCannotWriteAuthorityAsync(projects.RuntimeDataSource);
 
         var ownerToken = await IssueTokenAsync(
-            "projects.admin", ["upstream-tenant"], "platform_admin");
+            "projects.admin",
+            ["upstream-tenant"],
+            "projects-owner",
+            null,
+            null,
+            ["platform_admin"]);
         var ownerClaims = new JwtSecurityTokenHandler().ReadJwtToken(ownerToken).Claims.ToArray();
         var ownerSubject = SingleClaim(ownerClaims, "sub");
         Assert.DoesNotContain(ownerClaims,
@@ -118,7 +134,7 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         AddBearerAndTenant(createRequest, ownerToken, TenantId);
         using var created = await projects.Client.SendAsync(createRequest);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
-        var project = await created.Content.ReadFromJsonAsync<ProjectSummary>();
+        var project = await created.Content.ReadFromJsonAsync<ProjectSummary>(AuthorizationJsonOptions);
         Assert.NotNull(project);
 
         var ownerAssignment = await AssignRoleAsync(
@@ -127,6 +143,55 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
             ProjectAuthorityResourceType.Project,
             project.ProjectId,
             ProjectAuthorityRole.Owner);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            ownerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+        var ownerConsumerToken = await IssueTokenAsync(
+            "projects.admin projects.orchestrator",
+            [TenantId],
+            "projects-owner",
+            null,
+            null,
+            ["platform_admin"]);
+        var ownerConsumerClaims = new JwtSecurityTokenHandler().ReadJwtToken(ownerConsumerToken).Claims;
+        Assert.DoesNotContain(ownerConsumerClaims, claim => claim.Type is "project_id" or "run_id");
+
+        var environmentProjects = new EnvironmentProjectsConfigHttpClient(projects.Client);
+        var ownerConsumer = new EnvironmentCaller(ownerConsumerToken, TenantId);
+        var ownerConsumerContext = await environmentProjects.GetAuthorizationContextAsync(
+            ownerConsumer, CancellationToken.None);
+        Assert.Null(ownerConsumerContext.BoundProjectId);
+        Assert.Null(ownerConsumerContext.BoundRunId);
+        Assert.True(HasPermission(
+            ownerConsumerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.ReadRunSelection));
+        Assert.True(HasPermission(
+            ownerConsumerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.WriteProjects));
+
+        using var updateProjectConfiguration = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
+        {
+            Content = JsonContent.Create(new UpdateProjectConfigurationRequest
+            {
+                ExpectedRevision = project.ConfigurationRevision,
+                Configuration = new ProjectConfiguration
+                {
+                    ModelSelection = new ModelSelectionSettings("owner-consumer-model"),
+                },
+            }),
+        };
+        AddBearerAndTenant(updateProjectConfiguration, ownerConsumerToken, TenantId);
+        using var updatedProjectConfiguration = await projects.Client.SendAsync(updateProjectConfiguration);
+        Assert.Equal(HttpStatusCode.OK, updatedProjectConfiguration.StatusCode);
+        var updatedConfiguration = await updatedProjectConfiguration.Content
+            .ReadFromJsonAsync<VersionedProjectConfiguration>();
+        Assert.NotNull(updatedConfiguration);
+        Assert.Equal(project.ConfigurationRevision + 1, updatedConfiguration.Revision);
+
         using var ownerRead = await SendAsync(
             projects.Client, HttpMethod.Get, $"/api/projects/{project.ProjectId}", ownerToken, [TenantId]);
         Assert.Equal(HttpStatusCode.OK, ownerRead.StatusCode);
@@ -397,13 +462,13 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
 
         var selectionRequest = new AcceptRunSelectionRequest
         {
-            ExpectedProjectConfigRevision = project.ConfigurationRevision,
+            ExpectedProjectConfigRevision = updatedConfiguration.Revision,
             ExpectedPlatformRuntimeRevision = 1,
             Context = new RunSelectionContext
             {
                 Revision = "provider-catalog-v1",
                 AvailableModelSelectionReferences = ImmutableHashSet.Create(
-                    StringComparer.Ordinal, "platform-model"),
+                    StringComparer.Ordinal, "owner-consumer-model"),
             },
         };
         using var acceptSelection = new HttpRequestMessage(
@@ -414,6 +479,11 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
         AddBearerAndTenant(acceptSelection, runToken, TenantId);
         using var acceptedSelection = await projects.Client.SendAsync(acceptSelection);
         Assert.Equal(HttpStatusCode.OK, acceptedSelection.StatusCode);
+
+        var ownerConsumerSelection = await environmentProjects.GetRunSelectionAsync(
+            ownerConsumer, project.ProjectId, RunId, CancellationToken.None);
+        Assert.Equal(project.ProjectId, ownerConsumerSelection.ProjectId);
+        Assert.Equal(RunId, ownerConsumerSelection.RunId);
 
         using var runBoundPlatformAdmin = await SendAsync(
             projects.Client, HttpMethod.Get, "/api/platform/runtime-defaults", runToken, [TenantId]);
@@ -507,6 +577,728 @@ public sealed class ProjectsConfigBrokerAuthorizationTests(PostgresContainerFixt
             projects.Client, HttpMethod.Get, "/api/authorization/context", runToken, [TenantId]);
         Assert.Equal(HttpStatusCode.Forbidden, revokedMembershipContext.StatusCode);
         Assert.NotEqual(Guid.Empty, ownerAssignment.AssignmentId);
+    }
+
+    [Fact]
+    public async Task KnowledgePrivateReadsRequireLiveProjectAdminAndStayWithinProjectScope()
+    {
+        using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath, _signingCertificate.Password);
+        await using var database = await KnowledgeTestDatabase.CreateAsync(_connectionString);
+        var catalog = CreateKnowledgeMemoryCatalog(database);
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            _connectionString,
+            new X509SecurityKey(certificate),
+            providerCatalog: catalog);
+
+        const string tenantAdminUpstreamSubject = "knowledge-tenant-admin";
+        var tenantAdminToken = await IssueTokenAsync(
+            "projects.admin projects.orchestrator",
+            [TenantId],
+            tenantAdminUpstreamSubject,
+            null,
+            null,
+            []);
+        var tenantAdminSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(tenantAdminToken).Claims, "sub");
+        var tenantAdminMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, tenantAdminSubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            tenantAdminMembership.MembershipId,
+            ProjectAuthorityResourceType.Tenant,
+            TenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await CreateProjectsTestProjectAsync(
+            projects.Client, tenantAdminToken, TenantId, "Knowledge visibility project");
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            tenantAdminMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+
+        var ownerToken = await IssueTokenAsync(
+            "projects.admin projects.orchestrator",
+            [TenantId],
+            "knowledge-project-owner",
+            null,
+            null,
+            []);
+        var ownerClaims = new JwtSecurityTokenHandler().ReadJwtToken(ownerToken).Claims;
+        Assert.DoesNotContain(ownerClaims,
+            claim => claim.Type is "tenant_id" or "tid" or "role" or "roles" or
+                ClaimTypes.Role or "project_id" or "run_id");
+        var ownerSubject = SingleClaim(ownerClaims, "sub");
+        var ownerMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, ownerSubject, TenantId);
+        var ownerAssignment = await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            ownerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Owner);
+        var backupOwnerToken = await IssueTokenAsync(
+            "projects.admin",
+            [TenantId],
+            "knowledge-backup-owner",
+            null,
+            null,
+            []);
+        var backupOwnerSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(backupOwnerToken).Claims, "sub");
+        var backupOwnerMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, backupOwnerSubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            backupOwnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Owner);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            ownerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+
+        var metadataViewerToken = await IssueTokenAsync(
+            "projects.orchestrator",
+            [TenantId],
+            "knowledge-metadata-viewer",
+            null,
+            null,
+            []);
+        var metadataViewerSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(metadataViewerToken).Claims, "sub");
+        var metadataViewerMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, metadataViewerSubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            metadataViewerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Viewer);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            metadataViewerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+
+        var foreignOwnerToken = await IssueTokenAsync(
+            "projects.admin projects.orchestrator",
+            [OtherTenantId],
+            "knowledge-foreign-owner",
+            null,
+            null,
+            []);
+        var foreignOwnerSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(foreignOwnerToken).Claims, "sub");
+        var foreignOwnerMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, foreignOwnerSubject, OtherTenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            foreignOwnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Tenant,
+            OtherTenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var foreignProject = await CreateProjectsTestProjectAsync(
+            projects.Client, foreignOwnerToken, OtherTenantId, "Foreign Knowledge project");
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            foreignOwnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            foreignProject.ProjectId,
+            ProjectAuthorityRole.Owner);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            foreignOwnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            foreignProject.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+
+        using var viewerContextResponse = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", metadataViewerToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, viewerContextResponse.StatusCode);
+        var viewerContext = await ReadAuthorizationContextAsync(viewerContextResponse);
+        Assert.True(HasPermission(
+            viewerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.ReadProjects));
+        Assert.True(HasPermission(
+            viewerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.ReadRunSelection));
+        Assert.False(HasPermission(
+            viewerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.WriteProjects));
+
+        using var ownerContextResponse = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", ownerToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, ownerContextResponse.StatusCode);
+        Assert.True(HasPermission(
+            await ReadAuthorizationContextAsync(ownerContextResponse),
+            ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.WriteProjects));
+
+        using var tenantAdminContextResponse = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", tenantAdminToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, tenantAdminContextResponse.StatusCode);
+        var tenantAdminContext = await ReadAuthorizationContextAsync(tenantAdminContextResponse);
+        Assert.True(HasPermission(
+            tenantAdminContext, ProjectAuthorityResourceType.Tenant, TenantId,
+            ProjectAuthorizationPermission.WriteProjects));
+        Assert.False(HasPermission(
+            tenantAdminContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.WriteProjects));
+        Assert.True(HasPermission(
+            tenantAdminContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.ReadRunSelection));
+
+        var acceptedRun = await AcceptKnowledgeRunSelectionAsync(
+            projects, database, project, tenantAdminToken);
+        var ownerRunId = acceptedRun.RunId;
+        await using var app = await CreateKnowledgeTestAppAsync(
+            database, catalog, projects.Client, new X509SecurityKey(certificate));
+        using var knowledge = app.GetTestClient();
+
+        const string ownerSecret = "private-owner-session-context";
+        const string ownerAgentId = "agent-a";
+        var ownerBasePath =
+            $"/api/projects/{project.ProjectId}/runs/{ownerRunId}/agents/{ownerAgentId}";
+        using var ownerCreate = new HttpRequestMessage(HttpMethod.Post, $"{ownerBasePath}/records")
+        {
+            Content = JsonContent.Create(new
+            {
+                kind = "sessionContext",
+                type = "session",
+                content = ownerSecret,
+                importance = "medium",
+                tags = new[] { "authorization-test" },
+            }),
+        };
+        AddBearerAndTenant(ownerCreate, ownerToken, [TenantId]);
+        ownerCreate.Headers.TryAddWithoutValidation("Idempotency-Key", $"knowledge-owner-{Guid.NewGuid():N}");
+        using var ownerCreated = await knowledge.SendAsync(ownerCreate);
+        Assert.True(
+            ownerCreated.StatusCode == HttpStatusCode.Created,
+            await ownerCreated.Content.ReadAsStringAsync());
+        using var ownerCreatedJson = JsonDocument.Parse(await ownerCreated.Content.ReadAsStringAsync());
+        var ownerRecordId = ownerCreatedJson.RootElement
+            .GetProperty("record").GetProperty("recordId").GetGuid();
+        var ownerReadPaths = KnowledgeReadPaths(
+            project.ProjectId, ownerRunId, ownerAgentId, ownerRecordId);
+
+        const string privateAgentId = "agent-b";
+        const string privateAgentSecret = "private-agent-b-memory";
+        var privateAgentBasePath =
+            $"/api/projects/{project.ProjectId}/runs/{ownerRunId}/agents/{privateAgentId}";
+        using var privateAgentCreate = new HttpRequestMessage(
+            HttpMethod.Post, $"{privateAgentBasePath}/records")
+        {
+            Content = JsonContent.Create(new
+            {
+                kind = "memory",
+                type = "note",
+                content = privateAgentSecret,
+                importance = "medium",
+                tags = new[] { "authorization-test" },
+            }),
+        };
+        AddBearerAndTenant(privateAgentCreate, ownerToken, [TenantId]);
+        privateAgentCreate.Headers.TryAddWithoutValidation(
+            "Idempotency-Key", $"knowledge-agent-b-{Guid.NewGuid():N}");
+        using var privateAgentCreated = await knowledge.SendAsync(privateAgentCreate);
+        Assert.True(
+            privateAgentCreated.StatusCode == HttpStatusCode.Created,
+            await privateAgentCreated.Content.ReadAsStringAsync());
+        using var privateAgentCreatedJson =
+            JsonDocument.Parse(await privateAgentCreated.Content.ReadAsStringAsync());
+        var privateAgentRecord = privateAgentCreatedJson.RootElement.GetProperty("record");
+        var privateAgentRecordId = privateAgentRecord.GetProperty("recordId").GetGuid();
+        var privateAgentRevisionId = privateAgentRecord.GetProperty("revisionId").GetGuid();
+        var privateAgentReadPaths = KnowledgeReadPaths(
+            project.ProjectId, ownerRunId, privateAgentId, privateAgentRecordId);
+
+        foreach (var path in ownerReadPaths)
+        {
+            using var response = await SendAsync(knowledge, HttpMethod.Get, path, ownerToken, [TenantId]);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Contains(ownerSecret, body, StringComparison.Ordinal);
+        }
+
+        foreach (var path in ownerReadPaths)
+        {
+            using var response = await SendAsync(
+                knowledge, HttpMethod.Get, path, tenantAdminToken, [TenantId]);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Contains(ownerSecret, body, StringComparison.Ordinal);
+        }
+
+        foreach (var path in ownerReadPaths)
+        {
+            using var response = await SendAsync(
+                knowledge, HttpMethod.Get, path, metadataViewerToken, [TenantId]);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.DoesNotContain(ownerSecret, body, StringComparison.Ordinal);
+        }
+
+        foreach (var path in privateAgentReadPaths)
+        {
+            using var response = await SendAsync(knowledge, HttpMethod.Get, path, ownerToken, [TenantId]);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Contains(privateAgentSecret, body, StringComparison.Ordinal);
+        }
+
+        var ownerAgentPrivatePaths = KnowledgeReadPaths(
+            project.ProjectId, ownerRunId, ownerAgentId, privateAgentRecordId);
+        foreach (var index in new[] { 0, 3 })
+        {
+            using var response = await SendAsync(
+                knowledge, HttpMethod.Get, ownerAgentPrivatePaths[index], ownerToken, [TenantId]);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Contains(ownerSecret, body, StringComparison.Ordinal);
+            Assert.DoesNotContain(privateAgentSecret, body, StringComparison.Ordinal);
+            Assert.DoesNotContain(privateAgentRecordId.ToString(), body, StringComparison.Ordinal);
+            Assert.DoesNotContain(privateAgentRevisionId.ToString(), body, StringComparison.Ordinal);
+        }
+
+        foreach (var index in new[] { 1, 2 })
+        {
+            using var response = await SendAsync(
+                knowledge, HttpMethod.Get, ownerAgentPrivatePaths[index], ownerToken, [TenantId]);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+            Assert.DoesNotContain(privateAgentSecret, body, StringComparison.Ordinal);
+            Assert.DoesNotContain(privateAgentRecordId.ToString(), body, StringComparison.Ordinal);
+            Assert.DoesNotContain(privateAgentRevisionId.ToString(), body, StringComparison.Ordinal);
+        }
+
+        const string foreignSecret = "private-foreign-session-context";
+        var foreignRunId = "knowledge-run-foreign";
+        var foreignCreated = await database.Provider.CreateAsync(
+            new KnowledgeRecordCreate(
+                foreignProject.ProjectId,
+                "agent-foreign",
+                KnowledgeRecordKind.Memory,
+                "note",
+                null,
+                foreignSecret,
+                null,
+                "medium",
+                ["authorization-test"],
+                foreignRunId,
+                null,
+                new string('a', 64),
+                "authorization-test"),
+            $"knowledge-foreign-{Guid.NewGuid():N}");
+        Assert.Equal(KnowledgeWriteStatus.Created, foreignCreated.Status);
+        var foreignRecordId = foreignCreated.Record!.RecordId;
+        var foreignReadPaths = KnowledgeReadPaths(
+            foreignProject.ProjectId, foreignRunId, "agent-foreign", foreignRecordId);
+
+        foreach (var path in foreignReadPaths)
+        {
+            using var response = await SendAsync(knowledge, HttpMethod.Get, path, ownerToken, [TenantId]);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.DoesNotContain(foreignSecret, body, StringComparison.Ordinal);
+        }
+
+        foreach (var path in foreignReadPaths)
+        {
+            using var response = await SendAsync(
+                knowledge, HttpMethod.Get, path, tenantAdminToken, [TenantId]);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.DoesNotContain(foreignSecret, body, StringComparison.Ordinal);
+        }
+
+        await RevokeRoleAsync(
+            projects.PrivilegedFixtureDataSource, ownerAssignment.AssignmentId, 1);
+        using var revokedContextResponse = await SendAsync(
+            projects.Client, HttpMethod.Get, "/api/authorization/context", ownerToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, revokedContextResponse.StatusCode);
+        Assert.False(HasPermission(
+            await ReadAuthorizationContextAsync(revokedContextResponse),
+            ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.WriteProjects));
+
+        foreach (var path in ownerReadPaths)
+        {
+            using var response = await SendAsync(knowledge, HttpMethod.Get, path, ownerToken, [TenantId]);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.DoesNotContain(ownerSecret, body, StringComparison.Ordinal);
+        }
+    }
+
+    private static async Task<ProjectSummary> CreateProjectsTestProjectAsync(
+        HttpClient client,
+        string token,
+        string tenantId,
+        string name)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/projects/")
+        {
+            Content = JsonContent.Create(new CreateProjectRequest { Name = name }),
+        };
+        AddBearerAndTenant(request, token, [tenantId]);
+        using var response = await client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        return await response.Content.ReadFromJsonAsync<ProjectSummary>(AuthorizationJsonOptions)
+            ?? throw new InvalidOperationException("Projects & Config returned no project.");
+    }
+
+    private static string[] KnowledgeReadPaths(
+        string projectId,
+        string runId,
+        string agentId,
+        Guid recordId)
+    {
+        var prefix = $"/api/projects/{projectId}/runs/{runId}/agents/{agentId}";
+        return
+        [
+            $"{prefix}/records",
+            $"{prefix}/records/{recordId:D}",
+            $"{prefix}/records/{recordId:D}/revisions",
+            $"{prefix}/context",
+        ];
+    }
+
+    private static ProviderCatalog CreateKnowledgeMemoryCatalog(KnowledgeTestDatabase database)
+    {
+        var provider = database.Provider;
+        var registration = new ProviderRegistration(
+            provider.Descriptor,
+            Enabled: true,
+            database.Options.OptionsRevision,
+            database.Options.OptionsSchemaVersion);
+        return Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [registration],
+            [new ProviderSelection(ProviderSeam.Memory, NativePostgresMemoryProvider.ProviderId)],
+            [new ProviderOverridePermission(
+                ProviderSeam.Memory, NativePostgresMemoryProvider.ProviderId)]).Value);
+    }
+
+    private async Task<EffectiveRunSelection> AcceptKnowledgeRunSelectionAsync(
+        ProjectsConfigResourceServer projects,
+        KnowledgeTestDatabase database,
+        ProjectSummary project,
+        string tenantAdminToken)
+    {
+        const string modelReference = "knowledge-auth-model";
+        using var updateProject = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
+        {
+            Content = JsonContent.Create(new UpdateProjectConfigurationRequest
+            {
+                ExpectedRevision = project.ConfigurationRevision,
+                Configuration = new ProjectConfiguration
+                {
+                    ModelSelection = new ModelSelectionSettings(modelReference),
+                },
+            }),
+        };
+        AddBearerAndTenant(updateProject, tenantAdminToken, [TenantId]);
+        using var updatedProject = await projects.Client.SendAsync(updateProject);
+        Assert.Equal(HttpStatusCode.OK, updatedProject.StatusCode);
+        var projectConfiguration = await updatedProject.Content
+            .ReadFromJsonAsync<VersionedProjectConfiguration>(AuthorizationJsonOptions);
+        Assert.NotNull(projectConfiguration);
+
+        var platformAdminToken = await IssueTokenAsync(
+            "projects.admin", [TenantId], "knowledge-platform-admin", null, null, []);
+        var platformAdminSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(platformAdminToken).Claims, "sub");
+        var platformAdminMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, platformAdminSubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            platformAdminMembership.MembershipId,
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        var defaults = new PlatformRuntimeDefaults
+        {
+            ModelSelection = new ModelSelectionSettings(modelReference),
+            EgressBaseline = [],
+            RunLimits = new CopilotRunLimits
+            {
+                MaxModelTurns = 12,
+                MaxToolCalls = 100,
+                MaxChildren = 4,
+                MaxConcurrentChildren = 2,
+                MaxWallTimeSeconds = 3600,
+                MaxPromptTokens = 20_000,
+            },
+        };
+        using var updateDefaults = new HttpRequestMessage(
+            HttpMethod.Put, "/api/platform/runtime-defaults/")
+        {
+            Content = JsonContent.Create(new UpdatePlatformRuntimeDefaultsRequest
+            {
+                ExpectedRevision = 0,
+                Defaults = defaults,
+            }),
+        };
+        AddBearerAndTenant(updateDefaults, platformAdminToken, [TenantId]);
+        using var updatedDefaults = await projects.Client.SendAsync(updateDefaults);
+        Assert.Equal(HttpStatusCode.OK, updatedDefaults.StatusCode);
+        var platformDefaults = await updatedDefaults.Content
+            .ReadFromJsonAsync<VersionedPlatformRuntimeDefaults>(AuthorizationJsonOptions);
+        Assert.NotNull(platformDefaults);
+        Assert.Equal(1, platformDefaults.Revision);
+
+        const string runId = "knowledge-run-owner";
+        const string orchestratorUpstreamSubject = "knowledge-run-selection-actor";
+        var orchestratorBootstrap = await IssueTokenAsync(
+            "projects.bootstrap",
+            [TenantId],
+            orchestratorUpstreamSubject,
+            null,
+            null,
+            ["orchestrator"]);
+        var orchestratorSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(orchestratorBootstrap).Claims, "sub");
+        var orchestratorMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, orchestratorSubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            orchestratorMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+        await CreateRunBindingGrantAsync(orchestratorSubject, project.ProjectId, runId);
+        var orchestratorToken = await IssueTokenAsync(
+            "projects.admin projects.orchestrator",
+            [TenantId],
+            orchestratorUpstreamSubject,
+            project.ProjectId,
+            runId,
+            ["platform_admin"]);
+        var provider = database.Provider;
+        var request = new AcceptRunSelectionRequest
+        {
+            ExpectedProjectConfigRevision = projectConfiguration.Revision,
+            ExpectedPlatformRuntimeRevision = platformDefaults.Revision,
+            Context = new RunSelectionContext
+            {
+                Revision = "knowledge-auth-context-v1",
+                AvailableModelSelectionReferences =
+                    ImmutableHashSet.Create(StringComparer.Ordinal, modelReference),
+                ProviderRequirements =
+                [
+                    new ProviderRequirement
+                    {
+                        Seam = ProviderSeam.Memory,
+                        RequiredAdapterVersion = provider.Descriptor.AdapterVersion.ToString(),
+                        RequiredOptionsSchemaVersion = database.Options.OptionsSchemaVersion,
+                        RequiredCapabilities = MemoryProviderCapabilities.All,
+                    },
+                ],
+            },
+        };
+        using var acceptRun = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{project.ProjectId}/runs/{runId}/selection")
+        {
+            Content = JsonContent.Create(request),
+        };
+        AddBearerAndTenant(acceptRun, orchestratorToken, [TenantId]);
+        using var accepted = await projects.Client.SendAsync(acceptRun);
+        Assert.True(
+            accepted.StatusCode == HttpStatusCode.OK,
+            $"{accepted.StatusCode}: {await accepted.Content.ReadAsStringAsync()}");
+        var selection = await accepted.Content.ReadFromJsonAsync<EffectiveRunSelection>(AuthorizationJsonOptions);
+        Assert.NotNull(selection);
+        Assert.Equal(project.ProjectId, selection.ProjectId);
+        Assert.Equal(runId, selection.RunId);
+        var memory = Assert.Single(selection.Providers, item => item.Seam == ProviderSeam.Memory);
+        var candidate = Assert.Single(memory.Candidates);
+        Assert.Equal(provider.Descriptor.Id, candidate.ProviderId);
+        Assert.Equal(database.Options.OptionsRevision, candidate.OptionsRevision);
+        Assert.Equal(database.Options.OptionsSchemaVersion, candidate.OptionsSchemaVersion);
+        return selection;
+    }
+
+    private static async Task<WebApplication> CreateKnowledgeTestAppAsync(
+        KnowledgeTestDatabase database,
+        ProviderCatalog catalog,
+        HttpClient projectsClient,
+        SecurityKey signingKey)
+    {
+        var provider = database.Provider;
+        var runtimeOptions = new KnowledgeRuntimeOptions(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer),
+            "https://api.test",
+            new Uri("https://projects.test/"),
+            new Uri("https://events.test/"),
+            "events-tests",
+            database.Options,
+            MaximumContextCandidates: 100,
+            DefaultContextItems: 20,
+            DefaultContextTokens: 1000);
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(authentication =>
+            {
+                authentication.MapInboundClaims = false;
+                authentication.TokenValidationParameters = new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+                    ValidateAudience = true,
+                    ValidAudience = runtimeOptions.Audience,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = signingKey,
+                    ValidateLifetime = true,
+                    RequireSignedTokens = true,
+                    ClockSkew = TimeSpan.FromSeconds(30),
+                    ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
+                };
+            });
+        builder.Services.AddAuthorization();
+        builder.Services.AddHttpContextAccessor();
+        builder.Services.AddSingleton(runtimeOptions);
+        builder.Services.AddSingleton(database.Options);
+        builder.Services.AddSingleton(database.DataSource);
+        builder.Services.AddSingleton(new PostgresOutbox(database.DataSource, database.Options.Schema));
+        builder.Services.AddSingleton(catalog);
+        builder.Services.AddSingleton(new ProviderResolver(catalog));
+        builder.Services.AddSingleton(provider);
+        builder.Services.AddSingleton<IMemoryProvider>(provider);
+        builder.Services.AddSingleton<IReadOnlyDictionary<string, IMemoryProvider>>(
+            new Dictionary<string, IMemoryProvider>(StringComparer.Ordinal)
+            {
+                [NativePostgresMemoryProvider.ProviderId] = provider
+            });
+        builder.Services.AddSingleton<ProjectsConfigClient>(services => new ProjectsConfigClient(
+            projectsClient,
+            services.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>(),
+            runtimeOptions));
+        builder.Services.AddSingleton(new HttpClient
+        {
+            BaseAddress = runtimeOptions.EventsBaseAddress,
+        });
+        builder.Services.AddSingleton<AcceptedEffectRelay>();
+        builder.Services.AddScoped<KnowledgeProviderBindingService>();
+        builder.Services.AddSingleton<MemoryContextCompiler>();
+        builder.Services.AddScoped<KnowledgeApplicationService>();
+        builder.Services.ConfigureHttpJsonOptions(options =>
+            options.SerializerOptions.Converters.Add(
+                new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
+
+        var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapKnowledgeEndpoints();
+        await app.StartAsync();
+        return app;
+    }
+
+    private sealed class KnowledgeTestDatabase(
+        NativePostgresMemoryOptions options,
+        NpgsqlDataSource adminDataSource,
+        NpgsqlDataSource dataSource,
+        string runtimeRole,
+        NativePostgresMemoryProvider provider) : IAsyncDisposable
+    {
+        public NativePostgresMemoryOptions Options { get; } = options;
+        private NpgsqlDataSource AdminDataSource { get; } = adminDataSource;
+        public NpgsqlDataSource DataSource { get; } = dataSource;
+        public NativePostgresMemoryProvider Provider { get; } = provider;
+
+        public static async Task<KnowledgeTestDatabase> CreateAsync(string connectionString)
+        {
+            var adminConnectionString = new NpgsqlConnectionStringBuilder(connectionString);
+            var databaseName = adminConnectionString.Database
+                ?? throw new InvalidOperationException("The PostgreSQL test connection has no database name.");
+            var adminDataSource = NpgsqlDataSource.Create(connectionString);
+            var options = new NativePostgresMemoryOptions(
+                "knowledge-auth-test",
+                databaseName,
+                1,
+                $"knowledge_auth_{Guid.NewGuid():N}",
+                "knowledge-auth-v1",
+                NativePostgresMemoryOptions.CurrentOptionsSchemaVersion);
+            var runtimeRole = $"knowledge_auth_runtime_{Guid.NewGuid():N}";
+            const string runtimePassword = "knowledge-auth-test-password";
+            NpgsqlDataSource? dataSource = null;
+            var ownsResources = true;
+            try
+            {
+                await KnowledgeMigrator.MigrateAsync(adminDataSource, options.Schema);
+                await using (var connection = await adminDataSource.OpenConnectionAsync())
+                await using (var grants = new NpgsqlCommand($"""
+                    CREATE ROLE "{runtimeRole}" LOGIN PASSWORD '{runtimePassword}';
+                    GRANT USAGE ON SCHEMA "{options.Schema}" TO "{runtimeRole}";
+                    GRANT SELECT, INSERT, UPDATE ON "{options.Schema}".knowledge_records TO "{runtimeRole}";
+                    GRANT SELECT, INSERT ON "{options.Schema}".knowledge_revisions TO "{runtimeRole}";
+                    GRANT SELECT, INSERT ON "{options.Schema}".memory_provider_bindings TO "{runtimeRole}";
+                    GRANT SELECT, INSERT, UPDATE ON "{options.Schema}".knowledge_write_idempotency TO "{runtimeRole}";
+                    GRANT SELECT, INSERT, UPDATE ON "{options.Schema}".outbox_streams TO "{runtimeRole}";
+                    GRANT SELECT, INSERT, UPDATE ON "{options.Schema}".outbox_events TO "{runtimeRole}";
+                    GRANT SELECT ON "{options.Schema}".outbox_schema_migrations TO "{runtimeRole}";
+                    GRANT SELECT ON "{options.Schema}".knowledge_schema_migrations TO "{runtimeRole}";
+                    """, connection))
+                    await grants.ExecuteNonQueryAsync();
+
+                adminConnectionString.Username = runtimeRole;
+                adminConnectionString.Password = runtimePassword;
+                dataSource = NpgsqlDataSource.Create(adminConnectionString.ConnectionString);
+                var database = new KnowledgeTestDatabase(
+                    options, adminDataSource, dataSource, runtimeRole,
+                    new NativePostgresMemoryProvider(dataSource, options));
+                ownsResources = false;
+                return database;
+            }
+            finally
+            {
+                if (ownsResources)
+                {
+                    try
+                    {
+                        if (dataSource is not null)
+                            await dataSource.DisposeAsync();
+                        await CleanupAsync(adminDataSource, options.Schema, runtimeRole);
+                    }
+                    finally
+                    {
+                        await adminDataSource.DisposeAsync();
+                    }
+                }
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await DataSource.DisposeAsync();
+                await CleanupAsync(AdminDataSource, Options.Schema, runtimeRole);
+            }
+            finally
+            {
+                await AdminDataSource.DisposeAsync();
+            }
+        }
+
+        private static async Task CleanupAsync(
+            NpgsqlDataSource adminDataSource,
+            string schema,
+            string runtimeRole)
+        {
+            await using var connection = await adminDataSource.OpenConnectionAsync();
+            await using var drop = new NpgsqlCommand(
+                $"""DROP SCHEMA IF EXISTS "{schema}" CASCADE; DROP ROLE IF EXISTS "{runtimeRole}";""",
+                connection);
+            await drop.ExecuteNonQueryAsync();
+        }
     }
 
     private async Task<string> IssueTokenAsync(

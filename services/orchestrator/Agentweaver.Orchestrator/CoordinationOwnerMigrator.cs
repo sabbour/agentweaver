@@ -1,0 +1,149 @@
+using System.Text.RegularExpressions;
+using Agentweaver.Persistence.Postgres;
+using Npgsql;
+using NpgsqlTypes;
+
+namespace Agentweaver.Orchestrator;
+
+public static class CoordinationOwnerMigrator
+{
+    private static readonly Regex SchemaPattern = new(
+        "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
+
+    public static async Task MigrateAsync(
+        NpgsqlDataSource dataSource,
+        string schema,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        ValidateSchema(schema);
+        await new PostgresOutbox(dataSource, schema).InitializeAsync(cancellationToken);
+
+        var quotedSchema = Quote(schema);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var advisoryLock = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('agentweaver.coordination.migrate'), hashtext(@schema))",
+            connection, transaction))
+        {
+            advisoryLock.Parameters.AddWithValue("schema", NpgsqlDbType.Text, schema);
+            await advisoryLock.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var createSchema = new NpgsqlCommand(
+            $"CREATE SCHEMA IF NOT EXISTS {quotedSchema}", connection, transaction))
+            await createSchema.ExecuteNonQueryAsync(cancellationToken);
+        await using (var createVersions = new NpgsqlCommand($"""
+            CREATE TABLE IF NOT EXISTS {quotedSchema}.coordination_schema_migrations (
+                version integer PRIMARY KEY,
+                applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+            )
+            """, connection, transaction))
+            await createVersions.ExecuteNonQueryAsync(cancellationToken);
+
+        var applied = new List<int>();
+        await using (var query = new NpgsqlCommand(
+            $"SELECT version FROM {quotedSchema}.coordination_schema_migrations", connection, transaction))
+        await using (var reader = await query.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+                applied.Add(reader.GetInt32(0));
+
+        if (applied.Any(version => version is not (1 or 2 or 3)) ||
+            (applied.Contains(2) && !applied.Contains(1)) ||
+            (applied.Contains(3) && !applied.Contains(2)))
+            throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
+        foreach (var version in new[] { 1, 2, 3 }.Where(version => !applied.Contains(version)))
+        {
+            var migrationName = version switch
+            {
+                1 => "coordination_owner",
+                2 => "typed_decisions_and_checkpoints",
+                3 => "accepted_run_selection_context",
+                _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
+            };
+            await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
+                $"Agentweaver.Orchestrator.Migrations.{version:000}_{migrationName}.sql")
+                ?? throw new InvalidOperationException("The coordination owner migration resource is missing.");
+            using var text = new StreamReader(resource);
+            var sql = (await text.ReadToEndAsync(cancellationToken))
+                .Replace("{schema}", quotedSchema, StringComparison.Ordinal);
+            await using (var migration = new NpgsqlCommand(sql, connection, transaction))
+                await migration.ExecuteNonQueryAsync(cancellationToken);
+            await using (var record = new NpgsqlCommand(
+                $"INSERT INTO {quotedSchema}.coordination_schema_migrations (version) VALUES ({version})",
+                connection, transaction))
+                await record.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public static async Task VerifyAsync(
+        NpgsqlDataSource dataSource,
+        string schema,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        ValidateSchema(schema);
+        var quotedSchema = Quote(schema);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 1),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 2),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 3),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3)),
+                (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
+                (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
+                (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
+                to_regclass(@runs) IS NOT NULL,
+                to_regclass(@sessions) IS NOT NULL,
+                to_regclass(@messages) IS NOT NULL,
+                to_regclass(@requests) IS NOT NULL,
+                to_regclass(@notifications) IS NOT NULL,
+                to_regclass(@outbox) IS NOT NULL,
+                to_regclass(@inbox) IS NOT NULL,
+                to_regclass(@decisions) IS NOT NULL,
+                to_regclass(@decisionOutbox) IS NOT NULL,
+                to_regclass(@gates) IS NOT NULL,
+                to_regclass(@grants) IS NOT NULL,
+                to_regclass(@receipts) IS NOT NULL,
+                to_regclass(@checkpoints) IS NOT NULL,
+                to_regclass(@selectionContexts) IS NOT NULL
+            """, connection);
+        command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
+        command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
+        command.Parameters.AddWithValue("messages", NpgsqlDbType.Text, $"{schema}.coordination_messages");
+        command.Parameters.AddWithValue("requests", NpgsqlDbType.Text, $"{schema}.coordination_requests");
+        command.Parameters.AddWithValue("notifications", NpgsqlDbType.Text, $"{schema}.parent_notifications");
+        command.Parameters.AddWithValue("outbox", NpgsqlDbType.Text, $"{schema}.outbox_events");
+        command.Parameters.AddWithValue("inbox", NpgsqlDbType.Text, $"{schema}.consumer_inbox_receipts");
+        command.Parameters.AddWithValue("decisions", NpgsqlDbType.Text, $"{schema}.coordinator_decisions");
+        command.Parameters.AddWithValue(
+            "decisionOutbox", NpgsqlDbType.Text, $"{schema}.coordinator_decision_outbox");
+        command.Parameters.AddWithValue("gates", NpgsqlDbType.Text, $"{schema}.coordinator_gates");
+        command.Parameters.AddWithValue("grants", NpgsqlDbType.Text, $"{schema}.executable_action_grants");
+        command.Parameters.AddWithValue("receipts", NpgsqlDbType.Text, $"{schema}.policy_evaluation_receipts");
+        command.Parameters.AddWithValue("checkpoints", NpgsqlDbType.Text, $"{schema}.maf_workflow_checkpoints");
+        command.Parameters.AddWithValue(
+            "selectionContexts", NpgsqlDbType.Text, $"{schema}.coordinator_run_selection_contexts");
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken) ||
+            reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
+            reader.GetInt64(3) != 0 ||
+            reader.GetInt64(4) != 1 || reader.GetInt64(5) != 1 || reader.GetInt64(6) != 0 ||
+            Enumerable.Range(7, 14).Any(column => !reader.GetBoolean(column)))
+            throw new InvalidOperationException(
+                "Orchestrator coordination schema is not current; run the explicit --migrate command.");
+    }
+
+    private static void ValidateSchema(string schema)
+    {
+        ArgumentNullException.ThrowIfNull(schema);
+        if (!SchemaPattern.IsMatch(schema) || schema is "public" or "pg_catalog" or "information_schema" ||
+            schema.StartsWith("pg_", StringComparison.Ordinal))
+            throw new ArgumentException("A non-reserved lowercase schema identifier is required.", nameof(schema));
+    }
+
+    private static string Quote(string schema) => $"\"{schema}\"";
+}

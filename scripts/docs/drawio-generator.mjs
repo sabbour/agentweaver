@@ -228,10 +228,17 @@ export function graphSpecToDrawio(spec,{name='diagram'}={}) {
       for(let id=node.group;id;id=spec.groups.find(g=>g.id===id)?.parent)if(id===group)return true;
       return false;
     };
+    for(const group of spec.groups??[]) {
+      const id=`group-${group.id}`;
+      if(!bands.has(id)&&spec.nodes.some(n=>belongs(n,group.id)&&cards.has(n.id)))bands.set(id,{
+        id,type:'band',position:{x:0,y:0},data:{label:group.label,subLabel:group.subLabel,tier:group.tier},
+        style:{width:0,height:0},
+      });
+    }
     for(const [id,band] of bands) {
       const group=groupSpecs.get(id);
       if(!group)continue;
-      const members=spec.nodes.filter(n=>belongs(n,group.id)).map(n=>cards.get(n.id));
+      const members=spec.nodes.filter(n=>belongs(n,group.id)&&cards.has(n.id)).map(n=>cards.get(n.id));
       if(!members.length)continue;
       const x=Math.min(...members.map(b=>b.x))-G.groupPaddingX,y=Math.min(...members.map(b=>b.y))-G.groupPaddingTop;
       band.position={x,y};

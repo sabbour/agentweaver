@@ -13,9 +13,19 @@
       "docs": ["docs/architecture/providers-models.md"]
     },
     {
+      "name": "v1-storage-volume-provisioning",
+      "concept": "Azure Files provisioning, Replace cleanup, and attachment negotiation",
+      "docs": ["docs/architecture/design/provider-seams.md"]
+    },
+    {
       "name": "v1-sessions-journal",
       "concept": "Durable Sessions provider pin, journal append, and cursor replay",
       "docs": ["docs/architecture/events-sessions.md"]
+    },
+    {
+      "name": "v1-knowledge-memory",
+      "concept": "Knowledge authority, Memory provider binding, and bounded context",
+      "docs": ["docs/architecture/knowledge-memory.md"]
     },
     {
       "name": "v1-identity-redemption",

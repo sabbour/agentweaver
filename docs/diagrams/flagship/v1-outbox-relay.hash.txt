@@ -2,11 +2,11 @@
   "version": 2,
   "source": {
     "file": "v1-outbox-relay.json",
-    "sha256": "f8c6ad448744650d8eb6af7d020295aa1ae72e1857afae4b743e25c38c8adb31"
+    "sha256": "721386833aa1c74f7103361d4e0a148a5af42278a3018ffaff9ca26b780072b9"
   },
   "drawio": {
     "file": "v1-outbox-relay.drawio",
-    "sha256": "0f38d5e43e3c39d32295ee2b8b227ad4f92b4c7f2e51b087ff1e1d6f8d1a11ca"
+    "sha256": "44fdc1d093a7f7be34d7c8a6d80e4d0e16f6fa02c316d2670036203b2c095c28"
   },
   "renderer": {
     "renderer": "draw.io Desktop",

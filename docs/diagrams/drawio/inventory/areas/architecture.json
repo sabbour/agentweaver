@@ -22,7 +22,7 @@
       "disposition": "retain",
       "owner": null,
       "replacement": null,
-      "notes": "Compiled dependency references between current v1 components.",
+      "notes": "Compiled dependency references between current v1 components, including Environment and Azure Files workspace volumes.",
       "paths": {
         "input": "docs/diagrams/src/flagship/v1-foundation-dependencies.json",
         "drawio": "docs/diagrams/drawio/generated/flagship/v1-foundation-dependencies.drawio",
@@ -70,6 +70,20 @@
         "drawio": "docs/diagrams/drawio/generated/flagship/v1-provider-resolution.drawio",
         "png": "docs/diagrams/flagship/v1-provider-resolution.png",
         "hash": "docs/diagrams/flagship/v1-provider-resolution.hash.txt"
+      }
+    },
+    {
+      "name": "v1-storage-volume-provisioning",
+      "area": "architecture",
+      "disposition": "retain",
+      "owner": null,
+      "replacement": null,
+      "notes": "Generation-scoped Azure Files provisioning, durable old-generation cleanup on Replace, actual resource verification, and separate Sandbox attachment negotiation.",
+      "paths": {
+        "input": "docs/diagrams/src/flagship/v1-storage-volume-provisioning.json",
+        "drawio": "docs/diagrams/drawio/generated/flagship/v1-storage-volume-provisioning.drawio",
+        "png": "docs/diagrams/flagship/v1-storage-volume-provisioning.png",
+        "hash": "docs/diagrams/flagship/v1-storage-volume-provisioning.hash.txt"
       }
     },
     {

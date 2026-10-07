@@ -34,22 +34,6 @@ public sealed record VersionedPlatformRuntimeDefaults(
     string? UpdatedByActorId,
     DateTimeOffset? CreatedAt);
 
-public sealed record EffectiveProviderCandidate(
-    ProviderSeam Seam,
-    string ProviderId,
-    string AdapterVersion,
-    int OptionsSchemaVersion,
-    string OptionsRevision,
-    ProviderHostingPattern Hosting,
-    ImmutableArray<string> AdvertisedCapabilities,
-    ImmutableArray<string> RequiredCapabilities);
-
-public sealed record EffectiveProviderSelection(
-    ProviderCardinality Cardinality,
-    ProviderSeam Seam,
-    ImmutableArray<EffectiveProviderCandidate> Candidates,
-    string? MeterSource = null);
-
 public sealed record EffectiveRunSelection(
     string ProjectId,
     string RunId,
@@ -59,9 +43,12 @@ public sealed record EffectiveRunSelection(
     string ContextRevision,
     ModelSelectionSettings ModelSelection,
     ImmutableArray<EffectiveProviderSelection> Providers,
-    ImmutableArray<ProjectEgressRule> EgressAllowlist,
+    ImmutableArray<NetworkEgressRule> EgressAllowlist,
     CopilotRunLimits RunLimits,
-    ProjectConfiguration ProjectConfiguration);
+    ProjectConfiguration ProjectConfiguration,
+    ImmutableArray<NetworkEgressRule> EgressBaseline,
+    ImmutableArray<NetworkEgressRule>? ProjectEgressNarrowing,
+    ImmutableArray<NetworkEgressRule> RequiredEgress);
 
 public sealed class ProjectsConfigService(
     ProjectsConfigDbContext db,
@@ -382,7 +369,10 @@ public sealed class ProjectsConfigService(
             providers,
             egress,
             limits,
-            projectConfiguration);
+            projectConfiguration,
+            defaults.EgressBaseline,
+            projectConfiguration.EgressNarrowing,
+            ProjectConfigurationValidator.ValidateEgressRules(request.Context.RequiredEgress));
         var record = new ProjectRunSelectionRecord
         {
             RunId = runId,
@@ -481,7 +471,7 @@ public sealed class ProjectsConfigService(
             .SingleOrDefaultAsync(item => item.ProjectId == project.ProjectId && item.RunId == runId, cancellationToken)
             .ConfigureAwait(false)
             ?? throw ProjectConfigException.NotFound();
-        return Deserialize<EffectiveRunSelection>(selection.SnapshotJson);
+        return DeserializeRunSelection(selection.SnapshotJson);
     }
 
     private async Task<ProjectRecord> FindProjectAsync(
@@ -662,7 +652,7 @@ public sealed class ProjectsConfigService(
                     selections.Add(new EffectiveProviderSelection(
                         cardinality,
                         requirement.Seam,
-                        resolution.Candidates.Select(ToEffective).ToImmutableArray()));
+                        resolution.Candidates.Select(candidate => ToEffective(candidate)).ToImmutableArray()));
                     break;
                 }
                 case ProviderCardinality.Layered:
@@ -676,7 +666,9 @@ public sealed class ProjectsConfigService(
                     selections.Add(new EffectiveProviderSelection(
                         cardinality,
                         requirement.Seam,
-                        resolution.Layers.Select(layer => ToEffective(layer.Candidate)).ToImmutableArray()));
+                        resolution.Layers
+                            .Select(layer => ToEffective(layer.Candidate, layer.Layer))
+                            .ToImmutableArray()));
                     break;
                 }
                 case ProviderCardinality.KeyedByMeterSource:
@@ -719,7 +711,9 @@ public sealed class ProjectsConfigService(
             StatusCodes.Status422UnprocessableEntity);
     }
 
-    private static EffectiveProviderCandidate ToEffective(ProviderCandidate candidate) =>
+    private static EffectiveProviderCandidate ToEffective(
+        ProviderCandidate candidate,
+        NetworkPolicyLayer? layer = null) =>
         new(
             candidate.Seam,
             candidate.ProviderId,
@@ -728,7 +722,8 @@ public sealed class ProjectsConfigService(
             candidate.OptionsRevision,
             candidate.Hosting,
             candidate.AdvertisedCapabilities.Order(StringComparer.Ordinal).ToImmutableArray(),
-            candidate.RequiredCapabilities.Order(StringComparer.Ordinal).ToImmutableArray());
+            candidate.RequiredCapabilities.Order(StringComparer.Ordinal).ToImmutableArray(),
+            layer);
 
     private static void ValidateSelectionContext(RunSelectionContext context)
     {
@@ -801,11 +796,81 @@ public sealed class ProjectsConfigService(
     {
         if (existing.ProjectId != projectId || existing.RequestFingerprint != fingerprint)
             throw ProjectConfigException.IdempotencyConflict();
-        return Deserialize<EffectiveRunSelection>(existing.SnapshotJson);
+        return DeserializeRunSelection(existing.SnapshotJson);
+    }
+
+    internal static EffectiveRunSelection DeserializeRunSelection(string value)
+    {
+        var selection = Deserialize<EffectiveRunSelection>(value);
+        if (!selection.EgressBaseline.IsDefault &&
+            !selection.RequiredEgress.IsDefault &&
+            selection.ProjectEgressNarrowing is not { IsDefault: true })
+            return selection;
+
+        if (!selection.EgressBaseline.IsDefault ||
+            !selection.RequiredEgress.IsDefault ||
+            selection.ProjectEgressNarrowing is not null)
+            throw new JsonException("Stored run selection has an incomplete egress snapshot.");
+
+        var effective = selection.EgressAllowlist.IsDefault
+            ? ImmutableArray<NetworkEgressRule>.Empty
+            : NetworkEgressRuleSemantics.NormalizeSet(selection.EgressAllowlist, "legacy run selection");
+        var legacyProjectConfiguration = selection.ProjectConfiguration with
+        {
+            EgressNarrowing = selection.ProjectConfiguration.EgressNarrowing is { } narrowing
+                ? NetworkEgressRuleSemantics.NormalizeSet(narrowing, "legacy project egress narrowing")
+                : null,
+        };
+        return selection with
+        {
+            EgressAllowlist = effective,
+            EgressBaseline = effective,
+            ProjectEgressNarrowing = effective,
+            RequiredEgress = effective,
+            ProjectConfiguration = legacyProjectConfiguration,
+        };
     }
 
     private static string Fingerprint(string projectId, string runId, AcceptRunSelectionRequest request)
     {
+        var requiredEgress = ProjectConfigurationValidator
+            .ValidateEgressRules(request.Context.RequiredEgress);
+        var modelReferences = request.Context.AvailableModelSelectionReferences
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var providerRequirements = request.Context.ProviderRequirements
+            .OrderBy(item => item.Seam)
+            .ThenBy(item => item.MeterSource, StringComparer.Ordinal)
+            .Select(item => new ProviderRequirementFingerprint(
+                item.Seam, item.RequiredAdapterVersion, item.RequiredOptionsSchemaVersion,
+                item.RequiredCapabilities.Order(StringComparer.Ordinal).ToArray(),
+                item.RequiredL3L4Capabilities.Order(StringComparer.Ordinal).ToArray(),
+                item.RequiredL7Capabilities.Order(StringComparer.Ordinal).ToArray(),
+                item.MeterSource)).ToArray();
+
+        if (requiredEgress.All(rule =>
+            rule.Purpose == NetworkEgressPurpose.PublicHttps &&
+            rule.DestinationKind == NetworkEgressDestinationKind.Fqdn))
+        {
+            var legacyCanonical = new
+            {
+                projectId,
+                runId,
+                request.ExpectedProjectConfigRevision,
+                request.ExpectedPlatformRuntimeRevision,
+                ContextRevision = request.Context.Revision,
+                ModelReferences = modelReferences,
+                ProviderRequirements = providerRequirements,
+                RequiredEgress = requiredEgress
+                    .Select(rule => new LegacyEgressFingerprint(rule.Destination, rule.Port, rule.Protocol))
+                    .OrderBy(rule => rule.Host, StringComparer.Ordinal)
+                    .ThenBy(rule => rule.Port)
+                    .ThenBy(rule => rule.Protocol)
+                    .ToArray(),
+            };
+            return HashFingerprint(legacyCanonical);
+        }
+
         var canonical = new
         {
             projectId,
@@ -813,24 +878,26 @@ public sealed class ProjectsConfigService(
             request.ExpectedProjectConfigRevision,
             request.ExpectedPlatformRuntimeRevision,
             ContextRevision = request.Context.Revision,
-            ModelReferences = request.Context.AvailableModelSelectionReferences.Order(StringComparer.Ordinal).ToArray(),
-            ProviderRequirements = request.Context.ProviderRequirements
-                .OrderBy(item => item.Seam)
-                .ThenBy(item => item.MeterSource, StringComparer.Ordinal)
-                .Select(item => new ProviderRequirementFingerprint(
-                    item.Seam, item.RequiredAdapterVersion, item.RequiredOptionsSchemaVersion,
-                    item.RequiredCapabilities.Order(StringComparer.Ordinal).ToArray(),
-                    item.RequiredL3L4Capabilities.Order(StringComparer.Ordinal).ToArray(),
-                    item.RequiredL7Capabilities.Order(StringComparer.Ordinal).ToArray(),
-                    item.MeterSource)).ToArray(),
-            RequiredEgress = ProjectConfigurationValidator
-                .ValidateEgressRules(request.Context.RequiredEgress)
-                .OrderBy(rule => rule.Host, StringComparer.Ordinal)
-                .ThenBy(rule => rule.Port).ThenBy(rule => rule.Protocol).ToArray(),
+            ModelReferences = modelReferences,
+            ProviderRequirements = providerRequirements,
+            RequiredEgress = requiredEgress
+                .OrderBy(rule => rule.Purpose)
+                .ThenBy(rule => rule.DestinationKind)
+                .ThenBy(rule => rule.Destination, StringComparer.Ordinal)
+                .ThenBy(rule => rule.Port)
+                .ThenBy(rule => rule.Protocol)
+                .ToArray(),
         };
+        return HashFingerprint(canonical);
+    }
+
+    private static string HashFingerprint<TCanonical>(TCanonical canonical)
+    {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(canonical, JsonOptions);
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     }
+
+    private sealed record LegacyEgressFingerprint(string Host, int Port, EgressProtocol Protocol);
 
     private sealed record ProviderRequirementFingerprint(
         ProviderSeam Seam,
@@ -969,6 +1036,95 @@ public sealed class ProjectsConfigService(
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         };
         options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        options.Converters.Add(new LegacyProjectEgressRuleConverter());
         return options;
+    }
+
+    private sealed class LegacyProjectEgressRuleConverter : JsonConverter<NetworkEgressRule>
+    {
+        private static readonly string[] CurrentFields =
+            ["purpose", "destinationKind", "destination", "port", "protocol"];
+        private static readonly string[] LegacyFields = ["host", "port", "protocol"];
+
+        public override NetworkEgressRule Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options)
+        {
+            using var document = JsonDocument.ParseValue(ref reader);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new JsonException("An egress rule must be an object.");
+
+            var properties = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in document.RootElement.EnumerateObject())
+                if (!properties.TryAdd(property.Name, property.Value))
+                    throw new JsonException("An egress rule contains a duplicate property.");
+
+            if (properties.ContainsKey("host"))
+            {
+                RequireExactFields(properties, LegacyFields);
+                return new(
+                    NetworkEgressPurpose.PublicHttps,
+                    NetworkEgressDestinationKind.Fqdn,
+                    ReadString(properties, "host"),
+                    ReadInt32(properties, "port"),
+                    ReadEnum<EgressProtocol>(properties, "protocol", options));
+            }
+
+            RequireExactFields(properties, CurrentFields);
+            return new(
+                ReadEnum<NetworkEgressPurpose>(properties, "purpose", options),
+                ReadEnum<NetworkEgressDestinationKind>(properties, "destinationKind", options),
+                ReadString(properties, "destination"),
+                ReadInt32(properties, "port"),
+                ReadEnum<EgressProtocol>(properties, "protocol", options));
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            NetworkEgressRule value,
+            JsonSerializerOptions options)
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("purpose");
+            JsonSerializer.Serialize(writer, value.Purpose, options);
+            writer.WritePropertyName("destinationKind");
+            JsonSerializer.Serialize(writer, value.DestinationKind, options);
+            writer.WriteString("destination", value.Destination);
+            writer.WriteNumber("port", value.Port);
+            writer.WritePropertyName("protocol");
+            JsonSerializer.Serialize(writer, value.Protocol, options);
+            writer.WriteEndObject();
+        }
+
+        private static void RequireExactFields(
+            IReadOnlyDictionary<string, JsonElement> properties,
+            IReadOnlyCollection<string> expected)
+        {
+            if (properties.Count != expected.Count ||
+                expected.Any(field => !properties.ContainsKey(field)))
+                throw new JsonException("An egress rule does not match a supported contract.");
+        }
+
+        private static string ReadString(
+            IReadOnlyDictionary<string, JsonElement> properties,
+            string name) =>
+            properties[name].ValueKind == JsonValueKind.String
+                ? properties[name].GetString() ?? throw new JsonException($"Egress field '{name}' is null.")
+                : throw new JsonException($"Egress field '{name}' must be a string.");
+
+        private static int ReadInt32(
+            IReadOnlyDictionary<string, JsonElement> properties,
+            string name) =>
+            properties[name].ValueKind == JsonValueKind.Number &&
+            properties[name].TryGetInt32(out var value)
+                ? value
+                : throw new JsonException($"Egress field '{name}' must be an integer.");
+
+        private static T ReadEnum<T>(
+            IReadOnlyDictionary<string, JsonElement> properties,
+            string name,
+            JsonSerializerOptions options) where T : struct, Enum =>
+            JsonSerializer.Deserialize<T>(properties[name], options);
     }
 }

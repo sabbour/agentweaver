@@ -1,6 +1,18 @@
 # Foundation architecture
 
-The v1 source builds independent .NET components, including an unpublished Events & Sessions journal service candidate and an Orchestrator Core AGT YAML Policy adapter. The native journal includes a typed, redacted PolicyEvaluation event for durable decision evidence; the event and policy adapter are not action grants or a wired protected-effect guard. Contracts separate provider-neutral types from Azure, PostgreSQL, and AGT adapters.
+The v1 source builds independent .NET components, including unpublished Knowledge
+and Events & Sessions service candidates, Environment and Orchestrator candidates,
+and the Orchestrator Core AGT YAML Policy adapter. Environment owns lifecycle,
+egress intent, and workspace-volume orchestration; its Azure Files CSI adapter only
+provisions or releases generation-pinned Kubernetes claims. These are source
+candidates, not deployed services. The native journal includes typed, redacted
+PolicyEvaluation evidence but rejects generic writes without trusted Core-writer
+provenance. The event and policy adapter are not action grants. Orchestrator Core's action guard
+checks current grants and awaits a durable receipt acknowledgment; Events admits
+PolicyEvaluation only from immutable Orchestrator receipts after current owner
+validation. Downstream protected-effect call-site wiring is not claimed. Provider,
+journal, addressed-message, and Storage contracts stay separate from the Azure,
+PostgreSQL, Kubernetes, and AGT adapters and services.
 
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 
@@ -15,15 +27,19 @@ negotiation, a pricing adapter, or usage ingestion.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'" alt="Structural view of the unpublished Events & Sessions host candidate and its in-process Abstractions, Providers, PostgreSQL, and Telemetry references, alongside the Azure Blob object-store and Key Vault secret-redemption adapter chains." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'" alt="Structural view of unpublished Knowledge, Events & Sessions, and Environment candidates; Orchestrator/Core Policy adapters and owner flow; journal evidence and addressed-message delivery; Azure Files/Kubernetes, Azure Blob, and Key Vault adapters. The journal rejects untrusted PolicyEvaluation writes. Source structure, not deployment topology." />
   </a>
-  <figcaption>Direct project references and adapter/resource relationships in the v1 source; the Events & Sessions node is a service candidate, not a deployed topology. Host composition and Foundation Probe registration IDs are listed below.</figcaption>
+  <figcaption>Direct project references and adapter/resource relationships in the v1 source; Events & Sessions and Environment are unpublished service candidates, not a deployed topology. The Orchestrator owner flow is shown in the <a href="./events-sessions">Sessions journal diagram</a>. Host composition and Foundation Probe registration IDs are listed below.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.drawio'">Open editable draw.io source</a></p>
 
 The figure is a structural component view, not runtime request order or deployment topology.
 `Agentweaver.EventsAndSessions` references the shared contracts, provider catalog/resolver,
-PostgreSQL outbox/inbox library, and telemetry helper. `AzureBlobObjectStore` implements
+PostgreSQL outbox/inbox library, and telemetry helper. `Agentweaver.Environment` references the shared
+contracts, provider catalog/resolver, and Azure Files Storage provider; its egress flow and evidence boundary
+are described in [Environment egress](./environment-egress.md).
+`AzureFilesCsiWorkspaceVolumeProvider` implements `IWorkspaceVolumeProvider` and calls the Kubernetes API;
+it does not mount the volume into a Sandbox or prove data erasure. `AzureBlobObjectStore` implements
 `IObjectStore` in the `Agentweaver.ObjectStore.AzureBlob` library.
 `AzureKeyVaultSecretRedemption` implements `ISecretRedemption` in the
 `Agentweaver.Secrets.AzureKeyVault` library. The table names the concrete types and
@@ -49,7 +65,7 @@ their external boundaries.
 
 | Component | Current boundary | Direct project references |
 | --- | --- | --- |
-| `Agentweaver.Abstractions` | Provider, secret, and object-store contracts. | — |
+| `Agentweaver.Abstractions` | Provider, journal, addressed-message, accepted-effect, secret, object-store, environment/network-policy, authorization-context, run-selection, and Memory contracts. | — |
 | `Agentweaver.Providers` | In-memory provider catalog and resolver. | `Agentweaver.Abstractions` |
 | `Agentweaver.Orchestrator.Core` | Workflow validation and the platform-singleton AGT YAML Policy adapter. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Microsoft.AgentGovernance` |
 | `Agentweaver.Identity` | Trusted actor and exact run-grant authorization for secret redemption. | `Agentweaver.Abstractions` |
@@ -59,12 +75,35 @@ their external boundaries.
 | `Agentweaver.Telemetry` | In-process OpenTelemetry traces, metrics, and logs. | — |
 | `Agentweaver.Telemetry.AzureMonitor` | Opt-in Azure Monitor exporters. | `Agentweaver.Telemetry` |
 | `Agentweaver.Identity.Broker` | OAuth and secret-redemption host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault` |
-| `Agentweaver.EventsAndSessions` | PostgreSQL-backed native Sessions journal and HTTP host candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
+| `Agentweaver.EventsAndSessions` | PostgreSQL-backed native Sessions journal, addressed-message delivery store, and HTTP host candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
+| `Agentweaver.Knowledge` | Project-scoped Memory API, context compiler, and native PostgreSQL adapter candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
+| `Agentweaver.Environment` | Environment-owned egress and workspace-volume lifecycle service candidate; not deployed. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles` |
+| `Agentweaver.Orchestrator` | HTTP owner for root/child session state, message outbox, explicit turn-boundary operations, and parent notifications. It checks current Projects & Config authority and integrates with Events & Sessions. | `Agentweaver.Abstractions`, `Agentweaver.Persistence.Postgres` |
 | `Agentweaver.FoundationProbe` | Acceptance-only infrastructure probe executable. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.ObjectStore.AzureBlob`, `Agentweaver.Telemetry.AzureMonitor` |
 
-The Events & Sessions project and its contracts are described in the [journal service
-reference](events-sessions.md). The repository does not contain the AgentHost, product
+The Events & Sessions project owns the native PostgreSQL journal and addressed-message
+delivery store. The Orchestrator validates owner outbox messages and session bindings
+before admission, presentation, and acknowledgment. These source candidates have no
+deployment, background delivery relay, or automatic AgentHost scheduler. Their
+contracts are described in the [journal service reference](events-sessions.md).
+
+### Workspace-volume lifecycle
+
+Environment owns each volume's status and separate transition, resource, and data generations. Azure Files
+claims are scoped by Environment identity and resource generation; the owner pins the adapter/options
+snapshot, Kubernetes target identity, and exact claim/PV release descriptor. Replace pins the verified target and records cleanup for the exact old resource in one owner
+transaction. A current-fence lease retries that cleanup with the original binding. Retained resources and
+shared Delete work without an authoritative reference registry remain blocked; a `Released` receipt requires
+the exact claim and saved PV to be absent. This confirms Kubernetes control-plane removal, not Azure Files
+data erasure. Release is rejected while the volume is bound or attached. Known preflight rejections leave the
+owner record safely retryable; uncertain provider effects remain reconcilable. Azure Files does not claim
+Sandbox mounting or durable flush.
+
+The repository does not contain the AgentHost, product
 API, web UI, product MCP server, or application router. It does not contain a published
 platform image.
+
+The Knowledge source candidate and its current native Memory boundary are described in
+the [Knowledge and Memory reference](knowledge-memory.md).
 
 The [proposed platform architecture](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0001-platform-architecture.md) remains a Proposed source document.

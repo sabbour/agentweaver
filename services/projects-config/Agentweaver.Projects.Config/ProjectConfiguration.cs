@@ -29,15 +29,6 @@ public sealed record BlueprintWorkflowReference(string BlueprintId, string Workf
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SkillCatalogSetting(string SkillId, bool Enabled, int Order);
 
-public enum EgressProtocol
-{
-    Tcp,
-    Udp
-}
-
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record ProjectEgressRule(string Host, int Port, EgressProtocol Protocol);
-
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CopilotRunLimitOverrides
 {
@@ -69,8 +60,9 @@ public sealed record ProjectConfiguration
     public ImmutableArray<ProjectAgentCharter> AgentCharters { get; init; } = [];
     public ImmutableArray<ProjectAgentCast> Casting { get; init; } = [];
     public ImmutableArray<BlueprintWorkflowReference> BlueprintWorkflowReferences { get; init; } = [];
+    public string? DefaultWorkflowId { get; init; }
     public ImmutableArray<SkillCatalogSetting> Skills { get; init; } = [];
-    public ImmutableArray<ProjectEgressRule>? EgressNarrowing { get; init; }
+    public ImmutableArray<NetworkEgressRule>? EgressNarrowing { get; init; }
     public CopilotRunLimitOverrides RunLimits { get; init; } = new();
 }
 
@@ -78,7 +70,7 @@ public sealed record ProjectConfiguration
 public sealed record PlatformRuntimeDefaults
 {
     public ModelSelectionSettings? ModelSelection { get; init; }
-    public ImmutableArray<ProjectEgressRule> EgressBaseline { get; init; } = [];
+    public ImmutableArray<NetworkEgressRule> EgressBaseline { get; init; } = [];
     public CopilotRunLimits RunLimits { get; init; } = new();
 }
 
@@ -104,7 +96,7 @@ public sealed record RunSelectionContext
     public ImmutableHashSet<string> AvailableModelSelectionReferences { get; init; } =
         ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
     public ImmutableArray<ProviderRequirement> ProviderRequirements { get; init; } = [];
-    public ImmutableArray<ProjectEgressRule> RequiredEgress { get; init; } = [];
+    public ImmutableArray<NetworkEgressRule> RequiredEgress { get; init; } = [];
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -196,6 +188,8 @@ public static class ProjectConfigurationValidator
             ValidateIdentifier(item.BlueprintId, "blueprintWorkflowReferences.blueprintId");
             ValidateIdentifier(item.WorkflowId, "blueprintWorkflowReferences.workflowId");
         }
+        if (configuration.DefaultWorkflowId is { } defaultWorkflowId)
+            ValidateIdentifier(defaultWorkflowId, "defaultWorkflowId");
 
         if (configuration.Skills.Any(item => item is null))
             throw Invalid("Configuration contains a null skill setting.");
@@ -209,7 +203,7 @@ public static class ProjectConfigurationValidator
 
         var normalizedEgress = configuration.EgressNarrowing is { } narrowing
             ? ValidateAndNormalizeRules(narrowing, "egressNarrowing")
-            : (ImmutableArray<ProjectEgressRule>?)null;
+            : (ImmutableArray<NetworkEgressRule>?)null;
         ValidateLimitOverrides(configuration.RunLimits);
         return configuration with { EgressNarrowing = normalizedEgress };
     }
@@ -250,65 +244,39 @@ public static class ProjectConfigurationValidator
         return resolved;
     }
 
-    public static ImmutableArray<ProjectEgressRule> ResolveEgress(
-        ImmutableArray<ProjectEgressRule> baseline,
-        ImmutableArray<ProjectEgressRule>? projectNarrowing,
-        ImmutableArray<ProjectEgressRule> required)
+    public static ImmutableArray<NetworkEgressRule> ResolveEgress(
+        ImmutableArray<NetworkEgressRule> baseline,
+        ImmutableArray<NetworkEgressRule>? projectNarrowing,
+        ImmutableArray<NetworkEgressRule> required)
     {
         var allowed = ValidateAndNormalizeRules(baseline, "egressBaseline");
         var requested = projectNarrowing is { } narrowing
             ? ValidateAndNormalizeRules(narrowing, "egressNarrowing")
             : allowed;
         var runNeeds = ValidateAndNormalizeRules(required, "requiredEgress");
-        var baselineSet = allowed.ToHashSet();
-        if (requested.Any(rule => !baselineSet.Contains(rule)))
+        if (requested.Any(rule => !NetworkEgressRuleSemantics.IsContainedBy(rule, allowed)))
             throw Invalid("Project egress settings cannot widen the platform baseline.");
 
-        var effectiveSet = requested.ToHashSet();
-        if (runNeeds.Any(rule => !effectiveSet.Contains(rule)))
+        if (runNeeds.Any(rule => !NetworkEgressRuleSemantics.IsContainedBy(rule, requested)))
             throw Invalid("Required run egress is outside the effective platform and project allowlist.");
         return requested;
     }
 
-    public static ImmutableArray<ProjectEgressRule> ValidateEgressRules(
-        ImmutableArray<ProjectEgressRule> rules) =>
+    public static ImmutableArray<NetworkEgressRule> ValidateEgressRules(
+        ImmutableArray<NetworkEgressRule> rules) =>
         ValidateAndNormalizeRules(rules, "egress");
 
-    private static ImmutableArray<ProjectEgressRule> ValidateAndNormalizeRules(
-        ImmutableArray<ProjectEgressRule> rules,
+    private static ImmutableArray<NetworkEgressRule> ValidateAndNormalizeRules(
+        ImmutableArray<NetworkEgressRule> rules,
         string location)
     {
-        var result = ImmutableArray.CreateBuilder<ProjectEgressRule>();
-        foreach (var rule in rules)
-        {
-            if (rule is null || !Enum.IsDefined(rule.Protocol) || rule.Port is < 1 or > 65535)
-                throw Invalid($"{location} contains an invalid destination.");
-            var host = NormalizeHost(rule.Host);
-            result.Add(rule with { Host = host });
-        }
-
-        var normalized = result.ToImmutable();
-        if (normalized.Distinct().Count() != normalized.Length)
-            throw Invalid($"{location} contains duplicate destinations.");
-        return normalized;
-    }
-
-    private static string NormalizeHost(string host)
-    {
-        if (string.IsNullOrWhiteSpace(host) || host.Contains('*') || host.Contains('/'))
-            throw Invalid("Egress destinations must use an exact DNS host name.");
         try
         {
-            var normalized = new IdnMapping().GetAscii(host.Trim().TrimEnd('.')).ToLowerInvariant();
-            if (normalized.Length > 253 || !normalized.Contains('.', StringComparison.Ordinal) ||
-                Uri.CheckHostName(normalized) != UriHostNameType.Dns ||
-                IPAddress.TryParse(normalized, out _))
-                throw Invalid("Egress destinations must use an exact DNS host name.");
-            return normalized;
+            return NetworkEgressRuleSemantics.NormalizeSet(rules, location);
         }
-        catch (ArgumentException)
+        catch (ArgumentException exception)
         {
-            throw Invalid("Egress destination host name is invalid.");
+            throw Invalid(exception.Message);
         }
     }
 

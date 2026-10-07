@@ -166,13 +166,21 @@ classDiagram
         +Release(environment)
     }
     class StorageProvider {
-        +Bind(volume)
-        +Flush(binding)
+        +Provision(spec, generation, idempotencyKey)
+        +Release(resource, generation, idempotencyKey)
+    }
+    class WorkspaceVolumeLifecycle {
+        +Bind(volume, environment, fence)
+        +Unbind(binding, fence)
+        +Attach(binding, sandbox, mode)
+        +Flush(binding, dataGeneration)
     }
     class SnapshotProvider {
         +Capture(environment)
         +Restore(snapshot)
     }
+    WorkspaceVolumeLifecycle --> SandboxProvider
+    WorkspaceVolumeLifecycle --> StorageProvider
     ProviderCatalog --> ProviderDescriptor
     ProviderResolver --> ProviderCatalog
     ProviderResolver --> PinnedBinding
@@ -405,8 +413,14 @@ adoption test, not an assumption.
 workspace** semantics, not an Object Store for platform records. A `WorkspaceVolume` declares name, owner
 (run, agent, or team within one project), binding mode (`environment` or `shared`), access (`RWO`, `RWX`,
 `ROX`), provider class, capacity, advertised consistency mode, reclaim policy (`Delete`/`Retain`), and
-owner-deletion policy (`Delete`/`Retain`/`Unbind`). Status includes phase, conditions, data generation, and
-pinned protocol/driver version for placement.
+owner-deletion policy (`Delete`/`Retain`/`Unbind`). Status includes phase (`Requested`, `Provisioning`, `Ready`,
+`Bound`, `Attached`, `Releasing`, `Released`, or `Failed`), conditions, transition revision, resource generation,
+data generation, and pinned protocol/driver version for placement.
+
+Environment persists each immutable volume specification and its current status in its owner schema. Typed
+volume operations compare `TransitionRevision` under the full `EnvironmentGenerationFence`; external effects
+are reserved, then completed with exact resource verification or marked for owner reconciliation. The
+provider is an adapter, not the lifecycle authority.
 
 `environment` creates one backing volume per environment and fences its single writer in Agentweaver, not
 merely through a CSI access flag. `shared` binds a selected group with multi-writer semantics. Its selector
@@ -419,6 +433,69 @@ suspension and relocation.
 idempotency keys. Attach may mount a volume or materialize files when the sandbox permits it. `Flush`
 returns the workspace generation for the consistency manifest. Bind compatibility is checked against the
 Sandbox capabilities and pinned protocol/driver version; an unsupported attach fails before dispatch.
+Environment persists the exact Storage provider reference beside separate transition, resource, and data
+generations. Provision and replacement advance the resource generation only after verifying the returned
+provider reference; bind, attach, flush, and their inverse operations must continue using that same reference.
+Only a verified durable flush advances the data generation. Release clears the active provider reference but
+retains the last resource generation in its tombstone.
+`TransitionRevision` is the owner-side CAS revision and advances for each completed lifecycle transition.
+`ResourceGeneration` identifies the exact provider resource; `Create` keeps it at 0 with no resource, while
+`Provision` from 0 or `Replace` from an existing generation advances it exactly once after owner-verified
+success. Bind/Unbind/Attach/Detach/Flush/Release preserve the pinned resource generation, including a
+released tombstone. `DataGeneration` starts at 0 and advances only after an owner-verified durable flush.
+Operations carry the full Environment owner fence and an idempotency key. After a provider effect succeeds,
+Environment completes the owner transition with a non-cancelable commit; cancellation during an uncertain
+provider call is recorded for reconciliation.
+
+The Azure Files CSI adapter implements only the Storage provider's generation-scoped provision/release
+boundary. It derives a stable PVC name from project, Environment identity (for Environment-bound volumes),
+volume ID, and generation, and validates the matching owner annotations and requested capacity/access mode.
+Each generation pins a non-secret identity for the Kubernetes API target so a later service configuration
+cannot release resources through a different cluster endpoint. It verifies the bound PV's claim UID and
+uses UID preconditions when changing reclaim policy or deleting a claim. Its StorageClass must use the
+approved `uid=1000`, `gid=1000`, file/dir modes, `mfsymlinks`, strict cache, and `actimeo=30` options.
+The requested StorageClass must match the provider's configured class or provisioning fails before
+Kubernetes calls. The PV uses `Delete` only when an environment-bound volume requests `Delete` for both its
+reclaim and owner-deletion policies; all other combinations use `Retain`.
+Environment pins the adapter version, options schema and revision, non-secret options snapshot, cluster
+target identity, and exact claim/PV release descriptor with each provisioned generation. Release receipts bind the exact provider
+resource and idempotency key. `Retained` requires a read-back of the exact PV's `Retain` policy. `Released`
+requires either a UID-preconditioned claim delete followed by reads confirming both claim absence and
+absence of the exact saved PV, or a retry that confirms those same identities are already absent. A missing
+claim alone is not proof of release. The receipt confirms Kubernetes control-plane removal; it does not
+promise Azure Files data erasure or completion of asynchronous CSI backend cleanup. Environment validates
+the receipt before recording owner-side release completion. `AlreadyAbsent` is not accepted as a release
+receipt for either reclaim policy. An uncertain Release can be retried by replaying the same idempotency key;
+the provider rechecks the pinned claim/PV identities before the owner records completion.
+The owner rejects Release while the volume is Bound or Attached; callers must first Unbind and Detach it.
+Provider rejections known to occur before a Kubernetes mutation fail that operation without requiring
+reconciliation, while ambiguous failures remain recorded for reconciliation. Deterministic volume and
+StorageClass preflight rejections return their specific code with HTTP 422; replaying a failed transition
+does not return success, and an unresolved or cleanup-pending transition returns HTTP 202.
+
+A Replace cleanup work item is inserted atomically with the owner CAS that pins the verified target. It
+preserves the exact old resource reference and generation, original provider binding/options snapshot and
+release descriptor from completed owner history, both reclaim and owner-deletion policies, source-operation
+proof, and stable idempotency key. The old reference is kept only in that durable cleanup work; it is not
+available through the current volume snapshot for rebinding. The Environment owner claims pending work under
+the current lifecycle fence and expected lease revision, with a database-time expiry and unique lease ID.
+Before cleanup, the owner prevents deleting the current generation; `shared` plus `Delete` stays blocked
+because there is no authoritative cross-owner reference registry. The worker uses the original pinned
+binding, rechecks current authorization around the provider call, and can complete only with the matching
+unexpired lease and exact `Released` receipt. `Retained` records preservation and leaves cleanup blocked;
+an `AlreadyAbsent` disposition cannot close work. Failures and expired leases remain durably retryable, and
+Environment release is blocked while any cleanup is incomplete. The provider receipt cannot attest
+owner-side sharing or data erasure.
+The adapter does not advertise Sandbox attachment or durable-flush capability: a provisioned PVC is not
+proof that a selected Sandbox can attach it or provide the requested flush semantics. The Environment
+lifecycle must negotiate those capabilities and the actual resources before dispatch or immutable pinning.
+
+![Sequence showing generation-scoped Azure Files PVC provisioning, claim/PV UID checks, and separate
+Sandbox attachment negotiation. It does not imply that the Azure Files adapter mounts a volume or provides
+durable flush.](../../diagrams/flagship/v1-storage-volume-provisioning.png)
+
+[Full-size diagram](../../diagrams/flagship/v1-storage-volume-provisioning.png) ·
+[Editable draw.io source](../../diagrams/drawio/generated/flagship/v1-storage-volume-provisioning.drawio)
 
 ### Defaults, optional features, and limits
 
@@ -527,6 +604,13 @@ FQDN support where a deployment's requirements permit it. Sandbox-native egress 
 Sandbox adapters, not trusted as tenancy boundaries. No environment becomes ready until policy generation is
 confirmed; resume re-applies and verifies it before AgentHost dispatch. The verified generation enters the
 consistency manifest.
+
+The unpublished `Agentweaver.Environment` candidate compiles typed purpose-grouped rules from the
+platform/project/run intersection, rechecks Projects & Config authorization on each operation, and uses
+Kubernetes resource-version and intent-generation fences before pinning the verified L3/L4 binding. Its
+readback proves the exact Cilium policy object only, not enforcement in the datapath. It does not yet wire
+selector labels into Sandbox claims/templates or include deployed Kubernetes identity/RBAC. See
+[Environment egress](../environment-egress.md) for the source and test boundary.
 
 The platform's own **Tool & MCP gateway** fills the default L7 data-plane slot at cutover. It handles
 credential injection, permitted routes, rate limits, and audit for MCP, A2A, and model egress; agentgateway

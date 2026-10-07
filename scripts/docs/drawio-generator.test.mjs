@@ -172,6 +172,38 @@ test('preserves nested group parentage and relative geometry', () => {
   );
 });
 
+test('rebuilds source-defined groups around authored card positions', () => {
+  const output = graphSpecToDrawio({
+    title: 'Snapshot groups',
+    routing: 'separate-ports',
+    groups: [
+      { id: 'source', label: 'Source', tier: 1 },
+      { id: 'target', label: 'Target', tier: 1 },
+    ],
+    nodes: [
+      { id: 'a', label: 'Source API', icon: 'server', badge: { text: 'Service', tone: 'green' }, group: 'source' },
+      { id: 'b', label: 'Target API', icon: 'server', badge: { text: 'Service', tone: 'green' }, group: 'target' },
+    ],
+    edges: [{ from: 'a', to: 'b', label: 'calls' }],
+    layoutSnapshot: {
+      canvasWidth: 900,
+      canvasHeight: 600,
+      nodes: [
+        { id: 'a', type: 'card', position: { x: 80, y: 120 }, data: { label: 'Source API' } },
+        { id: 'b', type: 'card', position: { x: 520, y: 120 }, data: { label: 'Target API' } },
+      ],
+    },
+  }, { name: 'snapshot-groups' });
+
+  assert.match(output, /id="group-source"/);
+  assert.match(output, /id="group-target"/);
+  assert.match(output, /id="group-source-label" fluentRole="group-label"/);
+  assert.match(output, /&gt;Source&lt;\/div&gt;/);
+  assert.match(output, /id="node-a"[^>]*parent="group-source"/);
+  assert.match(output, /id="node-b"[^>]*parent="group-target"/);
+  assert.match(output, /id="e0" fluentRole="connector"/);
+});
+
 test('rejects ambiguous graph and sequence references', () => {
   assert.throws(
     () => graphSpecToDrawio({ nodes: [{ id: 'a', label: 'A', icon: 'box', badge: { text: 'Step', tone: 'neutral' } }], edges: [{ from: 'a', to: 'missing' }] }),
