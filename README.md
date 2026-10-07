@@ -69,6 +69,14 @@ The P1 Orchestrator Core library adds pure, deterministic workflow-catalog and
 step-bound WorkPlan validation. It validates pinned run selections, output bounds,
 joins, snapshots, and scope diffs; it does not dispatch children or persist run state.
 
+The unpublished Source Control candidate adds an exclusive GitHub provider adapter,
+typed project repository and SecretRef settings, immutable accepted-run provider pins,
+approved merge intents, and authenticated run-bound webhook relay admission. The
+Orchestrator host keeps the default audience strict, redeems exact-version secrets
+through Identity.Broker, and serializes repository merges with PostgreSQL. Direct
+unauthenticated GitHub webhook delivery is intentionally unavailable; no trusted
+deployed relay or published Source Control service is included.
+
 The release manifest describes independently versioned libraries (including Orchestrator Core) and unpublished service candidates such as Identity Broker and Projects & Config.
 It is a draft composition, not evidence of deployment or a released platform.
 

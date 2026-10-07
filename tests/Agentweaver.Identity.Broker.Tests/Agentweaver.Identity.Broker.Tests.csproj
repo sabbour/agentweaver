@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\services\identity\Agentweaver.Identity.Broker\Agentweaver.Identity.Broker.csproj" />
     <ProjectReference Include="..\..\services\environment\Agentweaver.Environment\Agentweaver.Environment.csproj" Aliases="EnvironmentService" />
     <ProjectReference Include="..\..\services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" Aliases="ProjectsConfig" />
+    <ProjectReference Include="..\..\packages\Agentweaver.SourceControl\Agentweaver.SourceControl.csproj" />
     <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" Aliases="OrchestratorHost" />
     <ProjectReference Include="..\..\services\events-and-sessions\Agentweaver.EventsAndSessions\Agentweaver.EventsAndSessions.csproj" Aliases="EventsHost" />
   </ItemGroup>

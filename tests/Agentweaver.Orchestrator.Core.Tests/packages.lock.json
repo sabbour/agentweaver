@@ -785,6 +785,7 @@
           "Agentweaver.Orchestrator.Core": "[0.0.0, )",
           "Agentweaver.Persistence.Postgres": "[0.0.0, )",
           "Agentweaver.Providers": "[0.0.0, )",
+          "Agentweaver.SourceControl": "[0.0.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.Agents.AI.Workflows": "[1.19.0, )",
           "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
@@ -811,6 +812,13 @@
           "Agentweaver.Abstractions": "[0.0.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
+        }
+      },
+      "agentweaver.sourcecontrol": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Providers": "[0.0.0, )"
         }
       }
     }

@@ -92,6 +92,9 @@ internal sealed class CoordinatorRunSelectionContextStore
         _providers = providerBuilder.ToImmutable();
     }
 
+    public SourceControlRepositoryPin RestoreSourceControlRepositoryPin(string serializedPin) =>
+        SourceControlOwnerStore.RestorePin(serializedPin, _catalog, _resolver);
+
     public async Task<CoordinatorRunSelectionContextResolution> ResolveForPlanAsync(
         EffectiveRunSelection selection,
         long executionFence,

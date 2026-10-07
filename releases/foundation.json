@@ -16,6 +16,12 @@
       "project": "packages/Agentweaver.Providers/Agentweaver.Providers.csproj"
     },
     {
+      "id": "Agentweaver.SourceControl",
+      "kind": "library",
+      "version": "0.0.0",
+      "project": "packages/Agentweaver.SourceControl/Agentweaver.SourceControl.csproj"
+    },
+    {
       "id": "Agentweaver.Orchestrator.Core",
       "kind": "library",
       "version": "0.0.0",
@@ -151,6 +157,16 @@
       ]
     },
     {
+      "consumer": "Agentweaver.SourceControl",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.SourceControl",
+      "dependency": "Agentweaver.Providers",
+      "versions": ["0.0.0"]
+    },
+    {
       "consumer": "Agentweaver.Orchestrator.Core",
       "dependency": "Agentweaver.Abstractions",
       "versions": [
@@ -182,6 +198,11 @@
     {
       "consumer": "Agentweaver.Orchestrator",
       "dependency": "Agentweaver.Providers",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Orchestrator",
+      "dependency": "Agentweaver.SourceControl",
       "versions": ["0.0.0"]
     },
     {

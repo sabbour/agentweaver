@@ -1,3 +1,5 @@
+extern alias OrchestratorHost;
+
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Headers;
@@ -7,6 +9,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using Agentweaver.Orchestrator.Core;
 using Agentweaver.Secrets.AzureKeyVault;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.WebUtilities;
@@ -14,6 +17,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.Http;
+using OrchestratorHost::Agentweaver.Orchestrator;
 using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
@@ -151,6 +156,147 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
             accessToken);
         Assert.Equal(HttpStatusCode.Forbidden, crossBinding.StatusCode);
         Assert.Single(_backend.Requests);
+    }
+
+    [Fact]
+    public async Task BrokerIssuedDistinctAudienceTokenRedeemsPurposeBoundSecretAndInvalidatesConsumerCredential()
+    {
+        const string orchestratorAudience = "https://orchestrator.test";
+        const string brokerAudience = "https://broker-redemption.test";
+        const string projectId = "source-control-project";
+        const string runId = "source-control-run";
+        const string secretId = "github-api";
+        const string secretVersion = "version-7";
+        const string grantId = "grant:source-control-api";
+
+        await RestartWithDistinctAudiencesAsync(orchestratorAudience, brokerAudience);
+        _fakeIdp.Subject = "source-control-oauth-subject";
+        using var fakeIdpClient = new HttpClient(_fakeIdp.Server.CreateHandler())
+        {
+            BaseAddress = new Uri(FakeIdentityProvider.Authority),
+        };
+        var (verifier, challenge) = Pkce.Create();
+        Guid actorId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            actorId = (await scope.ServiceProvider.GetRequiredService<BrokerUserProvisioner>()
+                .ProvisionAsync(
+                    FakeIdentityProvider.Authority,
+                    _fakeIdp.Subject,
+                    "SourceControl OAuth user",
+                    null,
+                    default)).Id;
+            await scope.ServiceProvider.GetRequiredService<IdentityGrantAuthority>()
+                .ReplaceAsync(
+                    new SecretRedemptionGrant(
+                        grantId,
+                        actorId.ToString(),
+                        projectId,
+                        runId,
+                        SourceControlSecretPurposes.Api,
+                        new SecretRef(secretId, secretVersion),
+                        GrantState.Active,
+                        DateTimeOffset.UtcNow.AddMinutes(30),
+                        revision: "draft"),
+                    0,
+                    "create-source-control-api-grant");
+        }
+
+        var prompt = await BrokerFlowDriver.BeginConsentAsync(
+            _broker,
+            fakeIdpClient,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            "openid api.read projects.orchestrator",
+            challenge,
+            projectId: projectId,
+            runId: runId);
+        var consent = await BrokerFlowDriver.SubmitConsentAsync(
+            _broker, prompt, scopes: ["openid", "api.read", "projects.orchestrator"]);
+        Assert.Equal(HttpStatusCode.Redirect, consent.StatusCode);
+        var codeResponse = await _broker.GetAsync(consent.Headers.Location!);
+        Assert.Equal(HttpStatusCode.Redirect, codeResponse.StatusCode);
+        var code = QueryHelpers.ParseQuery(codeResponse.Headers.Location!.Query)["code"].ToString();
+        var tokens = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            _broker,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            code,
+            verifier);
+        var accessToken = tokens.GetProperty("access_token").GetString()!;
+        var principal = new JwtSecurityTokenHandler().ReadJwtToken(accessToken);
+        var audiences = principal.Claims
+            .Where(claim => claim.Type == "aud")
+            .Select(claim => claim.Value)
+            .ToArray();
+        Assert.Contains(orchestratorAudience, audiences);
+        Assert.Contains(brokerAudience, audiences);
+        Assert.Equal(actorId.ToString(), principal.Subject);
+        Assert.Equal(projectId, principal.Claims.Single(claim =>
+            claim.Type == SecretRedemptionEndpoints.ProjectIdClaim).Value);
+        Assert.Equal(runId, principal.Claims.Single(claim =>
+            claim.Type == SecretRedemptionEndpoints.RunIdClaim).Value);
+
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", accessToken).ToString();
+        context.User = new ClaimsPrincipal(new ClaimsIdentity(principal.Claims, "Bearer"));
+        var acceptedRun = new SourceControlAcceptedRunBinding(
+            IdentityBrokerWebApplicationFactory.Issuer + "/",
+            actorId.ToString(),
+            "source-control-tenant",
+            projectId,
+            runId,
+            "source-control-root",
+            new string('A', 64),
+            1,
+            1,
+            1,
+            "source-control-context",
+            1);
+        var client = new SourceControlSecretRedemptionClient(
+            _broker,
+            new SourceControlSecretRedemptionOptions(
+                IdentityBrokerWebApplicationFactory.Issuer,
+                orchestratorAudience,
+                brokerAudience,
+                _broker.BaseAddress!.AbsoluteUri),
+            TimeProvider.System);
+        SecretCredential? usedCredential = null;
+        var redeemedValue = await client.WithCredentialAsync(
+            context,
+            acceptedRun,
+            new SourceControlCredentialReference(
+                new SecretRef(secretId, secretVersion),
+                SourceControlSecretPurposes.Api),
+            (credential, _) =>
+            {
+                usedCredential = credential;
+                return Task.FromResult(credential.GetValue());
+            },
+            CancellationToken.None);
+
+        Assert.Equal(_backend.Value, redeemedValue);
+        Assert.NotNull(usedCredential);
+        Assert.Throws<InvalidOperationException>(() => usedCredential.GetValue());
+        var brokerRequest = Assert.Single(_backend.Requests);
+        Assert.Equal(SourceControlSecretPurposes.Api, brokerRequest.Purpose);
+        Assert.Equal(secretVersion, brokerRequest.Secret.Version);
+
+        using var orchestratorOnly = await SendAsync(
+            Input(secretId, secretVersion, SourceControlSecretPurposes.Api, runId),
+            CreateToken(
+                actorId.ToString(),
+                projectId,
+                runId,
+                audience: orchestratorAudience));
+        Assert.Equal(HttpStatusCode.Unauthorized, orchestratorOnly.StatusCode);
+        using var wrongVersion = await SendAsync(
+            Input(secretId, "wrong-version", SourceControlSecretPurposes.Api, runId),
+            accessToken);
+        Assert.Equal(HttpStatusCode.Forbidden, wrongVersion.StatusCode);
+        Assert.Single(_backend.Requests);
+        Assert.DoesNotContain(_backend.Value, string.Join('\n', _factory.LogMessages), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -457,6 +603,36 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
             GrantState.Active,
             DateTimeOffset.UtcNow.AddMinutes(30),
             revision: "draft");
+
+    private async Task RestartWithDistinctAudiencesAsync(
+        string orchestratorAudience,
+        string brokerAudience)
+    {
+        var connectionString = await postgres.CreateMigratedDatabaseAsync();
+        _broker.Dispose();
+        await _factory.DisposeAsync();
+        _backend = new RecordingSecretRedemption();
+        _factory = new IdentityBrokerWebApplicationFactory(
+            connectionString,
+            _fakeIdp,
+            configure: settings =>
+            {
+                settings["IdentityBroker__SecretRedemption__Audience"] = brokerAudience;
+                settings["IdentityBroker__Clients__0__Resources__0"] = orchestratorAudience;
+                settings["IdentityBroker__Clients__0__Resources__1"] = brokerAudience;
+                settings["IdentityBroker__Clients__0__Scopes__5"] = "projects.orchestrator";
+            },
+            configureServices: services =>
+            {
+                services.RemoveAll<ISecretRedemption>();
+                services.AddSingleton<ISecretRedemption>(_backend);
+            });
+        _broker = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            BaseAddress = new Uri("https://broker.test.local"),
+        });
+    }
 
     private string CreateToken(
         string actorId = "actor-1",

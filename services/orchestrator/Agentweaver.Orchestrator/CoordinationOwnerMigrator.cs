@@ -48,16 +48,17 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8)) ||
+        if (applied.Any(version => version is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8 or 9)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
             (applied.Contains(5) && !applied.Contains(4)) ||
             (applied.Contains(6) && !applied.Contains(5)) ||
             (applied.Contains(7) && !applied.Contains(6)) ||
-            (applied.Contains(8) && !applied.Contains(7)))
+            (applied.Contains(8) && !applied.Contains(7)) ||
+            (applied.Contains(9) && !applied.Contains(8)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
-        foreach (var version in new[] { 1, 2, 3, 4, 5, 6, 7, 8 }.Where(version => !applied.Contains(version)))
+        foreach (var version in new[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 }.Where(version => !applied.Contains(version)))
         {
             var migrationName = version switch
             {
@@ -69,6 +70,7 @@ public static class CoordinationOwnerMigrator
                 6 => "session_fork_admission",
                 7 => "execution_outcomes_and_recovery",
                 8 => "run_selection_context_versions",
+                9 => "source_control_owner",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
@@ -107,7 +109,8 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 6),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 7),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 8),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 9),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -130,7 +133,16 @@ public static class CoordinationOwnerMigrator
                 to_regclass(@idleNotifications) IS NOT NULL,
                 to_regclass(@forkTargetReservation) IS NOT NULL,
                 to_regclass(@executionOperations) IS NOT NULL,
-                to_regclass(@selectionContextVersions) IS NOT NULL
+                to_regclass(@selectionContextVersions) IS NOT NULL,
+                to_regclass(@sourceControlPins) IS NOT NULL,
+                to_regclass(@sourceControlMergeIntents) IS NOT NULL,
+                to_regclass(@sourceControlWebhookDeliveries) IS NOT NULL,
+                EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = @schemaName
+                      AND table_name = 'executable_action_grants'
+                      AND column_name = 'source_control_intent_id'
+                )
             """, connection);
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
@@ -160,14 +172,20 @@ public static class CoordinationOwnerMigrator
             "executionOperations", NpgsqlDbType.Text, $"{schema}.coordination_execution_operations");
         command.Parameters.AddWithValue(
             "selectionContextVersions", NpgsqlDbType.Text, $"{schema}.coordinator_run_selection_context_versions");
+        command.Parameters.AddWithValue("sourceControlPins", NpgsqlDbType.Text, $"{schema}.source_control_repository_pins");
+        command.Parameters.AddWithValue(
+            "sourceControlMergeIntents", NpgsqlDbType.Text, $"{schema}.source_control_merge_intents");
+        command.Parameters.AddWithValue(
+            "sourceControlWebhookDeliveries", NpgsqlDbType.Text, $"{schema}.source_control_webhook_deliveries");
+        command.Parameters.AddWithValue("schemaName", NpgsqlDbType.Text, schema);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) ||
             reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
             reader.GetInt64(3) != 1 || reader.GetInt64(4) != 1 || reader.GetInt64(5) != 1 ||
-            reader.GetInt64(6) != 1 || reader.GetInt64(7) != 1 || reader.GetInt64(8) != 0 ||
-            reader.GetInt64(9) != 1 || reader.GetInt64(10) != 1 ||
-            reader.GetInt64(11) != 0 ||
-            Enumerable.Range(12, 20).Any(column => !reader.GetBoolean(column)))
+            reader.GetInt64(6) != 1 || reader.GetInt64(7) != 1 || reader.GetInt64(8) != 1 ||
+            reader.GetInt64(9) != 0 || reader.GetInt64(10) != 1 || reader.GetInt64(11) != 1 ||
+            reader.GetInt64(12) != 0 ||
+            Enumerable.Range(13, 24).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

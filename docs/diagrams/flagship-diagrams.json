@@ -13,6 +13,11 @@
       "docs": ["docs/architecture/providers-models.md"]
     },
     {
+      "name": "v1-source-control-owner-flow",
+      "concept": "Accepted-run Source Control pinning, webhook relay admission, and approved merge",
+      "docs": ["docs/architecture/design/provider-seams.md"]
+    },
+    {
       "name": "v1-storage-volume-provisioning",
       "concept": "Azure Files provisioning, Replace cleanup, and attachment negotiation",
       "docs": ["docs/architecture/design/provider-seams.md"]

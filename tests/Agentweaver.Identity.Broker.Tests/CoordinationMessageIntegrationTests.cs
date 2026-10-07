@@ -6,13 +6,17 @@ using System.Collections.Immutable;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Json;
+using System.Runtime.ExceptionServices;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
+using Agentweaver.SourceControl;
 using EventsHost::Agentweaver.EventsAndSessions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -47,6 +51,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             action: allow
             priority: 100
         """;
+    private const string SourceControlMergeAllowPolicy = """
+        apiVersion: governance.toolkit/v1
+        version: "1.0"
+        name: source-control-merge-policy
+        scope: global
+        default_action: deny
+        rules:
+          - name: allow-approved-source-control-merge
+            condition: "action_id == 'source_control.merge'"
+            action: allow
+            priority: 100
+        """;
 
     private static readonly JsonSerializerOptions CoordinationJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -56,13 +72,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     [Fact]
     public async Task BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending()
     {
+        var sourceControlSecretBackend = new RecordingSecretRedemption();
+        await RestartBrokerForSourceControlAsync(sourceControlSecretBackend);
         using var signingCertificate = X509CertificateLoader.LoadPkcs12FromFile(
             _signingCertificate.PfxPath,
             _signingCertificate.Password,
             X509KeyStorageFlags.EphemeralKeySet);
         var signingKey = new X509SecurityKey(signingCertificate);
         await using var projects = await ProjectsConfigResourceServer.StartAsync(
-            _connectionString, signingKey);
+            _connectionString,
+            signingKey,
+            providerCatalog: CreateSourceControlProviderCatalog());
 
         var platformAdminToken = await IssueTokenAsync(
             "projects.admin", [TenantId], "coordination-admin", null, null, ["platform_admin"]);
@@ -122,8 +142,23 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var claims = new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims.ToArray();
         var currentRunnerSubject = SingleClaim(claims, "sub");
         Assert.Contains(claims, claim => claim.Type == "aud" && claim.Value == "https://api.test");
+        Assert.Contains(
+            claims,
+            claim => claim.Type == "aud" && claim.Value == "https://broker-redemption.test");
         Assert.Contains(claims, claim => claim.Type == "project_id" && claim.Value == project.ProjectId);
         Assert.Contains(claims, claim => claim.Type == "run_id" && claim.Value == RunId);
+        await CreateSourceControlSecretGrantAsync(
+            currentRunnerSubject,
+            project.ProjectId,
+            RunId,
+            new SecretRef("github-api", "api-v1"),
+            SourceControlSecretPurposes.Api);
+        await CreateSourceControlSecretGrantAsync(
+            currentRunnerSubject,
+            project.ProjectId,
+            RunId,
+            new SecretRef("github-webhook", "webhook-v1"),
+            SourceControlSecretPurposes.Webhook);
 
         using var updateProjectConfiguration = new HttpRequestMessage(
             HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
@@ -138,7 +173,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         new ProjectAgentCharter(
                             "test-agent", "Test agent", "implementer", "Implements the accepted work item.")
                     ],
-                    Casting = [new ProjectAgentCast("test-agent", "implementer", 0)]
+                    Casting = [new ProjectAgentCast("test-agent", "implementer", 0)],
+                    SourceControl = new SourceControlProjectSettings(
+                        new SourceControlRepositoryIdentity("octo", "agentweaver"),
+                        new SecretRef("github-api", "api-v1"),
+                        webhookSecretReference: new SecretRef("github-webhook", "webhook-v1"))
                 }
             })
         };
@@ -197,6 +236,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             RequiredOptionsSchemaVersion = 1,
                             RequiredCapabilities = ImmutableHashSet.Create(
                                 StringComparer.Ordinal, "container.create")
+                        },
+                        new ProviderRequirement
+                        {
+                            Seam = ProviderSeam.SourceControl,
+                            RequiredAdapterVersion = "1.0.0",
+                            RequiredOptionsSchemaVersion = GitHubSourceControlAdapter.CurrentOptionsSchemaVersion,
+                            RequiredCapabilities = ImmutableHashSet.Create(
+                                StringComparer.Ordinal,
+                                SourceControlCapabilities.RepositoryRead,
+                                SourceControlCapabilities.IssueWrite,
+                                SourceControlCapabilities.PullRequestWrite,
+                                SourceControlCapabilities.ReviewRead,
+                                SourceControlCapabilities.Merge)
+                        },
+                        new ProviderRequirement
+                        {
+                            Seam = ProviderSeam.Policy,
+                            RequiredAdapterVersion = AgtPolicyProvider.AdapterVersion.ToString(),
+                            RequiredOptionsSchemaVersion = AgtPolicyProvider.OptionsSchemaVersion,
+                            RequiredCapabilities = PolicyProviderCapabilities.All
                         }
                     ]
                 }
@@ -233,7 +292,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["EventsAndSessions__OrchestratorOwner__OwnerBaseAddress"] = "https://orchestrator.test/",
             ["EventsAndSessions__OrchestratorOwner__Audience"] = "https://api.test",
             ["Identity__Issuer"] = IdentityBrokerWebApplicationFactory.Issuer,
-            ["Identity__Audience"] = "https://api.test"
+            ["Identity__Audience"] = "https://api.test",
+            ["Identity__SecretRedemption__Audience"] = "https://broker-redemption.test",
+            ["Identity__SecretRedemption__OwnerBaseAddress"] = "https://broker.test.local/"
         });
         await using (var migrations = NpgsqlDataSource.Create(_connectionString))
         {
@@ -242,23 +303,37 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         EventsIntegrationFactory? eventsFactoryReference = null;
+        var projectsOwnerRequests = 0;
+        var projectsOwnerResponses = 0;
         var admissions = new List<(HttpStatusCode Status, bool NoStore, string Body)>();
         var forkAdmissionGate = new ForkAdmissionGate();
         var ownerForkRaceGate = new OwnerForkRaceGate();
         var cacheObjectStore = new InMemoryObjectStore();
         var sandboxProvider = new ControlledSandboxResourceProvider();
+        var sourceControlGitHub = new ControlledGitHubApi(sourceControlSecretBackend.Value);
+        var sourceControlRequestBarrier = new ControlledRequestBarrier();
+        var mergeStartedSelectionBarrier = new ControlledRequestBarrier();
+        sourceControlGitHub.BeforeResponseAsync = sourceControlRequestBarrier.PauseIfMatchedAsync;
         await using var orchestratorFactory = new OrchestratorIntegrationFactory(
             _connectionString,
             ownerSchema,
             signingKey,
-            projects.CreateHandler,
+            () => new RequestCountingHandler(
+                projects.CreateHandler(),
+                () => Interlocked.Increment(ref projectsOwnerRequests),
+                mergeStartedSelectionBarrier.PauseIfMatchedAsync,
+                () => Interlocked.Increment(ref projectsOwnerResponses)),
             () => new OwnerForkRaceHandler(
                 new CapturingHandler(
                     eventsFactoryReference!.Server.CreateHandler(),
                     (status, noStore, body) => admissions.Add((status, noStore, body))),
                 ownerForkRaceGate),
             cacheObjectStore,
-            sandboxProvider);
+            sandboxProvider,
+            () => _brokerFactory.Server.CreateHandler(),
+            sourceControlGitHub.CreateHandler,
+            CreateSourceControlProviderCatalog(),
+            policyOptions: SourceControlMergePolicyOptions());
         await using var eventsFactory = new EventsIntegrationFactory(
             _connectionString,
             eventsSchema,
@@ -312,6 +387,265 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(1, reader.GetInt64(7));
             Assert.False(await reader.ReadAsync());
         }
+
+        const string sourceControlBrokerAudience = "https://broker-redemption.test";
+        var decisionStatePath =
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions";
+        var ownerEffectsBeforeAudienceChecks = await ReadOwnerEffectCountsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        var ownerRequestsBeforeAudienceChecks = Volatile.Read(ref projectsOwnerRequests);
+        var brokerOnlyToken = ReissueTokenWithAudiences(runToken, sourceControlBrokerAudience);
+        using (var brokerOnlyResponse = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   decisionStatePath,
+                   brokerOnlyToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, brokerOnlyResponse.StatusCode);
+        }
+        Assert.Equal(ownerRequestsBeforeAudienceChecks, Volatile.Read(ref projectsOwnerRequests));
+        Assert.Equal(
+            ownerEffectsBeforeAudienceChecks,
+            await ReadOwnerEffectCountsAsync(_connectionString, ownerSchema, project.ProjectId));
+
+        var dualAudienceToken = ReissueTokenWithAudiences(
+            runToken, "https://api.test", sourceControlBrokerAudience);
+        using (var dualAudienceResponse = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   decisionStatePath,
+                   dualAudienceToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, dualAudienceResponse.StatusCode);
+        }
+        Assert.True(Volatile.Read(ref projectsOwnerRequests) > ownerRequestsBeforeAudienceChecks);
+        Assert.Equal(
+            ownerEffectsBeforeAudienceChecks,
+            await ReadOwnerEffectCountsAsync(_connectionString, ownerSchema, project.ProjectId));
+
+        var ownerRequestsBeforeDirectWebhookChecks = Volatile.Read(ref projectsOwnerRequests);
+        var ownerEffectsBeforeDirectWebhookChecks = await ReadOwnerEffectCountsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        using (var unauthenticatedWebhook = new HttpRequestMessage(
+                   HttpMethod.Post, "/api/source-control/github/webhook")
+               {
+                   Content = new ByteArrayContent(Encoding.UTF8.GetBytes("{\"action\":\"opened\"}"))
+               })
+        using (var unauthenticatedWebhookResponse =
+               await orchestrator.SendAsync(unauthenticatedWebhook))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, unauthenticatedWebhookResponse.StatusCode);
+        }
+        using (var authenticatedDirectWebhookResponse = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   "/api/source-control/github/webhook",
+                   dualAudienceToken,
+                   new { action = "opened" }))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, authenticatedDirectWebhookResponse.StatusCode);
+        }
+        Assert.Equal(ownerRequestsBeforeDirectWebhookChecks, Volatile.Read(ref projectsOwnerRequests));
+        Assert.Equal(
+            ownerEffectsBeforeDirectWebhookChecks,
+            await ReadOwnerEffectCountsAsync(_connectionString, ownerSchema, project.ProjectId));
+
+        var issuePath =
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/source-control/sessions/{root.RootSessionId}/issues";
+        using (var brokerOnlyIssueResponse = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   issuePath,
+                   brokerOnlyToken,
+                   new SourceControlIssueRequest("", null)))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, brokerOnlyIssueResponse.StatusCode);
+        }
+        using (var invalidIssueResponse = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   issuePath,
+                   dualAudienceToken,
+                   new SourceControlIssueRequest("", null)))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, invalidIssueResponse.StatusCode);
+        }
+        Assert.Equal(ownerRequestsBeforeDirectWebhookChecks, Volatile.Read(ref projectsOwnerRequests));
+        Assert.Equal(
+            ownerEffectsBeforeDirectWebhookChecks,
+            await ReadOwnerEffectCountsAsync(_connectionString, ownerSchema, project.ProjectId));
+
+        var sourceControlBasePath =
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/source-control/sessions/{root.RootSessionId}";
+        using (var pinResponse = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   sourceControlBasePath + "/pin",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.Accepted, pinResponse.StatusCode);
+        }
+
+        using (var issueResponse = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   sourceControlBasePath + "/issues",
+                   runToken,
+                   new SourceControlIssueRequest("Integration issue", "Created through the authorized owner route.")))
+        {
+            Assert.Equal(HttpStatusCode.OK, issueResponse.StatusCode);
+            var issue = await ReadJsonAsync<SourceControlIssue>(issueResponse);
+            Assert.Equal(41, issue.Number);
+            Assert.Equal("Integration issue", issue.Title);
+        }
+
+        const string sourceHeadSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        const string sourceBaseSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        using (var pullRequestResponse = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   sourceControlBasePath + "/pull-requests",
+                   runToken,
+                   new SourceControlPullRequestRequest(
+                       "Integration change",
+                       "Created through the authorized owner route.",
+                       "feature/source-control",
+                       sourceHeadSha,
+                       "main",
+                       sourceBaseSha,
+                       Draft: false)))
+        {
+            Assert.Equal(HttpStatusCode.OK, pullRequestResponse.StatusCode);
+            var pullRequest = await ReadJsonAsync<SourceControlPullRequest>(pullRequestResponse);
+            Assert.Equal(17, pullRequest.Number);
+            Assert.Equal(sourceHeadSha, pullRequest.HeadSha);
+            Assert.Equal(sourceBaseSha, pullRequest.BaseSha);
+            Assert.Equal(SourceControlPullRequestDisposition.Reused, pullRequest.Disposition);
+        }
+
+        using (var reviewsResponse = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   sourceControlBasePath + "/pull-requests/17/reviews",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, reviewsResponse.StatusCode);
+            var reviews = await ReadJsonAsync<SourceControlReview[]>(reviewsResponse);
+            Assert.Collection(
+                reviews,
+                review =>
+                {
+                    Assert.Equal(11, review.Id);
+                    Assert.Equal("reviewer", review.Reviewer);
+                    Assert.Equal(SourceControlReviewState.Approved, review.State);
+                });
+        }
+
+        var webhookPath = sourceControlBasePath + "/webhook-relay";
+        var webhookDeliveryId = Guid.NewGuid().ToString("D");
+        var webhookBody = Encoding.UTF8.GetBytes(
+            "{\"repository\":{\"id\":12345,\"full_name\":\"octo/agentweaver\"}," +
+            "\"action\":\"synchronize\",\"pull_request\":{\"number\":17," +
+            "\"head\":{\"sha\":\"" + sourceHeadSha + "\"}," +
+            "\"base\":{\"sha\":\"" + sourceBaseSha + "\"}}}");
+        using (var webhookResponse = await SendSignedWebhookRelayAsync(
+                   orchestrator,
+                   webhookPath,
+                   runToken,
+                   TenantId,
+                   webhookDeliveryId,
+                   "pull_request",
+                   webhookBody,
+                   sourceControlSecretBackend.Value))
+        {
+            Assert.Equal(HttpStatusCode.Accepted, webhookResponse.StatusCode);
+            var delivery = await ReadJsonAsync<JsonElement>(webhookResponse);
+            Assert.Equal("accepted", delivery.GetProperty("state").GetString());
+        }
+        var webhookCountAfterFirstDelivery = await ReadWebhookDeliveryCountAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        Assert.Equal(1, webhookCountAfterFirstDelivery);
+
+        using (var duplicateWebhookResponse = await SendSignedWebhookRelayAsync(
+                   orchestrator,
+                   webhookPath,
+                   runToken,
+                   TenantId,
+                   webhookDeliveryId,
+                   "pull_request",
+                   webhookBody,
+                   sourceControlSecretBackend.Value))
+        {
+            Assert.Equal(HttpStatusCode.OK, duplicateWebhookResponse.StatusCode);
+            var delivery = await ReadJsonAsync<JsonElement>(duplicateWebhookResponse);
+            Assert.Equal("duplicate", delivery.GetProperty("state").GetString());
+        }
+
+        using (var spoofedWebhookResponse = await SendSignedWebhookRelayAsync(
+                   orchestrator,
+                   webhookPath,
+                   runToken,
+                   TenantId,
+                   Guid.NewGuid().ToString("D"),
+                   "pull_request",
+                   webhookBody,
+                   "spoofed-secret"))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, spoofedWebhookResponse.StatusCode);
+        }
+
+        var changedWebhookBody = Encoding.UTF8.GetBytes(
+            "{\"repository\":{\"id\":12345,\"full_name\":\"octo/agentweaver\"}," +
+            "\"action\":\"closed\"}");
+        using (var changedPayloadResponse = await SendSignedWebhookRelayAsync(
+                   orchestrator,
+                   webhookPath,
+                   runToken,
+                   TenantId,
+                   webhookDeliveryId,
+                   "issues",
+                   changedWebhookBody,
+                   sourceControlSecretBackend.Value))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, changedPayloadResponse.StatusCode);
+        }
+
+        var foreignRepositoryBody = Encoding.UTF8.GetBytes(
+            "{\"repository\":{\"id\":12345,\"full_name\":\"octo/other-repository\"}," +
+            "\"action\":\"opened\"}");
+        using (var foreignRepositoryResponse = await SendSignedWebhookRelayAsync(
+                   orchestrator,
+                   webhookPath,
+                   runToken,
+                   TenantId,
+                   Guid.NewGuid().ToString("D"),
+                   "issues",
+                   foreignRepositoryBody,
+                   sourceControlSecretBackend.Value))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, foreignRepositoryResponse.StatusCode);
+        }
+
+        using (var foreignTenantResponse = await SendSignedWebhookRelayAsync(
+                   orchestrator,
+                   webhookPath,
+                   runToken,
+                   OtherTenantId,
+                   Guid.NewGuid().ToString("D"),
+                   "pull_request",
+                   webhookBody,
+                   sourceControlSecretBackend.Value))
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, foreignTenantResponse.StatusCode);
+        }
+
+        Assert.Equal(
+            webhookCountAfterFirstDelivery,
+            await ReadWebhookDeliveryCountAsync(_connectionString, ownerSchema, project.ProjectId));
 
         var outcomeProposal = new ProposeCoordinatorOutcomeRequest(
             1,
@@ -508,7 +842,20 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     [],
                     [],
                     null,
-                    WorkflowPlatformGate.BuildTest)
+                    WorkflowPlatformGate.BuildTest),
+                new WorkflowStepDefinition(
+                    "merge",
+                    "Merge the approved pull request after current checks pass.",
+                    WorkflowStepMode.Platform,
+                    2,
+                    new WorkflowCardinality(0, 1),
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    null,
+                    WorkflowPlatformGate.Merge)
             ]);
         using var selectWorkflowResponse = await SendJsonAsync(
             orchestrator,
@@ -1098,6 +1445,467 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Null(revisedPlanResult.PendingGate);
         Assert.Equal(3, sandboxProvider.NegotiationCount);
 
+        var mergeIntentPath = sourceControlBasePath + "/merge-intents";
+        async Task<(string IntentId, string ApprovalRequestId)> CreateApprovedMergeIntentAsync(
+            string idempotencyKey)
+        {
+            using var decisionStateResponse = await SendAsync(
+                orchestrator, HttpMethod.Get, decisionStatePath, runToken, [TenantId]);
+            await AssertStatusAsync(decisionStateResponse, HttpStatusCode.OK);
+            var decisionState =
+                await ReadJsonAsync<CoordinatorDecisionStateView>(decisionStateResponse);
+            using var mergeApprovalResponse = await SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                mergeIntentPath,
+                runToken,
+                new OrchestratorHost::Agentweaver.Orchestrator.PrepareSourceControlMergeIntentRequest(
+                    idempotencyKey,
+                    decisionState.StateVersion,
+                    "generated-test",
+                    "1.0.0",
+                    "accepted-plan",
+                    "merge",
+                    17,
+                    SourceControlMergeMethod.Rebase));
+            Assert.True(
+                mergeApprovalResponse.StatusCode == HttpStatusCode.Accepted,
+                $"{mergeApprovalResponse.StatusCode}: {await mergeApprovalResponse.Content.ReadAsStringAsync()}");
+            var mergeApproval = await ReadJsonAsync<JsonElement>(mergeApprovalResponse);
+            var intentId = mergeApproval.GetProperty("intentId").GetString()
+                ?? throw new InvalidOperationException("The source-control merge intent ID was missing.");
+            var approvalRequestId = mergeApproval.GetProperty("approvalRequestId").GetString()
+                ?? throw new InvalidOperationException("The source-control approval request ID was missing.");
+            Assert.Equal("approval_pending", mergeApproval.GetProperty("state").GetString());
+            var approvalStateVersion = mergeApproval.GetProperty("stateVersion").GetInt64();
+            Assert.Equal(decisionState.StateVersion + 1, approvalStateVersion);
+
+            using var approveMerge = await SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/{approvalRequestId}/answer",
+                runToken,
+                new AnswerCoordinatorGateRequest(
+                    approvalStateVersion, idempotencyKey + "-approve", "approve", null));
+            Assert.True(
+                approveMerge.StatusCode == HttpStatusCode.OK,
+                $"{approveMerge.StatusCode}: {await approveMerge.Content.ReadAsStringAsync()}");
+            var approvedMerge = await ReadJsonAsync<CoordinatorDecisionOperationResponse>(approveMerge);
+            Assert.True(approvedMerge.Accepted);
+            Assert.Equal(approvalStateVersion + 1, approvedMerge.StateVersion);
+            Assert.Null(approvedMerge.PendingGate);
+            return (intentId, approvalRequestId);
+        }
+
+        async Task<(string State, string? MergeSha, string? FailureCode)> ReadMergeIntentStateAsync(
+            string intentId)
+        {
+            await using var database = NpgsqlDataSource.Create(_connectionString);
+            await using var connection = await database.OpenConnectionAsync();
+            await using var query = new NpgsqlCommand($"""
+                SELECT intent_state, merge_sha, last_failure_code
+                FROM "{ownerSchema}".source_control_merge_intents
+                WHERE project_id = @project AND run_id = @run AND intent_id = @intent
+                """, connection);
+            query.Parameters.AddWithValue("project", project.ProjectId);
+            query.Parameters.AddWithValue("run", RunId);
+            query.Parameters.AddWithValue("intent", intentId);
+            await using var reader = await query.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            return (
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2));
+        }
+
+        async Task AssertPreEffectConflictAsync(
+            HttpResponseMessage response,
+            string intentId,
+            int mergeCountBefore)
+        {
+            var body = await ReadJsonAsync<JsonElement>(response);
+            string failureCode;
+            if (response.StatusCode == HttpStatusCode.Conflict)
+            {
+                Assert.Equal("conflict", body.GetProperty("state").GetString());
+                failureCode = body.GetProperty("failureCode").GetString()
+                    ?? throw new InvalidOperationException("The merge conflict failure code was missing.");
+            }
+            else
+            {
+                Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+                failureCode = body.GetProperty("error").GetString()
+                    ?? throw new InvalidOperationException("The merge denial error code was missing.");
+            }
+            Assert.Contains(
+                failureCode,
+                new[] { "run_selection_permission_denied", "source_control_merge_grant_not_current" });
+            var persisted = await ReadMergeIntentStateAsync(intentId);
+            Assert.Equal("conflict", persisted.State);
+            Assert.Null(persisted.MergeSha);
+            Assert.Equal(failureCode, persisted.FailureCode);
+            Assert.Equal(mergeCountBefore, sourceControlGitHub.MergeRequestCount);
+        }
+
+        var (lockConflictIntentId, _) =
+            await CreateApprovedMergeIntentAsync("source-control-merge-lock-race");
+        var mergeCountBeforeLockRace = sourceControlGitHub.MergeRequestCount;
+        await using (var lockSource = NpgsqlDataSource.Create(_connectionString))
+        await using (var lockConnection = await lockSource.OpenConnectionAsync())
+        {
+            await using (var acquireRepositoryLock = new NpgsqlCommand(
+                "SELECT pg_advisory_lock(hashtext('agentweaver.source-control.merge'), hashtext(@repository))",
+                lockConnection))
+            {
+                acquireRepositoryLock.Parameters.AddWithValue("repository", "octo/agentweaver");
+                await acquireRepositoryLock.ExecuteScalarAsync();
+            }
+
+            var lockHeld = true;
+            var roleRevoked = false;
+            try
+            {
+                var ownerResponsesBeforeLockRace = Volatile.Read(ref projectsOwnerResponses);
+                var blockedMerge = SendAsync(
+                    orchestrator,
+                    HttpMethod.Post,
+                    mergeIntentPath + "/" + lockConflictIntentId + "/execute",
+                    runToken,
+                    [TenantId]);
+                using var lockWaitDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                while (Volatile.Read(ref projectsOwnerResponses) < ownerResponsesBeforeLockRace + 4)
+                    await Task.Delay(10, lockWaitDeadline.Token);
+                await Task.Delay(100, lockWaitDeadline.Token);
+                Assert.False(blockedMerge.IsCompleted);
+
+                await RevokeRoleAsync(
+                    projects.PrivilegedFixtureDataSource,
+                    runnerRole.AssignmentId,
+                    runnerRole.Revision);
+                roleRevoked = true;
+                await using (var releaseRepositoryLock = new NpgsqlCommand(
+                    "SELECT pg_advisory_unlock(hashtext('agentweaver.source-control.merge'), hashtext(@repository))",
+                    lockConnection))
+                {
+                    releaseRepositoryLock.Parameters.AddWithValue("repository", "octo/agentweaver");
+                    Assert.True((bool)(await releaseRepositoryLock.ExecuteScalarAsync())!);
+                }
+                lockHeld = false;
+                using var lockConflict = await blockedMerge.WaitAsync(TimeSpan.FromSeconds(30));
+                await AssertPreEffectConflictAsync(
+                    lockConflict, lockConflictIntentId, mergeCountBeforeLockRace);
+            }
+            finally
+            {
+                if (lockHeld)
+                {
+                    await using var releaseRepositoryLock = new NpgsqlCommand(
+                        "SELECT pg_advisory_unlock(hashtext('agentweaver.source-control.merge'), hashtext(@repository))",
+                        lockConnection);
+                    releaseRepositoryLock.Parameters.AddWithValue("repository", "octo/agentweaver");
+                    await releaseRepositoryLock.ExecuteScalarAsync();
+                }
+                if (roleRevoked)
+                    runnerRole = await AssignRoleAsync(
+                        projects.PrivilegedFixtureDataSource,
+                        runnerMembership.MembershipId,
+                        ProjectAuthorityResourceType.Project,
+                        project.ProjectId,
+                        ProjectAuthorityRole.Orchestrator);
+            }
+        }
+
+        var (redemptionConflictIntentId, _) =
+            await CreateApprovedMergeIntentAsync("source-control-merge-redemption-race");
+        var mergeCountBeforeRedemptionRace = sourceControlGitHub.MergeRequestCount;
+        var redemptionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRedemption = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        sourceControlSecretBackend.Handler = async (_, token) =>
+        {
+            redemptionStarted.TrySetResult();
+            await releaseRedemption.Task.WaitAsync(token);
+            return sourceControlSecretBackend.NewCredential(sourceControlSecretBackend.Value);
+        };
+        var redemptionRoleRevoked = false;
+        try
+        {
+            var blockedRedemptionMerge = SendAsync(
+                orchestrator,
+                HttpMethod.Post,
+                mergeIntentPath + "/" + redemptionConflictIntentId + "/execute",
+                runToken,
+                [TenantId]);
+            await redemptionStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            await RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerRole.AssignmentId,
+                runnerRole.Revision);
+            redemptionRoleRevoked = true;
+            releaseRedemption.TrySetResult();
+            using var redemptionConflict =
+                await blockedRedemptionMerge.WaitAsync(TimeSpan.FromSeconds(30));
+            await AssertPreEffectConflictAsync(
+                redemptionConflict, redemptionConflictIntentId, mergeCountBeforeRedemptionRace);
+        }
+        finally
+        {
+            releaseRedemption.TrySetResult();
+            sourceControlSecretBackend.Handler = null;
+            if (redemptionRoleRevoked)
+                runnerRole = await AssignRoleAsync(
+                    projects.PrivilegedFixtureDataSource,
+                    runnerMembership.MembershipId,
+                    ProjectAuthorityResourceType.Project,
+                    project.ProjectId,
+                    ProjectAuthorityRole.Orchestrator);
+        }
+
+        var (readinessConflictIntentId, _) =
+            await CreateApprovedMergeIntentAsync("source-control-merge-readiness-race");
+        var mergeCountBeforeReadinessRace = sourceControlGitHub.MergeRequestCount;
+        sourceControlRequestBarrier.Arm((request, _) => Task.FromResult(
+            request.Method == HttpMethod.Get &&
+            request.RequestUri?.AbsolutePath == "/repos/octo/agentweaver/rules/branches/main"));
+        var readinessMerge = SendAsync(
+            orchestrator,
+            HttpMethod.Post,
+            mergeIntentPath + "/" + readinessConflictIntentId + "/execute",
+            runToken,
+            [TenantId]);
+        var readinessRoleRevoked = false;
+        try
+        {
+            await sourceControlRequestBarrier.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            await RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerRole.AssignmentId,
+                runnerRole.Revision);
+            readinessRoleRevoked = true;
+            sourceControlRequestBarrier.Release();
+            using var readinessConflict = await readinessMerge.WaitAsync(TimeSpan.FromSeconds(30));
+            await AssertPreEffectConflictAsync(
+                readinessConflict, readinessConflictIntentId, mergeCountBeforeReadinessRace);
+        }
+        finally
+        {
+            sourceControlRequestBarrier.Release();
+            if (readinessRoleRevoked)
+                runnerRole = await AssignRoleAsync(
+                    projects.PrivilegedFixtureDataSource,
+                    runnerMembership.MembershipId,
+                    ProjectAuthorityResourceType.Project,
+                    project.ProjectId,
+                    ProjectAuthorityRole.Orchestrator);
+        }
+
+        var (mergeStartedConflictIntentId, _) =
+            await CreateApprovedMergeIntentAsync("source-control-merge-started-race");
+        var mergeCountBeforeStartedRace = sourceControlGitHub.MergeRequestCount;
+        mergeStartedSelectionBarrier.Arm(async (request, token) =>
+        {
+            if (request.Method != HttpMethod.Get ||
+                request.RequestUri?.AbsolutePath !=
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/selection")
+                return false;
+            return (await ReadMergeIntentStateAsync(mergeStartedConflictIntentId)).State == "merge_started";
+        });
+        var mergeStartedMerge = SendAsync(
+            orchestrator,
+            HttpMethod.Post,
+            mergeIntentPath + "/" + mergeStartedConflictIntentId + "/execute",
+            runToken,
+            [TenantId]);
+        var mergeStartedRoleRevoked = false;
+        try
+        {
+            await mergeStartedSelectionBarrier.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal("merge_started", (await ReadMergeIntentStateAsync(mergeStartedConflictIntentId)).State);
+            await RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerRole.AssignmentId,
+                runnerRole.Revision);
+            mergeStartedRoleRevoked = true;
+            mergeStartedSelectionBarrier.Release();
+            using var mergeStartedConflict = await mergeStartedMerge.WaitAsync(TimeSpan.FromSeconds(30));
+            await AssertPreEffectConflictAsync(
+                mergeStartedConflict, mergeStartedConflictIntentId, mergeCountBeforeStartedRace);
+        }
+        finally
+        {
+            mergeStartedSelectionBarrier.Release();
+            if (mergeStartedRoleRevoked)
+                runnerRole = await AssignRoleAsync(
+                    projects.PrivilegedFixtureDataSource,
+                    runnerMembership.MembershipId,
+                    ProjectAuthorityResourceType.Project,
+                    project.ProjectId,
+                    ProjectAuthorityRole.Orchestrator);
+        }
+
+        var (mergeIntentId, mergeApprovalRequestId) =
+            await CreateApprovedMergeIntentAsync("source-control-merge-prepare-1");
+
+        string sourceControlGrantId;
+        string sourceControlGrantRevision;
+        await using (var database = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await database.OpenConnectionAsync())
+        await using (var query = new NpgsqlCommand($"""
+            SELECT grant_id, revision, step_id, purpose, action_ids::text,
+                   source_decision_id::text, source_request_id, source_control_intent_id
+            FROM "{ownerSchema}".executable_action_grants
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+              AND is_current AND grant_state = 'active'
+              AND action_ids ? 'source_control.merge'
+            """, connection))
+        {
+            query.Parameters.AddWithValue("project", project.ProjectId);
+            query.Parameters.AddWithValue("run", RunId);
+            query.Parameters.AddWithValue("session", root.RootSessionId);
+            await using var reader = await query.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            sourceControlGrantId = reader.GetString(0);
+            sourceControlGrantRevision = reader.GetString(1);
+            Assert.Equal("merge", reader.GetString(2));
+            Assert.Equal("source-control.merge", reader.GetString(3));
+            Assert.Equal(
+                new[] { "source_control.merge" },
+                JsonSerializer.Deserialize<string[]>(reader.GetString(4), CoordinationJsonOptions));
+            Assert.False(string.IsNullOrWhiteSpace(reader.GetString(5)));
+            Assert.Equal(mergeApprovalRequestId, reader.GetString(6));
+            Assert.Equal(mergeIntentId, reader.GetString(7));
+            Assert.False(await reader.ReadAsync());
+        }
+
+        using (var executeMerge = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   mergeIntentPath + "/" + mergeIntentId + "/execute",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.True(
+                executeMerge.StatusCode == HttpStatusCode.OK,
+                $"{executeMerge.StatusCode}: {await executeMerge.Content.ReadAsStringAsync()}");
+            var result = await ReadJsonAsync<JsonElement>(executeMerge);
+            Assert.Equal("merged", result.GetProperty("state").GetString());
+            Assert.Equal(
+                "cccccccccccccccccccccccccccccccccccccccc",
+                result.GetProperty("mergeSha").GetString());
+        }
+        Assert.Equal(1, sourceControlGitHub.MergeRequestCount);
+        var mergeRequestBody = sourceControlGitHub.LastMergeRequestBody;
+        Assert.NotNull(mergeRequestBody);
+        using (var mergeRequestDocument = JsonDocument.Parse(mergeRequestBody))
+        {
+            Assert.Equal(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                mergeRequestDocument.RootElement.GetProperty("sha").GetString());
+            Assert.Equal("rebase", mergeRequestDocument.RootElement.GetProperty("merge_method").GetString());
+        }
+
+        using (var mergeReplay = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   mergeIntentPath + "/" + mergeIntentId + "/execute",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, mergeReplay.StatusCode);
+            var result = await ReadJsonAsync<JsonElement>(mergeReplay);
+            Assert.Equal("merged", result.GetProperty("state").GetString());
+        }
+        Assert.Equal(1, sourceControlGitHub.MergeRequestCount);
+
+        var (postEffectRevocationIntentId, _) =
+            await CreateApprovedMergeIntentAsync("source-control-merge-post-effect-revocation");
+        sourceControlRequestBarrier.Arm((request, _) => Task.FromResult(
+            request.Method == HttpMethod.Put &&
+            request.RequestUri?.AbsolutePath == "/repos/octo/agentweaver/pulls/17/merge"));
+        var postEffectMerge = SendAsync(
+            orchestrator,
+            HttpMethod.Post,
+            mergeIntentPath + "/" + postEffectRevocationIntentId + "/execute",
+            runToken,
+            [TenantId]);
+        var postEffectRoleRevoked = false;
+        try
+        {
+            await sourceControlRequestBarrier.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(
+                "merge_started",
+                (await ReadMergeIntentStateAsync(postEffectRevocationIntentId)).State);
+            await RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerRole.AssignmentId,
+                runnerRole.Revision);
+            postEffectRoleRevoked = true;
+            sourceControlRequestBarrier.Release();
+            using var postEffectResponse = await postEffectMerge.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(HttpStatusCode.OK, postEffectResponse.StatusCode);
+            var postEffectResult = await ReadJsonAsync<JsonElement>(postEffectResponse);
+            Assert.Equal("merged", postEffectResult.GetProperty("state").GetString());
+            Assert.Equal(
+                "cccccccccccccccccccccccccccccccccccccccc",
+                postEffectResult.GetProperty("mergeSha").GetString());
+            var persistedPostEffectMerge =
+                await ReadMergeIntentStateAsync(postEffectRevocationIntentId);
+            Assert.Equal("merged", persistedPostEffectMerge.State);
+            Assert.Equal(
+                "cccccccccccccccccccccccccccccccccccccccc",
+                persistedPostEffectMerge.MergeSha);
+            Assert.Equal(
+                "run_selection_permission_denied",
+                persistedPostEffectMerge.FailureCode);
+        }
+        finally
+        {
+            sourceControlRequestBarrier.Release();
+            if (postEffectRoleRevoked)
+                runnerRole = await AssignRoleAsync(
+                    projects.PrivilegedFixtureDataSource,
+                    runnerMembership.MembershipId,
+                    ProjectAuthorityResourceType.Project,
+                    project.ProjectId,
+                    ProjectAuthorityRole.Orchestrator);
+        }
+
+        Assert.Equal(2, sourceControlGitHub.MergeRequestCount);
+        await using (var restartedOrchestratorFactory = new OrchestratorIntegrationFactory(
+                         _connectionString,
+                         ownerSchema,
+                         signingKey,
+                         () => new RequestCountingHandler(
+                             projects.CreateHandler(),
+                             () => Interlocked.Increment(ref projectsOwnerRequests),
+                             mergeStartedSelectionBarrier.PauseIfMatchedAsync),
+                         () => eventsFactory.Server.CreateHandler(),
+                         cacheObjectStore,
+                         sandboxProvider,
+                         () => _brokerFactory.Server.CreateHandler(),
+                         sourceControlGitHub.CreateHandler,
+                         CreateSourceControlProviderCatalog(),
+                         policyOptions: SourceControlMergePolicyOptions()))
+        using (var restartedOrchestrator = restartedOrchestratorFactory.CreateClient(
+                   new WebApplicationFactoryClientOptions
+                   {
+                       BaseAddress = new Uri("https://orchestrator.test")
+                   }))
+        using (var restartedMergeReplay = await SendAsync(
+                   restartedOrchestrator,
+                   HttpMethod.Post,
+                   mergeIntentPath + "/" + postEffectRevocationIntentId + "/execute",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, restartedMergeReplay.StatusCode);
+            var result = await ReadJsonAsync<JsonElement>(restartedMergeReplay);
+            Assert.Equal("merged", result.GetProperty("state").GetString());
+            Assert.Equal(
+                "cccccccccccccccccccccccccccccccccccccccc",
+                result.GetProperty("mergeSha").GetString());
+        }
+        Assert.Equal(2, sourceControlGitHub.MergeRequestCount);
+
         var registrationEffectsBeforeRevocation = await ReadChildRegistrationEffectsAsync(
             _connectionString, ownerSchema, project.ProjectId);
         await using (var lockSource = NpgsqlDataSource.Create(_connectionString))
@@ -1289,6 +2097,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             "run_concurrent_child_limit_exceeded",
             await overConcurrentLimit.Content.ReadAsStringAsync());
 
+        long runtimeOwnerDecisionStateVersion;
         var selectionPause = new RuntimeOwnerContextSelectionPause();
         await using (var runtimeOwnerFactory = new OrchestratorIntegrationFactory(
                          _connectionString,
@@ -1316,13 +2125,19 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     _connectionString, ownerSchema, project.ProjectId, "child-two");
                 Assert.Equal("implement-1", ownerBeforeDecisionChange.WorkPlanItemId);
 
+                using var runtimeOwnerDecisionStateResponse = await SendAsync(
+                    orchestrator, HttpMethod.Get, decisionStatePath, runToken, [TenantId]);
+                await AssertStatusAsync(runtimeOwnerDecisionStateResponse, HttpStatusCode.OK);
+                var runtimeOwnerDecisionState =
+                    await ReadJsonAsync<CoordinatorDecisionStateView>(runtimeOwnerDecisionStateResponse);
+                runtimeOwnerDecisionStateVersion = runtimeOwnerDecisionState.StateVersion;
                 using var pendingOwnerContextGate = await SendJsonAsync(
                     orchestrator,
                     HttpMethod.Post,
                     $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/questions",
                     runToken,
                     new AskCoordinatorQuestionRequest(
-                        15,
+                        runtimeOwnerDecisionStateVersion,
                         "runtime-owner-context-question",
                         "runtime-owner-context-gate",
                         "execution-detail",
@@ -1333,7 +2148,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var pendingGateResult =
                     await ReadJsonAsync<CoordinatorDecisionOperationResponse>(pendingOwnerContextGate);
                 Assert.True(pendingGateResult.Accepted);
-                Assert.Equal(16, pendingGateResult.StateVersion);
+                Assert.Equal(runtimeOwnerDecisionStateVersion + 1, pendingGateResult.StateVersion);
                 Assert.Equal("runtime-owner-context-gate", pendingGateResult.PendingGate?.RequestId);
                 Assert.Equal(
                     ownerBeforeDecisionChange,
@@ -1356,13 +2171,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                    $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/runtime-owner-context-gate/answer",
                    runToken,
                    new AnswerCoordinatorGateRequest(
-                       16, "runtime-owner-context-answer", "continue", null)))
+                       runtimeOwnerDecisionStateVersion + 1,
+                       "runtime-owner-context-answer",
+                       "continue",
+                       null)))
         {
             Assert.Equal(HttpStatusCode.OK, answerOwnerContextGate.StatusCode);
             var answeredOwnerContextGate =
                 await ReadJsonAsync<CoordinatorDecisionOperationResponse>(answerOwnerContextGate);
             Assert.True(answeredOwnerContextGate.Accepted);
-            Assert.Equal(17, answeredOwnerContextGate.StateVersion);
+            Assert.Equal(runtimeOwnerDecisionStateVersion + 2, answeredOwnerContextGate.StateVersion);
             Assert.Null(answeredOwnerContextGate.PendingGate);
         }
 
@@ -2389,6 +3207,23 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
     }
 
+    private static async Task<long> ReadWebhookDeliveryCountAsync(
+        string connectionString,
+        string schema,
+        string projectId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{schema}".source_control_webhook_deliveries
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        return (long)(await command.ExecuteScalarAsync()
+            ?? throw new InvalidOperationException("The webhook delivery count was unavailable."));
+    }
+
     private static async Task<(string[] Decisions, string[] Contexts)> ReadOwnerFenceHistoryAsync(
         string connectionString,
         string schema,
@@ -2695,6 +3530,90 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             []).Value);
     }
 
+    private static ProviderCatalog CreateSourceControlProviderCatalog()
+    {
+        var policyOptions = SourceControlMergePolicyOptions();
+        var policyProvider = new AgtPolicyProvider();
+        var sandboxRegistration = new ProviderRegistration(
+            new ProviderDescriptor(
+                ProviderSeam.Sandbox,
+                "sandbox-platform",
+                new Version(1, 0, 0),
+                1,
+                ProviderHostingPattern.KubernetesController,
+                ImmutableHashSet.Create(StringComparer.Ordinal, "container.create")),
+            true,
+            "options-v1",
+            1);
+        var sourceControlRegistration = new ProviderRegistration(
+            GitHubSourceControlAdapter.CreateDescriptor(),
+            true,
+            "options-v1",
+            GitHubSourceControlAdapter.CurrentOptionsSchemaVersion);
+        var policyRegistration = policyProvider.CreateRegistration(policyOptions);
+        return Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [sandboxRegistration, sourceControlRegistration, policyRegistration],
+            [
+                new ProviderSelection(ProviderSeam.Sandbox, "sandbox-platform"),
+                new ProviderSelection(ProviderSeam.SourceControl, SourceControlProviderIds.GitHub),
+                new ProviderSelection(ProviderSeam.Policy, AgtPolicyProvider.ProviderId)
+            ],
+            []).Value);
+    }
+
+    private static AgtPolicyProviderOptions SourceControlMergePolicyOptions() =>
+        new(
+            "source-control-policy-resource",
+            1,
+            "source-control-policy-v1",
+            [SourceControlMergeAllowPolicy]);
+
+    private async Task RestartBrokerForSourceControlAsync(RecordingSecretRedemption backend)
+    {
+        await _brokerFactory.DisposeAsync();
+        _brokerFactory = new IdentityBrokerWebApplicationFactory(
+            _connectionString,
+            _fakeIdp,
+            signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                settings["IdentityBroker__SecretRedemption__Audience"] =
+                    "https://broker-redemption.test";
+                settings["IdentityBroker__Clients__0__Resources__1"] =
+                    "https://broker-redemption.test";
+                for (var i = 0; i < ProjectScopes.Length; i++)
+                    settings[$"IdentityBroker__Clients__0__Scopes__{i + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
+                        ProjectScopes[i];
+            },
+            configureServices: services =>
+            {
+                services.RemoveAll<ISecretRedemption>();
+                services.AddSingleton<ISecretRedemption>(backend);
+            });
+    }
+
+    private async Task CreateSourceControlSecretGrantAsync(
+        string subject,
+        string projectId,
+        string runId,
+        SecretRef secret,
+        string purpose)
+    {
+        using var scope = _brokerFactory.Services.CreateScope();
+        var authority = scope.ServiceProvider.GetRequiredService<IdentityGrantAuthority>();
+        var grant = new SecretRedemptionGrant(
+            $"source-control:{purpose}:{runId}:{secret.Id}",
+            subject,
+            projectId,
+            runId,
+            purpose,
+            secret,
+            GrantState.Active,
+            DateTimeOffset.UtcNow.AddMinutes(30),
+            revision: "source-control-v1");
+        await authority.ReplaceAsync(grant, 0, $"source-control-grant-{Guid.NewGuid():N}");
+    }
+
     private static async Task<string> ReadGateStateAsync(
         string connectionString,
         string schema,
@@ -2742,6 +3661,53 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         };
         AddBearerAndTenant(request, token, TenantId);
         return await client.SendAsync(request);
+    }
+
+    private static async Task<HttpResponseMessage> SendSignedWebhookRelayAsync(
+        HttpClient client,
+        string path,
+        string token,
+        string tenantId,
+        string deliveryId,
+        string eventName,
+        byte[] rawBody,
+        string secret)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new ByteArrayContent(rawBody)
+        };
+        request.Headers.Add("X-GitHub-Delivery", deliveryId);
+        request.Headers.Add("X-GitHub-Event", eventName);
+        var signature = Convert.ToHexString(HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes(secret), rawBody)).ToLowerInvariant();
+        request.Headers.Add("X-Hub-Signature-256", "sha256=" + signature);
+        AddBearerAndTenant(request, token, tenantId);
+        return await client.SendAsync(request);
+    }
+
+    private string ReissueTokenWithAudiences(string sourceToken, params string[] audiences)
+    {
+        using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        var original = new JwtSecurityTokenHandler().ReadJwtToken(sourceToken);
+        var claims = original.Claims.Where(claim => claim.Type is not
+            ("iss" or "aud" or "exp" or "nbf" or "iat" or "jti"));
+        var payload = new JwtPayload(
+            original.Issuer,
+            null,
+            claims,
+            original.ValidFrom,
+            original.ValidTo);
+        payload[JwtRegisteredClaimNames.Aud] = audiences;
+        var token = new JwtSecurityToken(
+            new JwtHeader(new SigningCredentials(
+                new X509SecurityKey(certificate), SecurityAlgorithms.RsaSha256)),
+            payload);
+        token.Header["typ"] = "at+jwt";
+        return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
     private static JsonElement Payload(string json)
@@ -2881,6 +3847,88 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             SessionRunSubscriptionRequest request,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RequestCountingHandler(
+        HttpMessageHandler innerHandler,
+        Action onRequest,
+        Func<HttpRequestMessage, CancellationToken, Task>? beforeRequest = null,
+        Action? onResponse = null) : DelegatingHandler(innerHandler)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            onRequest();
+            if (beforeRequest is not null)
+                await beforeRequest(request, cancellationToken).ConfigureAwait(false);
+            var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            onResponse?.Invoke();
+            return response;
+        }
+    }
+
+    private sealed class ControlledRequestBarrier
+    {
+        private readonly object _sync = new();
+        private Func<HttpRequestMessage, CancellationToken, Task<bool>>? _matcher;
+        private TaskCompletionSource _paused = NewSignal();
+        private TaskCompletionSource _release = NewSignal();
+
+        public void Arm(Func<HttpRequestMessage, CancellationToken, Task<bool>> matcher)
+        {
+            ArgumentNullException.ThrowIfNull(matcher);
+            lock (_sync)
+            {
+                if (_matcher is not null)
+                    throw new InvalidOperationException("A controlled request barrier is already armed.");
+                _paused = NewSignal();
+                _release = NewSignal();
+                _matcher = matcher;
+            }
+        }
+
+        public Task WaitUntilPausedAsync()
+        {
+            lock (_sync)
+                return _paused.Task;
+        }
+
+        public void Release()
+        {
+            TaskCompletionSource release;
+            lock (_sync)
+                release = _release;
+            release.TrySetResult();
+        }
+
+        public async Task PauseIfMatchedAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Func<HttpRequestMessage, CancellationToken, Task<bool>>? matcher;
+            lock (_sync)
+                matcher = _matcher;
+            if (matcher is null || !await matcher(request, cancellationToken).ConfigureAwait(false))
+                return;
+
+            TaskCompletionSource paused;
+            TaskCompletionSource release;
+            lock (_sync)
+            {
+                if (!ReferenceEquals(_matcher, matcher))
+                    return;
+                _matcher = null;
+                paused = _paused;
+                release = _release;
+            }
+
+            paused.TrySetResult();
+            await release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private static TaskCompletionSource NewSignal() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed class InMemoryObjectStore : IObjectStore
@@ -3119,7 +4167,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Func<HttpMessageHandler> projectsHandler,
         Func<HttpMessageHandler> eventsHandler,
         IObjectStore? objectStore = null,
-        ICoordinatorSandboxResourceProvider? sandboxProvider = null)
+        ICoordinatorSandboxResourceProvider? sandboxProvider = null,
+        Func<HttpMessageHandler>? brokerHandler = null,
+        Func<HttpMessageHandler>? sourceControlHandler = null,
+        ProviderCatalog? providerCatalog = null,
+        AgtPolicyProviderOptions? policyOptions = null)
         : WebApplicationFactory<OrchestratorHost::Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -3144,17 +4196,154 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 services.RemoveAll<NpgsqlDataSource>();
                 services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(connectionString));
                 services.RemoveAll<ProviderCatalog>();
-                services.AddSingleton(CreateSandboxProviderCatalog());
+                services.AddSingleton(providerCatalog ?? CreateSandboxProviderCatalog());
                 AddJwtBearer(services, signingKey);
                 services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.ProjectsRunSelectionClient>()
                     .ConfigurePrimaryHttpMessageHandler(projectsHandler);
                 services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.EventsAddressedMessageClient>()
                     .ConfigurePrimaryHttpMessageHandler(eventsHandler);
+                if (brokerHandler is not null)
+                    services.AddHttpClient<
+                            OrchestratorHost::Agentweaver.Orchestrator.SourceControlSecretRedemptionClient>()
+                        .ConfigurePrimaryHttpMessageHandler(brokerHandler);
+                if (sourceControlHandler is not null)
+                    services.AddHttpClient<GitHubSourceControlAdapter>()
+                        .ConfigurePrimaryHttpMessageHandler(sourceControlHandler);
+                if (policyOptions is not null)
+                    services.AddSingleton(policyOptions);
                 if (objectStore is not null)
                     services.AddSingleton<IObjectStore>(objectStore);
                 if (sandboxProvider is not null)
                     services.AddSingleton<ICoordinatorSandboxResourceProvider>(sandboxProvider);
             });
+        }
+    }
+
+    private sealed class ControlledGitHubApi(string credential)
+    {
+        private const string HeadSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        private const string BaseSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        private readonly List<string> _requests = [];
+        private int _mergeRequestCount;
+        private string? _lastMergeRequestBody;
+
+        public IReadOnlyList<string> Requests
+        {
+            get
+            {
+                lock (_requests)
+                    return _requests.ToArray();
+            }
+        }
+
+        public HttpMessageHandler CreateHandler() => new Handler(this);
+
+        public int MergeRequestCount => Volatile.Read(ref _mergeRequestCount);
+        public Func<HttpRequestMessage, CancellationToken, Task>? BeforeResponseAsync { get; set; }
+
+        public string? LastMergeRequestBody
+        {
+            get
+            {
+                lock (_requests)
+                    return _lastMergeRequestBody;
+            }
+        }
+
+        private async Task<HttpResponseMessage> RespondAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var uri = request.RequestUri
+                ?? throw new InvalidOperationException("GitHub request URI was missing.");
+            var requestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            lock (_requests)
+            {
+                _requests.Add(request.Method.Method + " " + uri.PathAndQuery);
+                if (request.Method == HttpMethod.Put &&
+                    uri.AbsolutePath == "/repos/octo/agentweaver/pulls/17/merge")
+                {
+                    _lastMergeRequestBody = requestBody;
+                    Interlocked.Increment(ref _mergeRequestCount);
+                }
+            }
+
+            if (request.Headers.Authorization?.Scheme != "Bearer" ||
+                request.Headers.Authorization.Parameter != credential)
+                return Json(HttpStatusCode.Unauthorized, "{}");
+
+            if (BeforeResponseAsync is { } beforeResponse)
+                await beforeResponse(request, cancellationToken).ConfigureAwait(false);
+
+            if (request.Method == HttpMethod.Get &&
+                uri.AbsolutePath == "/repos/octo/agentweaver")
+                return Json(HttpStatusCode.OK,
+                    "{\"id\":12345,\"full_name\":\"octo/agentweaver\",\"default_branch\":\"main\"," +
+                    "\"private\":false,\"created_at\":\"2020-01-01T00:00:00Z\"," +
+                    "\"permissions\":{\"pull\":true,\"push\":true}}");
+
+            if (request.Method == HttpMethod.Post &&
+                uri.AbsolutePath == "/repos/octo/agentweaver/issues")
+                return Json(HttpStatusCode.Created,
+                    "{\"number\":41,\"title\":\"Integration issue\"," +
+                    "\"html_url\":\"https://github.com/octo/agentweaver/issues/41\",\"state\":\"open\"}");
+
+            if (request.Method == HttpMethod.Post &&
+                uri.AbsolutePath == "/repos/octo/agentweaver/pulls")
+                return Json(HttpStatusCode.UnprocessableEntity, "{\"message\":\"Validation failed\"}");
+
+            if (request.Method == HttpMethod.Get &&
+                uri.AbsolutePath == "/repos/octo/agentweaver/pulls" &&
+                uri.Query.Contains("state=open", StringComparison.Ordinal))
+                return Json(HttpStatusCode.OK, "[" + PullRequestJson() + "]");
+
+            if (request.Method == HttpMethod.Get &&
+                uri.AbsolutePath == "/repos/octo/agentweaver/pulls/17")
+                return Json(HttpStatusCode.OK, PullRequestJson());
+
+            if (request.Method == HttpMethod.Get &&
+                uri.AbsolutePath == "/repos/octo/agentweaver/pulls/17/reviews")
+                return Json(HttpStatusCode.OK,
+                    "[{\"id\":11,\"user\":{\"login\":\"reviewer\"},\"state\":\"APPROVED\"," +
+                    "\"submitted_at\":\"2026-10-07T12:00:00Z\"}]");
+
+            if (request.Method == HttpMethod.Get &&
+                uri.AbsolutePath == "/repos/octo/agentweaver/rules/branches/main")
+                return Json(HttpStatusCode.OK, "[]");
+
+            if (request.Method == HttpMethod.Put &&
+                uri.AbsolutePath == "/repos/octo/agentweaver/pulls/17/merge")
+                return Json(HttpStatusCode.OK,
+                    "{\"merged\":true,\"sha\":\"cccccccccccccccccccccccccccccccccccccccc\"}");
+
+            return Json(HttpStatusCode.NotFound, "{\"message\":\"Unexpected controlled GitHub request\"}");
+        }
+
+        private static string PullRequestJson() =>
+            "{\"number\":17,\"html_url\":\"https://github.com/octo/agentweaver/pull/17\"," +
+            "\"state\":\"open\",\"merged\":false," +
+            "\"head\":{\"ref\":\"feature/source-control\",\"sha\":\"" + HeadSha +
+            "\",\"repo\":{\"full_name\":\"octo/agentweaver\"}}," +
+            "\"base\":{\"ref\":\"main\",\"sha\":\"" + BaseSha +
+            "\",\"repo\":{\"full_name\":\"octo/agentweaver\"}}}";
+
+        private static HttpResponseMessage Json(HttpStatusCode status, string content) =>
+            new(status)
+            {
+                Content = new StringContent(content, Encoding.UTF8, "application/json")
+            };
+
+        private sealed class Handler(ControlledGitHubApi api) : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return api.RespondAsync(request, cancellationToken);
+            }
         }
     }
 

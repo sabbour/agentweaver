@@ -17,6 +17,7 @@
     <ProjectReference Include="..\..\..\packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
+    <ProjectReference Include="..\..\..\packages\Agentweaver.SourceControl\Agentweaver.SourceControl.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Migrations\001_coordination_owner.sql" />
@@ -27,5 +28,6 @@
     <EmbeddedResource Include="Migrations\006_session_fork_admission.sql" />
     <EmbeddedResource Include="Migrations\007_execution_outcomes_and_recovery.sql" />
     <EmbeddedResource Include="Migrations\008_run_selection_context_versions.sql" />
+    <EmbeddedResource Include="Migrations\009_source_control_owner.sql" />
   </ItemGroup>
 </Project>

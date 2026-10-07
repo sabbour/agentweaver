@@ -26,6 +26,8 @@ internal sealed class CoordinatorDecisionOwnerStore
     private readonly string _decisions;
     private readonly string _gates;
     private readonly string _grants;
+    private readonly string _sourceControlPins;
+    private readonly string _sourceControlIntents;
     private readonly string _outbox;
     private readonly TimeProvider _timeProvider;
     private readonly CoordinatorRunSelectionContextStore _runSelectionContexts;
@@ -53,6 +55,8 @@ internal sealed class CoordinatorDecisionOwnerStore
         _decisions = $"{quotedSchema}.coordinator_decisions";
         _gates = $"{quotedSchema}.coordinator_gates";
         _grants = $"{quotedSchema}.executable_action_grants";
+        _sourceControlPins = $"{quotedSchema}.source_control_repository_pins";
+        _sourceControlIntents = $"{quotedSchema}.source_control_merge_intents";
         _outbox = $"{quotedSchema}.coordinator_decision_outbox";
         _runSelectionContexts = runSelectionContexts;
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -876,6 +880,38 @@ internal sealed class CoordinatorDecisionOwnerStore
                 },
                 cancellationToken).ConfigureAwait(false);
         }
+
+        await SourceControlMergeGrantProducer.IssueApprovedIntentsAsync(
+            connection,
+            transaction,
+            _sourceControlIntents,
+            _sourceControlPins,
+            _decisions,
+            _grants,
+            _outbox,
+            _runSelectionContexts.RestoreSourceControlRepositoryPin,
+            actor,
+            identity,
+            selection,
+            binding,
+            state,
+            decisionId,
+            requestId,
+            stateVersion,
+            _timeProvider,
+            cancellationToken).ConfigureAwait(false);
+        await SourceControlMergeGrantProducer.TrackApprovalRequestAsync(
+            connection,
+            transaction,
+            _sourceControlIntents,
+            _decisions,
+            actor,
+            identity,
+            binding,
+            state,
+            decisionId,
+            stateVersion,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static ImmutableArray<ActionGrantIntent> GetLegalActionIntents(
