@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Sandbox.AgentSandbox;
@@ -1053,11 +1054,26 @@ public sealed class AgentSandboxProvider : ISandboxProvider
             !string.Equals(ReadOptionalString(claim, "spec", "warmPoolRef", "name"),
                 descriptor.WarmPoolName, StringComparison.Ordinal) ||
             !TryGetAnnotation(claim, RecoveryAnnotation, out var recoveryJson) ||
-            !string.Equals(
-                recoveryJson,
-                JsonSerializer.Serialize(descriptor with { ClaimUid = null }, JsonOptions),
-                StringComparison.Ordinal))
+            !RecoveryDescriptorMatches(recoveryJson, descriptor with { ClaimUid = null }))
             throw ProviderResourceMismatch("The current claim does not match the exact pinned sandbox owner and generation.");
+    }
+
+    private static bool RecoveryDescriptorMatches(
+        string recoveryJson,
+        AgentSandboxRecoveryDescriptor expected)
+    {
+        try
+        {
+            var actual = JsonNode.Parse(recoveryJson);
+            var expectedJson = JsonSerializer.SerializeToNode(expected, JsonOptions);
+            return actual is not null &&
+                   expectedJson is not null &&
+                   JsonNode.DeepEquals(actual, expectedJson);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static void ValidateSandboxOwner(JsonElement sandbox, string claimUid)

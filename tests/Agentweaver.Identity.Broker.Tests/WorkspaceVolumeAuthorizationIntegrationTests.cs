@@ -6,7 +6,9 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
@@ -262,15 +264,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         var selectionObserver = new RunSelectionObserver();
-        using var sandboxKubernetesHttpClient = new HttpClient
+        var environmentId = $"environment-{Guid.NewGuid():N}";
+        var volumeId = $"volume-{Guid.NewGuid():N}";
+        var sandboxKubernetesHandler = new FakeKubernetesHandler(
+            project.ProjectId,
+            environmentId,
+            volumeId,
+            "claim-1",
+            "claim-uid");
+        using var sandboxKubernetesHttpClient = new HttpClient(sandboxKubernetesHandler)
         {
             BaseAddress = new Uri("https://kubernetes.test/")
         };
         var sandboxKubernetesClient = new KubernetesAgentSandboxClient(sandboxKubernetesHttpClient);
         var provider = new CountingWorkspaceVolumeProvider(sandboxKubernetesClient.ClusterIdentity);
-        var sandboxProvider = new CountingSandboxProvider(
-            sandboxOptions,
-            sandboxKubernetesClient.ClusterIdentity);
+        var sandboxProvider = new AgentSandboxProvider(sandboxOptions, sandboxKubernetesClient);
         var ciliumStore = new InMemoryCiliumPolicyResourceStore();
         await using var environment = await WorkspaceVolumeApiTestServer.StartAsync(
             _connectionString,
@@ -285,8 +293,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ciliumOptions,
             ciliumStore);
         var lifecycleStore = environment.CreateStore();
-        var environmentId = $"environment-{Guid.NewGuid():N}";
-        var volumeId = $"volume-{Guid.NewGuid():N}";
         var environmentOwner = new EnvironmentOwnerIdentity(
             TenantId, project.ProjectId, RunId, environmentId);
         var registration = await lifecycleStore.TransitionAsync(
@@ -400,6 +406,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ReadOnly: false,
             NetworkPolicyGeneration: 1,
             "sandbox-provision");
+        EnvironmentSandboxResult sandboxProvisionResult;
         using (var sandboxProvision = await SendJsonAsync(
             environment.Client,
             HttpMethod.Post,
@@ -408,11 +415,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             sandboxProvisionRequest))
         {
             await AssertStatusAsync(sandboxProvision, HttpStatusCode.Accepted);
-            var result = await ReadJsonAsync<EnvironmentSandboxResult>(sandboxProvision);
-            Assert.Equal(SandboxLeaseState.Active, result.State);
-            Assert.False(result.ReadyForDispatch);
-            Assert.Equal(1, sandboxProvider.ProvisionCalls);
+            sandboxProvisionResult = await ReadJsonAsync<EnvironmentSandboxResult>(sandboxProvision);
+            Assert.Equal(SandboxLeaseState.Active, sandboxProvisionResult.State);
+            Assert.False(sandboxProvisionResult.ReadyForDispatch);
         }
+        Assert.Equal(3, sandboxKubernetesHandler.CreateCount);
 
         using (var sandboxInspect = await SendAsync(
             environment.Client,
@@ -425,12 +432,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var result = await ReadJsonAsync<EnvironmentSandboxResult>(sandboxInspect);
             Assert.Equal(SandboxObservedState.Pending, result.Observation!.State);
             Assert.False(result.ReadyForDispatch);
-            Assert.Equal(2, sandboxProvider.DescribeCalls);
+            Assert.Equal(2, sandboxKubernetesHandler.SandboxObjectReadCount);
         }
 
         var sandboxLease = await sandboxLeaseStore.GetCurrentAsync(fence, CancellationToken.None);
         Assert.NotNull(sandboxLease);
         Assert.Equal(SandboxLeaseState.Active, sandboxLease.State);
+        Assert.Equal(sandboxProvisionResult.Resource, sandboxLease.ProvisionedResource!.Resource);
+        Assert.Equal(sandboxProvisionResult.Resource!.ResourceId, sandboxLease.ProvisionedResource.Resource.ResourceId);
         var abandon = new SandboxAbandonApiRequest(
             sandboxLease.ResourceGeneration,
             sandboxLease.ProviderFencingGeneration,
@@ -467,6 +476,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 IdempotencyKey = "stale-sandbox-fence"
             }))
             await AssertConflictAsync(staleFence, "sandbox_fence_stale");
+        Assert.Empty(sandboxKubernetesHandler.DeleteRequests);
 
         var selectionReadsBeforeSandboxRevocation = selectionObserver.SelectionReadCount;
         selectionObserver.RevokeAfterNextSelectionRead(() =>
@@ -482,7 +492,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             abandon with { IdempotencyKey = "revoked-sandbox-abandon" }))
             await AssertForbiddenAsync(revokedSandboxAbandon, "authorization_changed");
         Assert.Equal(selectionReadsBeforeSandboxRevocation + 1, selectionObserver.SelectionReadCount);
-        Assert.Equal(0, sandboxProvider.ReleaseCalls);
+        Assert.Empty(sandboxKubernetesHandler.DeleteRequests);
         var unchangedSandboxLease = await sandboxLeaseStore.GetCurrentAsync(fence, CancellationToken.None);
         Assert.NotNull(unchangedSandboxLease);
         Assert.Equal(sandboxLease.State, unchangedSandboxLease.State);
@@ -499,12 +509,19 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var result = await ReadJsonAsync<EnvironmentSandboxResult>(sandboxAbandon);
             Assert.Equal(SandboxLeaseState.Released, result.State);
         }
-        Assert.Equal(1, sandboxProvider.ReleaseCalls);
-        var exactRelease = Assert.IsType<SandboxReleaseRequest>(sandboxProvider.LastReleaseRequest);
-        Assert.Equal(fence, exactRelease.Fence);
-        Assert.Equal("sandbox-claim-uid", exactRelease.Resource.ResourceId);
-        Assert.Equal(sandboxLease.ResourceGeneration, exactRelease.Resource.Generation);
-        Assert.Equal(sandboxLease.ProviderFencingGeneration, exactRelease.FencingGeneration);
+        Assert.Equal(3, sandboxKubernetesHandler.DeleteRequests.Count);
+        Assert.All(sandboxKubernetesHandler.DeleteRequests, deletion =>
+        {
+            Assert.True(deletion.UidPreconditionMatched);
+            Assert.Equal("Foreground", deletion.PropagationPolicy);
+        });
+        var firstClaimDelete = Assert.Single(
+            sandboxKubernetesHandler.DeleteRequests,
+            deletion => deletion.Resource == "sandboxclaims");
+        Assert.Equal(sandboxLease.ProvisionedResource.Resource.ResourceId, firstClaimDelete.ExpectedUid);
+        Assert.Equal(fence, sandboxLease.Fence);
+        Assert.Equal(sandboxLease.ResourceGeneration, sandboxLease.ProvisionedResource.Resource.Generation);
+        Assert.Equal(sandboxLease.ProviderFencingGeneration, sandboxLease.CurrentFencingGeneration);
         var releasedSandboxLease = await sandboxLeaseStore.GetAsync(
             fence, sandboxLease.ResourceGeneration, CancellationToken.None);
         Assert.NotNull(releasedSandboxLease);
@@ -517,9 +534,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             owner.Token,
             abandon))
             await AssertStatusAsync(replayAbandon, HttpStatusCode.OK);
-        Assert.Equal(1, sandboxProvider.ReleaseCalls);
+        Assert.Equal(3, sandboxKubernetesHandler.DeleteRequests.Count);
 
-        var callbackGate = sandboxProvider.DeferNextProvision();
+        var callbackGate = sandboxKubernetesHandler.DeferNextClaimCreateResponse();
         var lateProvisionRequest = sandboxProvisionRequest with
         {
             IdempotencyKey = "late-sandbox-provision"
@@ -548,14 +565,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var result = await ReadJsonAsync<EnvironmentSandboxResult>(abandonDuringProvision);
             Assert.Equal(SandboxLeaseState.Releasing, result.State);
         }
-        Assert.Equal(1, sandboxProvider.ReleaseCalls);
+        Assert.Equal(3, sandboxKubernetesHandler.DeleteRequests.Count);
         callbackGate.AllowCompletion.TrySetResult();
+        EnvironmentSandboxResult lateProvisionResult;
         using (var lateProvision = await lateProvisionTask.WaitAsync(TimeSpan.FromSeconds(30)))
         {
             await AssertStatusAsync(lateProvision, HttpStatusCode.Accepted);
-            var result = await ReadJsonAsync<EnvironmentSandboxResult>(lateProvision);
-            Assert.Equal(SandboxLeaseState.Releasing, result.State);
-            Assert.False(result.ReadyForDispatch);
+            lateProvisionResult = await ReadJsonAsync<EnvironmentSandboxResult>(lateProvision);
+            Assert.Equal(SandboxLeaseState.Releasing, lateProvisionResult.State);
+            Assert.False(lateProvisionResult.ReadyForDispatch);
         }
         var fencedLateLease = await sandboxLeaseStore.GetAsync(
             fence, lateLease.ResourceGeneration, CancellationToken.None);
@@ -563,6 +581,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(SandboxLeaseState.Releasing, fencedLateLease.State);
         Assert.True(fencedLateLease.CurrentFencingGeneration > fencedLateLease.ProviderFencingGeneration);
         Assert.NotNull(fencedLateLease.ProvisionedResource);
+        Assert.Equal(fencedLateLease.ProvisionedResource.Resource, lateProvisionResult.Resource);
         using (var reconcileLateProvision = await SendAsync(
             environment.Client,
             HttpMethod.Post,
@@ -570,18 +589,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             owner.Token,
             [TenantId]))
             await AssertStatusAsync(reconcileLateProvision, HttpStatusCode.OK);
-        Assert.Equal(2, sandboxProvider.ReleaseCalls);
+        Assert.Equal(6, sandboxKubernetesHandler.DeleteRequests.Count);
         var releasedLateLease = await sandboxLeaseStore.GetAsync(
             fence, lateLease.ResourceGeneration, CancellationToken.None);
         Assert.NotNull(releasedLateLease);
         Assert.Equal(SandboxLeaseState.Released, releasedLateLease.State);
         Assert.False(releasedLateLease.IsCurrent);
+        var claimDeletes = sandboxKubernetesHandler.DeleteRequests
+            .Where(deletion => deletion.Resource == "sandboxclaims")
+            .ToArray();
+        Assert.Equal(2, claimDeletes.Length);
         Assert.Equal(
-            fencedLateLease.ProvisionedResource!.Resource,
-            sandboxProvider.LastReleaseRequest!.Resource);
-        Assert.Equal(lateLease.ResourceGeneration, sandboxProvider.LastReleaseRequest!.Resource.Generation);
-        Assert.Equal(lateLease.ProviderFencingGeneration, sandboxProvider.LastReleaseRequest.FencingGeneration);
-        Assert.Equal(fence, sandboxProvider.LastReleaseRequest.Fence);
+            fencedLateLease.ProvisionedResource.Resource.ResourceId,
+            claimDeletes[1].ExpectedUid);
+        Assert.Equal(lateLease.ResourceGeneration, fencedLateLease.ProvisionedResource.Resource.Generation);
+        Assert.Equal(lateLease.ProviderFencingGeneration, fencedLateLease.ProviderFencingGeneration);
+        Assert.Equal(fence, fencedLateLease.Fence);
         await AssertVolumeUnchangedAsync(lifecycleStore, fence, volumeId, beforeDeniedWrites);
         var activeAfterSandboxRetirement = await lifecycleStore.GetAsync(
             environmentOwner, CancellationToken.None);
@@ -673,115 +696,277 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(expected.Resource, actual.Resource);
     }
 
-    private sealed class CountingSandboxProvider(
-        AgentSandboxOptions options,
-        string clusterIdentity) : ISandboxProvider
+    private sealed class FakeKubernetesHandler : HttpMessageHandler
     {
-        private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-        private ProvisionGate? _nextProvisionGate;
-        private int _provisionCalls;
-        private int _describeCalls;
-        private int _releaseCalls;
-        private SandboxProvisionedResource? _lastProvisionedResource;
-        private Guid _lastOperationId;
+        private const string KubernetesNamespace = "agentweaver";
+        private const string SandboxApiPrefix = "apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes";
+        private const string ClaimUidLabel = "agents.x-k8s.io/claim-uid";
+        private readonly Dictionary<string, JsonNode> _resources = new(StringComparer.Ordinal);
+        private readonly List<JsonNode> _pods = [];
+        private ClaimCreateResponseGate? _nextClaimGate;
+        private int _createCount;
+        private int _sandboxObjectReadCount;
 
-        public int ProvisionCalls => Volatile.Read(ref _provisionCalls);
-        public int DescribeCalls => Volatile.Read(ref _describeCalls);
-        public int ReleaseCalls => Volatile.Read(ref _releaseCalls);
-        public SandboxReleaseRequest? LastReleaseRequest { get; private set; }
+        public int CreateCount => Volatile.Read(ref _createCount);
+        public int SandboxObjectReadCount => Volatile.Read(ref _sandboxObjectReadCount);
+        public List<DeleteRequestObservation> DeleteRequests { get; } = [];
 
-        public ProvisionGate DeferNextProvision()
+        public FakeKubernetesHandler(
+            string projectId,
+            string environmentId,
+            string volumeId,
+            string workspaceClaimName,
+            string workspaceClaimUid)
         {
-            var gate = new ProvisionGate();
-            if (Interlocked.CompareExchange(ref _nextProvisionGate, gate, null) is not null)
-                throw new InvalidOperationException("A Sandbox provider call is already deferred.");
+            _resources["apis/node.k8s.io/v1/runtimeclasses/kata-vm"] = JsonNode.Parse(
+                """
+                {"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass","metadata":{"name":"kata-vm"},
+                 "handler":"kata-qemu"}
+                """)!;
+            _resources[$"api/v1/namespaces/{KubernetesNamespace}/persistentvolumeclaims/{workspaceClaimName}"] =
+                JsonSerializer.SerializeToNode(new
+                {
+                    apiVersion = "v1",
+                    kind = "PersistentVolumeClaim",
+                    metadata = new
+                    {
+                        name = workspaceClaimName,
+                        @namespace = KubernetesNamespace,
+                        uid = workspaceClaimUid,
+                        annotations = new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["agentweaver.dev/project-id"] = projectId,
+                            ["agentweaver.dev/volume-id"] = volumeId,
+                            ["agentweaver.dev/generation"] = "1",
+                            ["agentweaver.dev/environment-id"] = environmentId
+                        }
+                    },
+                    status = new { phase = "Bound" }
+                })!;
+        }
+
+        public ClaimCreateResponseGate DeferNextClaimCreateResponse()
+        {
+            var gate = new ClaimCreateResponseGate();
+            if (Interlocked.CompareExchange(ref _nextClaimGate, gate, null) is not null)
+                throw new InvalidOperationException("A Sandbox claim create response is already deferred.");
             return gate;
         }
 
-        public async Task<SandboxProvisionedResource> ProvisionAsync(
-            SandboxProvisionRequest request,
-            CancellationToken cancellationToken = default)
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref _provisionCalls);
-            _lastOperationId = request.OperationId;
-            var claimUid = request.ResourceGeneration == 1
-                ? "sandbox-claim-uid"
-                : $"sandbox-claim-uid-{request.ResourceGeneration}";
-            var resource = new ProviderResourceRef(
-                ProviderSeam.Sandbox,
-                request.Candidate.ProviderId,
-                claimUid,
-                request.ResourceGeneration);
-            var binding = new SandboxProviderBindingSnapshot(
-                request.Candidate.ProviderId,
-                request.Candidate.AdapterVersion.ToString(),
-                request.Candidate.OptionsSchemaVersion,
-                request.Candidate.OptionsRevision,
-                JsonSerializer.SerializeToElement(options, JsonOptions),
-                JsonSerializer.SerializeToElement(new
-                {
-                    clusterIdentity,
-                    @namespace = options.Namespace,
-                    claimUid = resource.ResourceId,
-                    operationId = request.OperationId.ToString("N")
-                }, JsonOptions));
-            var provisioned = new SandboxProvisionedResource(
-                resource,
-                new SandboxEndpointReference(Guid.NewGuid()),
-                new SandboxPlacementReference("test-placement"),
-                request.Candidate.AdvertisedCapabilities,
-                [],
-                binding).Validate();
-            _lastProvisionedResource = provisioned;
-
-            var gate = Interlocked.Exchange(ref _nextProvisionGate, null);
-            if (gate is not null)
+            var path = request.RequestUri!.AbsolutePath.TrimStart('/');
+            if (request.Method == HttpMethod.Get)
             {
-                gate.Started.TrySetResult();
-                await gate.AllowCompletion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                if (path == $"api/v1/namespaces/{KubernetesNamespace}/pods")
+                    return JsonResponse(HttpStatusCode.OK, CreateList(_pods));
+                if (path == SandboxApiPrefix)
+                    return JsonResponse(
+                        HttpStatusCode.OK,
+                        CreateList(_resources
+                            .Where(resource => resource.Key.StartsWith(SandboxApiPrefix + "/", StringComparison.Ordinal))
+                            .Select(resource => resource.Value)));
+                if (_resources.TryGetValue(path, out var resource))
+                {
+                    if (path.StartsWith(SandboxApiPrefix + "/", StringComparison.Ordinal))
+                        Interlocked.Increment(ref _sandboxObjectReadCount);
+                    return JsonResponse(HttpStatusCode.OK, resource.DeepClone());
+                }
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
             }
-            return provisioned;
+
+            if (request.Method == HttpMethod.Post)
+            {
+                var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken)
+                    .ConfigureAwait(false))!;
+                var uid = $"kubernetes-uid-{Interlocked.Increment(ref _createCount)}";
+                body["metadata"]!["uid"] = uid;
+                var name = body["metadata"]!["name"]!.GetValue<string>();
+                var resourcePath = $"{path}/{Uri.EscapeDataString(name)}";
+                var stored = body.DeepClone();
+                _resources[resourcePath] = stored;
+                if (path.EndsWith("/sandboxclaims", StringComparison.Ordinal))
+                {
+                    AddPendingSandbox(stored);
+                    var gate = Interlocked.Exchange(ref _nextClaimGate, null);
+                    if (gate is not null)
+                    {
+                        gate.Started.TrySetResult();
+                        await gate.AllowCompletion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                return JsonResponse(HttpStatusCode.Created, body);
+            }
+
+            if (request.Method == HttpMethod.Patch)
+            {
+                var patch = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken)
+                    .ConfigureAwait(false))!.AsArray();
+                if (!_resources.TryGetValue(path, out var current))
+                    return new HttpResponseMessage(HttpStatusCode.NotFound);
+                var expectedUid = patch[0]!["value"]!.GetValue<string>();
+                if (current["metadata"]!["uid"]!.GetValue<string>() != expectedUid)
+                    return new HttpResponseMessage(HttpStatusCode.Conflict);
+                var annotationPath = patch[1]!["path"]!.GetValue<string>();
+                var annotationName = annotationPath["/metadata/annotations/".Length..]
+                    .Replace("~1", "/", StringComparison.Ordinal)
+                    .Replace("~0", "~", StringComparison.Ordinal);
+                current["metadata"]!["annotations"]![annotationName] =
+                    patch[1]!["value"]!.GetValue<string>();
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+
+            if (request.Method == HttpMethod.Delete)
+            {
+                var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken)
+                    .ConfigureAwait(false))!;
+                var expectedUid = body["preconditions"]!["uid"]!.GetValue<string>();
+                var propagationPolicy = body["propagationPolicy"]!.GetValue<string>();
+                var resourceName = path.Split('/')[^2];
+                var matched = _resources.TryGetValue(path, out var current) &&
+                    current["metadata"]!["uid"]!.GetValue<string>() == expectedUid;
+                DeleteRequests.Add(new(
+                    resourceName,
+                    expectedUid,
+                    propagationPolicy,
+                    matched));
+                if (!matched)
+                    return new HttpResponseMessage(HttpStatusCode.Conflict);
+                _resources.Remove(path);
+                if (resourceName == "sandboxclaims")
+                    RemoveClaimChildren(expectedUid);
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.MethodNotAllowed);
         }
 
-        public Task<SandboxObservation> DescribeAsync(
-            SandboxDescribeRequest request,
-            CancellationToken cancellationToken = default)
+        private void AddPendingSandbox(JsonNode claim)
         {
-            Interlocked.Increment(ref _describeCalls);
-            var resource = _lastProvisionedResource
-                ?? throw new InvalidOperationException("No test Sandbox resource has been provisioned.");
-            if (resource.Resource != request.Resource)
-                throw new InvalidOperationException("The described Sandbox resource is not the test provider's current resource.");
-            return Task.FromResult(new SandboxObservation(
-                request.Resource,
-                SandboxObservedState.Pending,
-                request.FencingGeneration,
-                VmIsolationVerified: true,
-                WorkspaceAttachmentVerified: true,
-                VerifiedNetworkGeneration: null,
-                StartupPhases: [],
-                ProvisionOperationId: _lastOperationId,
-                ProvisionedResource: resource).ValidateFor(request));
+            var metadata = claim["metadata"]!;
+            var claimUid = metadata["uid"]!.GetValue<string>();
+            var claimName = metadata["name"]!.GetValue<string>();
+            var warmPoolName = claim["spec"]!["warmPoolRef"]!["name"]!.GetValue<string>();
+            var warmPool = _resources[
+                $"apis/extensions.agents.x-k8s.io/v1beta1/namespaces/{KubernetesNamespace}/sandboxwarmpools/{warmPoolName}"];
+            var templateName = warmPool["spec"]!["sandboxTemplateRef"]!["name"]!.GetValue<string>();
+            var template = _resources[
+                $"apis/extensions.agents.x-k8s.io/v1beta1/namespaces/{KubernetesNamespace}/sandboxtemplates/{templateName}"];
+            var podTemplate = template["spec"]!["podTemplate"]!;
+            var podLabels = podTemplate["metadata"]!["labels"]!.DeepClone().AsObject();
+            podLabels[ClaimUidLabel] = claimUid;
+            var sandboxName = $"sandbox-{claimUid}";
+            var sandboxUid = $"sandbox-uid-{claimUid}";
+            claim["status"] = new JsonObject
+            {
+                ["sandbox"] = new JsonObject { ["name"] = sandboxName }
+            };
+            var sandboxLabels = metadata["labels"]!.DeepClone().AsObject();
+            sandboxLabels[ClaimUidLabel] = claimUid;
+            _resources[$"{SandboxApiPrefix}/{sandboxName}"] = JsonSerializer.SerializeToNode(new
+            {
+                apiVersion = "agents.x-k8s.io/v1beta1",
+                kind = "Sandbox",
+                metadata = new
+                {
+                    name = sandboxName,
+                    @namespace = KubernetesNamespace,
+                    uid = sandboxUid,
+                    generation = 1,
+                    labels = sandboxLabels,
+                    ownerReferences = new[]
+                    {
+                        new { kind = "SandboxClaim", name = claimName, uid = claimUid, controller = true }
+                    }
+                },
+                status = new { conditions = Array.Empty<object>() }
+            })!;
+            _pods.Add(JsonSerializer.SerializeToNode(new
+            {
+                apiVersion = "v1",
+                kind = "Pod",
+                metadata = new
+                {
+                    name = $"sandbox-pod-{claimUid}",
+                    @namespace = KubernetesNamespace,
+                    uid = $"pod-uid-{claimUid}",
+                    labels = podLabels,
+                    ownerReferences = new[]
+                    {
+                        new { kind = "Sandbox", name = sandboxName, uid = sandboxUid, controller = true }
+                    }
+                },
+                spec = podTemplate["spec"]!.DeepClone(),
+                status = new
+                {
+                    phase = "Pending",
+                    conditions = new[]
+                    {
+                        new
+                        {
+                            type = "PodScheduled",
+                            status = "True",
+                            lastTransitionTime = "2026-10-06T12:00:00Z"
+                        }
+                    },
+                    containerStatuses = new[]
+                    {
+                        new
+                        {
+                            name = "agenthost",
+                            ready = false,
+                            state = new { waiting = new { reason = "ContainerCreating" } }
+                        }
+                    }
+                }
+            })!);
         }
 
-        public Task<IReadOnlyList<SandboxObservation>> ListOwnedAsync(
-            SandboxListOwnedRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException("The integration scenario does not exercise provider recovery.");
-
-        public Task<SandboxReleaseReceipt> ReleaseAsync(
-            SandboxReleaseRequest request,
-            CancellationToken cancellationToken = default)
+        private void RemoveClaimChildren(string claimUid)
         {
-            Interlocked.Increment(ref _releaseCalls);
-            LastReleaseRequest = request;
-            return Task.FromResult(new SandboxReleaseReceipt(
-                request.Resource,
-                request.IdempotencyKey,
-                SandboxReleaseDisposition.Released).ValidateFor(request));
+            var sandboxPaths = _resources
+                .Where(resource =>
+                    resource.Key.StartsWith(SandboxApiPrefix + "/", StringComparison.Ordinal) &&
+                    HasOwnerUid(resource.Value["metadata"]!, claimUid))
+                .Select(resource => resource.Key)
+                .ToArray();
+            var sandboxUids = sandboxPaths.Select(path =>
+                _resources[path]["metadata"]!["uid"]!.GetValue<string>()).ToHashSet(StringComparer.Ordinal);
+            foreach (var path in sandboxPaths)
+                _resources.Remove(path);
+            _pods.RemoveAll(pod =>
+                HasOwnerUid(pod["metadata"]!, claimUid) ||
+                pod["metadata"]!["ownerReferences"]!.AsArray().Any(owner =>
+                    owner?["uid"]?.GetValue<string>() is { } uid && sandboxUids.Contains(uid)));
         }
 
-        public sealed class ProvisionGate
+        private static bool HasOwnerUid(JsonNode metadata, string uid) =>
+            metadata["ownerReferences"]!.AsArray().Any(owner =>
+                owner?["uid"]?.GetValue<string>() == uid);
+
+        private static JsonObject CreateList(IEnumerable<JsonNode> resources)
+        {
+            var items = new JsonArray();
+            foreach (var resource in resources)
+                items.Add(resource.DeepClone());
+            return new JsonObject { ["items"] = items };
+        }
+
+        private static HttpResponseMessage JsonResponse(HttpStatusCode status, JsonNode body) =>
+            new(status)
+            {
+                Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
+            };
+
+        public sealed record DeleteRequestObservation(
+            string Resource,
+            string ExpectedUid,
+            string PropagationPolicy,
+            bool UidPreconditionMatched);
+
+        public sealed class ClaimCreateResponseGate
         {
             public TaskCompletionSource Started { get; } =
                 new(TaskCreationOptions.RunContinuationsAsynchronously);

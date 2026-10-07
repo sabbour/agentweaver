@@ -160,10 +160,12 @@ change cluster configuration.
 
 The focused commands and limits are listed in the
 [Sandbox testing guide](../guide/environment-sandbox-testing.md). The provider
-test uses a fake Kubernetes HTTP handler. The production-authority API
-integration uses real Broker, Projects, and Environment HTTP paths plus
-disposable PostgreSQL; it controls only the Workspace provider, Sandbox
-provider, and Cilium resource-store boundaries. These tests do not prove
+test and production-authority API integration use the production
+`AgentSandboxProvider` and `KubernetesAgentSandboxClient` against a fake
+Kubernetes HTTP API. The integration also uses real Broker, Projects, and
+Environment HTTP paths plus disposable PostgreSQL; only the Workspace provider
+and Cilium policy resource store are controlled. The fake Kubernetes boundary
+records object ownership and UID-preconditioned deletes. These tests do not prove
 RuntimeClass or nested-virtualization availability on AKS, datapath enforcement,
 AgentHost configuration, run pin acceptance by Core, or deployed service
 configuration.

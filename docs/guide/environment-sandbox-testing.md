@@ -42,10 +42,12 @@ immutable run selection, Environment HTTP routes, and disposable PostgreSQL
 lease/lifecycle state. It covers authorized provision, inspect, repeated
 placement-only abandonment, exact resource UID/generation/fence, stale fences,
 viewer/foreign/selection denials, role revocation after selection, and a late
-provider callback fenced into retirement. Only the Workspace provider, Sandbox
-provider, and Cilium policy-resource boundary are controlled; it is not a live
-Kubernetes or datapath test. Sandbox observations remain `Pending` without
-AgentHost configure evidence.
+provider callback gated at the Kubernetes claim-create response and fenced into
+retirement. It runs the production Sandbox provider and Kubernetes client
+against a fake Kubernetes HTTP API; only the Workspace provider and Cilium
+policy-resource boundary are controlled. It is not a live Kubernetes or
+datapath test. Sandbox observations remain `Pending` without AgentHost configure
+evidence.
 
 Build the service and all referenced provider projects with:
 
