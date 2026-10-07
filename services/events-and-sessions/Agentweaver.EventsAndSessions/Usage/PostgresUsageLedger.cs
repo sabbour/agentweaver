@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Agentweaver.Abstractions;
@@ -37,6 +39,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
     {
         UsageLedgerValidation.Validate(submission, binding, price);
         var canonical = UsageLedgerCanonicalizer.Serialize(submission, binding, price);
+        var payloadHash = HashCanonicalInput(canonical);
         var payload = JsonSerializer.Serialize(
             new StoredUsage(submission, binding, price), JsonOptions);
 
@@ -61,18 +64,19 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 input_tokens, output_tokens, cached_tokens, reasoning_tokens, request_count,
                 provider_units, provider_unit, duration_milliseconds, price_disposition,
                 price_amount, price_unit, unpriced_reason, rate_card_id, rate_card_version, rate_card_unit,
-                cost_binding, canonical_input, payload)
+                cost_binding, canonical_input, canonical_input_hash, payload)
             VALUES (
                 @contract_version, @tenant_id, @project_id, @run_id, @session_id, @event_id, @occurred_at,
                 @agent_id, @model_reference, @model_id, @meter_source, @selection_revision,
                 @input_tokens, @output_tokens, @cached_tokens, @reasoning_tokens, @request_count,
                 @provider_units, @provider_unit, @duration_milliseconds, @price_disposition,
                 @price_amount, @price_unit, @unpriced_reason, @rate_card_id, @rate_card_version, @rate_card_unit,
-                @cost_binding, @canonical_input, @payload)
+                @cost_binding, @canonical_input, @canonical_input_hash, @payload)
             ON CONFLICT (event_id) DO NOTHING
             RETURNING recorded_at
             """, connection, transaction);
         AddInsertParameters(insert, submission, binding, price, canonical, payload);
+        insert.Parameters.AddWithValue("canonical_input_hash", NpgsqlDbType.Varchar, payloadHash);
         DateTimeOffset? recordedAt = null;
         await using (var reader = await insert.ExecuteReaderAsync(cancellationToken))
             if (await reader.ReadAsync(cancellationToken))
@@ -82,7 +86,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
             await transaction.CommitAsync(cancellationToken);
             return new UsageIngestionResult(
                 new UsageLedgerEntry(
-                    submission, binding, price, recordedAt.Value), IsDuplicate: false);
+                    submission, binding, price, recordedAt.Value, payloadHash), IsDuplicate: false);
         }
 
         existing = await ReadByEventIdAsync(
@@ -229,7 +233,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT canonical_input, payload, recorded_at
+            SELECT canonical_input, payload, recorded_at, canonical_input_hash
             FROM {_quotedSchema}.usage_ledger
             WHERE event_id = @event_id
             FOR UPDATE
@@ -241,6 +245,9 @@ public sealed class PostgresUsageLedger : IUsageLedger
         var canonical = reader.GetString(0);
         var payloadJson = reader.GetString(1);
         var recordedAt = reader.GetFieldValue<DateTimeOffset>(2);
+        var payloadHash = reader.GetString(3);
+        if (!string.Equals(payloadHash, HashCanonicalInput(canonical), StringComparison.Ordinal))
+            throw new InvalidOperationException("The stored usage payload hash does not match its canonical input.");
         StoredUsage payload;
         try
         {
@@ -253,7 +260,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
         }
         return new StoredEntry(
             canonical,
-            new UsageLedgerEntry(payload.Usage, payload.CostBinding, payload.Price, recordedAt));
+            new UsageLedgerEntry(payload.Usage, payload.CostBinding, payload.Price, recordedAt, payloadHash));
     }
 
     private static UsageIngestionResult MatchDuplicate(StoredEntry existing, string canonical)
@@ -263,6 +270,9 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 "A usage event ID cannot be reused with changed scope, usage, model, binding, or pricing.");
         return new UsageIngestionResult(existing.Entry, IsDuplicate: true);
     }
+
+    private static string HashCanonicalInput(string canonical) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
 
     private void AddInsertParameters(
         NpgsqlCommand command,

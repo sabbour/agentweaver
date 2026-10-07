@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS {schema}.usage_ledger (
     rate_card_unit varchar(128),
     cost_binding jsonb,
     canonical_input text NOT NULL,
+    canonical_input_hash varchar(64) NOT NULL
+        CHECK (canonical_input_hash ~ '^[0-9a-f]{64}$'),
     payload jsonb NOT NULL,
     recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     PRIMARY KEY (tenant_id, project_id, run_id, event_id),

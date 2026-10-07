@@ -80,7 +80,7 @@
     {
       "type": "note",
       "over": ["api", "postgres"],
-      "label": "Schema v4 adds immutable usage and rate cards.\nStorage/pricing only; no authorized SDK usage-writing route."
+      "label": "Schema v4 commits usage hashes, prices, and rate cards.\nAccounting receipts are not SDK source authorization."
     },
     {
       "type": "message",

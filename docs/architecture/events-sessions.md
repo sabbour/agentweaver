@@ -43,7 +43,9 @@ Ordinary startup requires version 4 and verifies both usage tables.
 An entry records tenant, project, run, session, agent, model metadata, measurements,
 the Cost binding, and the price. Nullable measurements remain unknown rather
 than zero. A transaction commits the rate card and usage entry before returning.
-Identical event retries return the original entry. Changed content for the same
+The accounting receipt binds the canonical SHA-256 hash, attribution, immutable
+price, rate-card version, and commit timestamp. Identical retries return the original
+receipt. Changed content for the same
 event ID conflicts. Database triggers reject changes and truncation of history.
 
 Totals retain separate meter-source and unit groups. A missing measurement makes
@@ -62,6 +64,8 @@ These are storage and pricing primitives, not native SDK ingestion.
 no usage-writing route and registers no SDK producer. Existing typed Orchestrator
 action grants and opaque model references do not prove an SDK usage source.
 Trusted resolved-model provenance and current producer authority remain required.
+The accounting receipt proves a committed ledger entry, not SDK source authority.
+It remains separate from the required trusted source-observation receipt.
 
 ## Addressed-message owner integration
 

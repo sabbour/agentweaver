@@ -1,5 +1,7 @@
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
+using System.Security.Cryptography;
+using System.Text;
 using Npgsql;
 using NpgsqlTypes;
 using Xunit;
@@ -44,6 +46,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var duplicate = await reconstructed.AppendAsync(usage, binding, price);
         Assert.True(duplicate.IsDuplicate);
         Assert.Equal(original.Entry.RecordedAt, duplicate.Entry.RecordedAt);
+        Assert.Equal(original.Receipt, duplicate.Receipt);
         Assert.Equal(usage, duplicate.Entry.Usage);
         Assert.Equal(price.Amount, duplicate.Entry.Price.Amount);
         Assert.Equal(price.Unit, duplicate.Entry.Price.Unit);
@@ -84,6 +87,46 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             euroBinding,
             price with { Amount = 2m, Unit = "EUR", RateCard = euroCard });
         Assert.Equal(0, await RateCardCountAsync(euroCard.Id, euroCard.Version));
+    }
+
+    [Fact]
+    public async Task AccountingReceiptBindsCommittedCanonicalUsageAndImmutablePrice()
+    {
+        var usage = UsageContractTests.Submission();
+        var binding = UsageContractTests.Binding();
+        var price = UsageContractTests.Price();
+        var result = await _ledger.AppendAsync(usage, binding, price);
+        var receipt = result.Receipt;
+        var expectedHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+            UsageLedgerCanonicalizer.Serialize(usage, binding, price))));
+
+        Assert.Equal(usage.EventId, receipt.EventId);
+        Assert.Equal(usage.Attribution, receipt.Attribution);
+        Assert.Equal(expectedHash, receipt.CanonicalPayloadHash);
+        Assert.Matches("^[0-9a-f]{64}$", receipt.CanonicalPayloadHash);
+        Assert.Equal(price.Disposition, receipt.Disposition);
+        Assert.Equal(price.Amount, receipt.Amount);
+        Assert.Equal(price.Unit, receipt.Unit);
+        Assert.Null(receipt.UnpricedReason);
+        Assert.Equal(binding.RateCard.Id, receipt.RateCardId);
+        Assert.Equal(binding.RateCard.Version, receipt.RateCardVersion);
+        Assert.Equal(result.Entry.RecordedAt, receipt.RecordedAt);
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var read = new NpgsqlCommand($"""
+            SELECT canonical_input_hash, price_amount, price_unit, rate_card_id,
+                   rate_card_version, recorded_at
+            FROM "{_schema}".usage_ledger WHERE event_id = @event
+            """, connection);
+        read.Parameters.AddWithValue("event", NpgsqlDbType.Uuid, usage.EventId);
+        await using var reader = await read.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(receipt.CanonicalPayloadHash, reader.GetString(0));
+        Assert.Equal(receipt.Amount, reader.GetDecimal(1));
+        Assert.Equal(receipt.Unit, reader.GetString(2));
+        Assert.Equal(receipt.RateCardId, reader.GetString(3));
+        Assert.Equal(receipt.RateCardVersion, reader.GetString(4));
+        Assert.Equal(receipt.RecordedAt, reader.GetFieldValue<DateTimeOffset>(5));
     }
 
     [Fact]
@@ -202,6 +245,12 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var unpriced = new CostPrice(null, null, CostDisposition.Unpriced, null, "Source is not pinned.");
         var first = await _ledger.AppendAsync(firstUsage, binding: null, unpriced);
         Assert.False(first.IsDuplicate);
+        Assert.Equal(CostDisposition.Unpriced, first.Receipt.Disposition);
+        Assert.Null(first.Receipt.Amount);
+        Assert.Null(first.Receipt.Unit);
+        Assert.Null(first.Receipt.RateCardId);
+        Assert.Null(first.Receipt.RateCardVersion);
+        Assert.Equal(unpriced.UnpricedReason, first.Receipt.UnpricedReason);
 
         var partialUsage = UsageContractTests.Submission(
             model: firstUsage.ModelBinding,
@@ -259,12 +308,12 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
                 INSERT INTO "{_schema}".usage_ledger (
                     contract_version, tenant_id, project_id, run_id, session_id, event_id, occurred_at,
                     agent_id, model_reference, model_id, meter_source, selection_revision, request_count,
-                    price_disposition, unpriced_reason, canonical_input, payload)
+                    price_disposition, unpriced_reason, canonical_input, canonical_input_hash, payload)
                 VALUES (
                     2, 'tenant-1', 'project-1', 'run-1', 'session-1',
                     '10000000-0000-0000-0000-000000000001', '2026-10-06T12:34:56Z',
                     'agent-1', 'model/ref', 'model-1', 'meter-a', 'selection-1', 0,
-                    'Unpriced', 'No pinned source', 'canonical', jsonb_build_object())
+                    'Unpriced', 'No pinned source', 'canonical', repeat('0', 64), jsonb_build_object())
                 """));
         Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
     }

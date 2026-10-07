@@ -67,6 +67,8 @@ The Events & Sessions tests cover weighted nano-AIU pricing, unweighted quotes,
 missing measurements, immutable rate cards, and redacted binding diagnostics.
 The disposable-PostgreSQL tests cover concurrent duplicates, content conflicts,
 restart, immutable history, transaction rollback, and exact run/agent totals.
+Receipt tests read the committed hash and immutable price through a separate
+PostgreSQL connection. Duplicate retries return the identical receipt.
 Migration tests cover fresh version 4, version-3 upgrades, the legacy version-2
 project-fact layout, and rejected version gaps.
 

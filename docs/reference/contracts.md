@@ -38,6 +38,10 @@ These methods do not authorize a model session or caller.
 metadata, and nullable measurements. `IUsageLedger.AppendAsync` validates and
 commits the immutable entry and rate card before returning. It returns the original
 entry for an identical retry and rejects changed event or rate-card content.
+`UsageAccountingReceipt` binds the event ID, attribution, canonical SHA-256 hash,
+price disposition, amount, unit, rate-card version, and commit timestamp.
+The ledger commits before returning this receipt. A retry returns the original
+receipt without repricing. This receipt does not authorize an SDK producer.
 `GetRunTotalsAsync` returns exact agent totals and separate meter-source/unit
 amounts. Unknown measurements stay null. Incomplete pricing remains explicit.
 

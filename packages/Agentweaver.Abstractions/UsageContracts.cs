@@ -26,9 +26,35 @@ public sealed record UsageSubmission(
     UsageMeasurement Measurement);
 
 public sealed record UsageLedgerEntry(
-    UsageSubmission Usage, CostBinding? CostBinding, CostPrice Price, DateTimeOffset RecordedAt);
+    UsageSubmission Usage, CostBinding? CostBinding, CostPrice Price,
+    DateTimeOffset RecordedAt, string CanonicalPayloadHash);
 
-public sealed record UsageIngestionResult(UsageLedgerEntry Entry, bool IsDuplicate);
+public sealed record UsageAccountingReceipt(
+    Guid EventId,
+    UsageAttribution Attribution,
+    string CanonicalPayloadHash,
+    CostDisposition Disposition,
+    decimal? Amount,
+    string? Unit,
+    string? UnpricedReason,
+    string? RateCardId,
+    string? RateCardVersion,
+    DateTimeOffset RecordedAt);
+
+public sealed record UsageIngestionResult(UsageLedgerEntry Entry, bool IsDuplicate)
+{
+    public UsageAccountingReceipt Receipt => new(
+        Entry.Usage.EventId,
+        Entry.Usage.Attribution,
+        Entry.CanonicalPayloadHash,
+        Entry.Price.Disposition,
+        Entry.Price.Amount,
+        Entry.Price.Unit,
+        Entry.Price.UnpricedReason,
+        Entry.CostBinding?.RateCard.Id,
+        Entry.CostBinding?.RateCard.Version,
+        Entry.RecordedAt);
+}
 
 public sealed record UsageAmountTotal(
     string MeterSource, string Unit, decimal Amount, long PricedEvents, long UnpricedEvents);
