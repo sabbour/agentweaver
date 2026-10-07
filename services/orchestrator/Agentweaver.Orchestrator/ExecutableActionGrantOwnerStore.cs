@@ -105,7 +105,14 @@ internal sealed class ExecutableActionGrantOwnerStore(
             authorized.Authorization.BoundProjectId != scope.ProjectId ||
             authorized.Authorization.BoundRunId != scope.RunId ||
             authorized.Authorization.MembershipRevision != snapshot.MembershipRevision ||
+            authorized.Selection.ProjectRevision != snapshot.ProjectRevision ||
+            authorized.Selection.ProjectConfigurationRevision != snapshot.ProjectConfigurationRevision ||
+            authorized.Selection.PlatformRuntimeRevision != snapshot.PlatformRuntimeRevision ||
+            !string.Equals(
+                authorized.Selection.ContextRevision, snapshot.ContextRevision, StringComparison.Ordinal) ||
             !hasCurrentProjectRole ||
+            snapshot.TenantId != snapshot.RunTenantId ||
+            !string.Equals(snapshot.GrantSelectionHash, selectionHash, StringComparison.Ordinal) ||
             !string.Equals(snapshot.AcceptedSelectionHash, selectionHash, StringComparison.Ordinal))
             return new ExecutableActionGrantLookupResult(ExecutableActionGrantLookupStatus.Revoked);
 
@@ -122,14 +129,30 @@ internal sealed class ExecutableActionGrantOwnerStore(
             SELECT g.revision, g.is_current, g.grant_state, g.issuer, g.actor_id, g.tenant_id,
                    g.project_id, g.run_id, g.session_id, g.step_id, g.action_ids, g.purpose,
                    g.execution_fence, g.expires_at, g.membership_revision, g.role_revision,
+                   g.project_revision, g.project_configuration_revision, g.platform_runtime_revision,
+                   g.context_revision, g.accepted_selection_hash,
                    r.execution_fence, r.execution_state, r.accepted_selection_hash,
-                   s.execution_fence, s.writer_issuer, s.writer_subject, s.lifecycle_state
+                   COALESCE(r.tenant_id, ''),
+                   s.execution_fence, s.writer_issuer, s.writer_subject, s.lifecycle_state,
+                   g.source_state_version
             FROM {_schema}.executable_action_grants AS g
             INNER JOIN {_schema}.accepted_runs AS r
               ON r.project_id = g.project_id AND r.run_id = g.run_id
             INNER JOIN {_schema}.coordination_sessions AS s
               ON s.project_id = g.project_id AND s.run_id = g.run_id
              AND s.session_id = g.session_id
+             AND s.parent_session_id IS NULL
+            INNER JOIN LATERAL (
+                SELECT d.decision_id, d.state_version, d.decision_state
+                FROM {_schema}.coordinator_decisions AS d
+                WHERE d.project_id = g.project_id AND d.run_id = g.run_id
+                  AND d.session_id = g.session_id
+                ORDER BY d.state_version DESC
+                LIMIT 1
+            ) AS current_decision
+              ON current_decision.decision_id = g.source_decision_id
+             AND current_decision.state_version = g.source_state_version
+             AND current_decision.decision_state = 'accepted'
             WHERE g.project_id = @project AND g.run_id = @run AND g.grant_id = @grant
             ORDER BY g.is_current DESC, g.created_at DESC
             LIMIT 1
@@ -188,12 +211,19 @@ internal sealed class ExecutableActionGrantOwnerStore(
             reader.GetInt64(14),
             reader.GetInt64(15),
             reader.GetInt64(16),
-            reader.GetString(17),
-            reader.GetString(18).TrimEnd(),
-            reader.GetInt64(19),
-            reader.GetString(20),
-            reader.GetString(21),
+            reader.GetInt64(17),
+            reader.GetInt64(18),
+            reader.GetString(19),
+            reader.GetString(20).TrimEnd(),
+            reader.GetInt64(21),
             reader.GetString(22),
+            reader.GetString(23).TrimEnd(),
+            reader.GetString(24),
+            reader.GetInt64(25),
+            reader.GetString(26),
+            reader.GetString(27),
+            reader.GetString(28),
+            reader.GetInt64(29),
             reader.GetString(3),
             reader.GetString(4),
             reader.GetString(5));
@@ -555,13 +585,20 @@ internal sealed class ExecutableActionGrantOwnerStore(
         DateTimeOffset ExpiresAt,
         long MembershipRevision,
         long RoleRevision,
+        long ProjectRevision,
+        long ProjectConfigurationRevision,
+        long PlatformRuntimeRevision,
+        string ContextRevision,
+        string GrantSelectionHash,
         long RunFence,
         string RunState,
         string AcceptedSelectionHash,
+        string RunTenantId,
         long SessionFence,
         string WriterIssuer,
         string WriterSubject,
         string SessionLifecycle,
+        long SourceStateVersion,
         string Issuer,
         string ActorId,
         string TenantId);

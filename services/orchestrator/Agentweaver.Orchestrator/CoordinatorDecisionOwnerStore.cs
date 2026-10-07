@@ -28,13 +28,16 @@ internal sealed class CoordinatorDecisionOwnerStore
     private readonly string _grants;
     private readonly string _outbox;
     private readonly TimeProvider _timeProvider;
+    private readonly CoordinatorRunSelectionContextStore _runSelectionContexts;
 
     public CoordinatorDecisionOwnerStore(
         NpgsqlDataSource dataSource,
         string schema,
+        CoordinatorRunSelectionContextStore runSelectionContexts,
         TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
+        ArgumentNullException.ThrowIfNull(runSelectionContexts);
         if (schema is null ||
             !System.Text.RegularExpressions.Regex.IsMatch(
                 schema, "^[a-z][a-z0-9_]{0,62}\\z",
@@ -51,7 +54,129 @@ internal sealed class CoordinatorDecisionOwnerStore
         _gates = $"{quotedSchema}.coordinator_gates";
         _grants = $"{quotedSchema}.executable_action_grants";
         _outbox = $"{quotedSchema}.coordinator_decision_outbox";
+        _runSelectionContexts = runSelectionContexts;
         _timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    public async Task<CoordinatorDecisionCurrentState> InitializeRootAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        CancellationToken cancellationToken)
+    {
+        ValidateInput(actor, identity, selection);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        OwnerBinding binding;
+        await using (var ownerLock = CreateOwnerBindingCommand(
+                         connection,
+                         transaction,
+                         actor,
+                         identity,
+                         selection.Authorization.TenantId,
+                         forUpdate: true))
+        await using (var reader = await ownerLock.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new CoordinationException(
+                    "coordinator_session_unavailable", StatusCodes.Status404NotFound);
+            binding = ReadOwnerBinding(
+                reader, HashSelection(selection.Selection), selection.Authorization.TenantId);
+        }
+
+        var expectedBinding = CoordinatorDecisionBinding.Create(
+            actor, identity, selection, binding.RunFence);
+        var latest = await ReadLatestDecisionAsync(
+            connection, transaction, identity, cancellationToken).ConfigureAwait(false);
+        if (latest is not null)
+        {
+            var existing = await RestoreEnvelopeAsync(
+                latest.Envelope, expectedBinding, selection.Selection, cancellationToken).ConfigureAwait(false);
+            if (!existing.IsValid ||
+                !string.Equals(
+                    latest.Envelope.AcceptedSelectionHash,
+                    expectedBinding.AcceptedSelectionHash,
+                    StringComparison.Ordinal))
+                throw InvalidPersistedState();
+            ValidateStateActor(existing.State!, actor);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new CoordinatorDecisionCurrentState(
+                existing.State!,
+                latest.StateVersion,
+                expectedBinding.AcceptedSelectionHash);
+        }
+
+        var state = CoordinatorDecisionState.Create(expectedBinding.Fence);
+        var envelope = CoordinatorDecisionStateEnvelope.Capture(state, expectedBinding);
+        var decisionId = Guid.NewGuid();
+        const string requestId = "root-initialization";
+        const string actionKind = "run.initialize";
+        const long stateVersion = 1;
+        var commandHash = ComputeCommandHash(new
+        {
+            identity.ProjectId,
+            identity.RunId,
+            identity.SessionId,
+            expectedBinding.AcceptedSelectionHash,
+            expectedBinding.Fence
+        });
+        var payload = JsonSerializer.Serialize(new PersistedDecisionPayload(
+            envelope, true, [], JsonSerializer.SerializeToElement(new { initialized = true })), JsonOptions);
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO {_decisions}
+                (project_id, run_id, session_id, request_id, decision_id,
+                 actor_issuer, actor_subject, execution_fence, state_version,
+                 action_kind, idempotency_key, command_hash, decision_state, decision)
+            VALUES
+                (@project, @run, @session, @request, @decision,
+                 @issuer, @subject, @fence, @version,
+                 @action, @idempotency, @command_hash, 'accepted', @payload)
+            """, connection, transaction))
+        {
+            AddIdentity(insert, identity);
+            insert.Parameters.AddWithValue("request", NpgsqlDbType.Varchar, requestId);
+            insert.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, decisionId);
+            insert.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
+            insert.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
+            insert.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, state.Fence);
+            insert.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, stateVersion);
+            insert.Parameters.AddWithValue("action", NpgsqlDbType.Varchar, actionKind);
+            insert.Parameters.AddWithValue(
+                "idempotency", NpgsqlDbType.Varchar, "owner-root-init-" + Guid.NewGuid().ToString("N"));
+            insert.Parameters.AddWithValue("command_hash", NpgsqlDbType.Char, commandHash);
+            insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, payload);
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await InsertOutboxEventAsync(
+            connection,
+            transaction,
+            identity,
+            decisionId,
+            "decision.accepted",
+            new
+            {
+                requestId,
+                actionKind,
+                executionFence = state.Fence,
+                stateVersion
+            },
+            cancellationToken).ConfigureAwait(false);
+        await IssueTransitionGrantsAsync(
+            connection,
+            transaction,
+            actor,
+            identity,
+            selection,
+            expectedBinding,
+            state,
+            decisionId,
+            requestId,
+            stateVersion,
+            cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new CoordinatorDecisionCurrentState(state, stateVersion, expectedBinding.AcceptedSelectionHash);
     }
 
     public async Task<CoordinatorDecisionCurrentState> ReadCurrentAsync(
@@ -83,10 +208,24 @@ internal sealed class CoordinatorDecisionOwnerStore
             connection, transaction: null, identity, cancellationToken).ConfigureAwait(false);
         var expectedBinding = CoordinatorDecisionBinding.Create(
             actor, identity, selection, binding.RunFence);
-        var current = RehydrateCurrent(expectedBinding, latest);
+        var current = await RehydrateCurrentAsync(
+            expectedBinding, latest, selection.Selection, cancellationToken).ConfigureAwait(false);
         await ValidatePendingGateRowsAsync(
             connection, identity, actor, current, cancellationToken).ConfigureAwait(false);
         return current;
+    }
+
+    public async Task<int> ReadRegisteredChildCountAsync(
+        SessionIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(identity.ProjectId) ||
+            string.IsNullOrWhiteSpace(identity.RunId) ||
+            string.IsNullOrWhiteSpace(identity.SessionId))
+            throw new ArgumentException("A valid run session identity is required.", nameof(identity));
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        return await ReadRegisteredChildCountAsync(
+            connection, transaction: null, identity, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<CoordinatorDecisionPersistedResult> PersistTransitionAsync(
@@ -153,7 +292,8 @@ internal sealed class CoordinatorDecisionOwnerStore
                 existing.CommandHash != commandHash)
                 throw new CoordinationException(
                     "coordinator_decision_idempotency_conflict", StatusCodes.Status409Conflict);
-            var existingState = existing.Envelope.Restore(expectedBinding);
+            var existingState = await RestoreEnvelopeAsync(
+                existing.Envelope, expectedBinding, selection.Selection, cancellationToken).ConfigureAwait(false);
             if (!existingState.IsValid ||
                 !string.Equals(
                     existing.Envelope.AcceptedSelectionHash,
@@ -186,9 +326,21 @@ internal sealed class CoordinatorDecisionOwnerStore
             previousEnvelope,
             confirmedSelectionContext,
             candidateSelectionContext);
-        var restored = mergedEnvelope.Restore(expectedBinding);
+        var restored = await RestoreEnvelopeAsync(
+            mergedEnvelope, expectedBinding, selection.Selection, cancellationToken).ConfigureAwait(false);
         if (!restored.IsValid)
             throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status409Conflict);
+        var newState = restored.State!;
+
+        var maxChildren = CoordinatorWorkflowCatalog.ReadMaxChildren(selection.Selection.Snapshot);
+        var registeredChildren = await ReadRegisteredChildCountAsync(
+            connection, transaction, identity, cancellationToken).ConfigureAwait(false);
+        var plannedChildren = newState.CandidateWorkPlan?.Plan.Items.Length
+                              ?? newState.ConfirmedWorkPlan?.Plan.Items.Length
+                              ?? 0;
+        if (registeredChildren + plannedChildren > maxChildren)
+            throw new CoordinationException(
+                "run_child_limit_exceeded", StatusCodes.Status409Conflict);
 
         var payload = new PersistedDecisionPayload(
             mergedEnvelope,
@@ -200,7 +352,6 @@ internal sealed class CoordinatorDecisionOwnerStore
         var decisionId = Guid.NewGuid();
         var decisionState = transitionAccepted ? "accepted" : "rejected";
         var serializedPayload = JsonSerializer.Serialize(payload, JsonOptions);
-        var newState = restored.State!;
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_decisions}
                 (project_id, run_id, session_id, request_id, decision_id,
@@ -574,6 +725,25 @@ internal sealed class CoordinatorDecisionOwnerStore
         return intents.ToImmutable();
     }
 
+    private async Task<int> ReadRegisteredChildCountAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        SessionIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT count(*)::integer
+            FROM {_sessions}
+            WHERE project_id = @project AND run_id = @run
+              AND parent_session_id IS NOT NULL
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
+        return Convert.ToInt32(
+            await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+            System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     private static long GetCurrentRoleRevision(
         ProjectsAuthorizationContext authorization,
         string projectId,
@@ -711,16 +881,19 @@ internal sealed class CoordinatorDecisionOwnerStore
         }
     }
 
-    private static CoordinatorDecisionCurrentState RehydrateCurrent(
+    private async Task<CoordinatorDecisionCurrentState> RehydrateCurrentAsync(
         CoordinatorDecisionBinding expectedBinding,
-        CoordinatorDecisionPersistedRecord? latest)
+        CoordinatorDecisionPersistedRecord? latest,
+        EffectiveRunSelection selection,
+        CancellationToken cancellationToken)
     {
         if (latest is null)
             return new CoordinatorDecisionCurrentState(
                 CoordinatorDecisionState.Create(expectedBinding.Fence),
                 0,
                 expectedBinding.AcceptedSelectionHash);
-        var restored = latest.Envelope.Restore(expectedBinding);
+        var restored = await RestoreEnvelopeAsync(
+            latest.Envelope, expectedBinding, selection, cancellationToken).ConfigureAwait(false);
         if (!restored.IsValid ||
             restored.State!.Fence != expectedBinding.Fence ||
             latest.StateVersion < 1)
@@ -729,6 +902,49 @@ internal sealed class CoordinatorDecisionOwnerStore
             restored.State,
             latest.StateVersion,
             expectedBinding.AcceptedSelectionHash);
+    }
+
+    private async Task<CoordinatorDecisionStateEnvelopeRestoreResult> RestoreEnvelopeAsync(
+        CoordinatorDecisionStateEnvelope envelope,
+        CoordinatorDecisionBinding expectedBinding,
+        EffectiveRunSelection selection,
+        CancellationToken cancellationToken)
+    {
+        var requiresBinding = envelope.ConfirmedSelectionContext?.IsolationProviderBinding is not null ||
+                              envelope.CandidateSelectionContext?.IsolationProviderBinding is not null;
+        if (!requiresBinding)
+            return envelope.Restore(expectedBinding);
+
+        var trustedContext = await _runSelectionContexts.ReadAsync(
+            selection, expectedBinding.Fence, cancellationToken).ConfigureAwait(false);
+        var trustedBinding = trustedContext?.IsolationProviderBinding;
+        if (trustedContext is null || trustedBinding is null ||
+            !MatchesSelectionContext(envelope.ConfirmedSelectionContext, trustedContext, expectedBinding.RunId) ||
+            !MatchesSelectionContext(envelope.CandidateSelectionContext, trustedContext, expectedBinding.RunId))
+            return envelope.Restore(expectedBinding);
+
+        PinnedProviderBinding? ResolveBinding(PinnedProviderBindingEnvelope persisted) =>
+            persisted.Matches(trustedBinding, expectedBinding.RunId) ? trustedBinding : null;
+
+        return envelope.Restore(expectedBinding, ResolveBinding);
+    }
+
+    private static bool MatchesSelectionContext(
+        WorkPlanSelectionContextEnvelope? persisted,
+        WorkPlanRunSelectionContext trusted,
+        string runId)
+    {
+        if (persisted is null)
+            return true;
+        if (persisted.Roles.IsDefault ||
+            !string.Equals(
+                JsonSerializer.Serialize(persisted.Roles, JsonOptions),
+                JsonSerializer.Serialize(trusted.Roles, JsonOptions),
+                StringComparison.Ordinal))
+            return false;
+        return persisted.IsolationProviderBinding is null ||
+               trusted.IsolationProviderBinding is { } binding &&
+               persisted.IsolationProviderBinding.Matches(binding, runId);
     }
 
     private static void ValidateStateActor(CoordinatorDecisionState state, CoordinationActor actor)

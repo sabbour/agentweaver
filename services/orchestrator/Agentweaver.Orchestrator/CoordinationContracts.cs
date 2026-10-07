@@ -59,7 +59,8 @@ public sealed record SelectCoordinatorWorkflowRequest(
     long ExpectedStateVersion,
     string IdempotencyKey,
     string RequestId,
-    string? WorkflowId);
+    string? WorkflowId,
+    WorkflowDefinition? ProposedDefinition = null);
 
 public sealed record ProposeCoordinatorWorkPlanRequest(
     long ExpectedStateVersion,

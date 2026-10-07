@@ -3,6 +3,7 @@ extern alias AzureIdentity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
+using Agentweaver.Providers;
 using Azure.Core;
 using Npgsql;
 using OpenIddict.Validation.AspNetCore;
@@ -49,20 +50,33 @@ var options = new OrchestratorOptions(
     events["OwnerBaseAddress"] ?? string.Empty,
     events["Audience"] ?? string.Empty,
     schema);
+const string providerCatalogSection = "ProjectsConfig:ProviderCatalog";
+var providerCatalog = builder.Configuration.GetSection(providerCatalogSection).Exists()
+    ? ProviderCatalogConfiguration.Load(builder.Configuration, providerCatalogSection)
+    : CreateEmptyProviderCatalog();
 
 builder.Services.AddSingleton<TokenCredential>(credential);
 builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
     CoordinationPostgresDataSource.Create(runtime.ConnectionString, credential));
 builder.Services.AddSingleton(options);
+builder.Services.AddSingleton(providerCatalog);
+builder.Services.AddSingleton<ProviderResolver>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(services => new CoordinationOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
     services.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(services => new CoordinatorRunSelectionContextStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema,
+    services.GetRequiredService<ProviderCatalog>(),
+    services.GetRequiredService<ProviderResolver>(),
+    services.GetServices<ICoordinatorSandboxResourceProvider>()));
 builder.Services.AddSingleton(services => new CoordinatorDecisionOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
+    services.GetRequiredService<CoordinatorRunSelectionContextStore>(),
     services.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton<ExecutableActionGrantOwnerStore>();
 builder.Services.AddSingleton<IExecutableActionGrantOwnerLookup>(services =>
@@ -124,5 +138,9 @@ static string Required(IConfiguration configuration, string key) =>
     !string.IsNullOrWhiteSpace(configuration[key])
         ? configuration[key]!
         : throw new InvalidOperationException($"Missing required configuration '{key}'.");
+
+static ProviderCatalog CreateEmptyProviderCatalog() =>
+    ProviderCatalog.Create([], [], []).Value
+    ?? throw new InvalidOperationException("An empty provider catalog could not be constructed.");
 
 public partial class Program;

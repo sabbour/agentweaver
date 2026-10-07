@@ -33,7 +33,9 @@ internal static class CoordinatorWorkflowCatalog
     private static readonly ImmutableArray<WorkflowDefinition> RegisteredDefinitions =
         [BuiltInDefault];
 
-    public static AuthorizedWorkflowCatalog ForSelection(EffectiveRunSelection selection)
+    public static AuthorizedWorkflowCatalog ForSelection(
+        EffectiveRunSelection selection,
+        WorkflowDefinition? proposedGeneratedDefinition = null)
     {
         ArgumentNullException.ThrowIfNull(selection);
         var projectConfiguration = GetProjectConfiguration(selection.Snapshot);
@@ -53,6 +55,19 @@ internal static class CoordinatorWorkflowCatalog
                                   definition.Id.Equals(BuiltInWorkflowId, StringComparison.OrdinalIgnoreCase))
                               ?? RegisteredDefinitions.Single(definition =>
                                   definition.Id.Equals(BuiltInWorkflowId, StringComparison.OrdinalIgnoreCase));
+
+        if (proposedGeneratedDefinition is not null)
+        {
+            if (proposedGeneratedDefinition.Origin != WorkflowDefinitionOrigin.Generated ||
+                !IsStableIdentifier(proposedGeneratedDefinition.Id) ||
+                available.Any(definition =>
+                    definition.Id.Equals(
+                        proposedGeneratedDefinition.Id, StringComparison.OrdinalIgnoreCase)))
+                throw new CoordinationException(
+                    "coordinator_generated_workflow_invalid",
+                    StatusCodes.Status400BadRequest);
+            available = available.Add(proposedGeneratedDefinition);
+        }
 
         return new AuthorizedWorkflowCatalog(selectedDefault, available);
     }
@@ -75,6 +90,31 @@ internal static class CoordinatorWorkflowCatalog
             .OrderBy(role => role.RoleId, StringComparer.Ordinal)
             .ToImmutableArray();
         return new WorkPlanRunSelectionContext(roles, IsolationProviderBinding: null);
+    }
+
+    public static int ReadMaxChildren(JsonElement selection)
+        => ReadRunLimit(selection, "maxChildren", allowZero: true, maximum: 100);
+
+    public static int ReadMaxConcurrentChildren(JsonElement selection)
+        => ReadRunLimit(selection, "maxConcurrentChildren", allowZero: false, maximum: 32);
+
+    private static int ReadRunLimit(
+        JsonElement selection,
+        string propertyName,
+        bool allowZero,
+        int maximum)
+    {
+        if (selection.ValueKind != JsonValueKind.Object ||
+            !selection.TryGetProperty("runLimits", out var runLimits) ||
+            runLimits.ValueKind != JsonValueKind.Object ||
+            !runLimits.TryGetProperty(propertyName, out var maxChildren) ||
+            !maxChildren.TryGetInt32(out var value) ||
+            value < (allowZero ? 0 : 1) ||
+            value > maximum)
+            throw new CoordinationException(
+                "projects_run_selection_contract_invalid",
+                StatusCodes.Status502BadGateway);
+        return value;
     }
 
     private static JsonElement GetProjectConfiguration(JsonElement selection)

@@ -180,10 +180,15 @@ internal sealed class CoordinationOwnerStore
         CoordinationActor actor,
         SessionIdentity parent,
         string childSessionId,
+        int maxChildren,
+        int maxConcurrentChildren,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(actor);
         CoordinationIdentity.ValidateIdentity(childSessionId, nameof(childSessionId));
+        if (maxChildren is < 0 or > 100 ||
+            maxConcurrentChildren is < 1 or > 32)
+            throw new CoordinationException("run_child_limit_invalid", StatusCodes.Status502BadGateway);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var run = await ReadAcceptedRunAsync(
@@ -216,6 +221,37 @@ internal sealed class CoordinationOwnerStore
                 parent.SessionId,
                 requestId,
                 existing.ExecutionFence);
+        }
+
+        await using (var countChildren = new NpgsqlCommand($"""
+            SELECT count(*)::integer
+            FROM {_sessions}
+            WHERE project_id = @project AND run_id = @run
+              AND parent_session_id IS NOT NULL
+            """, connection, transaction))
+        {
+            AddRunScope(countChildren, parent.ProjectId, parent.RunId);
+            var currentChildren = Convert.ToInt32(
+                await countChildren.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+                System.Globalization.CultureInfo.InvariantCulture);
+            if (currentChildren >= maxChildren)
+                throw new CoordinationException(
+                    "run_child_limit_exceeded", StatusCodes.Status409Conflict);
+        }
+        await using (var countActiveChildren = new NpgsqlCommand($"""
+            SELECT count(*)::integer
+            FROM {_sessions}
+            WHERE project_id = @project AND run_id = @run
+              AND parent_session_id IS NOT NULL AND lifecycle_state = 'active'
+            """, connection, transaction))
+        {
+            AddRunScope(countActiveChildren, parent.ProjectId, parent.RunId);
+            var activeChildren = Convert.ToInt32(
+                await countActiveChildren.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+                System.Globalization.CultureInfo.InvariantCulture);
+            if (activeChildren >= maxConcurrentChildren)
+                throw new CoordinationException(
+                    "run_concurrent_child_limit_exceeded", StatusCodes.Status409Conflict);
         }
 
         await using (var insertSession = new NpgsqlCommand($"""

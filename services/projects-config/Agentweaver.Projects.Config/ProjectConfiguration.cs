@@ -60,6 +60,7 @@ public sealed record ProjectConfiguration
     public ImmutableArray<ProjectAgentCharter> AgentCharters { get; init; } = [];
     public ImmutableArray<ProjectAgentCast> Casting { get; init; } = [];
     public ImmutableArray<BlueprintWorkflowReference> BlueprintWorkflowReferences { get; init; } = [];
+    public string? DefaultWorkflowId { get; init; }
     public ImmutableArray<SkillCatalogSetting> Skills { get; init; } = [];
     public ImmutableArray<NetworkEgressRule>? EgressNarrowing { get; init; }
     public CopilotRunLimitOverrides RunLimits { get; init; } = new();
@@ -187,6 +188,8 @@ public static class ProjectConfigurationValidator
             ValidateIdentifier(item.BlueprintId, "blueprintWorkflowReferences.blueprintId");
             ValidateIdentifier(item.WorkflowId, "blueprintWorkflowReferences.workflowId");
         }
+        if (configuration.DefaultWorkflowId is { } defaultWorkflowId)
+            ValidateIdentifier(defaultWorkflowId, "defaultWorkflowId");
 
         if (configuration.Skills.Any(item => item is null))
             throw Invalid("Configuration contains a null skill setting.");

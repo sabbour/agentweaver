@@ -34,7 +34,7 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
-    private const string ReceiptActionId = "coordinator.shell.execute";
+    private const string ReceiptActionId = "propose_work_plan";
     private const string ReceiptAllowPolicy = """
         apiVersion: governance.toolkit/v1
         version: "1.0"
@@ -43,7 +43,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         default_action: deny
         rules:
           - name: allow-coordinator-action
-            condition: "action_id == 'coordinator.shell.execute'"
+            condition: "action_id == 'propose_work_plan'"
             action: allow
             priority: 100
         """;
@@ -125,6 +125,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Contains(claims, claim => claim.Type == "project_id" && claim.Value == project.ProjectId);
         Assert.Contains(claims, claim => claim.Type == "run_id" && claim.Value == RunId);
 
+        using var updateProjectConfiguration = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
+        {
+            Content = JsonContent.Create(new UpdateProjectConfigurationRequest
+            {
+                ExpectedRevision = project.ConfigurationRevision,
+                Configuration = new ProjectConfiguration
+                {
+                    AgentCharters =
+                    [
+                        new ProjectAgentCharter(
+                            "test-agent", "Test agent", "implementer", "Implements the accepted work item.")
+                    ],
+                    Casting = [new ProjectAgentCast("test-agent", "implementer", 0)]
+                }
+            })
+        };
+        AddBearerAndTenant(updateProjectConfiguration, platformAdminToken, TenantId);
+        using var updatedProjectConfiguration =
+            await projects.Client.SendAsync(updateProjectConfiguration);
+        Assert.Equal(HttpStatusCode.OK, updatedProjectConfiguration.StatusCode);
+        var projectConfiguration =
+            await updatedProjectConfiguration.Content.ReadFromJsonAsync<VersionedProjectConfiguration>(
+                AuthorizationJsonOptions);
+        Assert.NotNull(projectConfiguration);
+
         using var updateDefaults = new HttpRequestMessage(HttpMethod.Put, "/api/platform/runtime-defaults/")
         {
             Content = JsonContent.Create(new UpdatePlatformRuntimeDefaultsRequest
@@ -155,13 +181,24 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             Content = JsonContent.Create(new AcceptRunSelectionRequest
             {
-                ExpectedProjectConfigRevision = project.ConfigurationRevision,
+                ExpectedProjectConfigRevision = projectConfiguration.Revision,
                 ExpectedPlatformRuntimeRevision = 1,
                 Context = new RunSelectionContext
                 {
                     Revision = "provider-catalog-v1",
                     AvailableModelSelectionReferences = ImmutableHashSet.Create(
-                        StringComparer.Ordinal, "platform-model")
+                        StringComparer.Ordinal, "platform-model"),
+                    ProviderRequirements =
+                    [
+                        new ProviderRequirement
+                        {
+                            Seam = ProviderSeam.Sandbox,
+                            RequiredAdapterVersion = "1.0.0",
+                            RequiredOptionsSchemaVersion = 1,
+                            RequiredCapabilities = ImmutableHashSet.Create(
+                                StringComparer.Ordinal, "container.create")
+                        }
+                    ]
                 }
             })
         };
@@ -207,6 +244,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         EventsIntegrationFactory? eventsFactoryReference = null;
         var admissions = new List<(HttpStatusCode Status, bool NoStore, string Body)>();
         var cacheObjectStore = new InMemoryObjectStore();
+        var sandboxProvider = new ControlledSandboxResourceProvider();
         await using var orchestratorFactory = new OrchestratorIntegrationFactory(
             _connectionString,
             ownerSchema,
@@ -215,7 +253,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             () => new CapturingHandler(
                 eventsFactoryReference!.Server.CreateHandler(),
                 (status, noStore, body) => admissions.Add((status, noStore, body))),
-            cacheObjectStore);
+            cacheObjectStore,
+            sandboxProvider);
         await using var eventsFactory = new EventsIntegrationFactory(
             _connectionString,
             eventsSchema,
@@ -238,9 +277,35 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(rootResponse, HttpStatusCode.Created);
         var root = await ReadJsonAsync<AcceptedRoot>(rootResponse);
         Assert.Equal("root", root.RootSessionId);
+        await using (var database = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await database.OpenConnectionAsync())
+        await using (var query = new NpgsqlCommand($"""
+            SELECT issuer, actor_id, tenant_id, session_id, step_id, purpose,
+                   execution_fence, source_state_version
+            FROM "{ownerSchema}".executable_action_grants
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+              AND is_current AND grant_state = 'active'
+              AND action_ids ? 'propose_outcome_spec'
+            """, connection))
+        {
+            query.Parameters.AddWithValue("project", project.ProjectId);
+            query.Parameters.AddWithValue("run", RunId);
+            query.Parameters.AddWithValue("session", root.RootSessionId);
+            await using var reader = await query.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri, reader.GetString(0));
+            Assert.Equal(currentRunnerSubject, reader.GetString(1));
+            Assert.Equal(TenantId, reader.GetString(2));
+            Assert.Equal(root.RootSessionId, reader.GetString(3));
+            Assert.Equal("outcome", reader.GetString(4));
+            Assert.Equal("coordinator.typed-decision", reader.GetString(5));
+            Assert.Equal(root.ExecutionFence, reader.GetInt64(6));
+            Assert.Equal(1, reader.GetInt64(7));
+            Assert.False(await reader.ReadAsync());
+        }
 
         var outcomeProposal = new ProposeCoordinatorOutcomeRequest(
-            0,
+            1,
             "outcome-proposal-1",
             "outcome-gate-1",
             new CoordinatorOutcomeSpecification(
@@ -253,14 +318,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var proposedOutcome = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/outcome",
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/propose_outcome_spec",
             runToken,
             outcomeProposal);
         await AssertStatusAsync(proposedOutcome, HttpStatusCode.OK);
         var proposedOutcomeResult =
             await ReadJsonAsync<CoordinatorDecisionOperationResponse>(proposedOutcome);
         Assert.True(proposedOutcomeResult.Accepted);
-        Assert.Equal(1, proposedOutcomeResult.StateVersion);
+        Assert.Equal(2, proposedOutcomeResult.StateVersion);
         Assert.Equal("outcome-gate-1", proposedOutcomeResult.PendingGate?.RequestId);
         Assert.Equal(CoordinatorGateKind.OutcomeConfirmation, proposedOutcomeResult.PendingGate?.Kind);
 
@@ -276,33 +341,33 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             await currentDecisionState.Content.ReadFromJsonAsync<CoordinatorDecisionStateView>(
                 CoordinationJsonOptions);
         Assert.NotNull(decisionStateView);
-        Assert.Equal(1, decisionStateView.StateVersion);
+        Assert.Equal(2, decisionStateView.StateVersion);
         Assert.Equal("outcome-gate-1", decisionStateView.PendingGate?.RequestId);
         Assert.False(decisionStateView.CanDecompose);
 
         using var outcomeProposalRetry = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/outcome",
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/propose_outcome_spec",
             runToken,
             outcomeProposal);
         Assert.Equal(HttpStatusCode.OK, outcomeProposalRetry.StatusCode);
         var retriedOutcomeResult =
             await ReadJsonAsync<CoordinatorDecisionOperationResponse>(outcomeProposalRetry);
         Assert.Equal(proposedOutcomeResult.DecisionId, retriedOutcomeResult.DecisionId);
-        Assert.Equal(1, retriedOutcomeResult.StateVersion);
+        Assert.Equal(2, retriedOutcomeResult.StateVersion);
 
         using var gateAcknowledgment = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/outcome-gate-1/acknowledge",
             runToken,
-            new AcknowledgeCoordinatorGateRequest(1, "outcome-ack-1"));
+            new AcknowledgeCoordinatorGateRequest(2, "outcome-ack-1"));
         Assert.Equal(HttpStatusCode.OK, gateAcknowledgment.StatusCode);
         var acknowledgedGate =
             await ReadJsonAsync<CoordinatorDecisionOperationResponse>(gateAcknowledgment);
         Assert.True(acknowledgedGate.Accepted);
-        Assert.Equal(2, acknowledgedGate.StateVersion);
+        Assert.Equal(3, acknowledgedGate.StateVersion);
         Assert.Equal("outcome-gate-1", acknowledgedGate.PendingGate?.RequestId);
 
         using var invalidGateAnswer = await SendJsonAsync(
@@ -310,12 +375,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/outcome-gate-1/answer",
             runToken,
-            new AnswerCoordinatorGateRequest(2, "outcome-answer-invalid", "not-allowed", null));
+            new AnswerCoordinatorGateRequest(3, "outcome-answer-invalid", "not-allowed", null));
         Assert.Equal(HttpStatusCode.OK, invalidGateAnswer.StatusCode);
         var rejectedGateAnswer =
             await ReadJsonAsync<CoordinatorDecisionOperationResponse>(invalidGateAnswer);
         Assert.False(rejectedGateAnswer.Accepted);
-        Assert.Equal(3, rejectedGateAnswer.StateVersion);
+        Assert.Equal(4, rejectedGateAnswer.StateVersion);
         Assert.Equal("outcome-gate-1", rejectedGateAnswer.PendingGate?.RequestId);
 
         using var answeredGate = await SendJsonAsync(
@@ -323,12 +388,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/outcome-gate-1/answer",
             runToken,
-            new AnswerCoordinatorGateRequest(3, "outcome-answer-1", "approve", null));
+            new AnswerCoordinatorGateRequest(4, "outcome-answer-1", "approve", null));
         Assert.Equal(HttpStatusCode.OK, answeredGate.StatusCode);
         var answeredGateResult =
             await ReadJsonAsync<CoordinatorDecisionOperationResponse>(answeredGate);
         Assert.True(answeredGateResult.Accepted);
-        Assert.Equal(4, answeredGateResult.StateVersion);
+        Assert.Equal(5, answeredGateResult.StateVersion);
         Assert.Null(answeredGateResult.PendingGate);
 
         using var askedQuestion = await SendJsonAsync(
@@ -337,7 +402,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/questions",
             runToken,
             new AskCoordinatorQuestionRequest(
-                4,
+                5,
                 "question-ask-1",
                 "question-gate-1",
                 "execution-detail",
@@ -348,7 +413,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var askedQuestionResult =
             await ReadJsonAsync<CoordinatorDecisionOperationResponse>(askedQuestion);
         Assert.True(askedQuestionResult.Accepted);
-        Assert.Equal(5, askedQuestionResult.StateVersion);
+        Assert.Equal(6, askedQuestionResult.StateVersion);
         Assert.Equal("question-gate-1", askedQuestionResult.PendingGate?.RequestId);
 
         using var answeredQuestion = await SendJsonAsync(
@@ -357,7 +422,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/question-gate-1/answer",
             runToken,
             new AnswerCoordinatorGateRequest(
-                5,
+                6,
                 "question-answer-1",
                 null,
                 "runner-a is provisioned for this run"));
@@ -365,7 +430,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var answeredQuestionResult =
             await ReadJsonAsync<CoordinatorDecisionOperationResponse>(answeredQuestion);
         Assert.True(answeredQuestionResult.Accepted);
-        Assert.Equal(6, answeredQuestionResult.StateVersion);
+        Assert.Equal(7, answeredQuestionResult.StateVersion);
         Assert.Null(answeredQuestionResult.PendingGate);
 
         await using (var database = NpgsqlDataSource.Create(_connectionString))
@@ -382,10 +447,132 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using (var reader = await query.ExecuteReaderAsync())
         {
             Assert.True(await reader.ReadAsync());
-            Assert.Equal(6, reader.GetInt64(0));
+            Assert.Equal(7, reader.GetInt64(0));
             Assert.Equal(1, reader.GetInt64(1));
             Assert.Equal(1, reader.GetInt64(2));
-            Assert.Equal(6, reader.GetInt64(3));
+            Assert.Equal(10, reader.GetInt64(3));
+        }
+
+        using var defaultWorkflowResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/select_workflow",
+            runToken,
+            new SelectCoordinatorWorkflowRequest(
+                7, "workflow-default-1", "workflow-default-1", WorkflowId: null));
+        Assert.Equal(HttpStatusCode.OK, defaultWorkflowResponse.StatusCode);
+        var defaultWorkflow =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(defaultWorkflowResponse);
+        Assert.True(defaultWorkflow.Accepted);
+        Assert.Equal(8, defaultWorkflow.StateVersion);
+        Assert.Null(defaultWorkflow.PendingGate);
+
+        var generatedWorkflow = new WorkflowDefinition(
+            "generated-test",
+            "1.0.0",
+            "generated-catalog-v1",
+            WorkflowDefinitionOrigin.Generated,
+            1,
+            [
+                new WorkflowStepDefinition(
+                    "implement",
+                    "Implement an accepted item using the selected isolation provider.",
+                    WorkflowStepMode.Open,
+                    0,
+                    new WorkflowCardinality(1, 1),
+                    [],
+                    ["implementer"],
+                    ["implementation"],
+                    ["isolated-worktree"],
+                    ["container.create"],
+                    null,
+                    null),
+                new WorkflowStepDefinition(
+                    "build-test",
+                    "Record a typed platform build-and-test request.",
+                    WorkflowStepMode.Platform,
+                    1,
+                    new WorkflowCardinality(0, 1),
+                    [],
+                    [],
+                    [],
+                    [],
+                    [],
+                    null,
+                    WorkflowPlatformGate.BuildTest)
+            ]);
+        using var selectWorkflowResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/select_workflow",
+            runToken,
+            new SelectCoordinatorWorkflowRequest(
+                8,
+                "workflow-select-generated-1",
+                "generated-workflow-gate-1",
+                generatedWorkflow.Id,
+                generatedWorkflow));
+        Assert.Equal(HttpStatusCode.OK, selectWorkflowResponse.StatusCode);
+        var selectedWorkflow =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(selectWorkflowResponse);
+        Assert.True(selectedWorkflow.Accepted);
+        Assert.Equal(9, selectedWorkflow.StateVersion);
+        Assert.Equal(CoordinatorGateKind.GeneratedWorkflowConfirmation, selectedWorkflow.PendingGate?.Kind);
+
+        using var prematurePlan = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/propose_work_plan",
+            runToken,
+            new ProposeCoordinatorWorkPlanRequest(
+                9,
+                "premature-plan-1",
+                "premature-plan-gate-1",
+                new WorkPlan("premature-plan", "generated-test", "1.0.0", "generated-catalog-v1", [])));
+        Assert.Equal(HttpStatusCode.OK, prematurePlan.StatusCode);
+        var prematurePlanResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(prematurePlan);
+        Assert.False(prematurePlanResult.Accepted);
+        Assert.Equal(10, prematurePlanResult.StateVersion);
+        Assert.Equal("generated-workflow-gate-1", prematurePlanResult.PendingGate?.RequestId);
+
+        using var confirmedGeneratedWorkflow = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/generated-workflow-gate-1/answer",
+            runToken,
+            new AnswerCoordinatorGateRequest(10, "generated-workflow-answer-1", "approve", null));
+        Assert.Equal(HttpStatusCode.OK, confirmedGeneratedWorkflow.StatusCode);
+        var confirmedGeneratedResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(confirmedGeneratedWorkflow);
+        Assert.True(confirmedGeneratedResult.Accepted);
+        Assert.Equal(11, confirmedGeneratedResult.StateVersion);
+        Assert.Null(confirmedGeneratedResult.PendingGate);
+
+        string receiptGrantId;
+        string receiptGrantRevision;
+        string receiptStepId;
+        string receiptPurpose;
+        await using (var database = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await database.OpenConnectionAsync())
+        await using (var query = new NpgsqlCommand($"""
+            SELECT grant_id, revision, step_id, purpose
+            FROM "{ownerSchema}".executable_action_grants
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+              AND is_current AND grant_state = 'active'
+              AND action_ids ? 'propose_work_plan'
+            """, connection))
+        {
+            query.Parameters.AddWithValue("project", project.ProjectId);
+            query.Parameters.AddWithValue("run", RunId);
+            query.Parameters.AddWithValue("session", root.RootSessionId);
+            await using var reader = await query.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            receiptGrantId = reader.GetString(0);
+            receiptGrantRevision = reader.GetString(1);
+            receiptStepId = reader.GetString(2);
+            receiptPurpose = reader.GetString(3);
+            Assert.False(await reader.ReadAsync());
         }
 
         var cacheKey = new ObjectKey($"runs/{project.ProjectId}/{RunId}/root/copilot-cache");
@@ -477,25 +664,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.True(missingReceipt.Headers.CacheControl?.NoStore);
 
         var receiptId = Guid.NewGuid();
-        const string receiptGrantId = "integration-receipt-grant";
-        const string receiptGrantRevision = "revision-1";
-        const string receiptGateRequestId = "integration-receipt-gate";
         var receiptIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
-        await SeedReceiptGrantAsync(
-            _connectionString,
-            ownerSchema,
-            project.ProjectId,
-            RunId,
-            root.RootSessionId,
-            receiptIssuer,
-            currentRunnerSubject,
-            TenantId,
-            runnerMembership.Revision,
-            runnerRole.Revision,
-            root.ExecutionFence,
-            receiptGrantId,
-            receiptGrantRevision,
-            receiptGateRequestId);
         var policyProvider = new AgtPolicyProvider();
         var policyOptions = ReceiptPolicyOptions();
         var policyBinding = await ResolveReceiptPolicyBindingAsync(policyProvider, policyOptions, RunId);
@@ -515,9 +684,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var receiptInvocation = new ExecutableActionInvocation(
             receiptPrincipal,
             root.RootSessionId,
-            "step-one",
+            receiptStepId,
             ReceiptActionId,
-            "coordination.action",
+            receiptPurpose,
             new ExecutableActionGrantReference(receiptGrantId, receiptGrantRevision),
             root.ExecutionFence,
             policyBinding,
@@ -586,6 +755,165 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new { accepted = true, actorId = currentRunnerSubject });
         Assert.Equal(HttpStatusCode.MethodNotAllowed, callerReceiptWrite.StatusCode);
 
+        var acceptedPlan = new WorkPlan(
+            "accepted-plan",
+            "generated-test",
+            "1.0.0",
+            "generated-catalog-v1",
+            [
+                new WorkPlanItem(
+                    "implement-1",
+                    "implement",
+                    "Implement the accepted change",
+                    "Implement the accepted change and verify it with targeted tests.",
+                    "implementer",
+                    "test-agent",
+                    "implementation",
+                    "platform-model",
+                    "sandbox-platform",
+                    "isolated-worktree",
+                    [],
+                    [])
+            ]);
+        await using (var unavailableFactory = new OrchestratorIntegrationFactory(
+                         _connectionString,
+                         ownerSchema,
+                         signingKey,
+                         projects.CreateHandler,
+                         () => eventsFactory.Server.CreateHandler()))
+        using (var unavailableClient = unavailableFactory.CreateClient(new WebApplicationFactoryClientOptions
+               {
+                   BaseAddress = new Uri("https://orchestrator.test")
+               }))
+        using (var unavailablePlan = await SendJsonAsync(
+                   unavailableClient,
+                   HttpMethod.Post,
+                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/propose_work_plan",
+                   runToken,
+                   new ProposeCoordinatorWorkPlanRequest(
+                       11,
+                       "unavailable-work-plan-1",
+                       "unavailable-work-plan-gate-1",
+                       acceptedPlan)))
+        {
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailablePlan.StatusCode);
+            await using var database = NpgsqlDataSource.Create(_connectionString);
+            await using var connection = await database.OpenConnectionAsync();
+            await using var count = new NpgsqlCommand(
+                $"SELECT count(*) FROM \"{ownerSchema}\".coordinator_run_selection_contexts " +
+                "WHERE project_id = @project AND run_id = @run",
+                connection);
+            count.Parameters.AddWithValue("project", project.ProjectId);
+            count.Parameters.AddWithValue("run", RunId);
+            Assert.Equal(0L, await count.ExecuteScalarAsync());
+        }
+
+        using var proposedPlan = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/propose_work_plan",
+            runToken,
+            new ProposeCoordinatorWorkPlanRequest(
+                11, "work-plan-proposal-1", "work-plan-gate-1", acceptedPlan));
+        Assert.True(
+            proposedPlan.StatusCode == HttpStatusCode.OK,
+            $"{proposedPlan.StatusCode}: {await proposedPlan.Content.ReadAsStringAsync()}");
+        var proposedPlanResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(proposedPlan);
+        Assert.True(proposedPlanResult.Accepted);
+        Assert.Equal(12, proposedPlanResult.StateVersion);
+        Assert.Equal("work-plan-gate-1", proposedPlanResult.PendingGate?.RequestId);
+        Assert.Equal(1, sandboxProvider.NegotiationCount);
+        await AssertAcceptedSandboxBindingAsync(
+            _connectionString, ownerSchema, project.ProjectId, sandboxProvider.ResourceId);
+
+        using var confirmedPlan = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/work-plan-gate-1/answer",
+            runToken,
+            new AnswerCoordinatorGateRequest(12, "work-plan-answer-1", "approve", null));
+        Assert.Equal(HttpStatusCode.OK, confirmedPlan.StatusCode);
+        var confirmedPlanResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(confirmedPlan);
+        Assert.True(confirmedPlanResult.Accepted);
+        Assert.Equal(13, confirmedPlanResult.StateVersion);
+
+        var restoringSandboxProvider = new ControlledSandboxResourceProvider();
+        await using (var restoringFactory = new OrchestratorIntegrationFactory(
+                         _connectionString,
+                         ownerSchema,
+                         signingKey,
+                         projects.CreateHandler,
+                         () => eventsFactory.Server.CreateHandler(),
+                         sandboxProvider: restoringSandboxProvider))
+        using (var restoredOrchestrator = restoringFactory.CreateClient(
+                   new WebApplicationFactoryClientOptions
+                   {
+                       BaseAddress = new Uri("https://orchestrator.test")
+                   }))
+        using (var assemblyRequest = await SendJsonAsync(
+                   restoredOrchestrator,
+                   HttpMethod.Post,
+                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/request_assembly",
+                   runToken,
+                   new RequestCoordinatorAssemblyRequest(
+                       13,
+                       "assembly-idempotency-1",
+                       new CoordinatorAssemblyRequest(
+                           "assembly-request-1",
+                           "generated-test",
+                           "1.0.0",
+                           "accepted-plan",
+                           "build-test",
+                           WorkflowPlatformGate.BuildTest))))
+        {
+            Assert.Equal(HttpStatusCode.OK, assemblyRequest.StatusCode);
+            var assemblyRequestResult =
+                await ReadJsonAsync<CoordinatorDecisionOperationResponse>(assemblyRequest);
+            Assert.True(assemblyRequestResult.Accepted);
+            Assert.Equal(14, assemblyRequestResult.StateVersion);
+            Assert.Null(assemblyRequestResult.PendingGate);
+            Assert.Equal(0, restoringSandboxProvider.NegotiationCount);
+        }
+        using (var database = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await database.OpenConnectionAsync())
+        await using (var query = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{ownerSchema}".coordination_sessions
+                    WHERE project_id = @project AND run_id = @run AND parent_session_id IS NOT NULL),
+                (SELECT execution_state FROM "{ownerSchema}".accepted_runs
+                    WHERE project_id = @project AND run_id = @run)
+            """, connection))
+        {
+            query.Parameters.AddWithValue("project", project.ProjectId);
+            query.Parameters.AddWithValue("run", RunId);
+            await using var reader = await query.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(0L, reader.GetInt64(0));
+            Assert.Equal("idle", reader.GetString(1));
+        }
+
+        using var revisedPlan = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/actions/revise_work_plan",
+            runToken,
+            new ReviseCoordinatorWorkPlanRequest(
+                14,
+                "work-plan-revision-1",
+                "work-plan-revision-1",
+                acceptedPlan));
+        Assert.True(
+            revisedPlan.StatusCode == HttpStatusCode.OK,
+            $"{revisedPlan.StatusCode}: {await revisedPlan.Content.ReadAsStringAsync()}");
+        var revisedPlanResult =
+            await ReadJsonAsync<CoordinatorDecisionOperationResponse>(revisedPlan);
+        Assert.True(revisedPlanResult.Accepted);
+        Assert.Equal(15, revisedPlanResult.StateVersion);
+        Assert.Null(revisedPlanResult.PendingGate);
+        Assert.Equal(1, sandboxProvider.NegotiationCount);
+
         using var childResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
@@ -603,6 +931,24 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new RegisterChildRequest("child"));
         await AssertStatusAsync(childReplay, HttpStatusCode.Created);
         Assert.Equal(child, await ReadJsonAsync<RegisteredChild>(childReplay));
+
+        using var secondChildResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
+            runToken,
+            new RegisterChildRequest("child-two"));
+        await AssertStatusAsync(secondChildResponse, HttpStatusCode.Created);
+        using var overConcurrentLimit = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
+            runToken,
+            new RegisterChildRequest("child-three"));
+        Assert.Equal(HttpStatusCode.Conflict, overConcurrentLimit.StatusCode);
+        Assert.Contains(
+            "run_concurrent_child_limit_exceeded",
+            await overConcurrentLimit.Content.ReadAsStringAsync());
 
         using var events = eventsFactory.CreateClient(new WebApplicationFactoryClientOptions
         {
@@ -826,6 +1172,46 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     private static AgtPolicyProviderOptions ReceiptPolicyOptions() =>
         new("agt-policy-resource", 3, "agt-policy-receipt-v1", [ReceiptAllowPolicy]);
 
+    private static async Task AssertAcceptedSandboxBindingAsync(
+        string connectionString,
+        string schema,
+        string projectId,
+        string resourceId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using (var query = new NpgsqlCommand($"""
+            SELECT provider_id, resource_id, resource_generation, negotiated_capabilities::text,
+                   execution_fence, project_configuration_revision
+            FROM "{schema}".coordinator_run_selection_contexts
+            WHERE project_id = @project AND run_id = @run
+            """, connection))
+        {
+            query.Parameters.AddWithValue("project", projectId);
+            query.Parameters.AddWithValue("run", RunId);
+            await using var reader = await query.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("sandbox-platform", reader.GetString(0));
+            Assert.Equal(resourceId, reader.GetString(1));
+            Assert.Equal(7, reader.GetInt64(2));
+            var capabilities = JsonSerializer.Deserialize<string[]>(reader.GetString(3));
+            Assert.NotNull(capabilities);
+            Assert.Contains("container.create", capabilities);
+            Assert.True(reader.GetInt64(4) > 0);
+            Assert.True(reader.GetInt64(5) > 0);
+            Assert.False(await reader.ReadAsync());
+        }
+
+        await using var mutation = new NpgsqlCommand($"""
+            UPDATE "{schema}".coordinator_run_selection_contexts
+            SET resource_generation = resource_generation + 1
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        mutation.Parameters.AddWithValue("project", projectId);
+        mutation.Parameters.AddWithValue("run", RunId);
+        await Assert.ThrowsAsync<PostgresException>(() => mutation.ExecuteNonQueryAsync());
+    }
+
     private static async Task<PinnedProviderBinding> ResolveReceiptPolicyBindingAsync(
         AgtPolicyProvider provider,
         AgtPolicyProviderOptions options,
@@ -840,105 +1226,23 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         return Assert.IsType<PinnedProviderBinding>(resolved.Value);
     }
 
-    private static async Task SeedReceiptGrantAsync(
-        string connectionString,
-        string schema,
-        string projectId,
-        string runId,
-        string sessionId,
-        string issuer,
-        string subject,
-        string tenantId,
-        long membershipRevision,
-        long roleRevision,
-        long fence,
-        string grantId,
-        string grantRevision,
-        string requestId)
+    private static ProviderCatalog CreateSandboxProviderCatalog()
     {
-        var decisionId = Guid.NewGuid();
-        var quotedSchema = $"\"{schema}\"";
-        await using var dataSource = NpgsqlDataSource.Create(connectionString);
-        await using var connection = await dataSource.OpenConnectionAsync();
-        await using var transaction = await connection.BeginTransactionAsync();
-        await using (var decision = new NpgsqlCommand($"""
-            INSERT INTO {quotedSchema}.coordinator_decisions
-                (project_id, run_id, session_id, request_id, decision_id, actor_issuer, actor_subject,
-                 execution_fence, state_version, action_kind, idempotency_key, command_hash,
-                 decision_state, decision)
-            VALUES
-                (@project, @run, @session, @request, @decision, @issuer, @subject,
-                 @fence, 7, 'test_source_receipt', 'test-source-receipt',
-                 '0000000000000000000000000000000000000000000000000000000000000000',
-                 'accepted', @decisionPayload)
-            """, connection, transaction))
-        {
-            decision.Parameters.AddWithValue("project", projectId);
-            decision.Parameters.AddWithValue("run", runId);
-            decision.Parameters.AddWithValue("session", sessionId);
-            decision.Parameters.AddWithValue("request", requestId);
-            decision.Parameters.AddWithValue("decision", decisionId);
-            decision.Parameters.AddWithValue("issuer", issuer);
-            decision.Parameters.AddWithValue("subject", subject);
-            decision.Parameters.AddWithValue("fence", fence);
-            decision.Parameters.AddWithValue("decisionPayload", NpgsqlTypes.NpgsqlDbType.Jsonb, "{}");
-            await decision.ExecuteNonQueryAsync();
-        }
-        await using (var gate = new NpgsqlCommand($"""
-            INSERT INTO {quotedSchema}.coordinator_gates
-                (project_id, run_id, session_id, request_id, gate_kind, gate_state, gate, allowed_choices,
-                 allow_free_form, created_by_issuer, created_by_subject, resolved_by_issuer,
-                 resolved_by_subject, execution_fence, state_version, response, idempotency_key)
-            VALUES
-                (@project, @run, @session, @request, 'outcome', 'approved', @gate,
-                 @choices, false, @issuer, @subject, @issuer, @subject,
-                 @fence, 1, @response, 'test-source-receipt')
-            """, connection, transaction))
-        {
-            gate.Parameters.AddWithValue("project", projectId);
-            gate.Parameters.AddWithValue("run", runId);
-            gate.Parameters.AddWithValue("session", sessionId);
-            gate.Parameters.AddWithValue("request", requestId);
-            gate.Parameters.AddWithValue("gate", NpgsqlTypes.NpgsqlDbType.Jsonb, "{}");
-            gate.Parameters.AddWithValue(
-                "choices", NpgsqlTypes.NpgsqlDbType.Jsonb, """["approve","reject"]""");
-            gate.Parameters.AddWithValue("issuer", issuer);
-            gate.Parameters.AddWithValue("subject", subject);
-            gate.Parameters.AddWithValue("fence", fence);
-            gate.Parameters.AddWithValue(
-                "response", NpgsqlTypes.NpgsqlDbType.Jsonb, """{"choiceId":"approve"}""");
-            await gate.ExecuteNonQueryAsync();
-        }
-        await using (var grant = new NpgsqlCommand($"""
-            INSERT INTO {quotedSchema}.executable_action_grants
-                (project_id, run_id, grant_id, revision, grant_state, issuer, actor_id, tenant_id,
-                 session_id, step_id, action_ids, purpose, membership_revision, role_revision,
-                 execution_fence, expires_at, source_decision_id, source_request_id)
-            VALUES
-                (@project, @run, @grant, @revision, 'active', @issuer, @subject, @tenant,
-                 @session, 'step-one', @actions, 'coordination.action', @membershipRevision, @roleRevision,
-                 @fence, @expires, @decision, @request)
-            """, connection, transaction))
-        {
-            grant.Parameters.AddWithValue("project", projectId);
-            grant.Parameters.AddWithValue("run", runId);
-            grant.Parameters.AddWithValue("grant", grantId);
-            grant.Parameters.AddWithValue("revision", grantRevision);
-            grant.Parameters.AddWithValue("issuer", issuer);
-            grant.Parameters.AddWithValue("subject", subject);
-            grant.Parameters.AddWithValue("tenant", tenantId);
-            grant.Parameters.AddWithValue("session", sessionId);
-            grant.Parameters.AddWithValue(
-                "actions", NpgsqlTypes.NpgsqlDbType.Jsonb, $$"""["{{ReceiptActionId}}"]""");
-            grant.Parameters.AddWithValue("membershipRevision", membershipRevision);
-            grant.Parameters.AddWithValue("roleRevision", roleRevision);
-            grant.Parameters.AddWithValue("fence", fence);
-            grant.Parameters.AddWithValue("expires", DateTimeOffset.UtcNow.AddMinutes(5));
-            grant.Parameters.AddWithValue("decision", decisionId);
-            grant.Parameters.AddWithValue("request", requestId);
-            await grant.ExecuteNonQueryAsync();
-        }
-        await transaction.CommitAsync();
+        var registration = new ProviderRegistration(
+            new ProviderDescriptor(
+                ProviderSeam.Sandbox,
+                "sandbox-platform",
+                new Version(1, 0, 0),
+                1,
+                ProviderHostingPattern.KubernetesController,
+                ImmutableHashSet.Create(StringComparer.Ordinal, "container.create")),
+            true,
+            "options-v1",
+            1);
+        return Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [registration],
+            [new ProviderSelection(ProviderSeam.Sandbox, "sandbox-platform")],
+            []).Value);
     }
 
     private static async Task<string> ReadGateStateAsync(
@@ -1171,7 +1475,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         SecurityKey signingKey,
         Func<HttpMessageHandler> projectsHandler,
         Func<HttpMessageHandler> eventsHandler,
-        IObjectStore? objectStore = null)
+        IObjectStore? objectStore = null,
+        ICoordinatorSandboxResourceProvider? sandboxProvider = null)
         : WebApplicationFactory<OrchestratorHost::Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -1195,6 +1500,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             {
                 services.RemoveAll<NpgsqlDataSource>();
                 services.AddSingleton(NpgsqlDataSource.Create(connectionString));
+                services.RemoveAll<ProviderCatalog>();
+                services.AddSingleton(CreateSandboxProviderCatalog());
                 AddJwtBearer(services, signingKey);
                 services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.ProjectsRunSelectionClient>()
                     .ConfigurePrimaryHttpMessageHandler(projectsHandler);
@@ -1202,7 +1509,39 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     .ConfigurePrimaryHttpMessageHandler(eventsHandler);
                 if (objectStore is not null)
                     services.AddSingleton<IObjectStore>(objectStore);
+                if (sandboxProvider is not null)
+                    services.AddSingleton<ICoordinatorSandboxResourceProvider>(sandboxProvider);
             });
+        }
+    }
+
+    private sealed class ControlledSandboxResourceProvider : ICoordinatorSandboxResourceProvider
+    {
+        private int _negotiationCount;
+
+        public string ProviderId => "sandbox-platform";
+        public string ResourceId => "controlled-sandbox-resource";
+        public int NegotiationCount => Volatile.Read(ref _negotiationCount);
+        public ImmutableArray<string> IsolationChoices { get; } = ["isolated-worktree"];
+
+        public Task<ProviderResult<ResourceNegotiation>> NegotiateAsync(
+            ProviderCandidate candidate,
+            OrchestratorHost::Agentweaver.Orchestrator.EffectiveRunSelection selection,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (candidate.Seam != ProviderSeam.Sandbox || candidate.ProviderId != ProviderId ||
+                selection.RunId != RunId)
+                return Task.FromResult(ProviderResult<ResourceNegotiation>.Failure(
+                    ProviderErrorCode.InvalidNegotiation,
+                    "The controlled Sandbox provider received an unexpected candidate."));
+
+            Interlocked.Increment(ref _negotiationCount);
+            return Task.FromResult(ProviderResult<ResourceNegotiation>.Success(
+                new ResourceNegotiation(
+                    new ProviderResourceRef(
+                        ProviderSeam.Sandbox, ProviderId, ResourceId, 7),
+                    candidate.RequiredCapabilities)));
         }
     }
 

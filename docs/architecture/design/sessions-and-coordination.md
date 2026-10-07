@@ -45,6 +45,15 @@ production; the positive receipt consumer in Events & Sessions remains #1846 wor
 after #1848 admission. See the
 [implemented journal and owner contract](../../architecture/events-sessions.md).
 
+When a non-empty or fixed-work plan needs isolation, the Orchestrator persists the
+accepted Sandbox candidate and adapter-returned negotiation as an immutable
+project/run context bound to the selection hash, configuration revisions, and
+execution fence. A restored decision envelope cannot supply its own pin: the new
+host reloads that tuple, checks the accepted selection and role context, and rebuilds
+the binding through the current catalog and `ProviderResolver.Pin` without calling
+the adapter again. If no registered adapter can provide the first negotiation, the
+plan request returns `503`; no synthetic resource or generation is created.
+
 ## Today in 0.x
 
 Paths refer to the 0.x code on the `dev` branch. In 0.x, an AgentHost agent turn is a

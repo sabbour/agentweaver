@@ -16,9 +16,11 @@
     <ProjectReference Include="..\Agentweaver.Orchestrator.Core\Agentweaver.Orchestrator.Core.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
+    <ProjectReference Include="..\..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Migrations\001_coordination_owner.sql" />
     <EmbeddedResource Include="Migrations\002_typed_decisions_and_checkpoints.sql" />
+    <EmbeddedResource Include="Migrations\003_accepted_run_selection_context.sql" />
   </ItemGroup>
 </Project>

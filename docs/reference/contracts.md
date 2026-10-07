@@ -50,9 +50,21 @@ authority and the accepted run selection; the caller's claims alone do not estab
 current permission. Internal Events calls use the configured Events audience and the
 same caller bearer.
 
+Typed action mutations use strict request contracts, expected state versions, and
+idempotency keys. Proposing or revising non-empty or fixed work requires the server's
+accepted Sandbox binding; a missing registered adapter or negotiation returns `503`.
+The caller cannot submit a resource pin or override the durable binding.
+
 | Method and path | Contract |
 | --- | --- |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/root` | Accept the root session for the current accepted run selection and register it with Events & Sessions. |
+| `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/decisions` | Read the current typed decision state and pending gate without exposing a transferable authorization or provider pin. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/propose_outcome_spec` | Propose a schema-validated outcome specification. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/select_workflow` | Select a workflow from the authorized catalog or submit a generated definition for confirmation. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/propose_work_plan` | Validate a plan against the selected workflow, current role/model eligibility, and the accepted Sandbox binding before opening its confirmation gate. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/revise_work_plan` | Validate a bounded revision against the same immutable run context; scope changes require a gate. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/request_assembly` | Record a typed assembly request against an accepted workflow, plan, and platform step. It does not execute assembly. |
+| `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/decisions/gates/{requestId}/answer` | Answer an exact pending gate with one of its allowed choices. Message receipt is not an answer. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{parentSessionId}/children` | Register a child under the active parent and register the child session with Events & Sessions. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/messages` | Persist a fenced owner message and synchronously admit it to Events against the exact persisted outbox record. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/turn-boundary` | Advance the logical turn, claim and present the next eligible addressed message, and return pending parent notifications. A retry with the original state version returns the completed boundary result. A blocked session can resume only when a wake is pending. |
@@ -73,6 +85,7 @@ Configuration:
 | `Orchestrator:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Required migration workload identity. |
 | `Orchestrator:Schema` | Optional service-owned schema name; defaults to `orchestrator`. |
 | `Identity:Issuer` / `Identity:Audience` | HTTPS issuer and incoming Orchestrator audience. |
+| `ProjectsConfig:ProviderCatalog` | Optional catalog-owner snapshot used to validate the accepted Sandbox candidate. With no snapshot or no registered Sandbox resource adapter, plans needing isolation fail closed with `503`. |
 | `ProjectsConfig:AuthorizationContext:OwnerBaseAddress` / `Audience` | Trusted HTTPS Projects & Config owner and required audience for current authority and selection. |
 | `EventsAndSessions:Authorization:OwnerBaseAddress` / `Audience` | Trusted HTTPS Events & Sessions owner and required audience for session registration and message delivery. |
 

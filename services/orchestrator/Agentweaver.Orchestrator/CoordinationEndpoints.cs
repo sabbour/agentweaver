@@ -16,6 +16,21 @@ public static class CoordinationEndpoints
         coordination.MapPost(
             "/sessions/{sessionId}/decisions/outcome",
             ProposeCoordinatorOutcomeAsync);
+        coordination.MapPost(
+            "/sessions/{sessionId}/actions/propose_outcome_spec",
+            ProposeCoordinatorOutcomeAsync);
+        coordination.MapPost(
+            "/sessions/{sessionId}/actions/select_workflow",
+            SelectCoordinatorWorkflowAsync);
+        coordination.MapPost(
+            "/sessions/{sessionId}/actions/propose_work_plan",
+            ProposeCoordinatorWorkPlanAsync);
+        coordination.MapPost(
+            "/sessions/{sessionId}/actions/revise_work_plan",
+            ReviseCoordinatorWorkPlanAsync);
+        coordination.MapPost(
+            "/sessions/{sessionId}/actions/request_assembly",
+            RequestCoordinatorAssemblyAsync);
         coordination.MapGet(
             "/sessions/{sessionId}/decisions",
             ReadCoordinatorDecisionStateAsync);
@@ -186,6 +201,253 @@ public static class CoordinationEndpoints
                     request.Prompt,
                     request.AllowedChoices,
                     request.AllowsFreeform
+                }),
+                transition.State ?? current.State,
+                transition.IsSuccess,
+                transition.Issues,
+                confirmedSelectionContext: null,
+                candidateSelectionContext: null,
+                validatedTransitionValue: transition.Value,
+                cancellationToken).ConfigureAwait(false);
+            return Results.Ok(ToDecisionResponse(saved));
+        }, cancellationToken);
+
+    private static Task<IResult> SelectCoordinatorWorkflowAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        SelectCoordinatorWorkflowRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var identity = new SessionIdentity(projectId, runId, sessionId);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var current = await decisions.ReadCurrentAsync(
+                actor, identity, selection, cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+
+            if (request.ProposedDefinition is not null &&
+                !string.Equals(
+                    request.WorkflowId ?? request.ProposedDefinition.Id,
+                    request.ProposedDefinition.Id,
+                    StringComparison.Ordinal))
+                throw new CoordinationException(
+                    "coordinator_generated_workflow_invalid",
+                    StatusCodes.Status400BadRequest);
+            var transition = CoordinatorDecisionFlow.SelectWorkflow(
+                current.State,
+                CoordinatorWorkflowCatalog.ForSelection(
+                    selection.Selection, request.ProposedDefinition),
+                request.WorkflowId ?? request.ProposedDefinition?.Id,
+                request.RequestId,
+                selection.Authorization.ActorId);
+            var saved = await decisions.PersistTransitionAsync(
+                actor,
+                identity,
+                selection,
+                request.ExpectedStateVersion,
+                request.IdempotencyKey,
+                request.RequestId,
+                "workflow.select",
+                CoordinatorDecisionOwnerStore.ComputeCommandHash(new
+                {
+                    request.ExpectedStateVersion,
+                    request.RequestId,
+                    request.WorkflowId,
+                    request.ProposedDefinition
+                }),
+                transition.State ?? current.State,
+                transition.IsSuccess,
+                transition.Issues,
+                confirmedSelectionContext: null,
+                candidateSelectionContext: null,
+                validatedTransitionValue: transition.Value,
+                cancellationToken).ConfigureAwait(false);
+            return Results.Ok(ToDecisionResponse(saved));
+        }, cancellationToken);
+
+    private static Task<IResult> ProposeCoordinatorWorkPlanAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        ProposeCoordinatorWorkPlanRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        CoordinatorRunSelectionContextStore runSelectionContexts,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var identity = new SessionIdentity(projectId, runId, sessionId);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var current = await decisions.ReadCurrentAsync(
+                actor, identity, selection, cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+
+            var selectionContext = RequiresProviderBinding(current.State, request.Plan)
+                ? await runSelectionContexts.ResolveForPlanAsync(
+                    selection.Selection, current.State.Fence, cancellationToken).ConfigureAwait(false)
+                : CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Selection.Snapshot);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            var transition = CoordinatorDecisionFlow.ProposeWorkPlan(
+                current.State,
+                request.Plan,
+                selectionContext,
+                request.RequestId,
+                selection.Authorization.ActorId);
+            transition = await EnforceRunChildLimitAsync(
+                transition,
+                current.State,
+                request.Plan,
+                selection.Selection,
+                identity,
+                decisions,
+                cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            var saved = await decisions.PersistTransitionAsync(
+                actor,
+                identity,
+                selection,
+                request.ExpectedStateVersion,
+                request.IdempotencyKey,
+                request.RequestId,
+                "work-plan.propose",
+                CoordinatorDecisionOwnerStore.ComputeCommandHash(new
+                {
+                    request.ExpectedStateVersion,
+                    request.RequestId,
+                    request.Plan
+                }),
+                transition.State ?? current.State,
+                transition.IsSuccess,
+                transition.Issues,
+                confirmedSelectionContext: null,
+                candidateSelectionContext: transition.IsSuccess ? selectionContext : null,
+                validatedTransitionValue: transition.Value,
+                cancellationToken).ConfigureAwait(false);
+            return Results.Ok(ToDecisionResponse(saved));
+        }, cancellationToken);
+
+    private static Task<IResult> ReviseCoordinatorWorkPlanAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        ReviseCoordinatorWorkPlanRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        CoordinatorRunSelectionContextStore runSelectionContexts,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var identity = new SessionIdentity(projectId, runId, sessionId);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var current = await decisions.ReadCurrentAsync(
+                actor, identity, selection, cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+
+            var selectionContext = RequiresProviderBinding(current.State, request.RevisedPlan)
+                ? await runSelectionContexts.ResolveForPlanAsync(
+                    selection.Selection, current.State.Fence, cancellationToken).ConfigureAwait(false)
+                : CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Selection.Snapshot);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            var transition = CoordinatorDecisionFlow.ReviseWorkPlan(
+                current.State,
+                request.RevisedPlan,
+                selectionContext,
+                request.RequestId,
+                selection.Authorization.ActorId);
+            transition = await EnforceRunChildLimitAsync(
+                transition,
+                current.State,
+                request.RevisedPlan,
+                selection.Selection,
+                identity,
+                decisions,
+                cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            var saved = await decisions.PersistTransitionAsync(
+                actor,
+                identity,
+                selection,
+                request.ExpectedStateVersion,
+                request.IdempotencyKey,
+                request.RequestId,
+                "work-plan.revise",
+                CoordinatorDecisionOwnerStore.ComputeCommandHash(new
+                {
+                    request.ExpectedStateVersion,
+                    request.RequestId,
+                    request.RevisedPlan
+                }),
+                transition.State ?? current.State,
+                transition.IsSuccess,
+                transition.Issues,
+                confirmedSelectionContext: null,
+                candidateSelectionContext: transition.IsSuccess ? selectionContext : null,
+                validatedTransitionValue: transition.Value,
+                cancellationToken).ConfigureAwait(false);
+            return Results.Ok(ToDecisionResponse(saved));
+        }, cancellationToken);
+
+    private static Task<IResult> RequestCoordinatorAssemblyAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        RequestCoordinatorAssemblyRequest request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var identity = new SessionIdentity(projectId, runId, sessionId);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var current = await decisions.ReadCurrentAsync(
+                actor, identity, selection, cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+
+            var transition = CoordinatorDecisionFlow.RequestAssembly(
+                current.State, request.Request);
+            var saved = await decisions.PersistTransitionAsync(
+                actor,
+                identity,
+                selection,
+                request.ExpectedStateVersion,
+                request.IdempotencyKey,
+                request.Request.RequestId,
+                "assembly.request",
+                CoordinatorDecisionOwnerStore.ComputeCommandHash(new
+                {
+                    request.ExpectedStateVersion,
+                    request.Request
                 }),
                 transition.State ?? current.State,
                 transition.IsSuccess,
@@ -442,6 +704,40 @@ public static class CoordinationEndpoints
                 "coordinator_selection_stale", StatusCodes.Status409Conflict);
     }
 
+    private static async Task<CoordinatorDecisionTransition<T>> EnforceRunChildLimitAsync<T>(
+        CoordinatorDecisionTransition<T> transition,
+        CoordinatorDecisionState currentState,
+        WorkPlan? plan,
+        EffectiveRunSelection selection,
+        SessionIdentity identity,
+        CoordinatorDecisionOwnerStore decisions,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        if (!transition.IsSuccess)
+            return transition;
+        var maxChildren = CoordinatorWorkflowCatalog.ReadMaxChildren(selection.Snapshot);
+        var registeredChildren = await decisions.ReadRegisteredChildCountAsync(
+            identity, cancellationToken).ConfigureAwait(false);
+        var proposedChildren = plan?.Items.IsDefaultOrEmpty == false ? plan.Items.Length : 0;
+        if (registeredChildren + proposedChildren <= maxChildren)
+            return transition;
+        return new CoordinatorDecisionTransition<T>(
+            currentState,
+            null,
+            [
+                new WorkflowValidationIssue(
+                    WorkflowValidationCode.WorkPlanLimitExceeded,
+                    "plan.items",
+                    "The proposed work plan exceeds the accepted run's remaining child limit.")
+            ]);
+    }
+
+    private static bool RequiresProviderBinding(CoordinatorDecisionState state, WorkPlan? plan) =>
+        plan?.Items.IsDefaultOrEmpty == false ||
+        state.SelectedWorkflow?.Definition.Steps.Any(step =>
+            step.Mode == WorkflowStepMode.Fixed && step.FixedWork is not null) == true;
+
     private static long GetProjectRoleRevision(
         ProjectsAuthorizationContext authorization,
         string projectId,
@@ -509,6 +805,7 @@ public static class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         EventsAddressedMessageClient events,
         CoordinationOwnerStore store,
+        CoordinatorDecisionOwnerStore decisions,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
@@ -519,6 +816,11 @@ public static class CoordinationEndpoints
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             var accepted = await store.AcceptRootAsync(
                 actor, selection, request.SessionId, cancellationToken).ConfigureAwait(false);
+            await decisions.InitializeRootAsync(
+                actor,
+                new SessionIdentity(projectId, runId, accepted.RootSessionId),
+                selection,
+                cancellationToken).ConfigureAwait(false);
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             await events.EnsureSessionAsync(
@@ -544,13 +846,19 @@ public static class CoordinationEndpoints
         ExecuteAsync(async () =>
         {
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
-            _ = await projects.ReadAcceptedSelectionAsync(
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             var child = await store.RegisterChildAsync(
                 actor,
                 new SessionIdentity(projectId, runId, parentSessionId),
                 request.SessionId,
+                CoordinatorWorkflowCatalog.ReadMaxChildren(selection.Selection.Snapshot),
+                CoordinatorWorkflowCatalog.ReadMaxConcurrentChildren(selection.Selection.Snapshot),
                 cancellationToken).ConfigureAwait(false);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             await events.EnsureSessionAsync(context, child.Identity, cancellationToken).ConfigureAwait(false);
             return Results.Created(
                 $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/coordination/sessions/{Uri.EscapeDataString(child.Identity.SessionId)}",
