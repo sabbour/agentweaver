@@ -35,6 +35,15 @@ of falling back to a new default. The service emits bounded pin evidence through
 existing telemetry helper without recording option values, credentials, or raw resource
 IDs. See the [journal service reference](events-sessions.md).
 
+Explicit-event forks require the pinned provider's `sessions.events.fork` capability
+and a committed source event matched to its session-bound cursor. Events rechecks the
+Orchestrator's admission receipt inside the fork transaction, then atomically persists
+the target session and lineage with the provider-binding hash. Exact retries return the
+stored lineage; reusing an idempotency key for a different fork conflicts. The
+Orchestrator adds the lineage to its session tree only after its final owner-state
+recheck, so an unregistered target is not a usable child. Session tree and status
+routes report durable owner state; they do not imply a running AgentHost.
+
 Event version 2 defines a typed PolicyEvaluation payload, but the native journal does not
 advertise `sessions.policy.evaluations` or accept these events from generic run-scoped
 callers. Actor equality does not prove Orchestrator Core writer provenance. The capability
