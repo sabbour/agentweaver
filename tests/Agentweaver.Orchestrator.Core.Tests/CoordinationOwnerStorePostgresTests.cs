@@ -257,6 +257,291 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PrepareForkRevalidatesAfterThePendingCommandInsertWaitAndRollsBack()
+    {
+        var request = NewForkRequest(_root, "blocked-prepare-target", "blocked-prepare");
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var validations = 0;
+        Task Revalidate(CancellationToken _) =>
+            Interlocked.Increment(ref validations) == 1
+                ? Task.CompletedTask
+                : Task.FromException(new CoordinationException("run_selection_permission_denied", 403));
+
+        await using var blocker = await _fixture.DataSource.OpenConnectionAsync();
+        await using var observer = await _fixture.DataSource.OpenConnectionAsync();
+        await using var blockerTransaction = await blocker.BeginTransactionAsync();
+        await using (var lockTable = new NpgsqlCommand(
+            $"""LOCK TABLE "{_schema}".coordination_tree_commands IN SHARE MODE""",
+            blocker,
+            blockerTransaction))
+            await lockTable.ExecuteNonQueryAsync();
+
+        var prepare = _store.PrepareSessionForkAsync(
+            _actor,
+            _root,
+            request,
+            selectionHash,
+            100,
+            32,
+            CancellationToken.None,
+            Revalidate);
+        await WaitUntilBlockedAsync(
+            observer,
+            blocker.ProcessID,
+            $"""INSERT INTO "{_schema}".coordination_tree_commands""");
+        await blockerTransaction.RollbackAsync();
+
+        var denied = await Assert.ThrowsAsync<CoordinationException>(() => prepare);
+        Assert.Equal(403, denied.StatusCode);
+        Assert.Equal(2, validations);
+        await using var verifyConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var verify = new NpgsqlCommand($"""
+            SELECT count(*)
+            FROM "{_schema}".coordination_tree_commands
+            WHERE project_id = @project AND run_id = @run
+              AND requested_target_session_id = @target
+            """, verifyConnection);
+        verify.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _root.ProjectId);
+        verify.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _root.RunId);
+        verify.Parameters.AddWithValue("target", NpgsqlDbType.Varchar, request.TargetSessionId);
+        Assert.Equal(0L, await verify.ExecuteScalarAsync());
+    }
+
+    [Theory]
+    [InlineData(403, "run_selection_permission_denied")]
+    [InlineData(409, "coordinator_selection_stale")]
+    public async Task CompleteForkRevalidatesAfterOutboxWaitAndFinalizesUnregistered(
+        int statusCode,
+        string unavailableCode)
+    {
+        var request = NewForkRequest(_root, $"blocked-complete-{statusCode}", $"blocked-complete-{statusCode}");
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var prepared = await _store.PrepareSessionForkAsync(
+            _actor, _root, request, selectionHash, 100, 32, CancellationToken.None);
+        var streamId = $"coordination/{_root.ProjectId}/{_root.RunId}/{_root.SessionId}";
+        await using (var seedConnection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var seed = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".outbox_streams (stream_id) VALUES (@stream)
+            ON CONFLICT (stream_id) DO NOTHING
+            """, seedConnection))
+        {
+            seed.Parameters.AddWithValue("stream", NpgsqlDbType.Text, streamId);
+            await seed.ExecuteNonQueryAsync();
+        }
+
+        var validations = 0;
+        Task Revalidate(CancellationToken _) =>
+            Interlocked.Increment(ref validations) == 1
+                ? Task.CompletedTask
+                : Task.FromException(new CoordinationException(unavailableCode, statusCode));
+
+        await using var blocker = await _fixture.DataSource.OpenConnectionAsync();
+        await using var observer = await _fixture.DataSource.OpenConnectionAsync();
+        await using var blockerTransaction = await blocker.BeginTransactionAsync();
+        await using (var lockStream = new NpgsqlCommand($"""
+            SELECT stream_id FROM "{_schema}".outbox_streams
+            WHERE stream_id = @stream FOR UPDATE
+            """, blocker, blockerTransaction))
+        {
+            lockStream.Parameters.AddWithValue("stream", NpgsqlDbType.Text, streamId);
+            Assert.Equal(streamId, await lockStream.ExecuteScalarAsync());
+        }
+
+        var complete = _store.CompleteSessionForkAsync(
+            _actor,
+            _root,
+            request,
+            selectionHash,
+            selectionHash,
+            selectionIsCurrent: true,
+            NewEventsFork(_root, request),
+            100,
+            32,
+            isDuplicate: prepared.IsDuplicate,
+            CancellationToken.None,
+            Revalidate);
+        await WaitUntilBlockedAsync(
+            observer,
+            blocker.ProcessID,
+            $"""UPDATE "{_schema}".outbox_streams SET last_sequence""");
+        await blockerTransaction.RollbackAsync();
+
+        var unregistered = await complete;
+        Assert.Equal(2, validations);
+        Assert.Equal(CoordinationForkRegistrationState.Unregistered, unregistered.RegistrationState);
+        Assert.Equal(unavailableCode, unregistered.UnavailableCode);
+        Assert.Null(unregistered.Node);
+        Assert.Null(unregistered.PendingRequestId);
+
+        await using var verifyConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var verify = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".coordination_sessions
+                 WHERE project_id = @project AND run_id = @run AND session_id = @target),
+                (SELECT count(*) FROM "{_schema}".coordination_requests
+                 WHERE project_id = @project AND run_id = @run AND recipient_session_id = @target),
+                (SELECT count(*) FROM "{_schema}".outbox_events
+                 WHERE id = @command AND event_type = 'orchestrator.session.forked'),
+                (SELECT count(*) FROM "{_schema}".outbox_events
+                 WHERE id = @command AND event_type = 'orchestrator.session.fork_unregistered'),
+                (SELECT result ->> 'registrationState' FROM "{_schema}".coordination_tree_commands
+                 WHERE command_id = @command)
+            """, verifyConnection);
+        verify.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _root.ProjectId);
+        verify.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _root.RunId);
+        verify.Parameters.AddWithValue("target", NpgsqlDbType.Varchar, request.TargetSessionId);
+        verify.Parameters.AddWithValue("command", NpgsqlDbType.Uuid, prepared.CommandId);
+        await using var reader = await verify.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(0L, reader.GetInt64(0));
+        Assert.Equal(0L, reader.GetInt64(1));
+        Assert.Equal(0L, reader.GetInt64(2));
+        Assert.Equal(1L, reader.GetInt64(3));
+        Assert.Equal("unregistered", reader.GetString(4));
+    }
+
+    [Fact]
+    public async Task PrepareRegisteredDuplicateRevalidatesAfterCommandRowWait()
+    {
+        var request = NewForkRequest(_root, "registered-duplicate-target", "registered-duplicate");
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var prepared = await _store.PrepareSessionForkAsync(
+            _actor, _root, request, selectionHash, 100, 32, CancellationToken.None);
+        var registered = await _store.CompleteSessionForkAsync(
+            _actor,
+            _root,
+            request,
+            selectionHash,
+            selectionHash,
+            selectionIsCurrent: true,
+            NewEventsFork(_root, request),
+            100,
+            32,
+            isDuplicate: false,
+            CancellationToken.None);
+        Assert.Equal(CoordinationForkRegistrationState.Registered, registered.RegistrationState);
+        var liveDuplicate = await _store.PrepareSessionForkAsync(
+            _actor,
+            _root,
+            request,
+            selectionHash,
+            100,
+            32,
+            CancellationToken.None,
+            _ => Task.CompletedTask);
+        Assert.True(liveDuplicate.IsDuplicate);
+        Assert.Equal(prepared.CommandId, liveDuplicate.CommandId);
+
+        await using var blocker = await _fixture.DataSource.OpenConnectionAsync();
+        await using var observer = await _fixture.DataSource.OpenConnectionAsync();
+        await using var blockerTransaction = await blocker.BeginTransactionAsync();
+        await using (var lockCommand = new NpgsqlCommand($"""
+            SELECT command_id FROM "{_schema}".coordination_tree_commands
+            WHERE command_id = @command FOR UPDATE
+            """, blocker, blockerTransaction))
+        {
+            lockCommand.Parameters.AddWithValue("command", NpgsqlDbType.Uuid, prepared.CommandId);
+            Assert.Equal(prepared.CommandId, await lockCommand.ExecuteScalarAsync());
+        }
+
+        var validations = 0;
+        Task Revalidate(CancellationToken _) =>
+            Interlocked.Increment(ref validations) == 1
+                ? Task.CompletedTask
+                : Task.FromException(new CoordinationException("run_selection_permission_denied", 403));
+        var duplicate = _store.PrepareSessionForkAsync(
+            _actor,
+            _root,
+            request,
+            selectionHash,
+            100,
+            32,
+            CancellationToken.None,
+            Revalidate);
+        await WaitUntilBlockedAsync(
+            observer, blocker.ProcessID, $"""coordination_tree_commands%FOR UPDATE""");
+        await blockerTransaction.RollbackAsync();
+
+        var denied = await Assert.ThrowsAsync<CoordinationException>(() => duplicate);
+        Assert.Equal(403, denied.StatusCode);
+        Assert.Equal(2, validations);
+    }
+
+    [Fact]
+    public async Task AdmissionFailureRegisteredDuplicateRevalidatesAfterCommandRowWait()
+    {
+        var request = NewForkRequest(_root, "failure-duplicate-target", "failure-duplicate");
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        var prepared = await _store.PrepareSessionForkAsync(
+            _actor, _root, request, selectionHash, 100, 32, CancellationToken.None);
+        var registered = await _store.CompleteSessionForkAsync(
+            _actor,
+            _root,
+            request,
+            selectionHash,
+            selectionHash,
+            selectionIsCurrent: true,
+            NewEventsFork(_root, request),
+            100,
+            32,
+            isDuplicate: false,
+            CancellationToken.None);
+        Assert.Equal(CoordinationForkRegistrationState.Registered, registered.RegistrationState);
+
+        await using var blocker = await _fixture.DataSource.OpenConnectionAsync();
+        await using var observer = await _fixture.DataSource.OpenConnectionAsync();
+        await using var blockerTransaction = await blocker.BeginTransactionAsync();
+        await using (var lockCommand = new NpgsqlCommand($"""
+            SELECT command_id FROM "{_schema}".coordination_tree_commands
+            WHERE command_id = @command FOR UPDATE
+            """, blocker, blockerTransaction))
+        {
+            lockCommand.Parameters.AddWithValue("command", NpgsqlDbType.Uuid, prepared.CommandId);
+            Assert.Equal(prepared.CommandId, await lockCommand.ExecuteScalarAsync());
+        }
+
+        var liveDuplicate = _store.FinalizeSessionForkAdmissionFailureAsync(
+            _actor,
+            _root,
+            request,
+            selectionHash,
+            CancellationToken.None,
+            _ => Task.CompletedTask);
+        await WaitUntilBlockedAsync(
+            observer, blocker.ProcessID, $"""coordination_tree_commands%FOR UPDATE""");
+        await blockerTransaction.RollbackAsync();
+        var replay = await liveDuplicate;
+        Assert.Equal(CoordinationForkRegistrationState.Registered, replay.RegistrationState);
+        Assert.True(replay.IsDuplicate);
+
+        await using var revokedBlocker = await _fixture.DataSource.OpenConnectionAsync();
+        await using var revokedObserver = await _fixture.DataSource.OpenConnectionAsync();
+        await using var revokedTransaction = await revokedBlocker.BeginTransactionAsync();
+        await using (var lockCommand = new NpgsqlCommand($"""
+            SELECT command_id FROM "{_schema}".coordination_tree_commands
+            WHERE command_id = @command FOR UPDATE
+            """, revokedBlocker, revokedTransaction))
+        {
+            lockCommand.Parameters.AddWithValue("command", NpgsqlDbType.Uuid, prepared.CommandId);
+            Assert.Equal(prepared.CommandId, await lockCommand.ExecuteScalarAsync());
+        }
+
+        var deniedDuplicate = _store.FinalizeSessionForkAdmissionFailureAsync(
+            _actor,
+            _root,
+            request,
+            selectionHash,
+            CancellationToken.None,
+            _ => Task.FromException(
+                new CoordinationException("run_selection_permission_denied", 403)));
+        await WaitUntilBlockedAsync(
+            revokedObserver, revokedBlocker.ProcessID, $"""coordination_tree_commands%FOR UPDATE""");
+        await revokedTransaction.RollbackAsync();
+        var denied = await Assert.ThrowsAsync<CoordinationException>(() => deniedDuplicate);
+        Assert.Equal(403, denied.StatusCode);
+    }
+
+    [Fact]
     public async Task ForkWithAChangedAcceptedSelectionIsPersistedAsUnregistered()
     {
         var request = NewForkRequest(_child.Identity, "selection-stale-fork", "selection-stale-fork-once");
@@ -1065,6 +1350,28 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             """, connection);
         command.Parameters.AddWithValue("eventType", NpgsqlDbType.Varchar, eventType);
         return (long)(await command.ExecuteScalarAsync() ?? 0L);
+    }
+
+    private static async Task WaitUntilBlockedAsync(
+        NpgsqlConnection observer,
+        int blockerProcessId,
+        string queryPattern)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (true)
+        {
+            await using var wait = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_stat_activity
+                    WHERE @locker = ANY(pg_blocking_pids(pid))
+                      AND query ILIKE '%' || @pattern || '%')
+                """, observer);
+            wait.Parameters.AddWithValue("locker", NpgsqlDbType.Integer, blockerProcessId);
+            wait.Parameters.AddWithValue("pattern", NpgsqlDbType.Text, queryPattern);
+            if ((bool)(await wait.ExecuteScalarAsync(timeout.Token) ?? false))
+                return;
+            await Task.Delay(20, timeout.Token);
+        }
     }
 
     private static CoordinationSessionForkRequest NewForkRequest(

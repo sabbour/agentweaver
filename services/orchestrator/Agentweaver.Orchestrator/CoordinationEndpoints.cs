@@ -426,7 +426,14 @@ public static class CoordinationEndpoints
                 exception.Code is "events_session_fork_denied" or "events_session_fork_conflict")
             {
                 var unregistered = await store.FinalizeSessionForkAdmissionFailureAsync(
-                    actor, source, request, selectionHash, cancellationToken).ConfigureAwait(false);
+                    actor,
+                    source,
+                    request,
+                    selectionHash,
+                    cancellationToken,
+                    currentCancellationToken => RequireUnchangedAuthorizedSelectionAsync(
+                        context, projectId, runId, selection, projects, currentCancellationToken))
+                    .ConfigureAwait(false);
                 return unregistered.RegistrationState == CoordinationForkRegistrationState.Registered &&
                        unregistered.IsDuplicate
                     ? Results.Ok(unregistered)

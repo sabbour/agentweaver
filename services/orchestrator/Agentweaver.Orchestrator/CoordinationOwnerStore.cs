@@ -369,6 +369,8 @@ internal sealed class CoordinationOwnerStore
         {
             if (existing.RegistrationState != CoordinationForkRegistrationState.RegistrationPending)
             {
+                if (revalidateCurrentAuthority is not null)
+                    await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                 return existing with { IsDuplicate = true };
             }
@@ -392,6 +394,8 @@ internal sealed class CoordinationOwnerStore
                 return unregistered with { IsDuplicate = true };
             }
 
+            if (revalidateCurrentAuthority is not null)
+                await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return existing with { IsDuplicate = true };
         }
@@ -463,6 +467,8 @@ internal sealed class CoordinationOwnerStore
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return pending;
     }
@@ -472,7 +478,8 @@ internal sealed class CoordinationOwnerStore
         SessionIdentity source,
         CoordinationSessionForkRequest request,
         string acceptedSelectionHash,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ValidateForkRequest(request);
@@ -494,6 +501,8 @@ internal sealed class CoordinationOwnerStore
                 "session_fork_operation_unavailable", StatusCodes.Status409Conflict);
         if (existing.RegistrationState != CoordinationForkRegistrationState.RegistrationPending)
         {
+            if (revalidateCurrentAuthority is not null)
+                await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return existing with { IsDuplicate = true };
         }
@@ -635,6 +644,10 @@ internal sealed class CoordinationOwnerStore
         }
 
         var pendingRequestId = Guid.NewGuid().ToString("N");
+        await using (var savepoint = new NpgsqlCommand(
+            "SAVEPOINT session_fork_registration", connection, transaction))
+            await savepoint.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
         await using (var insertSession = new NpgsqlCommand($"""
             INSERT INTO {_sessions}
                 (project_id, run_id, session_id, parent_session_id, root_session_id, node_kind,
@@ -689,6 +702,41 @@ internal sealed class CoordinationOwnerStore
         await EnqueueForkOutboxAsync(
             connection, transaction, source, actor, request, acceptedSelectionHash,
             result, "orchestrator.session.forked", cancellationToken).ConfigureAwait(false);
+
+        CoordinationException? finalAuthorityError = null;
+        if (revalidateCurrentAuthority is not null)
+        {
+            try
+            {
+                await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+            }
+            catch (CoordinationException exception) when (
+                exception.StatusCode is StatusCodes.Status403Forbidden or StatusCodes.Status409Conflict)
+            {
+                finalAuthorityError = exception;
+            }
+        }
+        if (finalAuthorityError is not null)
+        {
+            await using (var rollback = new NpgsqlCommand(
+                "ROLLBACK TO SAVEPOINT session_fork_registration", connection, transaction))
+                await rollback.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+            var unregistered = await FinalizeUnregisteredForkAsync(
+                connection,
+                transaction,
+                source,
+                actor,
+                request,
+                acceptedSelectionHash,
+                existing,
+                eventsFork.Lineage,
+                finalAuthorityError.Code,
+                cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return unregistered with { IsDuplicate = isDuplicate };
+        }
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result with { IsDuplicate = isDuplicate };
     }
