@@ -20,6 +20,32 @@ entries containing `MeterSource` and `ProviderId`. Native
 stored `EffectiveProviderSelection`. Both retain current owner authorization.
 No new usage-writing endpoint, model-source authority, or pricing API is introduced.
 
+## Cost and usage storage contracts
+
+`CostBinding` records the meter source, provider identity, adapter version,
+configuration revision, resource generation, negotiated capabilities, and immutable
+`CostRateCard`. `PinCost` rejects changed candidate configuration. `VerifyCost`
+rejects unavailable or changed provider identity. The adapter verifies the resource
+generation and rate-card content.
+
+`ICostProvider.Price` returns an amount, unit, rate card, and `CostDisposition`.
+`Quote` requires an explicit weighted or unweighted basis. The Copilot adapter
+converts reported nano-AIU to AIC without a second model multiplier. Missing
+measurements or model rates return `Unpriced` with a reason and no amount.
+These methods do not authorize a model session or caller.
+
+`UsageSubmission` contains an event ID, occurrence time, attribution, model
+metadata, and nullable measurements. `IUsageLedger.AppendAsync` validates and
+commits the immutable entry and rate card before returning. It returns the original
+entry for an identical retry and rejects changed event or rate-card content.
+`GetRunTotalsAsync` returns exact agent totals and separate meter-source/unit
+amounts. Unknown measurements stay null. Incomplete pricing remains explicit.
+
+These are low-level contracts, not a remote writer authorization boundary.
+Migration `004_copilot_usage.sql` extends the service schema to version 4.
+The native host exposes no SDK usage-writing route. Current typed action grants
+and opaque model references do not supply resolved SDK producer provenance.
+
 ## Orchestrator AGT Policy provider
 
 `AgtPolicyProviderOptions` supplies an opaque resource ID and generation, an options revision and schema

@@ -20,7 +20,7 @@
 | Platform singleton | Policy, Secrets, Messaging, Object Store | `Resolve` and `Pin` support this form. Projects cannot replace the provider. |
 | Ordered composite | Guardrails, Telemetry | `ResolveOrdered` and `PinOrdered` preserve the selected order. |
 | Layered | Network Policy | `ResolveNetworkPolicy` and `PinNetworkPolicy` support required L3/L4 and optional L7 layers. Pinning requires a matching applied intent generation. |
-| Keyed by meter source | Cost | `ResolveCost` selects one enabled provider per explicit source. Projects & Config persists candidates, not negotiated resource bindings. |
+| Keyed by meter source | Cost | `ResolveCost` selects one enabled provider per explicit source. `PinCost` and `VerifyCost` validate immutable Cost bindings. Projects persists candidates only. |
 | Per application | Application Hosting | Not implemented. |
 
 Pinning records provider identity, adapter version, options revision, resource generation, and negotiated capabilities. It does not provision a resource or enforce policy.
@@ -71,4 +71,12 @@ Model is not a provider seam. The v1 source contains no AgentHost, model resolve
 A Cost source key and an opaque model-selection reference are not trusted SDK
 provenance. The native Projects run-selection routes retain the source key,
 adapter/options versions, options revision and capabilities without claiming
-pricing or admitting usage writes.
+SDK producer authority or admitting usage writes.
+
+The `copilot.usage-cost` source adapter prices reported `nano_aiu` values in AI
+credits (`AIC`). One AIC contains `1_000_000_000` nano-AIU. Reported nano-AIU already
+includes model weighting, so usage pricing does not apply the multiplier again.
+Pre-flight quotes apply the multiplier only to explicitly unweighted AI credits.
+Each binding includes an explicit immutable rate-card version. Missing units,
+unsupported sources, and unknown model rates return `Unpriced`, not a zero price.
+The adapter and PostgreSQL ledger do not establish SDK producer authority.

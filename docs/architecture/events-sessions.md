@@ -28,8 +28,40 @@ uses the existing provider catalog/resolver and telemetry helper. The provider-n
 This source slice connects owner-validated addressed-message delivery to session
 turn-boundary requests. It does not implement the rest of the proposed platform:
 automatic AgentHost scheduling, a background delivery relay, gate approval decisions,
-usage accounting, consistency manifests, MAF checkpoints, or Gateway/UI/MCP routes.
+authorized SDK usage ingestion, consistency manifests, MAF checkpoints, or Gateway/UI/MCP routes.
 The broader Sessions and coordination design remains Proposed for those workflows.
+
+## Usage storage and Copilot pricing
+
+The service owns separate append-only `usage_ledger` and immutable
+`usage_rate_cards` tables. Migration `004_copilot_usage.sql` adds these tables after
+the session journal, addressed messages, and project facts. The migration preserves
+both current version-3 schemas and the earlier version-2 project-fact layout.
+Ordinary startup requires version 4 and verifies both usage tables.
+
+`PostgresUsageLedger` implements the low-level `IUsageLedger` storage contract.
+An entry records tenant, project, run, session, agent, model metadata, measurements,
+the Cost binding, and the price. Nullable measurements remain unknown rather
+than zero. A transaction commits the rate card and usage entry before returning.
+Identical event retries return the original entry. Changed content for the same
+event ID conflicts. Database triggers reject changes and truncation of history.
+
+Totals retain separate meter-source and unit groups. A missing measurement makes
+that measurement total unknown. An unpriced entry makes the run or agent pricing
+incomplete. Rate changes never reprice earlier entries. Exact totals that exceed
+the numeric range fail rather than round or wrap.
+
+`CopilotCostProvider` prices SDK-reported `nano_aiu` values in AI credits (`AIC`).
+One AIC contains `1_000_000_000` nano-AIU. Those reported units already include
+model weighting. Only quotes with an explicit unweighted basis apply a model
+multiplier. The adapter requires an immutable rate card and exact provider,
+configuration, resource, and capability bindings.
+
+These are storage and pricing primitives, not native SDK ingestion.
+`IUsageLedger.AppendAsync` does not authorize its caller. The HTTP host exposes
+no usage-writing route and registers no SDK producer. Existing typed Orchestrator
+action grants and opaque model references do not prove an SDK usage source.
+Trusted resolved-model provenance and current producer authority remain required.
 
 ## Addressed-message owner integration
 

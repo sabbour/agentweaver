@@ -214,6 +214,15 @@ public sealed class PinnedProviderBinding
     public ImmutableHashSet<string> NegotiatedCapabilities { get; }
 }
 
+public sealed class PinnedCostProviderBinding
+{
+    internal PinnedCostProviderBinding(string meterSource, PinnedProviderBinding providerBinding) =>
+        (MeterSource, ProviderBinding) = (meterSource, providerBinding);
+
+    public string MeterSource { get; }
+    public PinnedProviderBinding ProviderBinding { get; }
+}
+
 public sealed class PinnedOrderedProviderBinding
 {
     internal PinnedOrderedProviderBinding(string runId, ProviderSeam seam,

@@ -159,7 +159,9 @@ relationship and fences; acknowledging a correlated reply exposes input without 
 a gate. The services connect through protected HTTP contracts, not a shared transaction.
 The reserved positive Events receipt consumer remains #1846 work after #1848 admission.
 There is no background message relay, automatic AgentHost scheduler, or full dispatch engine.
-Usage accounting and product AgentHost/Gateway integration remain future work.
+Separate Cost pricing and append-only usage storage exist as source primitives.
+They preserve exact totals and immutable rate-card history.
+Authorized SDK usage ingestion and product AgentHost/Gateway integration remain future work.
 
 The Gateway and Identity boundary makes viewer authorization independent of the chosen [Application
 Hosting](applications-and-surfaces.md#application-hosting) provider. The first-party MCP server uses

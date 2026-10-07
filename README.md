@@ -58,8 +58,10 @@ See the [Events & Sessions journal](docs/architecture/events-sessions.md) for it
 implemented contract, PostgreSQL ownership, provider pin, and current limits.
 
 Provider selection covers exclusive and platform-singleton seams, ordered Guardrails/
-Telemetry sets, and layered Network Policy (required L3/L4, optional L7). Cost
-meter-keyed and Application Hosting per-app selection remain subsequent work; callers
+Telemetry sets, layered Network Policy (required L3/L4, optional L7), and meter-keyed
+Cost selection. Cost bindings, Copilot pricing, and immutable usage storage exist
+as source primitives. Trusted SDK usage ingestion remains separate work.
+Application Hosting per-app selection remains subsequent work; callers
 receive an explicit error for unsupported single-provider resolution rather than a
 fallback. Resolving a descriptor produces a candidate, not a provisioned resource.
 A run binding pins negotiated capabilities only after provisioning; layered pinning

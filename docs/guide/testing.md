@@ -57,6 +57,24 @@ rewriting its fingerprint or stored history.
 These tests exercise candidate selection only. They do not prove SDK model-source
 provenance, resource negotiation, pricing, or positive usage ingestion.
 
+## Cost bindings, pricing, and usage storage
+
+The additive Provider tests cover Cost resource pins, changed configuration, and
+missing or changed providers. Existing candidate-selection and legacy snapshot
+tests remain unchanged.
+
+The Events & Sessions tests cover weighted nano-AIU pricing, unweighted quotes,
+missing measurements, immutable rate cards, and redacted binding diagnostics.
+The disposable-PostgreSQL tests cover concurrent duplicates, content conflicts,
+restart, immutable history, transaction rollback, and exact run/agent totals.
+Migration tests cover fresh version 4, version-3 upgrades, the legacy version-2
+project-fact layout, and rejected version gaps.
+
+These tests exercise storage and pricing primitives only. They do not prove
+resolved SDK model provenance, an authorized producer, or positive native usage
+ingestion. Fixture model metadata and existing typed action grants are not
+SDK producer authority.
+
 ## Validate the documentation site
 
 Run these commands after changing a documentation page, link, or diagram:

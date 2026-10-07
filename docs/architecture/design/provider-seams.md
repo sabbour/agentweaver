@@ -640,9 +640,16 @@ The current source implements meter-keyed candidate selection through the existi
 `ProviderCatalog` and `ProviderResolver.ResolveCost`. The catalog owner supplies
 one enabled provider per source; Projects & Config's native run-selection routes
 persist the key and checked adapter/options versions, revision and capabilities.
-This independently usable source contract is not a Cost pricing adapter,
-negotiated resource binding, effective SDK model/source pin, or usage producer
-authorization. Those integrations remain separate from candidate selection.
+Projects persists candidates, not negotiated resource bindings.
+Separate source primitives add `PinCost`/`VerifyCost`, the Copilot Cost adapter,
+and an append-only PostgreSQL ledger. They do not establish effective SDK
+model/source provenance or authorize a usage producer.
+
+The Copilot adapter divides reported `nano_aiu` by `1_000_000_000` to return AIC.
+Reported units already include model weighting. Quotes apply a model multiplier
+only to explicitly unweighted AI credits. Each entry retains an immutable rate-card
+version. Missing measurements or unsupported sources remain unpriced.
+The HTTP host has no SDK usage-writing route until the trusted producer exists.
 
 The Azure BYOK adapter uses deployment token rates from Azure Retail Prices, allocates
 provisioned-throughput capacity by usage share, and may reconcile estimates with Azure Cost Management

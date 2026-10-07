@@ -41,7 +41,7 @@
     {
       "id": "postgres",
       "label": "Events & Sessions\nPostgreSQL schema",
-      "subLabel": "Journal, facts, run pins, inbox",
+      "subLabel": "Journal, facts, pins, usage storage",
       "icon": "database",
       "fluentIcon": "state",
       "badge": {
@@ -76,6 +76,11 @@
       "type": "note",
       "over": ["api", "postgres"],
       "label": "Runtime uses password-free workload identity and verifies schema only; --migrate uses a separate privileged identity."
+    },
+    {
+      "type": "note",
+      "over": ["api", "postgres"],
+      "label": "Schema v4 adds immutable usage and rate cards.\nStorage/pricing only; no authorized SDK usage-writing route."
     },
     {
       "type": "message",

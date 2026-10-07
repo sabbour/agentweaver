@@ -18,7 +18,9 @@ The Foundation Probe resolves provider descriptors and pins binding evidence for
 Projects & Config loads the catalog owner's meter-source selections and uses the
 existing resolver to persist Cost candidates through its native run-selection
 routes. This is source-keyed selection, not SDK model/producer authority, resource
-negotiation, a pricing adapter, or usage ingestion.
+negotiation or usage ingestion. Separate Cost source primitives provide immutable
+bindings, Copilot AI-credit pricing, and append-only PostgreSQL usage storage.
+The source does not connect an authorized SDK producer to that storage.
 
 ## Canonical component overview
 
@@ -72,7 +74,7 @@ their external boundaries.
 | `Agentweaver.Telemetry` | In-process OpenTelemetry traces, metrics, and logs. | — |
 | `Agentweaver.Telemetry.AzureMonitor` | Opt-in Azure Monitor exporters. | `Agentweaver.Telemetry` |
 | `Agentweaver.Identity.Broker` | OAuth and secret-redemption host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault` |
-| `Agentweaver.EventsAndSessions` | PostgreSQL-backed native Sessions journal, addressed-message delivery store, and HTTP host candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
+| `Agentweaver.EventsAndSessions` | Native PostgreSQL journal, addressed messages, Cost pricing, usage storage, and HTTP host candidate. No authorized SDK usage producer. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Knowledge` | Project-scoped Memory API, context compiler, and native PostgreSQL adapter candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Environment` | Environment-owned egress and workspace-volume lifecycle service candidate; not deployed. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles` |
 | `Agentweaver.Orchestrator` | HTTP owner for root/child session state, message outbox, explicit turn-boundary operations, and parent notifications. It checks current Projects & Config authority and integrates with Events & Sessions. | `Agentweaver.Abstractions`, `Agentweaver.Persistence.Postgres` |

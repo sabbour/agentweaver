@@ -120,7 +120,7 @@
     {
       "id": "events-and-sessions",
       "label": "Events & Sessions",
-      "subLabel": "PostgreSQL journal + addressed-message delivery.",
+      "subLabel": "Journal, messages, usage storage.",
       "meta": "Agentweaver.EventsAndSessions",
       "icon": "server",
       "fluentIcon": "api",

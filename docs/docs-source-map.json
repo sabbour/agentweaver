@@ -72,6 +72,8 @@
     {
       "name": "Events & Sessions journal",
       "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/CostContracts.cs",
+        "packages/Agentweaver.Abstractions/UsageContracts.cs",
         "packages/Agentweaver.Abstractions/AddressedMessageContracts.cs",
         "packages/Agentweaver.Abstractions/SessionsContracts.cs",
         "services/events-and-sessions/"
