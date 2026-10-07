@@ -970,12 +970,66 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Null(revisedPlanResult.PendingGate);
         Assert.Equal(3, sandboxProvider.NegotiationCount);
 
+        await using (var lockSource = NpgsqlDataSource.Create(_connectionString))
+        await using (var lockConnection = await lockSource.OpenConnectionAsync())
+        await using (var observationConnection = await lockSource.OpenConnectionAsync())
+        await using (var ownerLock = await lockConnection.BeginTransactionAsync())
+        {
+            await using (var lockRun = new NpgsqlCommand($"""
+                SELECT execution_fence FROM "{ownerSchema}".accepted_runs
+                WHERE project_id = @project AND run_id = @run FOR UPDATE
+                """, lockConnection, ownerLock))
+            {
+                lockRun.Parameters.AddWithValue("project", project.ProjectId);
+                lockRun.Parameters.AddWithValue("run", RunId);
+                Assert.Equal(root.ExecutionFence, await lockRun.ExecuteScalarAsync());
+            }
+            var blockedRegistration = SendJsonAsync(
+                orchestrator, HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
+                runToken, new RegisterChildRequest("revoked-while-waiting"));
+            var waiting = false;
+            using var lockWaitDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while (!waiting)
+            {
+                await using var wait = new NpgsqlCommand("""
+                    SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+                        WHERE @locker = ANY(pg_blocking_pids(pid)))
+                    """, observationConnection);
+                wait.Parameters.AddWithValue("locker", lockConnection.ProcessID);
+                waiting = (bool)(await wait.ExecuteScalarAsync(lockWaitDeadline.Token))!;
+                if (!waiting)
+                    await Task.Delay(20, lockWaitDeadline.Token);
+            }
+            await RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource, runnerRole.AssignmentId, runnerRole.Revision);
+            await ownerLock.RollbackAsync();
+            using var deniedRegistration = await blockedRegistration.WaitAsync(TimeSpan.FromSeconds(10));
+            await AssertStatusAsync(deniedRegistration, HttpStatusCode.Forbidden);
+            await using var noChild = new NpgsqlCommand($"""
+                SELECT count(*) FROM "{ownerSchema}".coordination_sessions
+                WHERE project_id = @project AND run_id = @run AND session_id = 'revoked-while-waiting'
+                """, lockConnection);
+            noChild.Parameters.AddWithValue("project", project.ProjectId);
+            noChild.Parameters.AddWithValue("run", RunId);
+            Assert.Equal(0L, await noChild.ExecuteScalarAsync());
+        }
+        runnerRole = await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource, runnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Orchestrator);
+
+        using (var unconfirmedItem = await SendJsonAsync(
+                   orchestrator, HttpMethod.Post,
+                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
+                   runToken, new RegisterChildRequest("unconfirmed-child", "foreign-item")))
+            await AssertStatusAsync(unconfirmedItem, HttpStatusCode.Conflict);
+
         using var childResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
             runToken,
-            new RegisterChildRequest("child"));
+            new RegisterChildRequest("child", "implement-1"));
         await AssertStatusAsync(childResponse, HttpStatusCode.Created);
         var child = await ReadJsonAsync<RegisteredChild>(childResponse);
 
@@ -984,7 +1038,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
             runToken,
-            new RegisterChildRequest("child"));
+            new RegisterChildRequest("child", "implement-1"));
         await AssertStatusAsync(childReplay, HttpStatusCode.Created);
         Assert.Equal(child, await ReadJsonAsync<RegisteredChild>(childReplay));
 
@@ -1076,6 +1130,48 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal("child", presented.Recipient.SessionId);
         Assert.Equal(AddressedMessageStatus.Delivered, presented.Status);
         Assert.Equal("active", boundary.ExecutionState);
+
+        var runtimeOwnerPath =
+            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/runtime-owner-context";
+        using (var runtimeOwnerResponse = await SendAsync(
+                   orchestrator, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]))
+        {
+            await AssertStatusAsync(runtimeOwnerResponse, HttpStatusCode.OK);
+            Assert.True(runtimeOwnerResponse.Headers.CacheControl?.NoStore);
+            var runtimeOwner = await ReadJsonAsync<RuntimeOwnerContext>(runtimeOwnerResponse);
+            Assert.Equal(1, runtimeOwner.ContractVersion);
+            Assert.Equal(currentRunnerSubject, runtimeOwner.ActorId);
+            Assert.Equal(TenantId, runtimeOwner.TenantId);
+            Assert.Equal(project.ProjectId, runtimeOwner.ProjectId);
+            Assert.Equal(RunId, runtimeOwner.RunId);
+            Assert.Equal("child", runtimeOwner.SessionId);
+            Assert.Equal("test-agent", runtimeOwner.AgentId);
+            Assert.Equal("platform-model", runtimeOwner.ModelSelectionReference);
+            Assert.Equal(child.ExecutionFence, runtimeOwner.ExecutionFence);
+            Assert.Equal(boundary.LogicalTurnOrdinal, runtimeOwner.LogicalTurnOrdinal);
+            Assert.Equal(boundary.StateVersion, runtimeOwner.OwnerStateVersion);
+            Assert.Equal(15, runtimeOwner.DecisionStateVersion);
+            var expectedTurnBytes = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                Contract = "agentweaver.runtime-turn.v1",
+                ProjectId = project.ProjectId,
+                RunId,
+                SessionId = "child",
+                ExecutionFence = child.ExecutionFence,
+                LogicalTurnOrdinal = boundary.LogicalTurnOrdinal
+            });
+            Assert.Equal("turn-" + Convert.ToHexStringLower(
+                System.Security.Cryptography.SHA256.HashData(expectedTurnBytes)), runtimeOwner.TurnId);
+            using var replayedOwner = await SendAsync(
+                orchestrator, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]);
+            await AssertStatusAsync(replayedOwner, HttpStatusCode.OK);
+            Assert.Equal(runtimeOwner, await ReadJsonAsync<RuntimeOwnerContext>(replayedOwner));
+        }
+        using (var unmappedOwner = await SendAsync(
+                   orchestrator, HttpMethod.Get,
+                   $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child-two/runtime-owner-context",
+                   runToken, [TenantId]))
+            await AssertStatusAsync(unmappedOwner, HttpStatusCode.Conflict);
 
         using var boundaryRetryResponse = await SendJsonAsync(
             orchestrator,

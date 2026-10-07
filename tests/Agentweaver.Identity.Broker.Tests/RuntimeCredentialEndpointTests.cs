@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -154,6 +155,92 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             token, bootstrap.Credential.GetValue(), exchange.Credential.GetValue(), rotated.Credential.GetValue()
         })
             Assert.DoesNotContain(secret, string.Join('\n', factory.LogMessages));
+
+        owner.Registration = owner.Registration with
+        {
+            Binding = owner.Registration.Binding with { ModelSelectionReference = "accepted-model-reference" }
+        };
+        var configuration = "{}"u8.ToArray();
+        var configurationHash = RuntimeContractValidation.Hash(configuration);
+        var nextDelivery = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
+            broker, broker.BaseAddress!, "/internal/runtime/bootstrap/request", actor,
+            new RuntimeBootstrapRequest(owner.Registration.RuntimeInstanceId, Guid.NewGuid(), configurationHash),
+            default);
+        var nextBootstrap = new RuntimeCredentialProof(nextDelivery.GrantId, nextDelivery.RuntimeInstanceId, 1,
+            RuntimeCredentialPurpose.Configure, owner.Registration.Binding.ConfigureEndpoint, configurationHash,
+            delivery.Credential!);
+        await using var sdk = new ControlledCopilotRuntime();
+        var initialize = new RuntimeSessionBootstrap(
+            owner, runtime, RuntimeCopilotSessionTests.Factory(sdk), actor, TimeProvider.System);
+        var readsBeforeInvalid = owner.Reads;
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => initialize.ConfigureAsync(
+            "tampered"u8.ToArray(), nextBootstrap, Guid.NewGuid(), Guid.NewGuid(),
+            RuntimeCopilotSessionTests.SdkCredential(), default));
+        Assert.Equal(readsBeforeInvalid, owner.Reads);
+        Assert.Empty(sdk.Requests);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var ready = await initialize.ConfigureAsync(configuration, nextBootstrap, Guid.NewGuid(), Guid.NewGuid(),
+            RuntimeCopilotSessionTests.SdkCredential(), timeout.Token);
+        Assert.Equal(owner.Registration, ready.Registration);
+        Assert.Equal("accepted-model-reference", ready.Facts.ModelSelectionReference);
+        Assert.Equal("controlled-model", ready.Facts.ModelId);
+        var readyProof = ready.Proof();
+        await using (var observations = ready.ReadUsageAsync(timeout.Token).GetAsyncEnumerator())
+        {
+            Assert.True(await observations.MoveNextAsync());
+            Assert.Equal(1234567.25m, observations.Current.TotalNanoAiu);
+        }
+        await ready.DisposeAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => runtime.VerifySourceAsync(readyProof, default));
+        Assert.False(readyProof.Credential.IsUsable());
+
+        var failedDelivery = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
+            broker, broker.BaseAddress!, "/internal/runtime/bootstrap/request", actor,
+            new RuntimeBootstrapRequest(owner.Registration.RuntimeInstanceId, Guid.NewGuid(), configurationHash),
+            default);
+        var failedBootstrap = new RuntimeCredentialProof(failedDelivery.GrantId, failedDelivery.RuntimeInstanceId, 1,
+            RuntimeCredentialPurpose.Configure, owner.Registration.Binding.ConfigureEndpoint, configurationHash,
+            delivery.Credential!);
+        await using var mismatchedSdk = new ControlledCopilotRuntime { EffectiveModelId = "other-model" };
+        var failedInitialize = new RuntimeSessionBootstrap(
+            owner, runtime, RuntimeCopilotSessionTests.Factory(mismatchedSdk), actor, TimeProvider.System);
+        var modelFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            failedInitialize.ConfigureAsync(configuration, failedBootstrap, Guid.NewGuid(), Guid.NewGuid(),
+                RuntimeCopilotSessionTests.SdkCredential(), timeout.Token));
+        Assert.Equal("runtime_sdk_effective_model_mismatch", modelFailure.Code);
+        Assert.Contains(mismatchedSdk.Requests, item => item.Method == "session.destroy");
+
+        var interruptedDelivery = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
+            broker, broker.BaseAddress!, "/internal/runtime/bootstrap/request", actor,
+            new RuntimeBootstrapRequest(owner.Registration.RuntimeInstanceId, Guid.NewGuid(), configurationHash),
+            default);
+        var interruptedBootstrap = new RuntimeCredentialProof(
+            interruptedDelivery.GrantId, interruptedDelivery.RuntimeInstanceId, 1,
+            RuntimeCredentialPurpose.Configure, owner.Registration.Binding.ConfigureEndpoint,
+            configurationHash, delivery.Credential!);
+        await using var interruptedSdk = new ControlledCopilotRuntime
+        {
+            BeforeEffectiveModelResponse = () => owner.Registration =
+                owner.Registration with { State = RuntimeRegistrationState.Revoked }
+        };
+        var interruptedInitialize = new RuntimeSessionBootstrap(
+            owner, runtime, RuntimeCopilotSessionTests.Factory(interruptedSdk), actor, TimeProvider.System);
+        var authorityLoss = await Assert.ThrowsAsync<AggregateException>(() =>
+            interruptedInitialize.ConfigureAsync(configuration, interruptedBootstrap, Guid.NewGuid(), Guid.NewGuid(),
+                RuntimeCopilotSessionTests.SdkCredential(), timeout.Token));
+        Assert.All(authorityLoss.InnerExceptions, error => Assert.IsType<RuntimeAuthorizationException>(error));
+        Assert.Contains(interruptedSdk.Requests, item => item.Method == "session.destroy");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+            var sourceHeads = await db.RuntimeGrantHeads.Join(db.RuntimeGrantRevisions,
+                    head => new { head.GrantId, Revision = head.CurrentRevision },
+                    revision => new { revision.GrantId, revision.Revision }, (_, revision) => revision)
+                .Where(revision => revision.Purpose == RuntimeCredentialPurpose.Observe)
+                .ToArrayAsync();
+            Assert.Equal(4, sourceHeads.Length);
+            Assert.All(sourceHeads, head => Assert.Equal(RuntimeCredentialState.Revoked, head.State));
+        }
     }
 
     private sealed class EndpointStorageOwner : IRuntimeRegistrationOwner

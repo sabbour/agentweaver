@@ -2,7 +2,7 @@
   "version": 2,
   "source": {
     "file": "v1-identity-redemption.json",
-    "sha256": "d4be2ca5b33b0ced6150b58a392d1953553f9e9dc7cb05869d080628b67554f3"
+    "sha256": "9bf8220eb8ca4e1ecf298329020b760eb7cf8e1e042c92d91b82f60f613a0064"
   },
   "drawio": {
     "file": "v1-identity-redemption.drawio",

@@ -48,17 +48,19 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is not (1 or 2 or 3)) ||
+        if (applied.Any(version => version is not (1 or 2 or 3 or 4)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
-            (applied.Contains(3) && !applied.Contains(2)))
+            (applied.Contains(3) && !applied.Contains(2)) ||
+            (applied.Contains(4) && !applied.Contains(3)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
-        foreach (var version in new[] { 1, 2, 3 }.Where(version => !applied.Contains(version)))
+        foreach (var version in new[] { 1, 2, 3, 4 }.Where(version => !applied.Contains(version)))
         {
             var migrationName = version switch
             {
                 1 => "coordination_owner",
                 2 => "typed_decisions_and_checkpoints",
                 3 => "accepted_run_selection_context",
+                4 => "runtime_owner_context",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
@@ -92,7 +94,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 3),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -109,7 +111,10 @@ public static class CoordinationOwnerMigrator
                 to_regclass(@grants) IS NOT NULL,
                 to_regclass(@receipts) IS NOT NULL,
                 to_regclass(@checkpoints) IS NOT NULL,
-                to_regclass(@selectionContexts) IS NOT NULL
+                to_regclass(@selectionContexts) IS NOT NULL,
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 4),
+                EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(@sessions)
+                    AND attname = 'work_plan_item_id' AND attnum > 0 AND NOT attisdropped)
             """, connection);
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
@@ -132,7 +137,8 @@ public static class CoordinationOwnerMigrator
             reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
             reader.GetInt64(3) != 0 ||
             reader.GetInt64(4) != 1 || reader.GetInt64(5) != 1 || reader.GetInt64(6) != 0 ||
-            Enumerable.Range(7, 14).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(7, 14).Any(column => !reader.GetBoolean(column)) ||
+            reader.GetInt64(21) != 1 || !reader.GetBoolean(22))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

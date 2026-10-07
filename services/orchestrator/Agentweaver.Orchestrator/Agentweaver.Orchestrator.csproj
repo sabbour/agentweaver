@@ -23,5 +23,6 @@
     <EmbeddedResource Include="Migrations\001_coordination_owner.sql" />
     <EmbeddedResource Include="Migrations\002_typed_decisions_and_checkpoints.sql" />
     <EmbeddedResource Include="Migrations\003_accepted_run_selection_context.sql" />
+    <EmbeddedResource Include="Migrations\004_runtime_owner_context.sql" />
   </ItemGroup>
 </Project>

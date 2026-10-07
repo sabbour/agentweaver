@@ -25,9 +25,20 @@ public sealed class RuntimeContractTests
             registration with { Binding = registration.Binding with { EnvironmentProviderFencingGeneration = 3 } },
             registration with { Binding = registration.Binding with { PlacementUid = "other-placement" } },
             registration with { Binding = registration.Binding with { ProjectRevision = 2 } },
+            registration with { Binding = registration.Binding with { ModelSelectionReference = "accepted-model" } },
             registration with { Binding = registration.Binding with { AcceptedSelectionHash = new string('b', 64) } }
         })
             Assert.NotEqual(original, RuntimeContractValidation.RegistrationHash(changed));
+    }
+
+    [Fact]
+    public void MissingLegacyModelReferenceDoesNotChangeTheStoredBindingJson()
+    {
+        var binding = CreateRegistration().Binding;
+        var serialized = JsonSerializer.Serialize(binding);
+        Assert.DoesNotContain("ModelSelectionReference", serialized);
+        var pinned = binding with { ModelSelectionReference = "accepted-model" };
+        Assert.Contains("ModelSelectionReference", JsonSerializer.Serialize(pinned));
     }
 
     [Theory]

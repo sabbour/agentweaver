@@ -155,7 +155,23 @@ public sealed record AcceptedRoot(
     long LogicalTurnOrdinal,
     string ExecutionState);
 
-public sealed record RegisterChildRequest(string SessionId);
+public sealed record RegisterChildRequest(string SessionId, string? WorkPlanItemId = null);
+
+internal sealed record ConfirmedWorkPlanItemAssociation(
+    string WorkPlanItemId, long DecisionStateVersion, string SelectionHash);
+
+internal sealed record SessionRuntimeOwnerState(
+    string RootSessionId, string WorkPlanItemId, string TenantId,
+    string AcceptedSelectionHash, long ExecutionFence, long LogicalTurnOrdinal,
+    long StateVersion, string RuntimeTurnId);
+
+public sealed record RuntimeOwnerContext(
+    int ContractVersion, string ActorIssuer, string ActorId, string TenantId,
+    string ProjectId, string RunId, string SessionId, string AgentId,
+    string ModelSelectionReference, string TurnId, long ProjectRevision,
+    long ProjectConfigurationRevision, long PlatformRuntimeRevision,
+    string ContextRevision, string AcceptedSelectionHash, long ExecutionFence,
+    long LogicalTurnOrdinal, long OwnerStateVersion, long DecisionStateVersion);
 
 public sealed record RegisteredChild(
     SessionIdentity Identity,

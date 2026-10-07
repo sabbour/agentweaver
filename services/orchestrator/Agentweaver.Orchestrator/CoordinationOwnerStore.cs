@@ -11,7 +11,7 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-internal sealed class CoordinationOwnerStore
+internal sealed partial class CoordinationOwnerStore
 {
     private const string IngressConsumer = "orchestrator.addressed-message-ingress";
     private const int EventVersion = 1;
@@ -182,7 +182,9 @@ internal sealed class CoordinationOwnerStore
         string childSessionId,
         int maxChildren,
         int maxConcurrentChildren,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ConfirmedWorkPlanItemAssociation? workPlanItemAssociation = null,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         CoordinationIdentity.ValidateIdentity(childSessionId, nameof(childSessionId));
@@ -200,6 +202,12 @@ internal sealed class CoordinationOwnerStore
         RequireCurrentActiveSession(parentSession, run);
         if (parentSession.LifecycleState != "active")
             throw new CoordinationException("parent_session_unavailable", StatusCodes.Status409Conflict);
+        if (workPlanItemAssociation is not null)
+            await ValidateRuntimeAssociationAsync(
+                connection, transaction, actor, parent, run, workPlanItemAssociation,
+                cancellationToken).ConfigureAwait(false);
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
 
         var existing = await FindSessionAsync(
             connection, transaction, parent.ProjectId, parent.RunId, childSessionId, forUpdate: true, cancellationToken)
@@ -210,11 +218,19 @@ internal sealed class CoordinationOwnerStore
                 existing.WriterIssuer != actor.Issuer || existing.WriterSubject != actor.Subject ||
                 existing.LifecycleState != "active")
                 throw new CoordinationException("child_session_conflict", StatusCodes.Status409Conflict);
+            if (await ReadRuntimeWorkPlanItemIdAsync(
+                    connection, transaction, new SessionIdentity(parent.ProjectId, parent.RunId, childSessionId),
+                    cancellationToken).ConfigureAwait(false) != workPlanItemAssociation?.WorkPlanItemId)
+                throw new CoordinationException("child_session_conflict", StatusCodes.Status409Conflict);
             var requestId = await FindRequestIdAsync(
                 connection, transaction, parent.ProjectId, parent.RunId,
                 parent.SessionId, childSessionId, cancellationToken).ConfigureAwait(false);
             if (requestId is null)
                 throw new InvalidOperationException("A registered child has no pending request.");
+            if (revalidateCurrentAuthority is not null)
+                await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+            if (revalidateCurrentAuthority is not null)
+                await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken);
             return new RegisteredChild(
                 new SessionIdentity(parent.ProjectId, parent.RunId, childSessionId),
@@ -267,6 +283,20 @@ internal sealed class CoordinationOwnerStore
             insertSession.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
             insertSession.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, run.Fence);
             await insertSession.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (workPlanItemAssociation is not null)
+        {
+            await using var bind = new NpgsqlCommand($"""
+                UPDATE {_sessions} SET work_plan_item_id = @workPlanItemId
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                    AND parent_session_id IS NOT NULL AND work_plan_item_id IS NULL
+                """, connection, transaction);
+            AddRunScope(bind, parent.ProjectId, parent.RunId);
+            bind.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, childSessionId);
+            bind.Parameters.AddWithValue("workPlanItemId", NpgsqlDbType.Varchar, workPlanItemAssociation.WorkPlanItemId);
+            if (await bind.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new CoordinationException("session_work_plan_item_stale", StatusCodes.Status409Conflict);
         }
 
         var requestIdCreated = Guid.NewGuid().ToString("N");

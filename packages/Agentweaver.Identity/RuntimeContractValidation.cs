@@ -31,6 +31,8 @@ public static class RuntimeContractValidation
             binding.EnvironmentId, binding.PlacementUid, binding.ProfileId
         })
             ValidateIdentifier(value);
+        if (binding.ModelSelectionReference is { } modelSelectionReference)
+            ValidateIdentifier(modelSelectionReference);
         ValidateHash(binding.AcceptedSelectionHash);
     }
 

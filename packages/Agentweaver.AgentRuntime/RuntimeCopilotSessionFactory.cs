@@ -22,7 +22,7 @@ public sealed class RuntimeCopilotSessionFactory
     {
         ArgumentNullException.ThrowIfNull(approvedConnection);
         ArgumentNullException.ThrowIfNull(approvedModelBindings);
-        if (approvedConnection is not UriRuntimeConnection ||
+        if (approvedConnection is not UriRuntimeConnection { ConnectionToken.Length: > 0 } ||
             !Path.IsPathFullyQualified(baseDirectory))
             throw new ArgumentException("A registered memory-authenticated SDK connection and absolute private base directory are required.");
         foreach (var (reference, modelId) in approvedModelBindings)
@@ -49,7 +49,6 @@ public sealed class RuntimeCopilotSessionFactory
             Mode = CopilotClientMode.Empty,
             Connection = _connection,
             BaseDirectory = _baseDirectory,
-            UseLoggedInUser = false,
             Logger = NullLogger.Instance,
             LogLevel = CopilotLogLevel.None
         });
@@ -58,7 +57,7 @@ public sealed class RuntimeCopilotSessionFactory
             new BoundedChannelOptions(256)
             {
                 SingleReader = true,
-                SingleWriter = true,
+                SingleWriter = false,
                 FullMode = BoundedChannelFullMode.Wait
             });
         try
@@ -91,9 +90,14 @@ public sealed class RuntimeCopilotSessionFactory
                 },
                 RemoteSession = GitHub.Copilot.Rpc.RemoteSessionMode.Off
             }, cancellationToken);
+            var currentModel = await session.Rpc.Model.GetCurrentAsync(cancellationToken);
+            if (currentModel.ModelId != selected.Id)
+                throw new RuntimeAuthorizationException("runtime_sdk_effective_model_mismatch");
 #pragma warning restore GHCP001
             if (session.SessionId != sdkSessionId)
                 throw new RuntimeAuthorizationException("runtime_sdk_session_mismatch");
+            if (!sdkCredential.IsUsable())
+                throw new RuntimeAuthorizationException("runtime_sdk_credential_unavailable");
             var sdkVersion = typeof(CopilotClient).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
                 ?.InformationalVersion
                 ?? throw new InvalidOperationException("The Copilot SDK assembly has no version metadata.");
@@ -103,7 +107,7 @@ public sealed class RuntimeCopilotSessionFactory
                 sdkVersion,
                 status.Version,
                 acceptedModelSelectionReference,
-                selected.Id,
+                currentModel.ModelId,
                 RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(catalog)),
                 RuntimeCopilotSession.NullableDecimal(selected.Billing?.Multiplier),
                 "hosted-copilot",

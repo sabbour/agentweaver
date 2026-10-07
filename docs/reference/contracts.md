@@ -287,6 +287,23 @@ rejected before verification; that rejection does not prove durable cleanup.
 Storage and actual Broker HTTP tests isolate the owner and delivery boundaries.
 Full current-Core, placement, native SDK, and accounting acceptance is pending.
 
+The auth-first runtime library validates the configuration hash and exact configure
+audience before consuming a delivered nonce. The current registration supplies the
+accepted model reference. Native session creation uses an explicit session token
+and the SDK's empty-mode policy; URI mode does not accept client-wide login options.
+The SDK-reported effective model must match the registered selection. No ready session
+is returned before the final registration, source-credential, and lifetime checks.
+Controlled TCP tests exercise the actual SDK RPCs and usage callbacks. Broker
+HTTP-to-SDK tests still isolate owner and delivery authority; they are not complete
+Core-to-accounting acceptance.
+
+`GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context`
+requires the authenticated current run owner and returns `Cache-Control: no-store`.
+The response contains the active child turn, accepted revisions and hash, and
+agent/model reference from its confirmed WorkPlan item. An unknown, unmapped,
+inactive, stale, or non-dispatchable child is unavailable. Caller configure JSON
+cannot set these fields.
+
 ## Projects & Config authorization context
 
 This route belongs to the unpublished Projects & Config candidate. It resolves only the validated caller's issuer and `sub`; it does not accept caller-subject or role selectors, issue grants, or mutate authority.

@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
-public static class CoordinationEndpoints
+public static partial class CoordinationEndpoints
 {
     public static IEndpointRouteBuilder MapCoordinationEndpoints(this IEndpointRouteBuilder app)
     {
@@ -70,6 +70,9 @@ public static class CoordinationEndpoints
         app.MapGet(
             "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/owner-binding",
             GetSessionBindingAsync).RequireAuthorization();
+        app.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context",
+            ReadRuntimeOwnerContextAsync).RequireAuthorization();
         return app;
     }
 
@@ -854,12 +857,29 @@ public static class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         EventsAddressedMessageClient events,
         CoordinationOwnerStore store,
+        CoordinatorDecisionOwnerStore decisions,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
             var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            ConfirmedWorkPlanItemAssociation? workPlanItemAssociation = null;
+            if (request.WorkPlanItemId is { } workPlanItemId)
+            {
+                var owner = await store.GetSessionBindingAsync(actor,
+                    new SessionIdentity(projectId, runId, parentSessionId), cancellationToken).ConfigureAwait(false);
+                var root = await store.ReadRuntimeRootIdentityAsync(
+                    actor, new SessionIdentity(projectId, runId, parentSessionId), cancellationToken).ConfigureAwait(false);
+                var decision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!decision.State.CanDispatch || decision.State.Fence != owner.ExecutionFence ||
+                    decision.State.ConfirmedWorkPlan?.Plan.Items.Any(item =>
+                        string.Equals(item.Id, workPlanItemId, StringComparison.Ordinal)) != true)
+                    throw new CoordinationException("session_work_plan_item_unavailable", StatusCodes.Status409Conflict);
+                workPlanItemAssociation = new ConfirmedWorkPlanItemAssociation(
+                    workPlanItemId, decision.StateVersion, decision.SelectionHash);
+            }
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             var child = await store.RegisterChildAsync(
@@ -868,7 +888,9 @@ public static class CoordinationEndpoints
                 request.SessionId,
                 CoordinatorWorkflowCatalog.ReadMaxChildren(selection.Selection.Snapshot),
                 CoordinatorWorkflowCatalog.ReadMaxConcurrentChildren(selection.Selection.Snapshot),
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, workPlanItemAssociation,
+                currentCancellationToken => RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, currentCancellationToken)).ConfigureAwait(false);
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             await events.EnsureSessionAsync(context, child.Identity, cancellationToken).ConfigureAwait(false);

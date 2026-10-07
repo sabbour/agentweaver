@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Sessions journal, accepted facts, and owner delivery",
-  "alt": "Projects & Config validates current permission and accepted run selection. Events & Sessions pins the journal, commits accepted facts, and serves ordered replay. After a fresh authority check and owner CAS, the Orchestrator commits the trusted accepted-run Sandbox binding with the winning plan decision, gate, grants, and outbox (its adapter only resolves existing resources), persists owner receipts and fenced message delivery; generic PolicyEvaluation append remains denied until #1846's trusted consumer.",
+  "alt": "Projects & Config validates current permission and accepted run selection. Events & Sessions pins the journal, commits accepted facts, and serves ordered replay. After a fresh authority check and owner CAS, the Orchestrator commits the trusted accepted-run Sandbox binding with the winning plan decision, gate, grants, and outbox (its adapter only resolves existing resources), persists owner receipts and fenced message delivery. The runtime-owner-context GET derives the agent, accepted model reference, and deterministic turn from a current confirmed work item; it rechecks the root decision and Projects authority. Complete native SDK accounting remains pending. Generic PolicyEvaluation append remains denied until #1846's trusted consumer.",
   "autonumber": true,
   "participants": [
     {

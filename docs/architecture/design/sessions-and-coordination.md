@@ -68,11 +68,26 @@ execution fence, session/work item, Environment lease, and fixed profile.
 Core execution fences, placement generations, and Environment provider/current
 fences remain distinct.
 
+Child registration can bind a confirmed WorkPlan item. The owner transaction
+checks its current decision version, selection hash, and fence before storing
+that association. Unmapped legacy children remain usable for existing operations
+but cannot provide runtime ownership. The authenticated `runtime-owner-context`
+GET derives agent, model reference, and deterministic turn identity from the
+current accepted selection, confirmed plan, and active child turn. It rechecks
+the root decision and current Projects authority before returning.
+
 The `Agentweaver.AgentRuntime` library uses the pinned native Copilot SDK.
 Its model catalog, effective model ID, SDK session ID/version, nullable
 measurements, and already-weighted nano-AIU come from that SDK. Credential
 values remain in protected memory. The library is not an AgentHost executable,
 scheduler, or new provider resolver.
+
+The auth-first library hook consumes the delivered configure nonce before binding.
+It reads the model reference from the current registration, not the configure body.
+It exchanges the consumed nonce for a source credential and checks current authority
+before and after native session creation. It returns one fully initialized immutable
+session; failures dispose the SDK session and revoke or invalidate the source credential.
+Usage reads also check current registration and source authority.
 
 The storage and Broker transport source does not prove complete SDK ingestion.
 Full acceptance still requires genuine current owner and placement checks,

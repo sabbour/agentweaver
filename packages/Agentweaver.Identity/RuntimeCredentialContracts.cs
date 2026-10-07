@@ -27,6 +27,8 @@ public sealed record RuntimeBinding(
 {
     public long EnvironmentCurrentFencingGeneration { get; init; }
     public long EnvironmentProviderFencingGeneration { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ModelSelectionReference { get; init; }
 }
 
 public enum RuntimeRegistrationState { Active, Revoked }

@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Identity broker secret redemption",
-  "alt": "Identity.Broker validates bearer and required claims. Invalid tokens return 401 and invalid requests return 400 without redemption; valid requests build trusted actor context, check the exact grant around exact-version Key Vault access, and invalidate credentials on postcheck failure or after the response. Runtime grants use a separate store; complete SDK accounting proof remains pending.",
+  "alt": "Identity.Broker validates bearer and required claims. Invalid tokens return 401 and invalid requests return 400 without redemption; valid requests build trusted actor context, check the exact grant around exact-version Key Vault access, and invalidate credentials on postcheck failure or after the response. Runtime grants use a separate store. The auth-first runtime library consumes the delivered nonce before native SDK binding and returns a completed session only after current-registration, source-credential, effective-model, and lifetime checks. Complete SDK accounting proof remains pending.",
   "autonumber": true,
   "participants": [
     {
