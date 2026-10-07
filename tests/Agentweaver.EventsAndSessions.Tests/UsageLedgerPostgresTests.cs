@@ -34,6 +34,47 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task NativeMetadataCacheWritesAndUnknownRequestCountPersistAcrossRestart()
+    {
+        var usage = UsageContractTests.Submission() with
+        {
+            Attribution = UsageContractTests.Submission().Attribution with { TurnId = "native-turn" },
+            Measurement = new(17, 11, 7, 3, null, 1234567.25m, "nano_aiu", 12.5m)
+            {
+                CacheWriteTokens = 5
+            },
+            SdkSource = new(Guid.NewGuid(), "native-session", "1.0.11", "runtime-v1", "model/ref", "model-1",
+                new string('a', 64), 2.5m, "hosted-copilot", "meter-a", new string('b', 64), 1),
+            SdkEventId = Guid.NewGuid().ToString("D")
+        };
+        var first = await _ledger.AppendAsync(usage, UsageContractTests.Binding(), UsageContractTests.Price());
+        var restarted = new PostgresUsageLedger(_fixture.DataSource, _schema);
+        var replay = await restarted.AppendAsync(usage, UsageContractTests.Binding(), UsageContractTests.Price());
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(first.Receipt, replay.Receipt);
+        Assert.Equal(usage, replay.Entry.Usage);
+        var totals = await restarted.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        var agent = Assert.Single(totals.Agents);
+        Assert.Null(agent.RequestCount);
+        Assert.Equal(5, agent.CacheWriteTokens);
+        await AssertConflictAsync(usage with
+        {
+            SdkSource = usage.SdkSource! with { CatalogHash = new string('c', 64) }
+        }, UsageContractTests.Binding(), UsageContractTests.Price());
+        await AssertConflictAsync(usage with
+        {
+            Measurement = usage.Measurement with { CacheWriteTokens = 6 }
+        }, UsageContractTests.Binding(), UsageContractTests.Price());
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await restarted.AppendWithinTransactionAsync(
+            connection, transaction, usage with { EventId = Guid.NewGuid() },
+            UsageContractTests.Binding(), UsageContractTests.Price());
+        await transaction.RollbackAsync();
+        Assert.Equal(1, (await restarted.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
+    }
+
+    [Fact]
     public async Task ExactDuplicateReturnsOriginalAndChangedScopeModelUnitBindingOrPriceConflicts()
     {
         var usage = UsageContractTests.Submission();

@@ -27,6 +27,8 @@ internal static class UsageLedgerValidation
             submission.Attribution.SessionId);
         ValidateIdentifier(submission.Attribution.TenantId, nameof(submission), 256);
         ValidateIdentifier(submission.Attribution.AgentId, nameof(submission), 256);
+        if (submission.Attribution.TurnId is not null)
+            ValidateIdentifier(submission.Attribution.TurnId, nameof(submission), 256);
         ValidateIdentifier(submission.ModelBinding.ModelReference, nameof(submission));
         ValidateIdentifier(submission.ModelBinding.ModelId, nameof(submission));
         ValidateIdentifier(submission.ModelBinding.MeterSource, nameof(submission), 256);
@@ -37,6 +39,7 @@ internal static class UsageLedgerValidation
         RequireNonNegative(measurement.InputTokens, nameof(measurement.InputTokens));
         RequireNonNegative(measurement.OutputTokens, nameof(measurement.OutputTokens));
         RequireNonNegative(measurement.CachedTokens, nameof(measurement.CachedTokens));
+        RequireNonNegative(measurement.CacheWriteTokens, nameof(measurement.CacheWriteTokens));
         RequireNonNegative(measurement.ReasoningTokens, nameof(measurement.ReasoningTokens));
         RequireNonNegative(measurement.ProviderUnits, nameof(measurement.ProviderUnits));
         RequireNonNegative(measurement.DurationMilliseconds, nameof(measurement.DurationMilliseconds));
@@ -168,6 +171,8 @@ internal static class UsageLedgerCanonicalizer
             writer.WriteString("runId", submission.Attribution.RunId);
             writer.WriteString("sessionId", submission.Attribution.SessionId);
             writer.WriteString("agentId", submission.Attribution.AgentId);
+            if (submission.Attribution.TurnId is not null)
+                writer.WriteString("turnId", submission.Attribution.TurnId);
             writer.WriteEndObject();
 
             writer.WritePropertyName("modelBinding");
@@ -183,12 +188,22 @@ internal static class UsageLedgerCanonicalizer
             WriteNullableNumber(writer, "inputTokens", submission.Measurement.InputTokens);
             WriteNullableNumber(writer, "outputTokens", submission.Measurement.OutputTokens);
             WriteNullableNumber(writer, "cachedTokens", submission.Measurement.CachedTokens);
+            if (submission.Measurement.CacheWriteTokens is not null)
+                WriteNullableNumber(writer, "cacheWriteTokens", submission.Measurement.CacheWriteTokens);
             WriteNullableNumber(writer, "reasoningTokens", submission.Measurement.ReasoningTokens);
-            writer.WriteNumber("requestCount", submission.Measurement.RequestCount);
+            WriteNullableNumber(writer, "requestCount", submission.Measurement.RequestCount);
             WriteNullableNumber(writer, "providerUnits", submission.Measurement.ProviderUnits);
             WriteNullableString(writer, "providerUnit", submission.Measurement.ProviderUnit);
             WriteNullableNumber(writer, "durationMilliseconds", submission.Measurement.DurationMilliseconds);
             writer.WriteEndObject();
+
+            if (submission.SdkSource is not null)
+            {
+                writer.WritePropertyName("sdkSource");
+                JsonSerializer.Serialize(writer, submission.SdkSource);
+            }
+            if (submission.SdkEventId is not null)
+                writer.WriteString("sdkEventId", submission.SdkEventId);
 
             writer.WritePropertyName("costBinding");
             if (binding is null)

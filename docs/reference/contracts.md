@@ -44,9 +44,26 @@ The ledger commits before returning this receipt. A retry returns the original
 receipt without repricing. This receipt does not authorize an SDK producer.
 `GetRunTotalsAsync` returns exact agent totals and separate meter-source/unit
 amounts. Unknown measurements stay null. Incomplete pricing remains explicit.
+Native submissions retain `TurnId`, `SdkEventId`, and the complete `SdkSource`
+snapshot. Cache-read and cache-write measurements remain separate. Native callbacks
+do not supply a request count, so `RequestCount` stays null.
+
+`RuntimeUsageSourceReceipt` contains the immutable runtime registration, native
+usage submission, source hash, receipt ID, version, and recorded timestamp.
+`RuntimeUsageSourceReceiptContract` validates exact owner, SDK, model, catalog,
+event, turn, and accepted-selection pins. It rejects BYOK and changed hashes.
+This receipt proves a source observation, not a price or accounting acknowledgment.
+A stored source receipt remains readable after its original lease expires.
+That historical read does not authorize another observation.
+
+`PostgresUsageLedger.AppendWithinTransactionAsync` uses the caller's owned
+PostgreSQL transaction without a separate commit. The trusted Events consumer
+can commit its source inbox and accounting receipt with the usage entry and rate card.
+The ordinary `AppendAsync` method retains its own transaction and commit.
 
 These are low-level contracts, not a remote writer authorization boundary.
-Migration `004_copilot_usage.sql` extends the service schema to version 4.
+Migration `005_native_sdk_usage.sql` extends the service schema to version 5.
+It preserves existing history and adds cache-write values and nullable request counts.
 The native host exposes no SDK usage-writing route. Current typed action grants
 and opaque model references do not supply resolved SDK producer provenance.
 

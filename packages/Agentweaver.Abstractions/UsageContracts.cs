@@ -1,9 +1,14 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
 public sealed record UsageAttribution(
-    string TenantId, string ProjectId, string RunId, string SessionId, string AgentId);
+    string TenantId, string ProjectId, string RunId, string SessionId, string AgentId)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TurnId { get; init; }
+}
 
 public sealed record UsageModelBinding(
     string ModelReference, string ModelId, string MeterSource, string SelectionRevision);
@@ -13,17 +18,27 @@ public sealed record UsageMeasurement(
     long? OutputTokens,
     long? CachedTokens,
     long? ReasoningTokens,
-    long RequestCount,
+    long? RequestCount,
     decimal? ProviderUnits,
     string? ProviderUnit,
-    decimal? DurationMilliseconds);
+    decimal? DurationMilliseconds)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? CacheWriteTokens { get; init; }
+}
 
 public sealed record UsageSubmission(
     Guid EventId,
     DateTimeOffset OccurredAt,
     UsageAttribution Attribution,
     UsageModelBinding ModelBinding,
-    UsageMeasurement Measurement);
+    UsageMeasurement Measurement)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SdkSessionFacts? SdkSource { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SdkEventId { get; init; }
+}
 
 public sealed record UsageLedgerEntry(
     UsageSubmission Usage, CostBinding? CostBinding, CostPrice Price,
@@ -62,14 +77,17 @@ public sealed record UsageAmountTotal(
 public sealed record UsageAgentTotals(
     string AgentId,
     long Events,
-    long RequestCount,
+    long? RequestCount,
     long? InputTokens,
     long? OutputTokens,
     long? CachedTokens,
     long? ReasoningTokens,
     decimal? DurationMilliseconds,
     bool IsFullyPriced,
-    ImmutableArray<UsageAmountTotal> Amounts);
+    ImmutableArray<UsageAmountTotal> Amounts)
+{
+    public long? CacheWriteTokens { get; init; }
+}
 
 public sealed record UsageRunTotals(
     string TenantId,

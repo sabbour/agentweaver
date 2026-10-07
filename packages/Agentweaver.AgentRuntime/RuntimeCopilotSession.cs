@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading.Channels;
 using System.Runtime.CompilerServices;
 using Agentweaver.Abstractions;
@@ -41,10 +39,8 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
                 usage.AgentId is not null || usage.Data.Initiator is not null ||
                 usage.Id == Guid.Empty)
                 throw new RuntimeAuthorizationException("runtime_sdk_usage_binding_invalid");
-            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(
-                $"agentweaver.sdk.usage.v1\0{Facts.RuntimeInstanceId:D}\0{Facts.SdkSessionId}\0{usage.Id}"));
             return new SdkUsageObservation(
-                new Guid(hash.AsSpan(0, 16)),
+                SdkUsageIdentity.Create(Facts.RuntimeInstanceId, Facts.SdkSessionId, usage.Id.ToString("D")),
                 usage.Id.ToString("D"),
                 Facts.SdkSessionId,
                 usage.Timestamp,

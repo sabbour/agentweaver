@@ -198,7 +198,7 @@ public sealed class CopilotCostProvider : ICostProvider
     private static void ValidateMeasurement(UsageMeasurement usage)
     {
         if (usage.InputTokens < 0 || usage.OutputTokens < 0 || usage.CachedTokens < 0 ||
-            usage.ReasoningTokens < 0 || usage.RequestCount < 0 ||
+            usage.CacheWriteTokens < 0 || usage.ReasoningTokens < 0 || usage.RequestCount < 0 ||
             usage.ProviderUnits < 0 || usage.DurationMilliseconds < 0)
             throw new ArgumentOutOfRangeException(nameof(usage), "Usage measurements cannot be negative.");
     }

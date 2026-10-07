@@ -80,7 +80,7 @@
     {
       "type": "note",
       "over": ["api", "postgres"],
-      "label": "Usage hashes, prices, rate cards: schema v4.\nRuntime owner + lease/profile pins are not accounting proof."
+      "label": "Usage + native SDK pins: schema v5.\nRuntime + source contracts are not accounting proof."
     },
     {
       "type": "message",

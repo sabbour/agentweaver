@@ -37,16 +37,22 @@ The service owns separate append-only `usage_ledger` and immutable
 `usage_rate_cards` tables. Migration `004_copilot_usage.sql` adds these tables after
 the session journal, addressed messages, and project facts. The migration preserves
 both current version-3 schemas and the earlier version-2 project-fact layout.
-Ordinary startup requires version 4 and verifies both usage tables.
+Migration `005_native_sdk_usage.sql` adds cache-write values and permits unknown
+request counts. Ordinary startup requires version 5 and verifies both usage tables.
 
 `PostgresUsageLedger` implements the low-level `IUsageLedger` storage contract.
 An entry records tenant, project, run, session, agent, model metadata, measurements,
-the Cost binding, and the price. Nullable measurements remain unknown rather
-than zero. A transaction commits the rate card and usage entry before returning.
+the Cost binding, and the price.
+Native submissions also retain the turn, SDK event ID, and complete SDK source snapshot.
+Cache-read and cache-write measurements remain separate. Native request counts stay
+null because the SDK callback does not report them. Nullable measurements remain
+unknown rather than zero.
+
+A transaction commits the rate card and usage entry before returning.
 The accounting receipt binds the canonical SHA-256 hash, attribution, immutable
 price, rate-card version, and commit timestamp. Identical retries return the original
-receipt. Changed content for the same
-event ID conflicts. Database triggers reject changes and truncation of history.
+receipt. Changed content for the same event ID conflicts.
+Database triggers reject changes and truncation of history.
 
 Totals retain separate meter-source and unit groups. A missing measurement makes
 that measurement total unknown. An unpriced entry makes the run or agent pricing
@@ -66,6 +72,10 @@ action grants and opaque model references do not prove an SDK usage source.
 Trusted resolved-model provenance and current producer authority remain required.
 The accounting receipt proves a committed ledger entry, not SDK source authority.
 It remains separate from the required trusted source-observation receipt.
+The shared `RuntimeUsageSourceReceipt` contract binds one native observation to
+its immutable runtime registration and source hash. Its validator rejects changed
+owner, SDK, model, catalog, event, and accepted-selection pins.
+This contract alone does not register a producer or authorize a remote writer.
 
 ## Addressed-message owner integration
 

@@ -22,5 +22,6 @@
     <EmbeddedResource Include="Migrations\002_addressed_messages.sql" />
     <EmbeddedResource Include="Migrations\003_project_facts.sql" />
     <EmbeddedResource Include="Migrations\004_copilot_usage.sql" />
+    <EmbeddedResource Include="Migrations\005_native_sdk_usage.sql" />
   </ItemGroup>
 </Project>

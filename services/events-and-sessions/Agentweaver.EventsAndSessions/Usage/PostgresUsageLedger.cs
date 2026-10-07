@@ -38,13 +38,29 @@ public sealed class PostgresUsageLedger : IUsageLedger
         CancellationToken cancellationToken = default)
     {
         UsageLedgerValidation.Validate(submission, binding, price);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var result = await AppendWithinTransactionAsync(
+            connection, transaction, submission, binding, price, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    internal async Task<UsageIngestionResult> AppendWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction,
+        UsageSubmission submission, CostBinding? binding, CostPrice price,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (transaction.Connection != connection)
+            throw new ArgumentException("The usage transaction must belong to the supplied connection.");
+        UsageLedgerValidation.Validate(submission, binding, price);
         var canonical = UsageLedgerCanonicalizer.Serialize(submission, binding, price);
         var payloadHash = HashCanonicalInput(canonical);
         var payload = JsonSerializer.Serialize(
             new StoredUsage(submission, binding, price), JsonOptions);
 
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         if (binding is not null)
             await EnsureRateCardAsync(connection, transaction, binding.RateCard, cancellationToken);
 
@@ -53,7 +69,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
         if (existing is not null)
         {
             var matchedExisting = MatchDuplicate(existing, canonical);
-            await transaction.CommitAsync(cancellationToken);
             return matchedExisting;
         }
 
@@ -61,14 +76,14 @@ public sealed class PostgresUsageLedger : IUsageLedger
             INSERT INTO {_quotedSchema}.usage_ledger (
                 contract_version, tenant_id, project_id, run_id, session_id, event_id, occurred_at,
                 agent_id, model_reference, model_id, meter_source, selection_revision,
-                input_tokens, output_tokens, cached_tokens, reasoning_tokens, request_count,
+                input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens, request_count,
                 provider_units, provider_unit, duration_milliseconds, price_disposition,
                 price_amount, price_unit, unpriced_reason, rate_card_id, rate_card_version, rate_card_unit,
                 cost_binding, canonical_input, canonical_input_hash, payload)
             VALUES (
                 @contract_version, @tenant_id, @project_id, @run_id, @session_id, @event_id, @occurred_at,
                 @agent_id, @model_reference, @model_id, @meter_source, @selection_revision,
-                @input_tokens, @output_tokens, @cached_tokens, @reasoning_tokens, @request_count,
+                @input_tokens, @output_tokens, @cached_tokens, @cache_write_tokens, @reasoning_tokens, @request_count,
                 @provider_units, @provider_unit, @duration_milliseconds, @price_disposition,
                 @price_amount, @price_unit, @unpriced_reason, @rate_card_id, @rate_card_version, @rate_card_unit,
                 @cost_binding, @canonical_input, @canonical_input_hash, @payload)
@@ -83,7 +98,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 recordedAt = reader.GetFieldValue<DateTimeOffset>(0);
         if (recordedAt is not null)
         {
-            await transaction.CommitAsync(cancellationToken);
             return new UsageIngestionResult(
                 new UsageLedgerEntry(
                     submission, binding, price, recordedAt.Value, payloadHash), IsDuplicate: false);
@@ -94,7 +108,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
         if (existing is null)
             throw new InvalidOperationException("The usage event identity conflicted without a stored row.");
         var duplicate = MatchDuplicate(existing, canonical);
-        await transaction.CommitAsync(cancellationToken);
         return duplicate;
     }
 
@@ -109,7 +122,8 @@ public sealed class PostgresUsageLedger : IUsageLedger
         await using var command = new NpgsqlCommand($"""
             SELECT l.agent_id, l.meter_source, l.price_unit, r.unit,
                    l.input_tokens, l.output_tokens, l.cached_tokens, l.reasoning_tokens,
-                   l.duration_milliseconds, l.request_count, l.price_amount, l.price_disposition
+                   l.duration_milliseconds, l.request_count, l.price_amount, l.price_disposition,
+                   l.cache_write_tokens
             FROM {_quotedSchema}.usage_ledger l
             LEFT JOIN {_quotedSchema}.usage_rate_cards r
                 ON r.card_id = l.rate_card_id AND r.version = l.rate_card_version
@@ -152,7 +166,8 @@ public sealed class PostgresUsageLedger : IUsageLedger
                     reader.IsDBNull(6) ? null : reader.GetInt64(6),
                     reader.IsDBNull(7) ? null : reader.GetInt64(7),
                     reader.IsDBNull(8) ? null : reader.GetDecimal(8),
-                    reader.GetInt64(9),
+                    reader.IsDBNull(9) ? null : reader.GetInt64(9),
+                    reader.IsDBNull(12) ? null : reader.GetInt64(12),
                     priced);
 
                 if (unit is not null)
@@ -301,8 +316,9 @@ public sealed class PostgresUsageLedger : IUsageLedger
         AddNullable(command, "input_tokens", NpgsqlDbType.Bigint, measurement.InputTokens);
         AddNullable(command, "output_tokens", NpgsqlDbType.Bigint, measurement.OutputTokens);
         AddNullable(command, "cached_tokens", NpgsqlDbType.Bigint, measurement.CachedTokens);
+        AddNullable(command, "cache_write_tokens", NpgsqlDbType.Bigint, measurement.CacheWriteTokens);
         AddNullable(command, "reasoning_tokens", NpgsqlDbType.Bigint, measurement.ReasoningTokens);
-        command.Parameters.AddWithValue("request_count", NpgsqlDbType.Bigint, measurement.RequestCount);
+        AddNullable(command, "request_count", NpgsqlDbType.Bigint, measurement.RequestCount);
         AddNullable(command, "provider_units", NpgsqlDbType.Numeric, measurement.ProviderUnits);
         AddNullable(command, "provider_unit", NpgsqlDbType.Varchar, measurement.ProviderUnit);
         AddNullable(command, "duration_milliseconds", NpgsqlDbType.Numeric, measurement.DurationMilliseconds);
@@ -374,11 +390,12 @@ public sealed class PostgresUsageLedger : IUsageLedger
     {
         public string AgentId { get; } = agentId;
         private long _events;
-        private long _requestCount;
+        private readonly NullableLongAccumulator _requestCount = new();
         private bool _fullyPriced = true;
         private readonly NullableLongAccumulator _inputTokens = new();
         private readonly NullableLongAccumulator _outputTokens = new();
         private readonly NullableLongAccumulator _cachedTokens = new();
+        private readonly NullableLongAccumulator _cacheWriteTokens = new();
         private readonly NullableLongAccumulator _reasoningTokens = new();
         private readonly NullableDecimalAccumulator _duration = new();
         public Dictionary<(string MeterSource, string Unit), AmountAccumulator> Amounts { get; } = [];
@@ -389,15 +406,17 @@ public sealed class PostgresUsageLedger : IUsageLedger
             long? cachedTokens,
             long? reasoningTokens,
             decimal? duration,
-            long requestCount,
+            long? requestCount,
+            long? cacheWriteTokens,
             bool priced)
         {
             _events = checked(_events + 1);
-            _requestCount = checked(_requestCount + requestCount);
+            _requestCount.Add(requestCount);
             _fullyPriced &= priced;
             _inputTokens.Add(inputTokens);
             _outputTokens.Add(outputTokens);
             _cachedTokens.Add(cachedTokens);
+            _cacheWriteTokens.Add(cacheWriteTokens);
             _reasoningTokens.Add(reasoningTokens);
             _duration.Add(duration);
         }
@@ -405,14 +424,17 @@ public sealed class PostgresUsageLedger : IUsageLedger
         public UsageAgentTotals ToTotals() => new(
             AgentId,
             _events,
-            _requestCount,
+            _requestCount.Value,
             _inputTokens.Value,
             _outputTokens.Value,
             _cachedTokens.Value,
             _reasoningTokens.Value,
             _duration.Value,
             _fullyPriced,
-            ToAmountTotals(Amounts));
+            ToAmountTotals(Amounts))
+        {
+            CacheWriteTokens = _cacheWriteTokens.Value
+        };
     }
 
     private sealed class NullableLongAccumulator
