@@ -20,6 +20,7 @@
   <Project Path="packages\Agentweaver.Telemetry.AzureMonitor\Agentweaver.Telemetry.AzureMonitor.csproj" />
   <Project Path="packages\Agentweaver.ObjectStore.AzureBlob\Agentweaver.ObjectStore.AzureBlob.csproj" />
   <Project Path="packages\Agentweaver.Identity\Agentweaver.Identity.csproj" />
+  <Project Path="packages\Agentweaver.AgentRuntime\Agentweaver.AgentRuntime.csproj" />
   <Project Path="tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj" />
   <Project Path="tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj" />
   <Project Path="tests\Agentweaver.Secrets.AzureKeyVault.Tests\Agentweaver.Secrets.AzureKeyVault.Tests.csproj" />

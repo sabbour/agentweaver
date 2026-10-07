@@ -23,7 +23,11 @@ public sealed record RuntimeBinding(
     long PlacementGeneration,
     string ProfileId,
     Uri ConfigureEndpoint,
-    Uri ObservationEndpoint);
+    Uri ObservationEndpoint)
+{
+    public long EnvironmentCurrentFencingGeneration { get; init; }
+    public long EnvironmentProviderFencingGeneration { get; init; }
+}
 
 public enum RuntimeRegistrationState { Active, Revoked }
 
@@ -58,7 +62,11 @@ public sealed record RuntimeBootstrapDeliveryReceipt(
     long PlacementGeneration,
     long ExecutionFence,
     string ConfigurationHash,
-    DateTimeOffset DeliveredAt);
+    DateTimeOffset DeliveredAt)
+{
+    public long EnvironmentCurrentFencingGeneration { get; init; }
+    public long EnvironmentProviderFencingGeneration { get; init; }
+}
 
 // Only the Environment owner may implement delivery to its exact current placement.
 // Credential values are transient input, not durable request or receipt fields.

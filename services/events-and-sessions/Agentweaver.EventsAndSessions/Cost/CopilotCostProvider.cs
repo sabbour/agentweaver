@@ -16,7 +16,7 @@ public static class CopilotCostCapabilities
 public sealed class CopilotCostProvider : ICostProvider
 {
     /// <summary>The stable meter-source key for Copilot SDK TotalNanoAiu values.</summary>
-    public const string MeterSource = "copilot.nano_aiu";
+    public const string MeterSource = SdkMeterSources.CopilotNanoAiu;
     public const string NanoAiuUnit = "nano_aiu";
     public const string AiCreditUnit = "AIC";
     public const string ProviderId = "copilot.usage-cost";

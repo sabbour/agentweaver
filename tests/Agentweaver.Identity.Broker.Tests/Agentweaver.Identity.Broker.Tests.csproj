@@ -23,4 +23,8 @@
     <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" Aliases="OrchestratorHost" />
     <ProjectReference Include="..\..\services\events-and-sessions\Agentweaver.EventsAndSessions\Agentweaver.EventsAndSessions.csproj" Aliases="EventsHost" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Migrations\runtime_registration.sql"
+                      LogicalName="Agentweaver.Identity.Broker.Tests.runtime_registration.sql" />
+  </ItemGroup>
 </Project>

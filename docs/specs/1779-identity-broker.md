@@ -115,6 +115,26 @@ The backend receives the exact requested SecretRef version.
 
 ## Host and deployment contract
 
+### Runtime credential source candidate (#1850)
+
+The source contains a separate runtime grant store. It does not use the
+Key Vault secret-redemption grant or change human OAuth clients or claims.
+The store keeps cryptographic nonce verifiers, exact runtime/actor/selection/
+placement bindings, purpose, audience, revision, state, expiry, and configuration
+hash. PostgreSQL revisions and operation receipts are append-only.
+
+Initial bootstrap material is delivered only through the Environment-owned
+out-of-band boundary. A completed delivery receipt is required before nonce
+consumption. Consumption, source exchange, and rotation use row-locked CAS.
+Exact operation replay returns the original receipt, not a persisted credential
+value. Each asynchronous owner lookup uses genuine protected actor credentials
+and rechecks the current registration. Missing delivery or owner authorization
+must fail explicitly.
+
+The current store tests cover persistence and cryptographic lifecycle only.
+They do not prove the remote authenticated runtime channel or native SDK source.
+The full Broker/Projects/Orchestrator/runtime/Events proof remains in progress.
+
 The host supplies native .NET configuration through its deployment secret/configuration sources:
 
 | Configuration key | Requirement |

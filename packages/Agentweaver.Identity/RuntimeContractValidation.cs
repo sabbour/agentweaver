@@ -16,6 +16,8 @@ public static class RuntimeContractValidation
             binding.ProjectRevision <= 0 || binding.ProjectConfigurationRevision <= 0 ||
             binding.PlatformRuntimeRevision <= 0 || binding.ExecutionFence <= 0 ||
             binding.PlacementGeneration <= 0 ||
+            binding.EnvironmentCurrentFencingGeneration <= 0 ||
+            binding.EnvironmentProviderFencingGeneration <= 0 ||
             !Guid.TryParseExact(binding.ActorId, "D", out _) ||
             !Uri.TryCreate(binding.ActorIssuer, UriKind.Absolute, out var issuer) ||
             !IsHttpsEndpoint(issuer) ||

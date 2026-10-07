@@ -21,6 +21,8 @@ public sealed class RuntimeContractTests
             registration with { Binding = registration.Binding with { AgentId = "other-agent" } },
             registration with { Binding = registration.Binding with { TurnId = "other-turn" } },
             registration with { Binding = registration.Binding with { ExecutionFence = 2 } },
+            registration with { Binding = registration.Binding with { EnvironmentCurrentFencingGeneration = 2 } },
+            registration with { Binding = registration.Binding with { EnvironmentProviderFencingGeneration = 3 } },
             registration with { Binding = registration.Binding with { PlacementUid = "other-placement" } },
             registration with { Binding = registration.Binding with { ProjectRevision = 2 } },
             registration with { Binding = registration.Binding with { AcceptedSelectionHash = new string('b', 64) } }
@@ -90,6 +92,10 @@ public sealed class RuntimeContractTests
             "session", "agent", "turn", 1, 1, 1, "context:1", new string('a', 64), 1,
             "environment", "placement-uid", 1, "hosted-profile",
             new Uri("https://runtime.test/configure"),
-            new Uri("https://orchestrator.test/runtime/observations")),
+            new Uri("https://orchestrator.test/runtime/observations"))
+        {
+            EnvironmentCurrentFencingGeneration = 4,
+            EnvironmentProviderFencingGeneration = 7
+        },
         RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(5));
 }

@@ -83,6 +83,8 @@ The library also defines a separate runtime-bootstrap contract. It does not reus
 actor, accepted run selection, current session/agent/turn, execution fence, and
 actual Environment placement UID and generation. The registered profile fixes
 the configure and observation HTTPS endpoints.
+The Orchestrator execution fence and both Environment fencing generations are
+separate pins. A numeric match between these different owners is not authority.
 
 `IRuntimeRegistrationOwner` must check current authority with genuine actor
 credentials supplied through `RuntimeActorAuthorization`. This protected-memory

@@ -26,9 +26,15 @@ public sealed class IdentityBrokerDbContext : DbContext
 
     public DbSet<SecretGrantOperation> SecretGrantOperations => Set<SecretGrantOperation>();
 
+    public DbSet<RuntimeGrantHead> RuntimeGrantHeads => Set<RuntimeGrantHead>();
+    public DbSet<RuntimeGrantRevision> RuntimeGrantRevisions => Set<RuntimeGrantRevision>();
+    public DbSet<RuntimeGrantOperation> RuntimeGrantOperations => Set<RuntimeGrantOperation>();
+    public DbSet<RuntimeGrantOperationReceipt> RuntimeGrantOperationReceipts => Set<RuntimeGrantOperationReceipt>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);
+        RuntimeGrantModel.Configure(modelBuilder);
 
         modelBuilder.Entity<BrokerUser>(entity =>
         {
