@@ -1763,9 +1763,17 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         var inputs = await BuildAssemblyInputsAsync(context, subtasks, edges, ct).ConfigureAwait(false);
-        var decision = string.IsNullOrEmpty(persisted.DecisionJson)
-            ? await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false)
-            : JsonSerializer.Deserialize<AssemblyReviewDecision>(persisted.DecisionJson, JsonDefaults.Options);
+        AssemblyReviewDecision? decision;
+        if (string.IsNullOrEmpty(persisted.DecisionJson))
+        {
+            await CoordinatorAssemblyReviewPersistence.ReactivateOpenReviewAsync(
+                _scopeFactory, context.CoordinatorRunId, persisted.OutputRevisionId, ct).ConfigureAwait(false);
+            decision = await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            decision = JsonSerializer.Deserialize<AssemblyReviewDecision>(persisted.DecisionJson, JsonDefaults.Options);
+        }
 
         if (decision is null)
             return;
