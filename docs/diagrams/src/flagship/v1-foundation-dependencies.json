@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "V1 services, contracts, and adapters",
-  "alt": "Structural view of unpublished Knowledge, Events & Sessions, and Environment candidates; Orchestrator/Core Policy adapters and owner flow; journal evidence and addressed-message delivery; Azure Files/Kubernetes, Azure Blob, and Key Vault adapters. The journal rejects untrusted PolicyEvaluation writes. Source structure, not deployment topology.",
+  "alt": "Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator/Core candidates; policy adapters, owner flow, journal evidence and addressed-message delivery; Azure Files/Kubernetes, Azure Blob, and Key Vault adapters. The journal rejects untrusted PolicyEvaluation writes. AzureBlobObjectStore and AzureKeyVaultSecretRedemption implement their provider interfaces. Source structure, not deployment topology.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -120,7 +120,7 @@
     {
       "id": "events-and-sessions",
       "label": "Events & Sessions",
-      "subLabel": "PostgreSQL journal + addressed-message delivery.",
+      "subLabel": "PostgreSQL journal, policy evidence, and messages.",
       "meta": "Agentweaver.EventsAndSessions",
       "icon": "server",
       "fluentIcon": "api",
@@ -262,7 +262,7 @@
       { "id": "isecretredemption", "type": "card", "position": { "x": 698, "y": 144 }, "data": { "label": "Agentweaver.Abstractions.ISecretRedemption", "subLabel": "Generic secret-redemption contract." } },
       { "id": "iworkspacevolumeprovider", "type": "card", "position": { "x": 1196.96, "y": 144 }, "data": { "label": "IWorkspaceVolumeProvider", "subLabel": "Generation-scoped Storage contract." } },
       { "id": "sessions-dependencies", "type": "card", "position": { "x": 396.4064, "y": 492.8 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry" } },
-      { "id": "events-and-sessions", "type": "card", "position": { "x": 999.5936, "y": 492.8 }, "data": { "label": "Events & Sessions", "subLabel": "PostgreSQL journal + addressed-message delivery.", "meta": "Agentweaver.EventsAndSessions" } },
+      { "id": "events-and-sessions", "type": "card", "position": { "x": 999.5936, "y": 492.8 }, "data": { "label": "Events & Sessions", "subLabel": "PostgreSQL journal, policy evidence, and messages.", "meta": "Agentweaver.EventsAndSessions" } },
       { "id": "environment-dependencies", "type": "card", "position": { "x": 396.4064, "y": 804.8 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nAzure Files Storage" } },
       { "id": "agentweaver-environment", "type": "card", "position": { "x": 999.5936, "y": 790.8 }, "data": { "label": "Environment", "subLabel": "Owner lifecycle, egress, and workspace volumes.", "meta": "Agentweaver.Environment" } },
       { "id": "knowledge-dependencies", "type": "card", "position": { "x": 396.4064, "y": 1099.2 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry" } },

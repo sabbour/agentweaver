@@ -208,9 +208,7 @@ public sealed class SessionsContractTests
         Assert.Equal(ProviderSeam.Sessions, registration.Descriptor.Seam);
         Assert.Equal(NativePostgresSessionsProvider.ProviderId, registration.Descriptor.Id);
         Assert.Equal(SessionsCapabilities.All, registration.Descriptor.AdvertisedCapabilities);
-        Assert.DoesNotContain(
-            SessionsCapabilities.PolicyEvaluations,
-            registration.Descriptor.AdvertisedCapabilities);
+        Assert.Contains(SessionsCapabilities.PolicyEvaluations, registration.Descriptor.AdvertisedCapabilities);
         Assert.Equal("options-2026-10", registration.OptionsRevision);
 
         var catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(

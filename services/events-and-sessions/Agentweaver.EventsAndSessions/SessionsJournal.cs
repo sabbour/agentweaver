@@ -184,6 +184,46 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         if (input.Payload is PolicyEvaluationSessionPayload)
             throw new SessionAccessDeniedException(
                 "Policy evaluation events require trusted Orchestrator Core writer provenance.");
+        return await AppendCoreAsync(identity, input, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<SessionAppendResult> AppendPolicyEvaluationAsync(
+        ClaimsPrincipal principal,
+        string sessionId,
+        PolicyEvaluationReceiptView receipt,
+        Func<CancellationToken, Task> validateBeforeCommit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(validateBeforeCommit);
+        var identity = RequireScope(principal).ForSession(sessionId);
+        var subjects = principal.FindAll("sub").Take(2).ToArray();
+        var issuers = principal.FindAll("iss").Take(2).ToArray();
+        if (receipt.ReceiptId == Guid.Empty ||
+            receipt.Identity != identity ||
+            subjects.Length != 1 ||
+            issuers.Length != 1 ||
+            receipt.Evidence.ActorId != subjects[0].Value ||
+            receipt.Issuer != issuers[0].Value)
+            throw new SessionAccessDeniedException(
+                "The policy receipt does not match the authenticated session caller.");
+
+        var input = new AppendSessionEvent(
+            receipt.ReceiptId,
+            SessionsContractVersions.CurrentSchemaVersion,
+            SessionsContractVersions.PolicyEvaluationEventVersion,
+            receipt.Evidence);
+        ValidateInput(input);
+        return await AppendCoreAsync(
+            identity, input, cancellationToken, validateBeforeCommit).ConfigureAwait(false);
+    }
+
+    private async Task<SessionAppendResult> AppendCoreAsync(
+        SessionIdentity identity,
+        AppendSessionEvent input,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? validateBeforeCommit = null)
+    {
         var canonicalInput = CreateCanonicalInput(identity, input);
         var payload = JsonSerializer.SerializeToElement<SessionEventPayload>(input.Payload, JsonOptions);
         var references = SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload);
@@ -216,6 +256,8 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             if (await compare.ExecuteScalarAsync(cancellationToken) is not true)
                 throw new SessionEventConflictException(
                     "The event identity was already used for a different immutable event.");
+            if (validateBeforeCommit is not null)
+                await validateBeforeCommit(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken);
             return new SessionAppendResult(duplicate, IsDuplicate: true);
         }
@@ -286,6 +328,8 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             outboxPayload,
             occurredAt), cancellationToken);
 
+        if (validateBeforeCommit is not null)
+            await validateBeforeCommit(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken);
         return new SessionAppendResult(envelope, IsDuplicate: false);
     }
