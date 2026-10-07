@@ -41,6 +41,25 @@ function writeFile(repo, file, content) {
   fs.writeFileSync(fullPath, content);
 }
 
+function createUnrelatedCommit(repo, message) {
+  const tree = execFileSync("git", ["mktree"], {
+    cwd: repo,
+    encoding: "utf8",
+    input: "",
+  }).trim();
+  return execFileSync("git", ["commit-tree", tree, "-m", message], {
+    cwd: repo,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: "Release Test",
+      GIT_AUTHOR_EMAIL: "release-test@example.invalid",
+      GIT_COMMITTER_NAME: "Release Test",
+      GIT_COMMITTER_EMAIL: "release-test@example.invalid",
+    },
+  }).trim();
+}
+
 function createReleaseRepo(t, name, {
   currentVersion = "0.34.0",
   publishedVersion = "0.34.0",
@@ -195,14 +214,22 @@ test("release preparation defaults to the native Changesets bump", (t) => {
   assert.equal(fs.existsSync(path.join(repo, ".changeset/fixture-child-patch.md")), false);
 });
 
-test("release planner keeps its default output and reports an explicit target without mutating sources", (t) => {
-  const repo = createReleaseRepo(t, "planner", { baseBranch: "dev", branch: "dev" });
+test("release planner ignores an unrelated local dev ref and does not mutate sources", (t) => {
+  const repo = createReleaseRepo(t, "planner");
+  git(repo, "push", "-q", "origin", "main:dev");
+  git(repo, "fetch", "-q", "origin");
+  git(repo, "update-ref", "refs/heads/dev", createUnrelatedCommit(repo, "unrelated local dev"));
+  assert.notEqual(git(repo, "rev-parse", "dev"), git(repo, "rev-parse", "origin/dev"));
+  assert.throws(() => execFileSync("git", ["merge-base", "dev", "origin/dev"], {
+    cwd: repo,
+    stdio: "ignore",
+  }));
   fs.symlinkSync(
     path.join(projectRoot, "node_modules"),
     path.join(repo, "node_modules"),
     process.platform === "win32" ? "junction" : "dir",
   );
-  const sourceStatus = git(repo, "status", "--porcelain");
+  const sourceStatus = git(repo, "status", "--porcelain", "--ignored");
 
   const defaultPlan = runPlan(repo, []);
   assert.equal(defaultPlan.status, 0, defaultPlan.stderr);
@@ -211,8 +238,30 @@ test("release planner keeps its default output and reports an explicit target wi
   const explicitPlan = runPlan(repo, ["--target", "0.34.2"]);
   assert.equal(explicitPlan.status, 0, explicitPlan.stderr);
   assert.match(explicitPlan.stdout, /Planned release: 0\.34\.0 -> 0\.34\.2 \(patch; native minimum 0\.34\.1\)/);
-  assert.equal(git(repo, "status", "--porcelain"), sourceStatus);
+  assert.equal(git(repo, "status", "--porcelain", "--ignored"), sourceStatus);
   assert.equal(fs.readdirSync(repo).some((name) => name.startsWith(".changeset-status-")), false);
+});
+
+test("release planner preserves no-pending output and rejects a target without a plan", (t) => {
+  const repo = createReleaseRepo(t, "planner-no-pending");
+  fs.rmSync(path.join(repo, ".changeset/fixture-child-patch.md"));
+  git(repo, "add", "--all");
+  git(repo, "commit", "-q", "-m", "remove pending changeset");
+  fs.symlinkSync(
+    path.join(projectRoot, "node_modules"),
+    path.join(repo, "node_modules"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const sourceStatus = git(repo, "status", "--porcelain", "--ignored");
+
+  const noPlan = runPlan(repo, []);
+  assert.equal(noPlan.status, 0, noPlan.stderr);
+  assert.equal(noPlan.stdout, "No pending changesets.\n");
+
+  const targeted = runPlan(repo, ["--target", "0.34.2"]);
+  assert.notEqual(targeted.status, 0);
+  assert.match(targeted.stderr, /--target requires a pending native release plan for agentweaver/);
+  assert.equal(git(repo, "status", "--porcelain", "--ignored"), sourceStatus);
 });
 
 test("explicit patch target updates the same native plan's package, changelog, dependency, and mirrors", (t) => {
