@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Sandbox.AgentSandbox;
@@ -58,10 +59,17 @@ public sealed class AgentSandboxProvider : ISandboxProvider
     private const string ClaimUidLabel = "agents.x-k8s.io/claim-uid";
     private const string WorkspaceVolumeName = "agentweaver-workspace";
     private const string WorkspaceContainerName = "agenthost";
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
     private readonly AgentSandboxOptions _options;
     private readonly KubernetesAgentSandboxClient _client;
     private readonly TimeProvider _timeProvider;
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        return options;
+    }
 
     public AgentSandboxProvider(
         AgentSandboxOptions options,
@@ -118,7 +126,8 @@ public sealed class AgentSandboxProvider : ISandboxProvider
             effectsMayHaveApplied |= ensuredTemplate.Created;
             var templateUid = ValidateTemplate(
                 ensuredTemplate.Resource,
-                request,
+                request.Workspace,
+                request.EgressSelectorLabels,
                 workspace,
                 names.TemplateName,
                 ownerFingerprint,
@@ -343,29 +352,19 @@ public sealed class AgentSandboxProvider : ISandboxProvider
             pod,
             options,
             cancellationToken).ConfigureAwait(false);
-        var phases = ReadStartupPhases(sandbox.Value, pod);
-        var ready = IsTrueCondition(sandbox.Value, "Ready") &&
-                    IsPodContainerReady(pod, WorkspaceContainerName);
+        var phases = ReadStartupPhases(pod);
         var failed = IsPodFailed(pod);
-        var networkGeneration = (long?)null;
         var state = failed
             ? SandboxObservedState.Failed
-            : ready && isolationVerified && workspaceVerified && networkGeneration is > 0
-                ? SandboxObservedState.Ready
-                : SandboxObservedState.Pending;
-        if (ready && !phases.Any(phase => phase.Phase == SandboxStartupPhase.Ready))
-            phases = phases.Add(new SandboxStartupPhaseObservation(
-                SandboxStartupPhase.Ready,
-                contractVersion: 1,
-                _timeProvider.GetUtcNow()));
+            : SandboxObservedState.Pending;
         return new SandboxObservation(
             request.Resource,
             state,
             request.FencingGeneration,
             isolationVerified,
             workspaceVerified,
-            networkGeneration,
-            phases,
+            VerifiedNetworkGeneration: null,
+            StartupPhases: phases,
             ProvisionOperationId: operationId,
             ProvisionedResource: BuildProvisionedResource(request, descriptor, phases)).ValidateFor(request);
     }
@@ -375,11 +374,13 @@ public sealed class AgentSandboxProvider : ISandboxProvider
         CancellationToken cancellationToken = default)
     {
         request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        var pinnedIntent = request.ProvisionIntent;
+        var options = ReadPinnedOptions(pinnedIntent);
         var ownerFingerprint = GetOwnerFingerprint(request.Fence.Owner);
         var claims = await _client.ListAsync(
             ExtensionsApiGroup,
             "sandboxclaims",
-            _options.Namespace,
+            options.Namespace,
             ImmutableDictionary<string, string>.Empty
                 .Add(ManagedLabel, "true")
                 .Add(OwnerLabel, ownerFingerprint),
@@ -419,6 +420,280 @@ public sealed class AgentSandboxProvider : ISandboxProvider
         }
 
         return observations;
+    }
+
+    public async Task<SandboxPartialReleaseReceipt> ReleasePartialAsync(
+        SandboxPartialReleaseRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        var lease = request.Lease;
+        var options = ReadPinnedOptions(lease.ProvisionIntent);
+        var recovery = ReadRecoveryIntent(lease, options);
+        var ownerFingerprint = GetOwnerFingerprint(request.Fence.Owner);
+        var names = GetResourceNames(
+            ownerFingerprint,
+            request.Fence,
+            lease.Fence.LifecycleGeneration,
+            lease.ResourceGeneration,
+            lease.ProviderFencingGeneration,
+            lease.OperationId,
+            lease.ProvisionIntent.OptionsRevision);
+        var labels = BuildResourceLabels(
+            ownerFingerprint,
+            lease.Fence.LifecycleGeneration,
+            lease.ResourceGeneration,
+            lease.ProviderFencingGeneration,
+            lease.OperationId);
+        var workspace = ReadWorkspaceAttachment(recovery.Workspace, options);
+        var claim = await _client.GetAsync(
+            ExtensionsApiGroup,
+            "sandboxclaims",
+            options.Namespace,
+            names.ClaimName,
+            cancellationToken).ConfigureAwait(false);
+        if (claim is not null)
+            throw new SandboxProviderException(
+                "sandbox_partial_claim_present",
+                "The exact Sandbox claim exists and must be recovered by its provider UID before release.",
+                effectMayHaveApplied: true);
+
+        await EnsureNoPartialClaimChildrenAsync(
+            options.Namespace,
+            ownerFingerprint,
+            lease.OperationId,
+            labels,
+            cancellationToken).ConfigureAwait(false);
+
+        var template = await _client.GetAsync(
+            ExtensionsApiGroup,
+            "sandboxtemplates",
+            options.Namespace,
+            names.TemplateName,
+            cancellationToken).ConfigureAwait(false);
+        var templateUid = template is null
+            ? null
+            : ValidateTemplate(
+                template.Value,
+                recovery.Workspace,
+                recovery.EgressSelectorLabels,
+                workspace,
+                names.TemplateName,
+                ownerFingerprint,
+                labels,
+                options);
+        var warmPool = await _client.GetAsync(
+            ExtensionsApiGroup,
+            "sandboxwarmpools",
+            options.Namespace,
+            names.WarmPoolName,
+            cancellationToken).ConfigureAwait(false);
+        var warmPoolUid = warmPool is null
+            ? null
+            : ValidateWarmPool(
+                warmPool.Value,
+                options.Namespace,
+                names.WarmPoolName,
+                names.TemplateName,
+                ownerFingerprint,
+                labels);
+
+        var effectsMayHaveApplied = false;
+        try
+        {
+            if (warmPoolUid is not null)
+            {
+                effectsMayHaveApplied = true;
+                _ = await DeleteOwnedResourceAsync(
+                    ExtensionsApiGroup,
+                    "sandboxwarmpools",
+                    options.Namespace,
+                    names.WarmPoolName,
+                    warmPoolUid,
+                    ownerFingerprint,
+                    lease.Fence.LifecycleGeneration,
+                    lease.ResourceGeneration,
+                    lease.ProviderFencingGeneration,
+                    lease.OperationId.ToString("N"),
+                    options,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            if (templateUid is not null)
+            {
+                effectsMayHaveApplied = true;
+                _ = await DeleteOwnedResourceAsync(
+                    ExtensionsApiGroup,
+                    "sandboxtemplates",
+                    options.Namespace,
+                    names.TemplateName,
+                    templateUid,
+                    ownerFingerprint,
+                    lease.Fence.LifecycleGeneration,
+                    lease.ResourceGeneration,
+                    lease.ProviderFencingGeneration,
+                    lease.OperationId.ToString("N"),
+                    options,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            var remainingClaim = await _client.GetAsync(
+                ExtensionsApiGroup,
+                "sandboxclaims",
+                options.Namespace,
+                names.ClaimName,
+                cancellationToken).ConfigureAwait(false);
+            if (remainingClaim is not null)
+                throw new SandboxProviderException(
+                    "sandbox_partial_claim_present",
+                    "The exact Sandbox claim appeared during partial-resource retirement.",
+                    effectMayHaveApplied: true);
+            await EnsureNoPartialClaimChildrenAsync(
+                options.Namespace,
+                ownerFingerprint,
+                lease.OperationId,
+                labels,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (SandboxProviderException exception)
+        {
+            throw new SandboxProviderException(
+                exception.Code,
+                exception.Message,
+                effectsMayHaveApplied || exception.EffectMayHaveApplied,
+                exception);
+        }
+
+        return new SandboxPartialReleaseReceipt(
+            lease.OperationId,
+            lease.ResourceGeneration,
+            lease.ProviderFencingGeneration,
+            lease.CurrentFencingGeneration,
+            lease.LeaseRevision,
+            lease.ReleaseIdempotencyKey!,
+            options.Namespace,
+            names.ClaimName,
+            names.TemplateName,
+            templateUid,
+            names.WarmPoolName,
+            warmPoolUid,
+            ClaimAbsent: true,
+            SandboxesAbsent: true,
+            PodsAbsent: true,
+            Disposition: templateUid is null && warmPoolUid is null
+                ? SandboxReleaseDisposition.KnownOwnedAbsent
+                : SandboxReleaseDisposition.Released).ValidateFor(request);
+    }
+
+    private AgentSandboxOptions ReadPinnedOptions(SandboxLeaseProvisionIntent pinnedIntent)
+    {
+        AgentSandboxOptions options;
+        try
+        {
+            options = JsonSerializer.Deserialize<AgentSandboxOptions>(
+                    pinnedIntent.OptionsSnapshot,
+                    JsonOptions)
+                ?? throw new JsonException("The pinned Sandbox options are empty.");
+        }
+        catch (JsonException exception)
+        {
+            throw new SandboxProviderException(
+                "sandbox_recovery_options_invalid",
+                "The pinned Sandbox options are invalid.",
+                effectMayHaveApplied: false,
+                exception);
+        }
+        options.Validate();
+        if (!string.Equals(
+                pinnedIntent.ProviderId,
+                AgentSandboxProviderMetadata.ProviderId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                pinnedIntent.AdapterVersion,
+                AgentSandboxProviderMetadata.AdapterVersion.ToString(),
+                StringComparison.Ordinal) ||
+            pinnedIntent.OptionsSchemaVersion != options.OptionsSchemaVersion ||
+            !string.Equals(pinnedIntent.OptionsRevision, options.OptionsRevision, StringComparison.Ordinal))
+            throw new SandboxProviderException(
+                "sandbox_recovery_binding_unavailable",
+                "The exact selected Sandbox options or adapter revision is not available for recovery.",
+                effectMayHaveApplied: false);
+        return options;
+    }
+
+    private static AgentSandboxRecoveryIntent ReadRecoveryIntent(
+        SandboxLeaseSnapshot lease,
+        AgentSandboxOptions options)
+    {
+        AgentSandboxRecoveryIntent recovery;
+        try
+        {
+            recovery = JsonSerializer.Deserialize<AgentSandboxRecoveryIntent>(
+                    lease.ProvisionIntent.ProviderRequest,
+                    JsonOptions)
+                ?? throw new JsonException("The stored Sandbox provider recovery intent is empty.");
+        }
+        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+        {
+            throw new SandboxProviderException(
+                "sandbox_recovery_intent_invalid",
+                "The stored Sandbox provider recovery request is invalid.",
+                effectMayHaveApplied: false,
+                exception);
+        }
+
+        if (recovery.ContractVersion != 1 ||
+            recovery.Workspace is null ||
+            recovery.EgressSelectorLabels is null)
+            throw ProviderBindingMismatch();
+        var workspace = recovery.Workspace.Validate();
+        var negotiation = workspace.Negotiation;
+        var plannedResource = SandboxResourceIdentity.CreatePlannedReference(
+            lease.ProvisionIntent.ProviderId,
+            lease.ProvisionIntent.OptionsRevision,
+            lease.Fence,
+            lease.ResourceGeneration,
+            lease.ProviderFencingGeneration,
+            lease.OperationId);
+        ValidateEgressSelectorLabels(recovery.EgressSelectorLabels);
+        _ = ReadWorkspaceAttachment(workspace, options);
+        if (negotiation.EnvironmentFence != lease.Fence ||
+            negotiation.SandboxResource != plannedResource ||
+            negotiation.Volume.ProjectId != lease.Fence.Owner.ProjectId ||
+            !string.Equals(
+                negotiation.StorageResource.ProviderId,
+                options.WorkspaceStorageProviderId,
+                StringComparison.Ordinal))
+            throw ProviderBindingMismatch();
+        return recovery with { Workspace = workspace };
+    }
+
+    private async Task EnsureNoPartialClaimChildrenAsync(
+        string kubernetesNamespace,
+        string ownerFingerprint,
+        Guid operationId,
+        ImmutableDictionary<string, string> labels,
+        CancellationToken cancellationToken)
+    {
+        var selector = ImmutableDictionary.CreateRange(
+            StringComparer.Ordinal,
+            labels.Where(pair => pair.Key is ManagedLabel or OwnerLabel or OperationLabel));
+        var sandboxes = await _client.ListAsync(
+            SandboxesApiGroup,
+            "sandboxes",
+            kubernetesNamespace,
+            selector,
+            cancellationToken).ConfigureAwait(false);
+        var pods = await _client.ListAsync(
+            string.Empty,
+            "pods",
+            kubernetesNamespace,
+            selector,
+            cancellationToken).ConfigureAwait(false);
+        if (sandboxes.Count != 0 || pods.Count != 0)
+            throw new SandboxProviderException(
+                "sandbox_partial_children_present",
+                "The Sandbox operation still has Kubernetes children without its claim.",
+                effectMayHaveApplied: false);
     }
 
     public async Task<SandboxReleaseReceipt> ReleaseAsync(
@@ -845,7 +1120,8 @@ public sealed class AgentSandboxProvider : ISandboxProvider
 
     private static string ValidateTemplate(
         JsonElement resource,
-        SandboxProvisionRequest request,
+        SandboxWorkspaceAttachment workspaceAttachment,
+        ImmutableDictionary<string, string> egressSelectorLabels,
         AgentSandboxPersistentVolumeClaimAttachment workspace,
         string name,
         string ownerFingerprint,
@@ -864,7 +1140,7 @@ public sealed class AgentSandboxProvider : ISandboxProvider
 
         var podTemplate = RequiredObject(spec, "podTemplate");
         var podLabels = ReadStringDictionary(RequiredObject(podTemplate, "metadata"), "labels");
-        foreach (var label in request.EgressSelectorLabels)
+        foreach (var label in egressSelectorLabels)
             if (!HasAnnotationOrLabel(podLabels, label.Key, label.Value))
                 throw ProviderResourceMismatch("The owned Pod template is missing its verified egress selector.");
         foreach (var label in labels)
@@ -891,7 +1167,7 @@ public sealed class AgentSandboxProvider : ISandboxProvider
             throw ProviderResourceMismatch("The owned AgentHost container differs from the pinned provider options.");
         ValidatePodSecurityContext(RequiredObject(podSpec, "securityContext"), container);
         ValidateContainerResources(container, options);
-        ValidateWorkspacePodMount(podSpec, container, workspace, request.Workspace.Negotiation);
+        ValidateWorkspacePodMount(podSpec, container, workspace, workspaceAttachment.Negotiation);
         return uid;
     }
 
@@ -1637,9 +1913,7 @@ public sealed class AgentSandboxProvider : ISandboxProvider
         new SandboxPlacementReference(
             $"k8s-{Hash($"{clusterIdentity}\0{kubernetesNamespace}")[..32]}").Validate();
 
-    private ImmutableArray<SandboxStartupPhaseObservation> ReadStartupPhases(
-        JsonElement sandbox,
-        JsonElement pod)
+    private ImmutableArray<SandboxStartupPhaseObservation> ReadStartupPhases(JsonElement pod)
     {
         var phases = ImmutableArray.CreateBuilder<SandboxStartupPhaseObservation>();
         if (HasTrueCondition(pod, "PodScheduled", out var scheduledAt))
@@ -1663,22 +1937,12 @@ public sealed class AgentSandboxProvider : ISandboxProvider
                 1,
                 startedAt));
 
-        if (IsTrueCondition(sandbox, "Ready") &&
-            IsPodContainerReady(pod, WorkspaceContainerName))
-            phases.Add(new SandboxStartupPhaseObservation(
-                SandboxStartupPhase.Ready,
-                1,
-                _timeProvider.GetUtcNow()));
-
         return phases
             .GroupBy(phase => phase.Phase)
             .Select(group => group.OrderBy(phase => phase.ObservedAt).First())
             .OrderBy(phase => phase.Phase)
             .ToImmutableArray();
     }
-
-    private static bool IsTrueCondition(JsonElement resource, string type) =>
-        HasTrueCondition(resource, type, out _);
 
     private static bool HasTrueCondition(
         JsonElement resource,
@@ -1714,11 +1978,6 @@ public sealed class AgentSandboxProvider : ISandboxProvider
                 return item;
         return null;
     }
-
-    private static bool IsPodContainerReady(JsonElement pod, string containerName) =>
-        FindContainerStatus(pod, containerName) is { } status &&
-        TryGetBoolean(status, "ready", out var ready) &&
-        ready;
 
     private static bool IsPodFailed(JsonElement pod) =>
         string.Equals(ReadOptionalString(pod, "status", "phase"), "Failed", StringComparison.Ordinal);
@@ -2009,4 +2268,9 @@ public sealed class AgentSandboxProvider : ISandboxProvider
     {
         public string? ClaimUid { get; init; }
     }
+
+    private sealed record AgentSandboxRecoveryIntent(
+        int ContractVersion,
+        SandboxWorkspaceAttachment Workspace,
+        ImmutableDictionary<string, string> EgressSelectorLabels);
 }

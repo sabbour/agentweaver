@@ -70,6 +70,23 @@ public sealed record EnvironmentSandboxResult(
     SandboxObservationSummary? Observation,
     bool ReadyForDispatch);
 
+public sealed record EnvironmentSandboxPlacementProjectionV1(
+    int ContractVersion,
+    string TenantId,
+    string ProjectId,
+    string RunId,
+    string EnvironmentId,
+    long LifecycleGeneration,
+    long CurrentFencingGeneration,
+    long ProviderFencingGeneration,
+    long LeaseRevision,
+    DateTimeOffset LeaseExpiresAt,
+    bool IsCurrent,
+    SandboxLeaseState State,
+    ProviderResourceRef Resource,
+    SandboxEndpointReference Endpoint,
+    SandboxPlacementReference Placement);
+
 public sealed class EnvironmentSandboxManager(
     IProjectsConfigClient projects,
     IEnvironmentLifecycleStore lifecycleStore,
@@ -133,6 +150,8 @@ public sealed class EnvironmentSandboxManager(
         }
 
         var providerCallStarted = false;
+        var workspaceAttachmentAttempted = false;
+        long? workspaceAttachmentTransitionRevision = null;
         SandboxProvisionedResource? provisioned = null;
         try
         {
@@ -148,6 +167,7 @@ public sealed class EnvironmentSandboxManager(
                 request,
                 workspace,
                 plannedResource);
+            workspaceAttachmentTransitionRevision = GetWorkspaceAttachmentTransitionRevision(workspace.Snapshot);
             var selector = CreateEgressSelector(context.Fence, context.Selection);
             var provisionRequest = new SandboxProvisionRequest(
                 context.Fence,
@@ -158,7 +178,12 @@ public sealed class EnvironmentSandboxManager(
                 selector.MatchLabels,
                 workspaceAttachment).Validate();
             var recoveryIntent = JsonSerializer.SerializeToElement(
-                new SandboxProviderRecoveryIntent(1, request, provisionRequest.Workspace, selector.MatchLabels),
+                new SandboxProviderRecoveryIntent(
+                    1,
+                    request,
+                    provisionRequest.Workspace,
+                    selector.MatchLabels,
+                    workspaceAttachmentTransitionRevision.Value),
                 JsonOptions);
             lease = await leaseStore.SaveProviderRequestAsync(
                 lease.OperationId,
@@ -168,6 +193,13 @@ public sealed class EnvironmentSandboxManager(
             if (lease.State != SandboxLeaseState.Provisioning)
                 return ToResult(lease);
 
+            workspaceAttachmentAttempted = true;
+            await AttachWorkspaceForSandboxAsync(
+                context.Fence,
+                lease.OperationId,
+                workspace.Snapshot,
+                workspaceAttachmentTransitionRevision.Value,
+                cancellationToken).ConfigureAwait(false);
             await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
             await lifecycleStore.RequireActiveAsync(context.Fence, cancellationToken).ConfigureAwait(false);
             _ = await egressManager.VerifyNetworkForSandboxAsync(
@@ -178,7 +210,9 @@ public sealed class EnvironmentSandboxManager(
                 cancellationToken).ConfigureAwait(false);
             var latestWorkspace = await ReadWorkspaceAsync(
                 context.Fence, context.Selection.RunSelection, request, cancellationToken).ConfigureAwait(false);
-            if (!SameWorkspace(workspace, latestWorkspace))
+            if (!SameWorkspace(workspace, latestWorkspace) ||
+                latestWorkspace.Snapshot.Phase != EnvironmentWorkspaceVolumeState.Attached ||
+                latestWorkspace.Snapshot.TransitionRevision != workspaceAttachmentTransitionRevision.Value)
                 throw new EnvironmentLifecycleException(
                     "workspace_generation_changed",
                     "The exact Workspace resource or data generation changed before Sandbox provisioning.");
@@ -201,6 +235,13 @@ public sealed class EnvironmentSandboxManager(
         }
         catch (OperationCanceledException)
         {
+            if (!providerCallStarted && workspaceAttachmentAttempted)
+                await EnsureWorkspaceAttachmentReleasedAsync(
+                    context.Fence,
+                    lease.OperationId,
+                    workspace.Snapshot,
+                    workspaceAttachmentTransitionRevision!.Value,
+                    CancellationToken.None).ConfigureAwait(false);
             _ = await leaseStore.CompleteProvisionAsync(
                 lease.OperationId,
                 context.Fence,
@@ -240,6 +281,13 @@ public sealed class EnvironmentSandboxManager(
                 CiliumPolicyException or
                 HttpRequestException))
         {
+            if (workspaceAttachmentAttempted)
+                await EnsureWorkspaceAttachmentReleasedAsync(
+                    context.Fence,
+                    lease.OperationId,
+                    workspace.Snapshot,
+                    workspaceAttachmentTransitionRevision!.Value,
+                    CancellationToken.None).ConfigureAwait(false);
             _ = await leaseStore.CompleteProvisionAsync(
                 lease.OperationId,
                 context.Fence,
@@ -292,6 +340,33 @@ public sealed class EnvironmentSandboxManager(
             cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentPlacementAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        CancellationToken cancellationToken)
+    {
+        var authorization = await egressManager.GetAuthorizedRunEnvironmentControlAsync(
+            caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+        var lifecycle = await lifecycleStore.GetAsync(authorization.Owner, cancellationToken).ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException(
+                "environment_unknown",
+                "The exact Environment owner tuple is not registered.");
+        await lifecycleStore.RequireActiveAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
+        var lease = await leaseStore.GetCurrentAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
+        await lifecycleStore.RequireActiveAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
+        await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
+            caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
+        return lease is null
+            ? null
+            : ProjectCurrentPlacement(
+                authorization.Owner,
+                lifecycle.Fence,
+                lease,
+                DateTimeOffset.UtcNow);
+    }
+
     public async Task<EnvironmentSandboxResult> AbandonAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -339,6 +414,18 @@ public sealed class EnvironmentSandboxManager(
     {
         var context = await AuthorizeAsync(
             caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+        var result = await ReconcileCurrentLeaseAsync(
+            caller, context, networkPolicyGeneration, cancellationToken).ConfigureAwait(false);
+        await ReconcileNextLateResourceCleanupAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    private async Task<EnvironmentSandboxResult?> ReconcileCurrentLeaseAsync(
+        CurrentCallerRequest caller,
+        AuthorizedSandboxContext context,
+        long? networkPolicyGeneration,
+        CancellationToken cancellationToken)
+    {
         var lease = await leaseStore.GetCurrentAsync(context.Fence, cancellationToken).ConfigureAwait(false);
         if (lease is null)
             return null;
@@ -394,7 +481,10 @@ public sealed class EnvironmentSandboxManager(
                 SandboxLeaseState.ReconciliationRequired))
         {
             var owned = await sandboxProvider.ListOwnedAsync(
-                new SandboxListOwnedRequest(context.Fence, lease.ProviderFencingGeneration),
+                new SandboxListOwnedRequest(
+                    context.Fence,
+                    lease.ProviderFencingGeneration,
+                    lease.ProvisionIntent),
                 cancellationToken).ConfigureAwait(false);
             var recovered = owned.Where(observation =>
                     observation.ProvisionOperationId == lease.OperationId &&
@@ -433,11 +523,249 @@ public sealed class EnvironmentSandboxManager(
                 throw new EnvironmentLifecycleException(
                     "sandbox_recovery_ambiguous",
                     "More than one exact Sandbox claim matches the durable owner operation.");
+            if (recovered.Length == 0 &&
+                lease.RetirementReason == SandboxRetirementReason.AuthorizedAbandon)
+                return await ReleasePartialRetiringLeaseAsync(
+                    caller, context, lease, cancellationToken).ConfigureAwait(false);
+            if (recovered.Length == 0 &&
+                lease.RetirementReason is null &&
+                (lease.State is SandboxLeaseState.Provisioning or SandboxLeaseState.ReconciliationRequired) &&
+                lease.IsCurrent &&
+                lease.CurrentFencingGeneration == lease.ProviderFencingGeneration)
+                return await ResumeProvisioningAsync(
+                    caller, context, lease, cancellationToken).ConfigureAwait(false);
         }
 
         if (lease.State == SandboxLeaseState.Releasing)
             return await ReleaseRetiringLeaseAsync(caller, context, lease, cancellationToken).ConfigureAwait(false);
         return ToResult(lease);
+    }
+
+    private async Task ReconcileNextLateResourceCleanupAsync(
+        CurrentCallerRequest caller,
+        AuthorizedSandboxContext context,
+        CancellationToken cancellationToken)
+    {
+        var cleanup = await leaseStore.ClaimNextLateResourceCleanupAsync(
+            context.Fence,
+            cancellationToken).ConfigureAwait(false);
+        if (cleanup is null)
+            return;
+
+        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        var request = new SandboxReleaseRequest(
+            cleanup.Lease.Fence,
+            cleanup.ProvisionedResource.Resource,
+            cleanup.Lease.ProviderFencingGeneration,
+            cleanup.ProvisionedResource.ProviderBinding,
+            cleanup.IdempotencyKey).Validate();
+        var receipt = await sandboxProvider.ReleaseAsync(request, cancellationToken).ConfigureAwait(false);
+        receipt = receipt.ValidateFor(request);
+        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        await leaseStore.CompleteLateResourceCleanupAsync(
+            context.Fence,
+            cleanup,
+            receipt,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<EnvironmentSandboxResult> ResumeProvisioningAsync(
+        CurrentCallerRequest caller,
+        AuthorizedSandboxContext context,
+        SandboxLeaseSnapshot lease,
+        CancellationToken cancellationToken)
+    {
+        lease = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
+        var recovery = ReadProviderRecoveryIntent(lease);
+        if (!JsonNode.DeepEquals(
+                JsonNode.Parse(lease.ProvisionIntent.SelectionSnapshot.GetRawText()),
+                JsonSerializer.SerializeToNode(context.Selection.RunSelection, JsonOptions)))
+            throw new EnvironmentLifecycleException(
+                "sandbox_recovery_selection_changed",
+                "The current run selection differs from the immutable Sandbox provision selection.");
+        var candidate = ResolveSandboxCandidate(context.Selection.RunSelection);
+        if (candidate.Seam != ProviderSeam.Sandbox ||
+            !string.Equals(candidate.ProviderId, lease.ProvisionIntent.ProviderId, StringComparison.Ordinal) ||
+            !string.Equals(
+                candidate.AdapterVersion.ToString(),
+                lease.ProvisionIntent.AdapterVersion,
+                StringComparison.Ordinal) ||
+            candidate.OptionsSchemaVersion != lease.ProvisionIntent.OptionsSchemaVersion ||
+            !string.Equals(candidate.OptionsRevision, lease.ProvisionIntent.OptionsRevision, StringComparison.Ordinal))
+            throw new EnvironmentLifecycleException(
+                "sandbox_recovery_binding_unavailable",
+                "The exact selected Sandbox provider revision is unavailable for recovery.");
+        var provisionRequest = new SandboxProvisionRequest(
+            context.Fence,
+            candidate,
+            lease.ResourceGeneration,
+            lease.ProviderFencingGeneration,
+            lease.OperationId,
+            recovery.EgressSelectorLabels,
+            recovery.Workspace).Validate();
+        var currentContext = await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        await lifecycleStore.RequireActiveAsync(context.Fence, cancellationToken).ConfigureAwait(false);
+        _ = await egressManager.VerifyNetworkForSandboxAsync(
+            caller,
+            context.Fence,
+            currentContext.Selection,
+            recovery.Request.NetworkPolicyGeneration,
+            cancellationToken).ConfigureAwait(false);
+        await EnsureSandboxWorkspaceAttachedAsync(
+            context,
+            recovery,
+            provisionRequest,
+            cancellationToken).ConfigureAwait(false);
+        currentContext = await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        await lifecycleStore.RequireActiveAsync(context.Fence, cancellationToken).ConfigureAwait(false);
+        _ = await egressManager.VerifyNetworkForSandboxAsync(
+            caller,
+            context.Fence,
+            currentContext.Selection,
+            recovery.Request.NetworkPolicyGeneration,
+            cancellationToken).ConfigureAwait(false);
+        lease = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
+
+        SandboxProvisionedResource provisioned;
+        try
+        {
+            provisioned = await sandboxProvider.ProvisionAsync(
+                provisionRequest, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is SandboxProviderException or IOException or HttpRequestException or TimeoutException)
+        {
+            _ = await leaseStore.CompleteProvisionAsync(
+                lease.OperationId,
+                context.Fence,
+                provisionedResource: null,
+                effectMayHaveApplied: true,
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        lease = await leaseStore.CompleteProvisionAsync(
+            lease.OperationId,
+            context.Fence,
+            provisioned,
+            effectMayHaveApplied: true,
+            cancellationToken).ConfigureAwait(false);
+        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        if (lease.State == SandboxLeaseState.Releasing)
+            return await ReleaseRetiringLeaseAsync(caller, context, lease, cancellationToken).ConfigureAwait(false);
+        if (lease.State == SandboxLeaseState.Active && lease.IsCurrent && recovery.Request.NetworkPolicyGeneration > 0)
+            return await ObserveAsync(
+                caller,
+                context,
+                lease,
+                recovery.Request.NetworkPolicyGeneration,
+                cancellationToken).ConfigureAwait(false);
+        return ToResult(lease);
+    }
+
+    private async Task EnsureSandboxWorkspaceAttachedAsync(
+        AuthorizedSandboxContext context,
+        SandboxProviderRecoveryIntent recovery,
+        SandboxProvisionRequest provisionRequest,
+        CancellationToken cancellationToken)
+    {
+        var plannedResource = SandboxResourceIdentity.CreatePlannedReference(
+            provisionRequest.Candidate.ProviderId,
+            provisionRequest.Candidate.OptionsRevision,
+            context.Fence,
+            provisionRequest.ResourceGeneration,
+            provisionRequest.FencingGeneration,
+            provisionRequest.OperationId);
+        var workspace = await ReadWorkspaceAsync(
+            context.Fence,
+            context.Selection.RunSelection,
+            recovery.Request,
+            cancellationToken).ConfigureAwait(false);
+        var expectedAttachment = NegotiateWorkspace(
+            context.Fence, recovery.Request, workspace, plannedResource);
+        if (!SameSandboxWorkspaceAttachment(expectedAttachment, provisionRequest.Workspace))
+            throw new EnvironmentLifecycleException(
+                "sandbox_recovery_intent_invalid",
+                "The current Workspace does not match the immutable Sandbox attachment request.");
+
+        var targetRevision = recovery.WorkspaceAttachmentTransitionRevision;
+        if (workspace.Snapshot.Phase == EnvironmentWorkspaceVolumeState.Bound &&
+            workspace.Snapshot.TransitionRevision + 1 == targetRevision)
+        {
+            await AttachWorkspaceForSandboxAsync(
+                context.Fence,
+                provisionRequest.OperationId,
+                workspace.Snapshot,
+                targetRevision,
+                cancellationToken).ConfigureAwait(false);
+        }
+        else if (workspace.Snapshot.Phase != EnvironmentWorkspaceVolumeState.Attached ||
+                 workspace.Snapshot.TransitionRevision != targetRevision)
+        {
+            throw new EnvironmentLifecycleException(
+                "workspace_attachment_state_invalid",
+                "The Workspace is not at the exact persisted Sandbox attachment revision.");
+        }
+
+        var attached = await ReadWorkspaceAsync(
+            context.Fence,
+            context.Selection.RunSelection,
+            recovery.Request,
+            cancellationToken).ConfigureAwait(false);
+        if (attached.Snapshot.Phase != EnvironmentWorkspaceVolumeState.Attached ||
+            attached.Snapshot.TransitionRevision != targetRevision ||
+            !SameSandboxWorkspaceAttachment(
+                NegotiateWorkspace(context.Fence, recovery.Request, attached, plannedResource),
+                provisionRequest.Workspace))
+            throw new EnvironmentLifecycleException(
+                "workspace_attachment_completion_invalid",
+                "The Workspace owner did not preserve the exact Sandbox attachment during recovery.");
+    }
+
+    private async Task<EnvironmentSandboxResult> ReleasePartialRetiringLeaseAsync(
+        CurrentCallerRequest caller,
+        AuthorizedSandboxContext context,
+        SandboxLeaseSnapshot lease,
+        CancellationToken cancellationToken)
+    {
+        lease = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
+        var request = new SandboxPartialReleaseRequest(context.Fence, lease).Validate();
+        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        var receipt = (await sandboxProvider.ReleasePartialAsync(
+            request, cancellationToken).ConfigureAwait(false)).ValidateFor(request);
+        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        var current = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
+        _ = receipt.ValidateFor(new SandboxPartialReleaseRequest(context.Fence, current));
+        await DetachWorkspaceAfterSandboxReleaseAsync(
+            context.Fence,
+            current,
+            cancellationToken,
+            allowUnprovisionedResource: true).ConfigureAwait(false);
+        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        _ = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
+        var released = await leaseStore.CompletePartialReleaseAsync(
+            new SandboxPartialReleaseCompletionRequest(context.Fence, receipt),
+            cancellationToken).ConfigureAwait(false);
+        return ToResult(released);
+    }
+
+    private async Task<SandboxLeaseSnapshot> RequireCurrentLeaseAsync(
+        EnvironmentGenerationFence fence,
+        SandboxLeaseSnapshot expected,
+        CancellationToken cancellationToken)
+    {
+        var current = await leaseStore.GetCurrentAsync(fence, cancellationToken).ConfigureAwait(false);
+        if (current is null ||
+            current.OperationId != expected.OperationId ||
+            current.ResourceGeneration != expected.ResourceGeneration ||
+            current.State != expected.State ||
+            current.CurrentFencingGeneration != expected.CurrentFencingGeneration ||
+            current.ProviderFencingGeneration != expected.ProviderFencingGeneration ||
+            current.LeaseRevision != expected.LeaseRevision)
+            throw new EnvironmentLifecycleException(
+                "sandbox_fence_stale",
+                "The Sandbox lease changed before its recovery effect could proceed.");
+        return current;
     }
 
     private async Task<EnvironmentSandboxResult> ObserveAsync(
@@ -465,16 +793,7 @@ public sealed class EnvironmentSandboxManager(
         _ = await egressManager.VerifyNetworkForSandboxAsync(
             caller, context.Fence, currentContext.Selection, networkPolicyGeneration, cancellationToken)
             .ConfigureAwait(false);
-        if (observation.State == SandboxObservedState.Pending &&
-            observation.VmIsolationVerified &&
-            observation.WorkspaceAttachmentVerified &&
-            observation.StartupPhases.Any(phase => phase.Phase == SandboxStartupPhase.Ready))
-            observation = observation with
-            {
-                State = SandboxObservedState.Ready,
-                VerifiedNetworkGeneration = networkPolicyGeneration
-            };
-        else if (observation.State is not (SandboxObservedState.Finished or SandboxObservedState.Absent))
+        if (observation.State is not (SandboxObservedState.Finished or SandboxObservedState.Absent))
             observation = observation with { VerifiedNetworkGeneration = networkPolicyGeneration };
         observation = observation.ValidateFor(CreateDescribeRequest(lease));
         return ToResult(currentLease, observation);
@@ -516,6 +835,7 @@ public sealed class EnvironmentSandboxManager(
                     "sandbox_release_intent_missing",
                     "The retiring Sandbox lease is missing its durable release idempotency key.")).Validate();
         var receipt = await sandboxProvider.ReleaseAsync(releaseRequest, cancellationToken).ConfigureAwait(false);
+        receipt = receipt.ValidateFor(releaseRequest);
         var current = await leaseStore.GetCurrentAsync(context.Fence, cancellationToken).ConfigureAwait(false);
         if (current is null ||
             current.OperationId != lease.OperationId ||
@@ -525,6 +845,19 @@ public sealed class EnvironmentSandboxManager(
                 "sandbox_fence_stale",
                 "The Sandbox lease changed during provider release; the receipt was not accepted.");
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        await DetachWorkspaceAfterSandboxReleaseAsync(
+            context.Fence,
+            lease,
+            cancellationToken).ConfigureAwait(false);
+        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        current = await leaseStore.GetCurrentAsync(context.Fence, cancellationToken).ConfigureAwait(false);
+        if (current is null ||
+            current.OperationId != lease.OperationId ||
+            current.State != SandboxLeaseState.Releasing ||
+            current.CurrentFencingGeneration != lease.CurrentFencingGeneration)
+            throw new EnvironmentLifecycleException(
+                "sandbox_fence_stale",
+                "The Sandbox lease changed while its Workspace attachment was being released.");
         var released = await leaseStore.CompleteReleaseAsync(
             lease.OperationId,
             context.Fence,
@@ -578,8 +911,8 @@ public sealed class EnvironmentSandboxManager(
                 "The exact owner-scoped Workspace volume does not exist.");
         if (snapshot.ResourceGeneration != request.VolumeResourceGeneration ||
             snapshot.DataGeneration != request.DataGeneration ||
-            snapshot.Phase is not (EnvironmentWorkspaceVolumeState.Ready or
-                EnvironmentWorkspaceVolumeState.Bound or EnvironmentWorkspaceVolumeState.Attached) ||
+            snapshot.Phase is not (EnvironmentWorkspaceVolumeState.Bound or
+                EnvironmentWorkspaceVolumeState.Attached) ||
             snapshot.Resource is null ||
             snapshot.ProviderBinding is null)
             throw new EnvironmentLifecycleException(
@@ -649,6 +982,235 @@ public sealed class EnvironmentSandboxManager(
                 "The Workspace PVC provider binding targets a different Kubernetes cluster or namespace.");
         return new(snapshot, spec, storageResource, claim);
     }
+
+    private async Task AttachWorkspaceForSandboxAsync(
+        EnvironmentGenerationFence fence,
+        Guid sandboxOperationId,
+        EnvironmentWorkspaceVolumeSnapshot workspace,
+        long targetTransitionRevision,
+        CancellationToken cancellationToken)
+    {
+        var resource = workspace.Resource
+            ?? throw new EnvironmentLifecycleException(
+                "workspace_generation_mismatch",
+                "The Workspace volume has no pinned Storage resource.");
+        if (workspace.Phase is not (EnvironmentWorkspaceVolumeState.Bound or
+                EnvironmentWorkspaceVolumeState.Attached) ||
+            targetTransitionRevision < 2)
+            throw new EnvironmentLifecycleException(
+                "workspace_attachment_state_invalid",
+                "The Workspace volume is not in the owner-bound state required for Sandbox attachment.");
+
+        var reservation = await lifecycleStore.ReserveWorkspaceVolumeAttachAsync(
+            fence,
+            workspace.VolumeId,
+            targetTransitionRevision - 1,
+            workspace.ResourceGeneration,
+            workspace.DataGeneration,
+            WorkspaceAttachmentIdempotencyKey("attach", sandboxOperationId),
+            cancellationToken).ConfigureAwait(false);
+        if (reservation.EnvironmentFence != fence ||
+            reservation.VolumeId != workspace.VolumeId ||
+            reservation.Operation != EnvironmentWorkspaceVolumeOperation.Attach ||
+            reservation.ExpectedTransitionRevision != targetTransitionRevision - 1 ||
+            reservation.TargetTransitionRevision != targetTransitionRevision ||
+            reservation.ExpectedResourceGeneration != workspace.ResourceGeneration ||
+            reservation.ExpectedDataGeneration != workspace.DataGeneration ||
+            reservation.CurrentResource != resource)
+            throw new EnvironmentLifecycleException(
+                "workspace_attachment_reservation_invalid",
+                "The Workspace attachment reservation does not match the exact Sandbox mount.");
+
+        var completed = await lifecycleStore.CompleteWorkspaceVolumeAttachAsync(
+            reservation.OperationId,
+            fence,
+            effectMayHaveApplied: true,
+            resource,
+            effectVerified: true,
+            cancellationToken).ConfigureAwait(false);
+        if (completed.EnvironmentFence != fence ||
+            completed.VolumeId != workspace.VolumeId ||
+            completed.Operation != EnvironmentWorkspaceVolumeOperation.Attach ||
+            completed.TargetTransitionRevision != targetTransitionRevision ||
+            completed.TargetResourceGeneration != workspace.ResourceGeneration ||
+            completed.TargetDataGeneration != workspace.DataGeneration ||
+            completed.TargetResource != resource ||
+            completed.TargetPhase != EnvironmentWorkspaceVolumeState.Attached ||
+            completed.TransitionState != EnvironmentWorkspaceVolumeTransitionState.Completed)
+            throw new EnvironmentLifecycleException(
+                "workspace_attachment_completion_invalid",
+                "The Workspace owner did not commit the exact Sandbox attachment.");
+    }
+
+    private async Task EnsureWorkspaceAttachmentReleasedAsync(
+        EnvironmentGenerationFence fence,
+        Guid sandboxOperationId,
+        EnvironmentWorkspaceVolumeSnapshot workspace,
+        long targetTransitionRevision,
+        CancellationToken cancellationToken)
+    {
+        await AttachWorkspaceForSandboxAsync(
+            fence,
+            sandboxOperationId,
+            workspace,
+            targetTransitionRevision,
+            cancellationToken).ConfigureAwait(false);
+        await DetachWorkspaceAttachmentAsync(
+            fence,
+            sandboxOperationId,
+            new WorkspaceVolumeReference(fence.Owner.ProjectId, workspace.VolumeId, workspace.ResourceGeneration),
+            workspace.Resource
+                ?? throw new EnvironmentLifecycleException(
+                    "workspace_generation_mismatch",
+                    "The Workspace volume has no pinned Storage resource."),
+            workspace.DataGeneration,
+            targetTransitionRevision,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task DetachWorkspaceAfterSandboxReleaseAsync(
+        EnvironmentGenerationFence fence,
+        SandboxLeaseSnapshot lease,
+        CancellationToken cancellationToken,
+        bool allowUnprovisionedResource = false)
+    {
+        var recovery = ReadProviderRecoveryIntent(lease);
+        var negotiation = recovery.Workspace.Negotiation;
+        var resource = lease.ProvisionedResource?.Resource;
+        var plannedResource = SandboxResourceIdentity.CreatePlannedReference(
+            lease.ProvisionIntent.ProviderId,
+            lease.ProvisionIntent.OptionsRevision,
+            fence,
+            lease.ResourceGeneration,
+            lease.ProviderFencingGeneration,
+            lease.OperationId);
+        var exactResource = resource is null
+            ? allowUnprovisionedResource
+            : resource.Generation == negotiation.SandboxResource.Generation &&
+              string.Equals(resource.ProviderId, negotiation.SandboxResource.ProviderId, StringComparison.Ordinal);
+        if (negotiation.EnvironmentFence != fence ||
+            negotiation.Volume.ProjectId != fence.Owner.ProjectId ||
+            negotiation.Volume.VolumeId != recovery.Request.VolumeId ||
+            negotiation.Volume.ResourceGeneration != recovery.Request.VolumeResourceGeneration ||
+            negotiation.DataGeneration != recovery.Request.DataGeneration ||
+            negotiation.StorageResource.Generation != recovery.Request.VolumeResourceGeneration ||
+            negotiation.SandboxResource.Generation != lease.ResourceGeneration ||
+            !string.Equals(negotiation.SandboxResource.ProviderId, lease.ProvisionIntent.ProviderId, StringComparison.Ordinal) ||
+            negotiation.SandboxResource != plannedResource ||
+            !exactResource ||
+            recovery.WorkspaceAttachmentTransitionRevision < 2)
+            throw new EnvironmentLifecycleException(
+                "sandbox_recovery_intent_invalid",
+                "The retiring Sandbox lease does not contain its exact Workspace attachment receipt.");
+
+        await DetachWorkspaceAttachmentAsync(
+            fence,
+            lease.OperationId,
+            negotiation.Volume,
+            negotiation.StorageResource,
+            negotiation.DataGeneration,
+            recovery.WorkspaceAttachmentTransitionRevision,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task DetachWorkspaceAttachmentAsync(
+        EnvironmentGenerationFence fence,
+        Guid sandboxOperationId,
+        WorkspaceVolumeReference volume,
+        ProviderResourceRef storageResource,
+        long dataGeneration,
+        long attachmentTransitionRevision,
+        CancellationToken cancellationToken)
+    {
+        var reservation = await lifecycleStore.ReserveWorkspaceVolumeDetachAsync(
+            fence,
+            volume.VolumeId,
+            attachmentTransitionRevision,
+            volume.ResourceGeneration,
+            dataGeneration,
+            WorkspaceAttachmentIdempotencyKey("detach", sandboxOperationId),
+            cancellationToken).ConfigureAwait(false);
+        if (reservation.EnvironmentFence != fence ||
+            reservation.VolumeId != volume.VolumeId ||
+            reservation.Operation != EnvironmentWorkspaceVolumeOperation.Detach ||
+            reservation.ExpectedTransitionRevision != attachmentTransitionRevision ||
+            reservation.TargetTransitionRevision != attachmentTransitionRevision + 1 ||
+            reservation.ExpectedResourceGeneration != volume.ResourceGeneration ||
+            reservation.ExpectedDataGeneration != dataGeneration ||
+            reservation.CurrentResource != storageResource)
+            throw new EnvironmentLifecycleException(
+                "workspace_detachment_reservation_invalid",
+                "The Workspace detachment reservation does not match the exact Sandbox mount.");
+
+        var completed = await lifecycleStore.CompleteWorkspaceVolumeDetachAsync(
+            reservation.OperationId,
+            fence,
+            effectMayHaveApplied: true,
+            storageResource,
+            effectVerified: true,
+            cancellationToken).ConfigureAwait(false);
+        if (completed.EnvironmentFence != fence ||
+            completed.VolumeId != volume.VolumeId ||
+            completed.Operation != EnvironmentWorkspaceVolumeOperation.Detach ||
+            completed.TargetTransitionRevision != attachmentTransitionRevision + 1 ||
+            completed.TargetResourceGeneration != volume.ResourceGeneration ||
+            completed.TargetDataGeneration != dataGeneration ||
+            completed.TargetResource != storageResource ||
+            completed.TargetPhase != EnvironmentWorkspaceVolumeState.Bound ||
+            completed.TransitionState != EnvironmentWorkspaceVolumeTransitionState.Completed)
+            throw new EnvironmentLifecycleException(
+                "workspace_detachment_completion_invalid",
+                "The Workspace owner did not commit the exact Sandbox detachment.");
+    }
+
+    private static SandboxProviderRecoveryIntent ReadProviderRecoveryIntent(SandboxLeaseSnapshot lease)
+    {
+        SandboxProviderRecoveryIntent recovery;
+        try
+        {
+            recovery = JsonSerializer.Deserialize<SandboxProviderRecoveryIntent>(
+                    lease.ProvisionIntent.ProviderRequest,
+                    JsonOptions)
+                ?? throw new JsonException("The stored Sandbox recovery intent is empty.");
+        }
+        catch (JsonException)
+        {
+            throw new EnvironmentLifecycleException(
+                "sandbox_recovery_intent_invalid",
+                "The stored Sandbox recovery intent is invalid.");
+        }
+
+        _ = recovery.Request.Validate();
+        _ = recovery.Workspace.Validate();
+        if (recovery.ContractVersion != 1 ||
+            recovery.WorkspaceAttachmentTransitionRevision < 2)
+            throw new EnvironmentLifecycleException(
+                "sandbox_recovery_intent_invalid",
+                "The stored Sandbox recovery intent does not match its current contract.");
+        return recovery;
+    }
+
+    private static bool SameSandboxWorkspaceAttachment(
+        SandboxWorkspaceAttachment left,
+        SandboxWorkspaceAttachment right) =>
+        JsonNode.DeepEquals(
+            JsonSerializer.SerializeToNode(left, JsonOptions),
+            JsonSerializer.SerializeToNode(right, JsonOptions));
+
+    private static long GetWorkspaceAttachmentTransitionRevision(
+        EnvironmentWorkspaceVolumeSnapshot workspace) =>
+        workspace.Phase switch
+        {
+            EnvironmentWorkspaceVolumeState.Bound =>
+                checked(workspace.TransitionRevision + 1),
+            EnvironmentWorkspaceVolumeState.Attached => workspace.TransitionRevision,
+            _ => throw new EnvironmentLifecycleException(
+                "workspace_attachment_state_invalid",
+                "Sandbox attachment requires an owner-bound Workspace volume.")
+        };
+
+    private static string WorkspaceAttachmentIdempotencyKey(string operation, Guid sandboxOperationId) =>
+        $"sandbox-{operation}-{sandboxOperationId:N}";
 
     private SandboxWorkspaceAttachment NegotiateWorkspace(
         EnvironmentGenerationFence fence,
@@ -840,6 +1402,58 @@ public sealed class EnvironmentSandboxManager(
             ready);
     }
 
+    internal static EnvironmentSandboxPlacementProjectionV1 ProjectCurrentPlacement(
+        EnvironmentOwnerIdentity owner,
+        EnvironmentGenerationFence fence,
+        SandboxLeaseSnapshot lease,
+        DateTimeOffset now)
+    {
+        if (lease.Fence != fence ||
+            lease.Fence.Owner != owner ||
+            !lease.IsCurrent ||
+            lease.ProviderFencingGeneration != lease.CurrentFencingGeneration)
+            throw new EnvironmentLifecycleException(
+                "sandbox_lease_stale",
+                "The current Sandbox lease does not match the active Environment owner fence.");
+        if (lease.LeaseExpiresAt is not { } expiresAt || expiresAt <= now)
+            throw new EnvironmentLifecycleException(
+                "sandbox_lease_expired",
+                "The current Sandbox lease is expired.");
+        if (lease.State != SandboxLeaseState.Active ||
+            lease.ProvisionedResource is not { } provisionedResource)
+            throw new EnvironmentLifecycleException(
+                "sandbox_placement_unavailable",
+                "The current Sandbox lease has no active provisioned placement.");
+
+        _ = lease.Validate();
+        _ = provisionedResource.Validate();
+        if (provisionedResource.Resource.Generation != lease.ResourceGeneration ||
+            !string.Equals(
+                provisionedResource.Resource.ProviderId,
+                lease.ProvisionIntent.ProviderId,
+                StringComparison.Ordinal))
+            throw new EnvironmentLifecycleException(
+                "sandbox_lease_stale",
+                "The current Sandbox placement does not match its recorded lease.");
+
+        return new(
+            ContractVersion: 1,
+            owner.TenantId,
+            owner.ProjectId,
+            owner.RunId,
+            owner.EnvironmentId,
+            fence.LifecycleGeneration,
+            lease.CurrentFencingGeneration,
+            lease.ProviderFencingGeneration,
+            lease.LeaseRevision,
+            expiresAt,
+            lease.IsCurrent,
+            lease.State,
+            provisionedResource.Resource,
+            provisionedResource.Endpoint,
+            provisionedResource.Placement);
+    }
+
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -857,7 +1471,8 @@ public sealed class EnvironmentSandboxManager(
         int ContractVersion,
         SandboxProvisionApiRequest Request,
         SandboxWorkspaceAttachment Workspace,
-        ImmutableDictionary<string, string> EgressSelectorLabels);
+        ImmutableDictionary<string, string> EgressSelectorLabels,
+        long WorkspaceAttachmentTransitionRevision);
 
     private sealed record AuthorizedSandboxContext(
         EnvironmentGenerationFence Fence,

@@ -270,11 +270,14 @@ public sealed record SandboxDescribeRequest(
 
 public sealed record SandboxListOwnedRequest(
     EnvironmentGenerationFence Fence,
-    long MinimumFencingGeneration)
+    long MinimumFencingGeneration,
+    SandboxLeaseProvisionIntent ProvisionIntent)
 {
     public SandboxListOwnedRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Fence);
+        ArgumentNullException.ThrowIfNull(ProvisionIntent);
+        _ = ProvisionIntent.Validate();
         if (MinimumFencingGeneration < 1)
             throw new ArgumentOutOfRangeException(nameof(MinimumFencingGeneration));
         return this;
@@ -373,6 +376,7 @@ public sealed record SandboxObservation(
                 (!VmIsolationVerified ||
                  !WorkspaceAttachmentVerified ||
                  VerifiedNetworkGeneration is null ||
+                 !StartupPhases.Any(phase => phase.Phase == SandboxStartupPhase.Configured) ||
                  !StartupPhases.Any(phase => phase.Phase == SandboxStartupPhase.Ready)))
             throw new ArgumentException("The sandbox observation does not match its exact pinned request.");
         return this with { StartupPhases = StartupPhases.ToImmutableArray() };
@@ -446,6 +450,94 @@ public sealed record SandboxReleaseReceipt(
     }
 }
 
+public sealed record SandboxPartialReleaseRequest(
+    EnvironmentGenerationFence Fence,
+    SandboxLeaseSnapshot Lease)
+{
+    public SandboxPartialReleaseRequest Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Fence);
+        ArgumentNullException.ThrowIfNull(Lease);
+        Lease.Validate();
+        if (Lease.Fence != Fence ||
+            !Lease.IsCurrent ||
+            Lease.State is not (SandboxLeaseState.Releasing or SandboxLeaseState.ReconciliationRequired) ||
+            Lease.RetirementReason != SandboxRetirementReason.AuthorizedAbandon ||
+            Lease.ProvisionedResource is not null ||
+            Lease.ProviderRequestFingerprint is null ||
+            Lease.ReleaseIdempotencyKey is null ||
+            Lease.CurrentFencingGeneration <= Lease.ProviderFencingGeneration)
+            throw new ArgumentException(
+                "A partial Sandbox release requires the exact current authorized-retirement lease.",
+                nameof(Lease));
+        return this;
+    }
+}
+
+public sealed record SandboxPartialReleaseReceipt(
+    Guid OperationId,
+    long ResourceGeneration,
+    long ProviderFencingGeneration,
+    long CurrentFencingGeneration,
+    long LeaseRevision,
+    string IdempotencyKey,
+    string KubernetesNamespace,
+    string ClaimName,
+    string TemplateName,
+    string? TemplateUid,
+    string WarmPoolName,
+    string? WarmPoolUid,
+    bool ClaimAbsent,
+    bool SandboxesAbsent,
+    bool PodsAbsent,
+    SandboxReleaseDisposition Disposition)
+{
+    public SandboxPartialReleaseReceipt ValidateFor(SandboxPartialReleaseRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.Validate();
+        var lease = request.Lease;
+        var planned = SandboxResourceIdentity.CreatePlannedReference(
+            lease.ProvisionIntent.ProviderId,
+            lease.ProvisionIntent.OptionsRevision,
+            lease.Fence,
+            lease.ResourceGeneration,
+            lease.ProviderFencingGeneration,
+            lease.OperationId);
+        var suffix = planned.ResourceId["aw-claim-".Length..];
+        if (OperationId != lease.OperationId ||
+            ResourceGeneration != lease.ResourceGeneration ||
+            ProviderFencingGeneration != lease.ProviderFencingGeneration ||
+            CurrentFencingGeneration != lease.CurrentFencingGeneration ||
+            LeaseRevision != lease.LeaseRevision ||
+            !string.Equals(IdempotencyKey, lease.ReleaseIdempotencyKey, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(KubernetesNamespace) ||
+            KubernetesNamespace.Length > 63 ||
+            KubernetesNamespace.Any(char.IsControl) ||
+            ClaimName != planned.ResourceId ||
+            TemplateName != $"aw-template-{suffix}" ||
+            WarmPoolName != $"aw-pool-{suffix}" ||
+            !IsValidUid(TemplateUid) ||
+            !IsValidUid(WarmPoolUid) ||
+            !ClaimAbsent ||
+            !SandboxesAbsent ||
+            !PodsAbsent ||
+            Disposition != (TemplateUid is null && WarmPoolUid is null
+                ? SandboxReleaseDisposition.KnownOwnedAbsent
+                : SandboxReleaseDisposition.Released))
+            throw new ArgumentException(
+                "The partial Sandbox release receipt does not prove exact owner-fenced resource retirement.",
+                nameof(request));
+        return this;
+    }
+
+    private static bool IsValidUid(string? value) =>
+        value is null ||
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= 256 &&
+        !value.Any(char.IsControl);
+}
+
 public interface ISandboxProvider
 {
     Task<SandboxProvisionedResource> ProvisionAsync(
@@ -462,6 +554,10 @@ public interface ISandboxProvider
 
     Task<SandboxReleaseReceipt> ReleaseAsync(
         SandboxReleaseRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<SandboxPartialReleaseReceipt> ReleasePartialAsync(
+        SandboxPartialReleaseRequest request,
         CancellationToken cancellationToken = default);
 }
 
@@ -526,7 +622,53 @@ public sealed record SandboxLeaseSnapshot(
     public string? RetirementFingerprint { get; init; }
     public string? RetiringIssuer { get; init; }
     public string? ProviderRequestFingerprint { get; init; }
+    public long LeaseRevision { get; init; }
+    public DateTimeOffset? LeaseExpiresAt { get; init; }
+    public SandboxPartialReleaseReceipt? PartialReleaseReceipt { get; init; }
+
+    public SandboxLeaseSnapshot Validate()
+    {
+        var terminal = State is SandboxLeaseState.Released or SandboxLeaseState.Failed;
+        if (LeaseRevision < 1 ||
+            (terminal && LeaseExpiresAt is not null) ||
+            (!terminal && LeaseExpiresAt is null) ||
+            LeaseExpiresAt is { } expiresAt && expiresAt <= DateTimeOffset.MinValue ||
+            PartialReleaseReceipt is not null &&
+                State is not (SandboxLeaseState.Released or SandboxLeaseState.ReconciliationRequired))
+            throw new ArgumentException("The Sandbox lease revision or expiry is invalid.");
+        return this;
+    }
 }
+
+public sealed record SandboxLateResourceCleanupClaim(
+    SandboxLeaseSnapshot Lease,
+    SandboxProvisionedResource ProvisionedResource,
+    string IdempotencyKey,
+    Guid ClaimToken,
+    DateTimeOffset ClaimExpiresAt)
+{
+    public SandboxLateResourceCleanupClaim Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Lease);
+        ArgumentNullException.ThrowIfNull(ProvisionedResource);
+        _ = Lease.Validate();
+        _ = ProvisionedResource.Validate();
+        if (Lease.IsCurrent ||
+            Lease.State is not (SandboxLeaseState.Released or SandboxLeaseState.Failed) ||
+            ProvisionedResource.Resource.Generation != Lease.ResourceGeneration ||
+            string.IsNullOrWhiteSpace(IdempotencyKey) ||
+            IdempotencyKey.Length > 128 ||
+            IdempotencyKey.Any(char.IsControl) ||
+            ClaimToken == Guid.Empty ||
+            ClaimExpiresAt <= DateTimeOffset.MinValue)
+            throw new ArgumentException("The late Sandbox resource cleanup claim is invalid.");
+        return this;
+    }
+}
+
+public sealed record SandboxPartialReleaseCompletionRequest(
+    EnvironmentGenerationFence Fence,
+    SandboxPartialReleaseReceipt Receipt);
 
 public sealed record SandboxLeaseReservation(SandboxLeaseSnapshot Lease, bool Replayed);
 
@@ -589,6 +731,20 @@ public interface ISandboxLeaseStore
         Guid operationId,
         EnvironmentGenerationFence fence,
         long providerFencingGeneration,
+        SandboxReleaseReceipt receipt,
+        CancellationToken cancellationToken);
+
+    Task<SandboxLeaseSnapshot> CompletePartialReleaseAsync(
+        SandboxPartialReleaseCompletionRequest request,
+        CancellationToken cancellationToken);
+
+    Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
+        EnvironmentGenerationFence fence,
+        CancellationToken cancellationToken);
+
+    Task CompleteLateResourceCleanupAsync(
+        EnvironmentGenerationFence currentFence,
+        SandboxLateResourceCleanupClaim claim,
         SandboxReleaseReceipt receipt,
         CancellationToken cancellationToken);
 }

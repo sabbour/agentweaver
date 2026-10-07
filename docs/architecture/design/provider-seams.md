@@ -376,11 +376,14 @@ selection requires it.
 ### Readiness, retirement, and retention
 
 `ReadyForDispatch` requires an active exact Environment fence, current `WriteProjects` and separate
-`ReadRunSelection` authority, the exact ready Workspace PVC generation, observed VM RuntimeClass and Pod
-isolation, the exact attached PVC, and a fresh readback of the requested verified Cilium policy generation
-before and after provider observation. A provider Ready condition alone is insufficient. The adapter reports
-observed `scheduled`, `image ready`, `started`, and `ready` phases; it does not report `configured` because
-this slice has no AgentHost configure/ready handshake. Policy-object verification is not datapath proof.
+`ReadRunSelection` authority, the exact owner-bound Workspace PVC generation, observed VM RuntimeClass
+and Pod isolation, the exact attached PVC, and a fresh readback of the requested verified Cilium policy
+generation before and after provider observation. Environment reserves the exact Workspace generation as
+attached before provider dispatch and detaches it only after exact Sandbox placement retirement; Workspace
+replace and release therefore cannot race a live mount. Kubernetes Sandbox and container Ready conditions
+do not imply Environment or AgentHost readiness. The adapter reports observed `scheduled`, `image ready`,
+and `started` phases; it does not report `configured` or dispatch `ready` because this slice has no AgentHost
+configure/ready handshake. Policy-object verification is not datapath proof.
 
 An exact `Finished=True` Agent Sandbox condition with a supported reason and current observed generation can
 retire Sandbox placement only. An explicit abandon also requires fresh Projects authority and a durable
@@ -394,6 +397,12 @@ foreground deletion, then verifies the claim and its Sandbox/Pod children are ab
 owner-specific pool and template. `KnownOwnedAbsent` means a successful exact lookup found no claim or
 children; transient or unauthorized lookup failures remain errors. Sandbox placement cleanup never releases
 or erases Workspace Storage. Storage reclaim/retention remains controlled by its own owner lifecycle.
+
+A differing valid provider result that arrives after terminal release is recorded in a separate,
+owner-scoped cleanup queue. The terminal lease's resource and partial-release evidence are preserved.
+Current-owner reconciliation claims at most one queued resource, uses the original lease fence and provider
+binding for release, and stores the validated receipt under a current-fence CAS. Expiring claim tokens avoid
+concurrent deletion and allow retry after a reconciler stops.
 
 The complete current behavior, configuration, API boundaries, and test limits are in the
 [Environment Sandbox lifecycle guide](../environment-sandbox.md) and

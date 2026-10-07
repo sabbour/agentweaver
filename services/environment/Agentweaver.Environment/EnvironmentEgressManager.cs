@@ -716,6 +716,35 @@ public sealed class EnvironmentEgressManager(
         CancellationToken cancellationToken) =>
         GetAuthorizedSelectionAsync(caller, owner, cancellationToken);
 
+    internal async Task<(EnvironmentOwnerIdentity Owner, ProjectAuthorizationContextResponse Authorization)>
+        GetAuthorizedRunEnvironmentControlAsync(
+            CurrentCallerRequest caller,
+            string projectId,
+            string runId,
+            string environmentId,
+            CancellationToken cancellationToken)
+    {
+        var authorization = await ReadCurrentAuthorizationContextAsync(
+            caller, projectId, runId, tenantId: null, cancellationToken).ConfigureAwait(false);
+        RequirePermission(
+            authorization,
+            projectId,
+            ProjectAuthorizationPermission.WriteProjects,
+            "project_write_not_authorized",
+            "The current caller lacks fresh WriteProjects authority for this target project.");
+        return (
+            new EnvironmentOwnerIdentity(authorization.TenantId, projectId, runId, environmentId),
+            authorization);
+    }
+
+    internal Task EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
+        CurrentCallerRequest caller,
+        EnvironmentOwnerIdentity owner,
+        ProjectAuthorizationContextResponse authorization,
+        CancellationToken cancellationToken) =>
+        EnsureAuthorizationUnchangedAsync(
+            caller, owner, authorization, requireRunSelection: false, cancellationToken);
+
     internal async Task<CiliumPolicyObservation> VerifyNetworkForSandboxAsync(
         CurrentCallerRequest caller,
         EnvironmentGenerationFence fence,
@@ -813,20 +842,35 @@ public sealed class EnvironmentEgressManager(
     private async Task<ProjectAuthorizationContextResponse> ReadCurrentAuthorizationContextAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken) =>
+        await ReadCurrentAuthorizationContextAsync(
+            caller,
+            owner.ProjectId,
+            owner.RunId,
+            owner.TenantId,
+            cancellationToken).ConfigureAwait(false);
+
+    private async Task<ProjectAuthorizationContextResponse> ReadCurrentAuthorizationContextAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string? tenantId,
         CancellationToken cancellationToken)
     {
         var authorization = await projects.GetAuthorizationContextAsync(caller, cancellationToken)
             .ConfigureAwait(false);
         var boundProjectMatches = authorization.BoundProjectId is null ||
-            string.Equals(authorization.BoundProjectId, owner.ProjectId, StringComparison.Ordinal);
+            string.Equals(authorization.BoundProjectId, projectId, StringComparison.Ordinal);
         var boundRunMatches = authorization.BoundRunId is null ||
-            string.Equals(authorization.BoundRunId, owner.RunId, StringComparison.Ordinal);
+            string.Equals(authorization.BoundRunId, runId, StringComparison.Ordinal);
         var bindingIsConsistent = authorization.BoundRunId is null ||
-            string.Equals(authorization.BoundProjectId, owner.ProjectId, StringComparison.Ordinal);
+            string.Equals(authorization.BoundProjectId, projectId, StringComparison.Ordinal);
         if (authorization.ContractVersion != ProjectAuthorizationContextContract.CurrentVersion ||
             string.IsNullOrWhiteSpace(authorization.Issuer) ||
             string.IsNullOrWhiteSpace(authorization.ActorId) ||
-            !string.Equals(authorization.TenantId, owner.TenantId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(authorization.TenantId) ||
+            (tenantId is not null &&
+                !string.Equals(authorization.TenantId, tenantId, StringComparison.Ordinal)) ||
             authorization.MembershipRevision < 1 ||
             authorization.EffectiveAuthority.IsDefault ||
             authorization.EffectiveAuthority.Any(resource =>

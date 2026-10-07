@@ -21,12 +21,14 @@ provisioning, RuntimeClass and PVC reads, Pod/PVC attachment evidence, withheld
 readiness without a verified network generation, and foreground deletes with
 UID preconditions.
 
-The manager test confirms that missing target-project `WriteProjects` authority
-is rejected before run selection or Sandbox provider access. It is not a full
-Environment API integration test. The source tests do not prove live RBAC,
-Kata/nested-virtualization availability, Cilium datapath enforcement,
-AgentHost configure/readiness, Core run pins, or automatic terminal-run
-reclamation.
+The manager tests confirm that missing target-project `WriteProjects`
+authority is rejected before run selection or Sandbox provider access. They
+also verify that the versioned placement projection preserves the exact
+resource identity and rejects expired, stale, non-current, and foreign leases.
+They are not a full Environment API integration test. The source tests do not
+prove live RBAC, Kata/nested-virtualization availability, Cilium datapath
+enforcement, AgentHost configure/readiness, Core run pins, or automatic
+terminal-run reclamation.
 
 The production-authority HTTP and PostgreSQL integration is in the Identity
 Broker test project:
@@ -41,9 +43,11 @@ This test uses a broker-issued JWT, real Projects membership/role checks and
 immutable run selection, Environment HTTP routes, and disposable PostgreSQL
 lease/lifecycle state. It covers authorized provision, inspect, repeated
 placement-only abandonment, exact resource UID/generation/fence, stale fences,
-viewer/foreign/selection denials, role revocation after selection, and a late
-provider callback gated at the Kubernetes claim-create response and fenced into
-retirement. It runs the production Sandbox provider and Kubernetes client
+viewer/foreign/selection denials, and a late provider callback gated at the
+Kubernetes claim-create response and fenced into retirement. It also reads the
+versioned placement projection with an owner that lacks `ReadRunSelection`,
+asserts that no selection read occurs, and rejects a viewer without
+`WriteProjects`. It runs the production Sandbox provider and Kubernetes client
 against a fake Kubernetes HTTP API; only the Workspace provider and Cilium
 policy-resource boundary are controlled. It is not a live Kubernetes or
 datapath test. Sandbox observations remain `Pending` without AgentHost configure

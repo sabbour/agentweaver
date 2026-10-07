@@ -7,9 +7,9 @@ tested.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before dispatch. It records an owner-fenced lease and immutable provider request, then provisions and observes the exact agent-sandbox resources. ReadyForDispatch requires the same verified network generation and actual Pod, PVC, and isolation evidence. Retirement advances the owner fence and releases only Sandbox placement; Workspace retention is unchanged." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before dispatch. It records an owner-fenced lease and immutable provider request, then provisions and observes the exact agent-sandbox resources. ReadyForDispatch requires the same verified network generation and actual Pod, PVC, and isolation evidence. A differing provider result that arrives after release is stored separately and reclaimed by fenced reconciliation without changing terminal lease evidence. Workspace retention is unchanged." />
   </a>
-  <figcaption>Environment Sandbox lease and recovery sequence. A ready lease requires exact Workspace and network observations; retirement releases Sandbox placement only, not the Environment or its Workspace data.</figcaption>
+  <figcaption>Environment Sandbox lease and recovery sequence. A ready lease requires exact Workspace and network observations; retirement releases Sandbox placement only, not the Environment or its Workspace data. Late differing provider results use a separate durable cleanup record.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.drawio'">Open editable draw.io source</a></p>
 
@@ -30,6 +30,14 @@ memory quota. An unresolved or ambiguous provider effect remains current and
 blocks Environment lifecycle advancement. Old resource generations remain
 stored after release.
 
+A different valid provider resource returned after a lease is terminal is
+stored in a separate cleanup record. The original terminal state, resource, and
+partial-release receipt remain unchanged. Reconciliation can discover pending
+cleanup under current owner authorization across lifecycle generations while
+using the original provider fence and binding for exact release. A durable,
+expiring claim prevents concurrent reconcilers from racing the same delete;
+the validated release receipt is saved with a current-fence compare-and-swap.
+
 The Sandbox selection must contain exactly one exclusive candidate. The
 configured provider ID, adapter version, options schema, options revision,
 hosting pattern, and advertised capabilities must match that candidate. The
@@ -39,18 +47,36 @@ Environment separately verifies the selected Cilium policy generation.
 
 ## Authorization and API
 
-All four Sandbox routes require an authenticated caller and fresh Projects
-authority. The manager requires target-project `WriteProjects` and the separate
-`ReadRunSelection` permission before it reads the immutable run selection or
-contacts Kubernetes. It compares the fresh authorization and selection again
-after asynchronous work and before accepting provider callbacks.
+All five Sandbox routes require an authenticated caller and fresh Projects
+authority. Provision, inspect, abandon, and reconcile require target-project
+`WriteProjects` plus the separate `ReadRunSelection` permission before they
+read the immutable run selection or contact Kubernetes. They compare the fresh
+authorization and selection again after asynchronous work and before accepting
+provider callbacks. The placement projection requires only fresh
+`WriteProjects` authority; it does not read run selection or contact Kubernetes.
 
 | Route | Operation |
 | --- | --- |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/provision` | Validate the exact Workspace generation and Cilium policy generation, reserve an owner lease, then provision the selected adapter. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox?networkPolicyGeneration={generation}` | Inspect the current lease. It reports `ReadyForDispatch` only after fresh Cilium verification and exact provider observation. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Return the versioned owner-local projection of the exact current, active, unexpired lease and its placement references. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/abandon` | Explicitly abandon one current resource generation and provider fence. The request is not itself proof of ownership; fresh Projects authorization and the durable owner CAS are required. |
-| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. A network-policy generation may be supplied to verify readiness. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource. A network-policy generation may be supplied to verify readiness. |
+
+The v1 placement projection reads `ISandboxLeaseStore.GetCurrentAsync` under
+the exact active Environment owner fence, then rechecks fresh `WriteProjects`
+authority and the active lifecycle. It returns the tenant/project/run/Environment
+tuple, lifecycle and provider fences, lease revision/expiry/current state, and
+the exact resource, endpoint, and opaque placement references recorded by the
+lease. It does not derive lease data from `EnvironmentSandboxResult`, caller
+arguments, run selection, or runtime registration. The provider `ResourceId`
+is preserved as stored; it is not relabeled as a Kubernetes UID because a
+planned `aw-claim-*` identity and a returned Kubernetes UID are distinct values.
+Missing placement returns no content; expired, stale, non-current, foreign, or
+non-active snapshots are rejected. Provider options, release descriptors, and
+credentials are not included. Profile mapping, receiver registration, and
+delivery receipts remain the responsibility of the separately owned bootstrap
+profile adapter; absent approved production transport remains unavailable.
 
 The Environment owner must already exist and be active. These routes do not
 register or release an Environment lifecycle, create a Core run provider pin,
@@ -62,24 +88,27 @@ lookup is treated as proof that a run ended.
 ## Workspace, network, and readiness
 
 Provisioning accepts a Workspace volume ID and exact resource/data generations,
-mount path, read-only choice, and Cilium policy generation. Environment checks
-the owner-scoped Workspace record, its current Storage selection and pinned
-provider/options, and the PVC namespace, UID, and owner-generation annotations.
-It negotiates a PVC attachment against the planned Sandbox resource before
-provider dispatch. This operation attaches a PVC to the Sandbox Pod; it does not
+mount path, read-only choice, and Cilium policy generation. The volume must
+already be bound to the Environment. Environment checks the owner-scoped
+Workspace record, its current Storage selection and pinned provider/options,
+and the PVC namespace, UID, and owner-generation annotations. It reserves the
+exact volume generation as Attached through the Workspace owner CAS before
+provider dispatch. Replace and release remain blocked until the exact Sandbox
+placement is retired and Environment detaches that generation. This does not
 change Workspace retention or reclaim state.
 
 The manager verifies the requested Cilium policy generation and object before
 Sandbox dispatch, then rechecks it after provider observation. The provider
 reports actual Sandbox/Pod, RuntimeClass handler, PVC attachment, and startup
-observations. A provider Ready condition without the exact current network
-generation cannot make the lease ready. `ReadyForDispatch` is an Environment
-observation only; it is not Core admission or permission to execute a run.
+observations. Kubernetes Sandbox and container Ready conditions do not imply
+Environment or AgentHost readiness. `ReadyForDispatch` requires an explicit
+`configured` phase and is an Environment observation only; it is not Core
+admission or permission to execute a run.
 
-The current provider emits `scheduled`, `image ready`, `started`, and `ready`
-startup phases from Kubernetes observations. It does not emit `configured`:
-this source does not contain an AgentHost configure or readiness handshake.
-Object readback also does not prove Cilium datapath enforcement.
+The current provider emits `scheduled`, `image ready`, and `started` phases
+from Kubernetes observations. It does not emit `configured` or dispatch
+`ready`: this source does not contain an AgentHost configure/readiness
+handshake. Object readback also does not prove Cilium datapath enforcement.
 
 ## Agent Sandbox resources and recovery
 
@@ -98,13 +127,24 @@ UIDs, owner labels, the pinned template and pool references, the RuntimeClass
 handler, and the bound PVC's UID and Environment/volume-generation annotations.
 Describe validates the claim UID, Sandbox controller owner reference, Pod
 controller owner reference, PVC mount, Pod security settings, and the actual
-RuntimeClass. `ListOwned` recovers only claims with the exact owner and fence;
-Environment further matches the recorded operation and resource generation.
+RuntimeClass. `ListOwned` reads the namespace from the lease's persisted
+provider-options snapshot rather than current defaults, then recovers only
+claims with the exact owner and fence; Environment further matches the
+recorded operation and resource generation.
 
 The provision request is stored before dispatch. A crash after dispatch can be
 recovered through exact `ListOwned` results. A lease abandoned before any
 provider request was persisted can be completed as a known no-effect operation.
 An uncertain or failed lookup is never interpreted as absence.
+
+If a different valid provider resource arrives after release, Environment
+records that exact result in the late-resource cleanup table instead of
+overwriting the terminal lease. Reconciliation discovers it under the current
+owner authorization, claims one item at a time, and releases it with the
+original provider binding and fence. Claims expire for recovery after a
+reconciler stops; receipt persistence verifies the current lifecycle fence and
+claim token atomically. Provider failures remain visible and leave the cleanup
+available for retry.
 
 ## Retirement and storage retention
 

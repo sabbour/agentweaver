@@ -1,14 +1,14 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Environment Sandbox lease, readiness, recovery, and retirement",
-  "alt": "Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before dispatch. It records an owner-fenced lease and immutable provider request, then provisions and observes the exact agent-sandbox resources. ReadyForDispatch requires the same verified network generation and actual Pod/PVC/isolation evidence. Retirement advances the owner fence and releases only Sandbox placement; Workspace retention is unchanged.",
+  "title": "Environment Sandbox lease, readiness, recovery, and late-resource cleanup",
+  "alt": "Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before dispatch. It records an owner-fenced lease and immutable provider request, then provisions and observes the exact agent-sandbox resources. ReadyForDispatch requires the same verified network generation and actual Pod/PVC/isolation evidence. A different provider result after release is stored in a separate durable cleanup record and released with its original provider fence without changing terminal lease evidence. Workspace retention is unchanged.",
   "autonumber": true,
   "participants": [
     {
       "id": "environment",
       "label": "Environment owner",
-      "subLabel": "Manager and PostgreSQL lease CAS",
+      "subLabel": "Manager, lease CAS, and late-resource cleanup queue",
       "icon": "server",
       "fluentIcon": "api",
       "badge": { "text": "Owner", "tone": "neutral" }
@@ -202,7 +202,7 @@
               "type": "message",
               "from": "environment",
               "to": "environment",
-              "label": "Validate evidence/CAS or keep ambiguous lease current for reconciliation",
+              "label": "Validate terminal evidence; keep uncertain effects current and queue a different late result separately",
               "line": "solid",
               "arrow": "filled"
             }
@@ -213,7 +213,7 @@
     {
       "type": "note",
       "over": ["environment", "prerequisites"],
-      "label": "Placement release does not release Environment lifecycle or Workspace data. Timeouts and failed lookups never prove run abandonment."
+      "label": "Late cleanup uses current owner auth and the original provider fence. Sandbox retirement leaves Environment and Workspace data unchanged."
     }
   ]
 }

@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
@@ -12,6 +13,51 @@ namespace Agentweaver.Environment.Tests;
 
 public sealed class AgentSandboxProviderTests
 {
+    [Fact]
+    public async Task ListOwnedUsesPinnedOptionsNamespaceInsteadOfCurrentDefaults()
+    {
+        var currentOptions = new AgentSandboxOptions(
+            1,
+            "current-options",
+            "current-namespace",
+            "azure-files-csi",
+            "ghcr.io/agentweaver/agenthost:1",
+            "kata-vm",
+            "kata-qemu",
+            "500m",
+            "512Mi",
+            1,
+            1);
+        var pinnedOptions = currentOptions with
+        {
+            OptionsRevision = "pinned-options",
+            Namespace = "agentweaver"
+        };
+        var handler = new FakeKubernetesHandler();
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://kubernetes.example/")
+        };
+        var provider = new AgentSandboxProvider(
+            currentOptions,
+            new KubernetesAgentSandboxClient(httpClient));
+        var owner = new EnvironmentOwnerIdentity("tenant-a", "project-a", "run-a", "environment-a");
+        var intent = new SandboxLeaseProvisionIntent(
+            AgentSandboxProviderMetadata.ProviderId,
+            AgentSandboxProviderMetadata.AdapterVersion.ToString(),
+            pinnedOptions.OptionsSchemaVersion,
+            pinnedOptions.OptionsRevision,
+            JsonSerializer.SerializeToElement(pinnedOptions, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            Json("{\"providers\":[]}"),
+            Json("{\"contractVersion\":1}"));
+
+        var observations = await provider.ListOwnedAsync(
+            new SandboxListOwnedRequest(new EnvironmentGenerationFence(owner, 1), 1, intent));
+
+        Assert.Empty(observations);
+        Assert.Equal("agentweaver", handler.LastSandboxClaimsNamespace);
+    }
+
     [Fact]
     public async Task ProvisionIsIdempotentDescribeWithholdsReadyWithoutNetworkGenerationAndReleaseUsesUidPreconditions()
     {
@@ -124,6 +170,27 @@ public sealed class AgentSandboxProviderTests
                 StringComparer.Ordinal,
                 [new KeyValuePair<string, string>("egress.example/selector", "environment-a")]),
             new SandboxWorkspaceAttachment(negotiation, attachmentDescriptor));
+        SandboxProvisionRequest NewRequest(long resourceGeneration, long fencingGeneration, Guid operationId)
+        {
+            var planned = SandboxResourceIdentity.CreatePlannedReference(
+                candidate.ProviderId,
+                candidate.OptionsRevision,
+                fence,
+                resourceGeneration,
+                fencingGeneration,
+                operationId);
+            return request with
+            {
+                ResourceGeneration = resourceGeneration,
+                FencingGeneration = fencingGeneration,
+                OperationId = operationId,
+                Workspace = request.Workspace with
+                {
+                    Negotiation = negotiation with { SandboxResource = planned }
+                }
+            };
+        }
+
         var handler = new FakeKubernetesHandler();
         using var httpClient = new HttpClient(handler)
         {
@@ -160,7 +227,9 @@ public sealed class AgentSandboxProviderTests
         Assert.True(observation.VmIsolationVerified);
         Assert.True(observation.WorkspaceAttachmentVerified);
         Assert.Null(observation.VerifiedNetworkGeneration);
-        Assert.Contains(observation.StartupPhases, phase => phase.Phase == SandboxStartupPhase.Ready);
+        Assert.DoesNotContain(
+            observation.StartupPhases,
+            phase => phase.Phase is SandboxStartupPhase.Configured or SandboxStartupPhase.Ready);
 
         var receipt = await provider.ReleaseAsync(new SandboxReleaseRequest(
             fence,
@@ -172,6 +241,91 @@ public sealed class AgentSandboxProviderTests
         Assert.Equal(SandboxReleaseDisposition.Released, receipt.Disposition);
         Assert.Equal(3, handler.DeleteUidPreconditions.Count);
         Assert.All(handler.DeleteUidPreconditions, Assert.True);
+
+        var resumableRequest = NewRequest(2, 2, Guid.NewGuid());
+        handler.FailNextClaimCreate = true;
+        var partialProvision = await Assert.ThrowsAsync<SandboxProviderException>(
+            () => provider.ProvisionAsync(resumableRequest));
+        Assert.True(partialProvision.EffectMayHaveApplied);
+        Assert.Equal(5, handler.CreateCount);
+        var resumed = await provider.ProvisionAsync(resumableRequest);
+        Assert.Equal(6, handler.CreateCount);
+        var resumedReceipt = await provider.ReleaseAsync(new SandboxReleaseRequest(
+            fence,
+            resumed.Resource,
+            2,
+            resumed.ProviderBinding,
+            "release-resumed"));
+        Assert.Equal(SandboxReleaseDisposition.Released, resumedReceipt.Disposition);
+
+        var retiringRequest = NewRequest(3, 3, Guid.NewGuid());
+        handler.FailNextClaimCreate = true;
+        _ = await Assert.ThrowsAsync<SandboxProviderException>(() =>
+            provider.ProvisionAsync(retiringRequest));
+        var recoveryIntent = new SandboxLeaseProvisionIntent(
+            AgentSandboxProviderMetadata.ProviderId,
+            AgentSandboxProviderMetadata.AdapterVersion.ToString(),
+            options.OptionsSchemaVersion,
+            options.OptionsRevision,
+            JsonSerializer.SerializeToElement(options, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            Json("{\"providers\":[]}"),
+            JsonSerializer.SerializeToElement(new
+            {
+                contractVersion = 1,
+                request = new
+                {
+                    volumeId = "workspace-a",
+                    volumeResourceGeneration = 1,
+                    dataGeneration = 0,
+                    mountPath = "/workspace/agentweaver/project",
+                    readOnly = false,
+                    networkPolicyGeneration = 1,
+                    idempotencyKey = "provision-c"
+                },
+                workspace = retiringRequest.Workspace,
+                egressSelectorLabels = retiringRequest.EgressSelectorLabels,
+                workspaceAttachmentTransitionRevision = 2
+            }, RecoveryJsonOptions()));
+        var now = DateTimeOffset.UtcNow;
+        var partialLease = new SandboxLeaseSnapshot(
+            fence,
+            3,
+            3,
+            4,
+            retiringRequest.OperationId,
+            SandboxLeaseState.Releasing,
+            recoveryIntent,
+            ProvisionedResource: null,
+            SandboxRetirementReason.AuthorizedAbandon,
+            TerminalEvidence: null,
+            "actor-a",
+            1,
+            "release-partial",
+            IsCurrent: true,
+            now)
+        {
+            RetiringIssuer = "https://projects.example",
+            ProviderRequestFingerprint = new string('a', 64),
+            LeaseRevision = 4,
+            LeaseExpiresAt = now.AddSeconds(60)
+        };
+        var partialReleaseRequest = new SandboxPartialReleaseRequest(fence, partialLease).Validate();
+        handler.DeleteUidPreconditions.Clear();
+        var partialRelease = await provider.ReleasePartialAsync(partialReleaseRequest);
+
+        Assert.Equal(SandboxReleaseDisposition.Released, partialRelease.Disposition);
+        Assert.Equal("resource-uid-7", partialRelease.TemplateUid);
+        Assert.Equal("resource-uid-8", partialRelease.WarmPoolUid);
+        Assert.Equal(2, handler.DeleteUidPreconditions.Count);
+        Assert.All(handler.DeleteUidPreconditions, Assert.True);
+        Assert.Equal(8, handler.CreateCount);
+    }
+
+    private static JsonSerializerOptions RecoveryJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        return options;
     }
 
     private static JsonElement Json(string value)
@@ -187,6 +341,8 @@ public sealed class AgentSandboxProviderTests
 
         public int CreateCount { get; private set; }
         public List<bool> DeleteUidPreconditions { get; } = [];
+        public string? LastSandboxClaimsNamespace { get; private set; }
+        public bool FailNextClaimCreate { get; set; }
 
         public FakeKubernetesHandler()
         {
@@ -327,6 +483,13 @@ public sealed class AgentSandboxProviderTests
             {
                 if (path == "api/v1/namespaces/agentweaver/pods")
                     return JsonResponse(HttpStatusCode.OK, _podList ?? new JsonObject { ["items"] = new JsonArray() });
+                if (path.EndsWith("/sandboxclaims", StringComparison.Ordinal))
+                {
+                    var segments = path.Split('/');
+                    var namespaceIndex = Array.IndexOf(segments, "namespaces");
+                    LastSandboxClaimsNamespace = segments[namespaceIndex + 1];
+                    return JsonResponse(HttpStatusCode.OK, new JsonObject { ["items"] = new JsonArray() });
+                }
                 if (path == "apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes")
                     return JsonResponse(HttpStatusCode.OK, new JsonObject { ["items"] = new JsonArray() });
                 return _resources.TryGetValue(path, out var resource)
@@ -338,6 +501,11 @@ public sealed class AgentSandboxProviderTests
             {
                 var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken)
                     .ConfigureAwait(false))!;
+                if (body["kind"]!.GetValue<string>() == "SandboxClaim" && FailNextClaimCreate)
+                {
+                    FailNextClaimCreate = false;
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                }
                 body["metadata"]!["uid"] = $"resource-uid-{++CreateCount}";
                 var name = body["metadata"]!["name"]!.GetValue<string>();
                 _resources[$"{path}/{Uri.EscapeDataString(name)}"] = body.DeepClone();

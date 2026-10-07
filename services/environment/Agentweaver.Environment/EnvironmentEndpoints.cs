@@ -271,6 +271,23 @@ public static class EnvironmentEndpoints
                     caller!, projectId, runId, environmentId, networkPolicyGeneration, cancellationToken)
                     .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
         });
+        sandboxes.MapGet("/v1/placement", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            HttpContext context,
+            EnvironmentSandboxManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+            {
+                var projection = await manager.GetCurrentPlacementAsync(
+                    caller!, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+                return projection is null ? Results.NotFound() : Results.Ok(projection);
+            }, cancellationToken).ConfigureAwait(false);
+        });
         sandboxes.MapPost("/abandon", async (
             string projectId,
             string runId,

@@ -44,7 +44,10 @@ public sealed class SandboxLeases : Migration
                 retirement_fingerprint = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: true),
                 is_current = table.Column<bool>(type: "boolean", nullable: false),
                 created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
-                updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
+                updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                lease_revision = table.Column<long>(type: "bigint", nullable: false),
+                lease_expires_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                partial_release_receipt_json = table.Column<string>(type: "jsonb", nullable: true)
             },
             constraints: table =>
             {
@@ -58,8 +61,11 @@ public sealed class SandboxLeases : Migration
                     "ck_environment_sandbox_leases_state",
                     "lease_state IN ('Provisioning', 'Active', 'Releasing', 'Released', 'ReconciliationRequired', 'Failed')");
                 table.CheckConstraint(
+                    "ck_environment_sandbox_leases_revision_expiry",
+                    "lease_revision >= 1 AND ((lease_state IN ('Released', 'Failed') AND lease_expires_at IS NULL) OR (lease_state NOT IN ('Released', 'Failed') AND lease_expires_at IS NOT NULL))");
+                table.CheckConstraint(
                     "ck_environment_sandbox_leases_json",
-                    "jsonb_typeof(options_snapshot_json) = 'object' AND jsonb_typeof(selection_snapshot_json) = 'object' AND jsonb_typeof(provider_request_json) = 'object' AND (resource_json IS NULL OR jsonb_typeof(resource_json) = 'object') AND (terminal_evidence_json IS NULL OR jsonb_typeof(terminal_evidence_json) = 'object')");
+                    "jsonb_typeof(options_snapshot_json) = 'object' AND jsonb_typeof(selection_snapshot_json) = 'object' AND jsonb_typeof(provider_request_json) = 'object' AND (resource_json IS NULL OR jsonb_typeof(resource_json) = 'object') AND (terminal_evidence_json IS NULL OR jsonb_typeof(terminal_evidence_json) = 'object') AND (partial_release_receipt_json IS NULL OR jsonb_typeof(partial_release_receipt_json) = 'object')");
                 table.CheckConstraint(
                     "ck_environment_sandbox_leases_retirement",
                     """
@@ -74,6 +80,8 @@ public sealed class SandboxLeases : Migration
                             AND retiring_issuer IS NOT NULL AND retiring_actor_id IS NOT NULL
                             AND retiring_membership_revision > 0))
                     AND (lease_state <> 'Active' OR resource_json IS NOT NULL)
+                    AND (partial_release_receipt_json IS NULL OR
+                        lease_state IN ('Released', 'ReconciliationRequired'))
                     """);
                 table.ForeignKey(
                     "fk_environment_sandbox_leases_owners",
@@ -108,6 +116,87 @@ public sealed class SandboxLeases : Migration
             schema: EnvironmentDbContext.Schema,
             table: "sandbox_leases",
             columns: new[] { "lease_state", "updated_at" });
+        migrationBuilder.CreateIndex(
+            name: "ix_environment_sandbox_leases_state_expiry",
+            schema: EnvironmentDbContext.Schema,
+            table: "sandbox_leases",
+            columns: new[] { "lease_state", "lease_expires_at" },
+            filter: "\"lease_expires_at\" IS NOT NULL");
+
+        migrationBuilder.CreateTable(
+            name: "sandbox_late_resource_cleanups",
+            schema: EnvironmentDbContext.Schema,
+            columns: table => new
+            {
+                tenant_id = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
+                project_id = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
+                run_id = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
+                environment_id = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
+                resource_generation = table.Column<long>(type: "bigint", nullable: false),
+                provider_resource_fingerprint = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: false),
+                resource_json = table.Column<string>(type: "jsonb", nullable: false),
+                release_idempotency_key = table.Column<string>(type: "character varying(128)", maxLength: 128, nullable: false),
+                claim_token = table.Column<Guid>(type: "uuid", nullable: true),
+                claim_expires_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                release_receipt_json = table.Column<string>(type: "jsonb", nullable: true),
+                created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
+            },
+            constraints: table =>
+            {
+                table.PrimaryKey(
+                    "pk_environment_sandbox_late_resource_cleanups",
+                    row => new
+                    {
+                        row.tenant_id,
+                        row.project_id,
+                        row.run_id,
+                        row.environment_id,
+                        row.resource_generation,
+                        row.provider_resource_fingerprint
+                    });
+                table.CheckConstraint(
+                    "ck_environment_sandbox_late_resource_cleanups_json",
+                    "jsonb_typeof(resource_json) = 'object' AND (release_receipt_json IS NULL OR jsonb_typeof(release_receipt_json) = 'object')");
+                table.CheckConstraint(
+                    "ck_environment_sandbox_late_resource_cleanups_claim",
+                    "(claim_token IS NULL) = (claim_expires_at IS NULL) AND " +
+                    "(release_receipt_json IS NULL OR (claim_token IS NULL AND claim_expires_at IS NULL))");
+                table.ForeignKey(
+                    "fk_environment_sandbox_late_resource_cleanups_lease",
+                    row => new
+                    {
+                        row.tenant_id,
+                        row.project_id,
+                        row.run_id,
+                        row.environment_id,
+                        row.resource_generation
+                    },
+                    principalSchema: EnvironmentDbContext.Schema,
+                    principalTable: "sandbox_leases",
+                    principalColumns:
+                    [
+                        "tenant_id",
+                        "project_id",
+                        "run_id",
+                        "environment_id",
+                        "resource_generation"
+                    ],
+                    onDelete: ReferentialAction.Restrict);
+            });
+        migrationBuilder.CreateIndex(
+            name: "ix_environment_sandbox_late_resource_cleanups_pending",
+            schema: EnvironmentDbContext.Schema,
+            table: "sandbox_late_resource_cleanups",
+            columns: new[]
+            {
+                "tenant_id",
+                "project_id",
+                "run_id",
+                "environment_id",
+                "created_at"
+            },
+            filter: "\"release_receipt_json\" IS NULL");
     }
 
     protected override void Down(MigrationBuilder migrationBuilder) =>
