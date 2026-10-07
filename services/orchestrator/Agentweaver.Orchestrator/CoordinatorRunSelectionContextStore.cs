@@ -72,7 +72,7 @@ internal sealed class CoordinatorRunSelectionContextStore
             throw new ArgumentException("A non-reserved lowercase schema identifier is required.", nameof(schema));
 
         _dataSource = dataSource;
-        _bindings = $"\"{schema}\".coordinator_run_selection_contexts";
+        _bindings = $"\"{schema}\".coordinator_run_selection_context_versions";
         _catalog = catalog;
         _resolver = resolver;
         var providerBuilder = ImmutableDictionary.CreateBuilder<string, ICoordinatorSandboxResourceProvider>(
@@ -151,11 +151,12 @@ internal sealed class CoordinatorRunSelectionContextStore
                    hosting, resource_id, resource_generation, advertised_capabilities,
                    required_capabilities, negotiated_capabilities, isolation_choices
             FROM {_bindings}
-            WHERE project_id = @project AND run_id = @run
+            WHERE project_id = @project AND run_id = @run AND execution_fence = @fence
             """, connection))
         {
             command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, selection.ProjectId);
             command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, selection.RunId);
+            command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, executionFence);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 return null;
@@ -231,7 +232,7 @@ internal sealed class CoordinatorRunSelectionContextStore
                  @fence, @roles, @provider, @adapter_version,
                  @schema_version, @options_revision, @hosting, @resource,
                  @generation, @advertised, @required, @negotiated, @isolation_choices)
-            ON CONFLICT (project_id, run_id) DO NOTHING
+            ON CONFLICT (project_id, run_id, execution_fence) DO NOTHING
             """, connection);
         command.Transaction = transaction;
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, selection.ProjectId);
@@ -278,6 +279,47 @@ internal sealed class CoordinatorRunSelectionContextStore
             JsonSerializer.Serialize(pendingBinding.IsolationChoices, JsonOptions));
         var inserted = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         if (inserted != 1)
+            throw new CoordinationException(
+                "coordinator_sandbox_binding_conflict", StatusCodes.Status409Conflict);
+    }
+
+    internal async Task CarryForwardAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        EffectiveRunSelection selection,
+        long previousFence,
+        long nextFence,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(selection);
+        if (previousFence < 1 || nextFence != previousFence + 1)
+            throw new CoordinationException(
+                "coordinator_sandbox_binding_stale", StatusCodes.Status409Conflict);
+
+        await using var command = new NpgsqlCommand($"""
+            INSERT INTO {_bindings}
+                (project_id, run_id, accepted_selection_hash, project_revision,
+                 project_configuration_revision, platform_runtime_revision, context_revision,
+                 execution_fence, role_context, provider_id, adapter_version,
+                 options_schema_version, options_revision, hosting, resource_id,
+                 resource_generation, advertised_capabilities, required_capabilities,
+                 negotiated_capabilities, isolation_choices)
+            SELECT project_id, run_id, accepted_selection_hash, project_revision,
+                   project_configuration_revision, platform_runtime_revision, context_revision,
+                   @nextFence, role_context, provider_id, adapter_version,
+                   options_schema_version, options_revision, hosting, resource_id,
+                   resource_generation, advertised_capabilities, required_capabilities,
+                   negotiated_capabilities, isolation_choices
+            FROM {_bindings}
+            WHERE project_id = @project AND run_id = @run AND execution_fence = @previousFence
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, selection.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, selection.RunId);
+        command.Parameters.AddWithValue("previousFence", NpgsqlDbType.Bigint, previousFence);
+        command.Parameters.AddWithValue("nextFence", NpgsqlDbType.Bigint, nextFence);
+        if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
             throw new CoordinationException(
                 "coordinator_sandbox_binding_conflict", StatusCodes.Status409Conflict);
     }

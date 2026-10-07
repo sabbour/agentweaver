@@ -28,9 +28,9 @@ negotiation, a pricing adapter, or usage ingestion.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'" alt="Structural view of unpublished Knowledge, Events & Sessions, and Environment candidates; Orchestrator/Core Policy adapters and owner flow; journal evidence and addressed-message delivery; Azure Files/Kubernetes, Azure Blob, and Key Vault adapters. The journal rejects untrusted PolicyEvaluation writes. Source structure, not deployment topology." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'" alt="Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator candidates; Orchestrator/Core Policy adapters and owner flow; journal evidence and addressed-message delivery; Azure Files/Kubernetes, Azure Blob, and Key Vault adapters. Mapped session context is checked against current owner state and authority, not proof of SDK execution or accounting; public Environment run-bound enrollment remains denied and internal lookup is read-only. The journal rejects untrusted PolicyEvaluation writes. Source structure, not deployment topology." />
   </a>
-  <figcaption>Direct project references and adapter/resource relationships in the v1 source; Events & Sessions and Environment are unpublished service candidates, not a deployed topology. The Orchestrator owner flow is shown in the <a href="./events-sessions">Sessions journal diagram</a>. Host composition and Foundation Probe registration IDs are listed below.</figcaption>
+  <figcaption>Direct project references and adapter/resource relationships in the v1 source; Events & Sessions, Environment, and Orchestrator are unpublished service candidates, not a deployed topology. The Orchestrator owner flow is shown in the <a href="./events-sessions">Sessions journal diagram</a>. Host composition and Foundation Probe registration IDs are listed below.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.drawio'">Open editable draw.io source</a></p>
 
@@ -81,12 +81,15 @@ their external boundaries.
 | `Agentweaver.EventsAndSessions` | PostgreSQL-backed native Sessions journal, addressed-message delivery store, and HTTP host candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Knowledge` | Project-scoped Memory API, context compiler, and native PostgreSQL adapter candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Environment` | Environment-owned egress, workspace-volume, and Sandbox lease service candidate; not deployed. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles`, `Agentweaver.Providers.Sandbox.AgentSandbox` |
-| `Agentweaver.Orchestrator` | HTTP owner for root/child session state, message outbox, explicit turn-boundary operations, and parent notifications. It checks current Projects & Config authority and integrates with Events & Sessions. | `Agentweaver.Abstractions`, `Agentweaver.Persistence.Postgres` |
+| `Agentweaver.Orchestrator` | HTTP owner for root/child session state, message outbox, explicit turn-boundary operations, parent notifications, and the current session/work-item/turn context and runtime-registration source. It checks current Projects & Config authority and integrates with Events & Sessions. Complete runtime delivery and usage accounting remain outside this source slice. | `Agentweaver.Abstractions`, `Agentweaver.Orchestrator.Core`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Providers` |
 | `Agentweaver.FoundationProbe` | Acceptance-only infrastructure probe executable. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.ObjectStore.AzureBlob`, `Agentweaver.Telemetry.AzureMonitor` |
 
 The Events & Sessions project owns the native PostgreSQL journal and addressed-message
 delivery store. The Orchestrator validates owner outbox messages and session bindings
-before admission, presentation, and acknowledgment. These source candidates have no
+before admission, presentation, and acknowledgment. Mapped spawn validates the latest
+confirmed root decision under the owner lock; runtime-owner-context returns mapped
+agent/model/turn metadata only while the child row, decision, and current Projects
+authority are unchanged. These source candidates have no
 deployment, background delivery relay, or automatic AgentHost scheduler. Their
 contracts are described in the [journal service reference](events-sessions.md).
 

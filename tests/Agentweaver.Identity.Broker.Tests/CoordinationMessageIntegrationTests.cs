@@ -243,6 +243,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         EventsIntegrationFactory? eventsFactoryReference = null;
         var admissions = new List<(HttpStatusCode Status, bool NoStore, string Body)>();
+        var forkAdmissionGate = new ForkAdmissionGate();
+        var ownerForkRaceGate = new OwnerForkRaceGate();
         var cacheObjectStore = new InMemoryObjectStore();
         var sandboxProvider = new ControlledSandboxResourceProvider();
         await using var orchestratorFactory = new OrchestratorIntegrationFactory(
@@ -250,9 +252,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ownerSchema,
             signingKey,
             projects.CreateHandler,
-            () => new CapturingHandler(
-                eventsFactoryReference!.Server.CreateHandler(),
-                (status, noStore, body) => admissions.Add((status, noStore, body))),
+            () => new OwnerForkRaceHandler(
+                new CapturingHandler(
+                    eventsFactoryReference!.Server.CreateHandler(),
+                    (status, noStore, body) => admissions.Add((status, noStore, body))),
+                ownerForkRaceGate),
             cacheObjectStore,
             sandboxProvider);
         await using var eventsFactory = new EventsIntegrationFactory(
@@ -260,7 +264,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             eventsSchema,
             signingKey,
             projects.CreateHandler,
-            () => orchestratorFactory.Server.CreateHandler());
+            () => new ForkAdmissionBarrierHandler(
+                orchestratorFactory.Server.CreateHandler(), forkAdmissionGate));
         eventsFactoryReference = eventsFactory;
 
         using var orchestrator = orchestratorFactory.CreateClient(new WebApplicationFactoryClientOptions
@@ -1093,6 +1098,65 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Null(revisedPlanResult.PendingGate);
         Assert.Equal(3, sandboxProvider.NegotiationCount);
 
+        var registrationEffectsBeforeRevocation = await ReadChildRegistrationEffectsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        await using (var lockSource = NpgsqlDataSource.Create(_connectionString))
+        await using (var lockConnection = await lockSource.OpenConnectionAsync())
+        await using (var observationConnection = await lockSource.OpenConnectionAsync())
+        await using (var ownerLock = await lockConnection.BeginTransactionAsync())
+        {
+            await using (var lockRun = new NpgsqlCommand($"""
+                SELECT execution_fence
+                FROM "{ownerSchema}".accepted_runs
+                WHERE project_id = @project AND run_id = @run
+                FOR UPDATE
+                """, lockConnection, ownerLock))
+            {
+                lockRun.Parameters.AddWithValue("project", project.ProjectId);
+                lockRun.Parameters.AddWithValue("run", RunId);
+                Assert.Equal(root.ExecutionFence, await lockRun.ExecuteScalarAsync());
+            }
+
+            var blockedRegistration = SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
+                runToken,
+                new RegisterChildRequest("revoked-while-waiting"));
+            var waiting = false;
+            using var lockWaitDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            while (!waiting)
+            {
+                await using var wait = new NpgsqlCommand("""
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_stat_activity
+                        WHERE @locker = ANY(pg_blocking_pids(pid)))
+                    """, observationConnection);
+                wait.Parameters.AddWithValue("locker", lockConnection.ProcessID);
+                waiting = (bool)(await wait.ExecuteScalarAsync(lockWaitDeadline.Token))!;
+                if (!waiting)
+                    await Task.Delay(20, lockWaitDeadline.Token);
+            }
+
+            await RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerRole.AssignmentId,
+                runnerRole.Revision);
+            await ownerLock.RollbackAsync();
+            using var deniedRegistration = await blockedRegistration.WaitAsync(TimeSpan.FromSeconds(20));
+            await AssertStatusAsync(deniedRegistration, HttpStatusCode.Forbidden);
+        }
+        Assert.Equal(
+            registrationEffectsBeforeRevocation,
+            await ReadChildRegistrationEffectsAsync(_connectionString, ownerSchema, project.ProjectId));
+        runnerRole = await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            runnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+
         using var childResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
@@ -1110,24 +1174,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new RegisterChildRequest("child"));
         await AssertStatusAsync(childReplay, HttpStatusCode.Created);
         Assert.Equal(child, await ReadJsonAsync<RegisteredChild>(childReplay));
-
-        using var secondChildResponse = await SendJsonAsync(
-            orchestrator,
-            HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
-            runToken,
-            new RegisterChildRequest("child-two"));
-        await AssertStatusAsync(secondChildResponse, HttpStatusCode.Created);
-        using var overConcurrentLimit = await SendJsonAsync(
-            orchestrator,
-            HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
-            runToken,
-            new RegisterChildRequest("child-three"));
-        Assert.Equal(HttpStatusCode.Conflict, overConcurrentLimit.StatusCode);
-        Assert.Contains(
-            "run_concurrent_child_limit_exceeded",
-            await overConcurrentLimit.Content.ReadAsStringAsync());
 
         using var forgedAdmission = await SendJsonAsync(
             events,
@@ -1195,6 +1241,257 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal("child", presented.Recipient.SessionId);
         Assert.Equal(AddressedMessageStatus.Delivered, presented.Status);
         Assert.Equal("active", boundary.ExecutionState);
+
+        using var secondChildResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/spawn",
+            runToken,
+            new SpawnSessionRequest(
+                "child-two",
+                CoordinationSessionKind.ChildWork,
+                "child-two-spawn",
+                "Execute the confirmed work item.",
+                WorkPlanItemId: "implement-1"));
+        await AssertStatusAsync(secondChildResponse, HttpStatusCode.Accepted);
+        var spawnedChildTwo = await ReadJsonAsync<SpawnedSession>(secondChildResponse);
+        var childTwo = new RegisteredChild(
+            spawnedChildTwo.Node.Identity,
+            "root",
+            spawnedChildTwo.PendingRequestId,
+            spawnedChildTwo.Node.ExecutionFence);
+        using var childTwoBindingResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child-two/owner-binding",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(childTwoBindingResponse, HttpStatusCode.OK);
+        var childTwoBinding = await ReadJsonAsync<CoordinationSessionBinding>(childTwoBindingResponse);
+        using var childTwoBoundaryResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child-two/turn-boundary",
+            runToken,
+            new TurnBoundaryRequest(childTwo.ExecutionFence, childTwoBinding.StateVersion));
+        await AssertStatusAsync(childTwoBoundaryResponse, HttpStatusCode.OK);
+        Assert.Equal(
+            "active",
+            (await ReadJsonAsync<TurnBoundaryResult>(childTwoBoundaryResponse)).ExecutionState);
+        using var overConcurrentLimit = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
+            runToken,
+            new RegisterChildRequest("child-three"));
+        Assert.Equal(HttpStatusCode.Conflict, overConcurrentLimit.StatusCode);
+        Assert.Contains(
+            "run_concurrent_child_limit_exceeded",
+            await overConcurrentLimit.Content.ReadAsStringAsync());
+
+        var selectionPause = new RuntimeOwnerContextSelectionPause();
+        await using (var runtimeOwnerFactory = new OrchestratorIntegrationFactory(
+                         _connectionString,
+                         ownerSchema,
+                         signingKey,
+                         () => new RuntimeOwnerContextSelectionBarrierHandler(
+                             projects.CreateHandler(), selectionPause),
+                         () => eventsFactory.Server.CreateHandler(),
+                         cacheObjectStore,
+                         sandboxProvider))
+        using (var runtimeOwnerClient = runtimeOwnerFactory.CreateClient(
+                   new WebApplicationFactoryClientOptions
+                   {
+                       BaseAddress = new Uri("https://orchestrator.test")
+                   }))
+        {
+            var runtimeOwnerPath =
+                $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child-two/runtime-owner-context";
+            var runtimeOwnerTask = SendAsync(
+                runtimeOwnerClient, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]);
+            try
+            {
+                await selectionPause.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                var ownerBeforeDecisionChange = await ReadRuntimeOwnerRowAsync(
+                    _connectionString, ownerSchema, project.ProjectId, "child-two");
+                Assert.Equal("implement-1", ownerBeforeDecisionChange.WorkPlanItemId);
+
+                using var pendingOwnerContextGate = await SendJsonAsync(
+                    orchestrator,
+                    HttpMethod.Post,
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/questions",
+                    runToken,
+                    new AskCoordinatorQuestionRequest(
+                        15,
+                        "runtime-owner-context-question",
+                        "runtime-owner-context-gate",
+                        "execution-detail",
+                        "Should the approved work item continue?",
+                        ["continue"],
+                        true));
+                Assert.Equal(HttpStatusCode.OK, pendingOwnerContextGate.StatusCode);
+                var pendingGateResult =
+                    await ReadJsonAsync<CoordinatorDecisionOperationResponse>(pendingOwnerContextGate);
+                Assert.True(pendingGateResult.Accepted);
+                Assert.Equal(16, pendingGateResult.StateVersion);
+                Assert.Equal("runtime-owner-context-gate", pendingGateResult.PendingGate?.RequestId);
+                Assert.Equal(
+                    ownerBeforeDecisionChange,
+                    await ReadRuntimeOwnerRowAsync(
+                        _connectionString, ownerSchema, project.ProjectId, "child-two"));
+            }
+            finally
+            {
+                selectionPause.Release();
+            }
+
+            using var staleRuntimeOwnerContext =
+                await runtimeOwnerTask.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(HttpStatusCode.Conflict, staleRuntimeOwnerContext.StatusCode);
+        }
+
+        using (var answerOwnerContextGate = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/runtime-owner-context-gate/answer",
+                   runToken,
+                   new AnswerCoordinatorGateRequest(
+                       16, "runtime-owner-context-answer", "continue", null)))
+        {
+            Assert.Equal(HttpStatusCode.OK, answerOwnerContextGate.StatusCode);
+            var answeredOwnerContextGate =
+                await ReadJsonAsync<CoordinatorDecisionOperationResponse>(answerOwnerContextGate);
+            Assert.True(answeredOwnerContextGate.Accepted);
+            Assert.Equal(17, answeredOwnerContextGate.StateVersion);
+            Assert.Null(answeredOwnerContextGate.PendingGate);
+        }
+
+        var mappedActiveChild = await ReadRuntimeOwnerRowAsync(
+            _connectionString, ownerSchema, project.ProjectId, "child-two");
+        Assert.Equal("implement-1", mappedActiveChild.WorkPlanItemId);
+        await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await ownerDatabase.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT node_kind, lifecycle_state
+            FROM "{ownerSchema}".coordination_sessions
+            WHERE project_id = @project AND run_id = @run AND session_id = 'child-two'
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", project.ProjectId);
+            command.Parameters.AddWithValue("run", RunId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("child_work", reader.GetString(0));
+            Assert.Equal("active", reader.GetString(1));
+        }
+        using (var availableOwnerContext = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child-two/runtime-owner-context",
+                   runToken,
+                   [TenantId]))
+        {
+            await AssertStatusAsync(availableOwnerContext, HttpStatusCode.OK);
+            Assert.Equal(
+                mappedActiveChild.ExecutionFence,
+                (await ReadJsonAsync<RuntimeOwnerContext>(availableOwnerContext)).ExecutionFence);
+        }
+
+        var originalContextRow = await ReadSelectionContextRowAsync(
+            _connectionString, ownerSchema, project.ProjectId, mappedActiveChild.ExecutionFence)
+            ?? throw new InvalidOperationException("Expected the current-fence selection context.");
+        var originalContextBinding = await ReadSelectionContextBindingSnapshotAsync(
+            _connectionString, ownerSchema, project.ProjectId, mappedActiveChild.ExecutionFence);
+        var acceptedSelectionSnapshot = await ReadAcceptedSelectionSnapshotAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await ownerDatabase.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            await using (var disableTrigger = new NpgsqlCommand($"""
+                ALTER TABLE "{ownerSchema}".coordinator_run_selection_context_versions
+                DISABLE TRIGGER coordinator_run_selection_context_versions_immutable
+                """, connection, transaction))
+                await disableTrigger.ExecuteNonQueryAsync();
+            try
+            {
+                await using var removeContext = new NpgsqlCommand($"""
+                    DELETE FROM "{ownerSchema}".coordinator_run_selection_context_versions
+                    WHERE project_id = @project AND run_id = @run AND execution_fence = @fence
+                    """, connection, transaction);
+                removeContext.Parameters.AddWithValue("project", project.ProjectId);
+                removeContext.Parameters.AddWithValue("run", RunId);
+                removeContext.Parameters.AddWithValue("fence", mappedActiveChild.ExecutionFence);
+                Assert.Equal(1, await removeContext.ExecuteNonQueryAsync());
+            }
+            finally
+            {
+                await using var enableTrigger = new NpgsqlCommand($"""
+                    ALTER TABLE "{ownerSchema}".coordinator_run_selection_context_versions
+                    ENABLE TRIGGER coordinator_run_selection_context_versions_immutable
+                    """, connection, transaction);
+                await enableTrigger.ExecuteNonQueryAsync();
+            }
+            await transaction.CommitAsync();
+        }
+
+        var effectsBeforeMissingContext = await ReadOwnerEffectCountsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        using (var missingContext = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child-two/runtime-owner-context",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, missingContext.StatusCode);
+            Assert.Contains(
+                "runtime_owner_context_unavailable",
+                await missingContext.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(
+            effectsBeforeMissingContext,
+            await ReadOwnerEffectCountsAsync(_connectionString, ownerSchema, project.ProjectId));
+        await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await ownerDatabase.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{ownerSchema}".coordinator_run_selection_context_versions
+                 WHERE project_id = @project AND run_id = @run AND execution_fence = @fence),
+                (SELECT accepted_selection IS NOT NULL FROM "{ownerSchema}".accepted_runs
+                 WHERE project_id = @project AND run_id = @run),
+                (SELECT tgenabled FROM pg_trigger
+                 WHERE tgrelid = '"{ownerSchema}".coordinator_run_selection_context_versions'::regclass
+                   AND tgname = 'coordinator_run_selection_context_versions_immutable')::text
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", project.ProjectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("fence", mappedActiveChild.ExecutionFence);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(0L, reader.GetInt64(0));
+            Assert.True(reader.GetBoolean(1));
+            Assert.Equal("O", reader.GetString(2));
+        }
+        Assert.Equal(
+            acceptedSelectionSnapshot,
+            await ReadAcceptedSelectionSnapshotAsync(_connectionString, ownerSchema, project.ProjectId));
+        await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await ownerDatabase.OpenConnectionAsync())
+        await using (var restoreContext = new NpgsqlCommand($"""
+            INSERT INTO "{ownerSchema}".coordinator_run_selection_context_versions
+            SELECT (jsonb_populate_record(
+                NULL::"{ownerSchema}".coordinator_run_selection_context_versions, @context::jsonb)).*
+            """, connection))
+        {
+            restoreContext.Parameters.AddWithValue("context", originalContextRow);
+            Assert.Equal(1, await restoreContext.ExecuteNonQueryAsync());
+        }
+        Assert.Equal(
+            originalContextBinding,
+            await ReadSelectionContextBindingSnapshotAsync(
+                _connectionString, ownerSchema, project.ProjectId, mappedActiveChild.ExecutionFence));
 
         using var boundaryRetryResponse = await SendJsonAsync(
             orchestrator,
@@ -1325,10 +1622,728 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             presented.MessageId,
             journalEvent.GetProperty("payload").GetProperty("messageId").GetGuid());
 
-        await RevokeRoleAsync(
-            projects.PrivilegedFixtureDataSource,
-            runnerRole.AssignmentId,
-            1);
+        async Task CompleteChildForForkCapacityAsync(RegisteredChild registeredChild)
+        {
+            using var bindingResponse = await SendAsync(
+                orchestrator,
+                HttpMethod.Get,
+                $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{registeredChild.Identity.SessionId}/owner-binding",
+                runToken,
+                [TenantId]);
+            await AssertStatusAsync(bindingResponse, HttpStatusCode.OK);
+            var binding = await ReadJsonAsync<CoordinationSessionBinding>(bindingResponse);
+            var expectedStateVersion = binding.StateVersion;
+            if (binding.TurnState == "idle")
+            {
+                using var boundaryResponse = await SendJsonAsync(
+                    orchestrator,
+                    HttpMethod.Post,
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{registeredChild.Identity.SessionId}/turn-boundary",
+                    runToken,
+                    new TurnBoundaryRequest(registeredChild.ExecutionFence, binding.StateVersion));
+                await AssertStatusAsync(boundaryResponse, HttpStatusCode.OK);
+                expectedStateVersion = (await ReadJsonAsync<TurnBoundaryResult>(boundaryResponse)).StateVersion;
+            }
+            else
+            {
+                Assert.Equal("active", binding.TurnState);
+            }
+
+            using var completionResponse = await SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{registeredChild.Identity.SessionId}/turn-completion",
+                runToken,
+                new FinishTurnRequest(
+                    registeredChild.ExecutionFence,
+                    expectedStateVersion,
+                    LogicalTurnCompletion.Completed));
+            await AssertStatusAsync(completionResponse, HttpStatusCode.OK);
+        }
+        await CompleteChildForForkCapacityAsync(child);
+        await CompleteChildForForkCapacityAsync(childTwo);
+
+        var forkEventId = Guid.NewGuid();
+        using var forkEventAppend = await SendJsonAsync(
+            events,
+            HttpMethod.Post,
+            "/internal/sessions/root/events",
+            runToken,
+            new AppendSessionEvent(
+                forkEventId,
+                SessionsContractVersions.CurrentSchemaVersion,
+                SessionsContractVersions.CurrentEventVersion,
+                new TurnSessionPayload(
+                    "assistant",
+                    new SessionObjectReference(new ObjectKey("turns/fork-source"), "turns"))));
+        await AssertStatusAsync(forkEventAppend, HttpStatusCode.Created);
+        using var forkSourceReplay = await SendAsync(
+            events, HttpMethod.Get, "/internal/sessions/root/events?limit=100", runToken, [TenantId]);
+        await AssertStatusAsync(forkSourceReplay, HttpStatusCode.OK);
+        using var forkSourceDocument =
+            JsonDocument.Parse(await forkSourceReplay.Content.ReadAsStringAsync());
+        var forkSourceEvents = forkSourceDocument.RootElement.GetProperty("events");
+        Assert.Equal(forkEventId, forkSourceEvents[forkSourceEvents.GetArrayLength() - 1]
+            .GetProperty("eventId").GetGuid());
+        var forkCursor = Assert.IsType<string>(
+            forkSourceDocument.RootElement.GetProperty("nextCursor").GetString());
+
+        string originalForkRetention;
+        async Task AssertNoEventsForkEffectsAsync(string targetSessionId)
+        {
+            await using var database = NpgsqlDataSource.Create(_connectionString);
+            await using var connection = await database.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand($"""
+                SELECT
+                    (SELECT count(*) FROM "{eventsSchema}".sessions
+                     WHERE project_id = @project AND run_id = @run AND session_id = @target),
+                    (SELECT count(*) FROM "{eventsSchema}".session_fork_lineage
+                     WHERE project_id = @project AND run_id = @run AND target_session_id = @target),
+                    (SELECT retain_until::text FROM "{eventsSchema}".session_object_references
+                     WHERE project_id = @project AND run_id = @run AND event_id = @event)
+                """, connection);
+            command.Parameters.AddWithValue("project", project.ProjectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("target", targetSessionId);
+            command.Parameters.AddWithValue("event", forkEventId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(0L, reader.GetInt64(0));
+            Assert.Equal(0L, reader.GetInt64(1));
+            Assert.Equal(originalForkRetention, reader.GetString(2));
+        }
+
+        await using (var database = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await database.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT retain_until::text
+            FROM "{eventsSchema}".session_object_references
+            WHERE project_id = @project AND run_id = @run AND event_id = @event
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", project.ProjectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("event", forkEventId);
+            originalForkRetention = (string)(await command.ExecuteScalarAsync() ??
+                throw new InvalidOperationException("Expected bounded source-object retention."));
+        }
+
+        using var directFork = await SendJsonAsync(
+            events,
+            HttpMethod.Post,
+            "/internal/sessions/root/fork",
+            runToken,
+            new SessionForkRequest(
+                "fork-without-owner-reservation",
+                forkEventId,
+                forkCursor,
+                "fork-without-owner-reservation"));
+        await AssertStatusAsync(directFork, HttpStatusCode.Conflict);
+        Assert.True(directFork.Headers.CacheControl?.NoStore);
+        await AssertNoEventsForkEffectsAsync("fork-without-owner-reservation");
+
+        var forkRequest = new CoordinationSessionForkRequest(
+            root.ExecutionFence,
+            "fork-owner-admitted",
+            "fork-owner-target",
+            forkEventId,
+            forkCursor,
+            CoordinationSessionKind.ChildWork);
+        var firstOwnerForkTask = SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
+            runToken,
+            forkRequest);
+        CoordinationSessionForkResult ownerForkResult;
+        CoordinationSessionForkResult ownerForkReplayResult;
+        try
+        {
+            await ownerForkRaceGate.WaitUntilFirstResponsePausedAsync()
+                .WaitAsync(TimeSpan.FromSeconds(30));
+            var secondOwnerForkTask = SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
+                runToken,
+                forkRequest);
+            await ownerForkRaceGate.WaitUntilSecondRequestPausedAsync()
+                .WaitAsync(TimeSpan.FromSeconds(30));
+
+            ownerForkRaceGate.ReleaseFirstResponse();
+            using (var ownerFork = await firstOwnerForkTask)
+            {
+                await AssertStatusAsync(ownerFork, HttpStatusCode.Created);
+                ownerForkResult = await ReadJsonAsync<CoordinationSessionForkResult>(ownerFork);
+                Assert.Equal(
+                    CoordinationForkRegistrationState.Registered,
+                    ownerForkResult.RegistrationState);
+                Assert.Equal(forkEventId, ownerForkResult.Lineage?.SourceEventId);
+                Assert.Equal(forkCursor, ownerForkResult.Lineage?.SourceCursor);
+            }
+
+            ownerForkRaceGate.ReleaseSecondRequest();
+            using var ownerForkReplay = await secondOwnerForkTask;
+            await AssertStatusAsync(ownerForkReplay, HttpStatusCode.OK);
+            ownerForkReplayResult =
+                await ReadJsonAsync<CoordinationSessionForkResult>(ownerForkReplay);
+            Assert.True(ownerForkReplayResult.IsDuplicate);
+            Assert.Equal(ownerForkResult.CommandId, ownerForkReplayResult.CommandId);
+        }
+        finally
+        {
+            ownerForkRaceGate.ReleaseFirstResponse();
+            ownerForkRaceGate.ReleaseSecondRequest();
+        }
+
+        await using (var database = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await database.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{eventsSchema}".sessions
+                 WHERE project_id = @project AND run_id = @run AND session_id = @target),
+                (SELECT count(*) FROM "{eventsSchema}".session_fork_lineage
+                 WHERE project_id = @project AND run_id = @run AND target_session_id = @target),
+                (SELECT retain_until::text FROM "{eventsSchema}".session_object_references
+                 WHERE project_id = @project AND run_id = @run AND event_id = @event),
+                (SELECT count(*) FROM "{ownerSchema}".coordination_sessions
+                 WHERE project_id = @project AND run_id = @run
+                   AND session_id = @target AND parent_session_id = 'root'),
+                (SELECT count(*) FROM "{ownerSchema}".outbox_events
+                 WHERE id = @command AND event_type = 'orchestrator.session.forked')
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", project.ProjectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("target", forkRequest.TargetSessionId);
+            command.Parameters.AddWithValue("event", forkEventId);
+            command.Parameters.AddWithValue("command", ownerForkResult.CommandId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(1L, reader.GetInt64(0));
+            Assert.Equal(1L, reader.GetInt64(1));
+            Assert.Equal(originalForkRetention, reader.GetString(2));
+            Assert.Equal(1L, reader.GetInt64(3));
+            Assert.Equal(1L, reader.GetInt64(4));
+        }
+
+        async Task RestoreRunnerRoleAsync()
+        {
+            runnerRole = await AssignRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerMembership.MembershipId,
+                ProjectAuthorityResourceType.Project,
+                project.ProjectId,
+                ProjectAuthorityRole.Orchestrator);
+        }
+
+        var latePrepareRequest = forkRequest with
+        {
+            IdempotencyKey = "fork-owner-prepare-late-revoke",
+            TargetSessionId = "fork-owner-prepare-late-revoke"
+        };
+        using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
+        await using (var lockConnection = await ownerDatabase.OpenConnectionAsync())
+        await using (var observationConnection = await ownerDatabase.OpenConnectionAsync())
+        await using (var ownerLock = await lockConnection.BeginTransactionAsync())
+        {
+            await using (var lockCommands = new NpgsqlCommand($"""
+                LOCK TABLE "{ownerSchema}".coordination_tree_commands IN SHARE MODE
+                """, lockConnection, ownerLock))
+                await lockCommands.ExecuteNonQueryAsync();
+
+            var latePrepareTask = SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
+                runToken,
+                latePrepareRequest);
+            try
+            {
+                await WaitForBlockedSqlAsync(
+                    observationConnection,
+                    lockConnection.ProcessID,
+                    $"""INSERT INTO "{ownerSchema}".coordination_tree_commands""");
+                await RevokeRoleAsync(
+                    projects.PrivilegedFixtureDataSource,
+                    runnerRole.AssignmentId,
+                    runnerRole.Revision);
+            }
+            finally
+            {
+                await ownerLock.RollbackAsync();
+            }
+
+            using var deniedPrepare = await latePrepareTask.WaitAsync(TimeSpan.FromSeconds(30));
+            await AssertStatusAsync(deniedPrepare, HttpStatusCode.Forbidden);
+        }
+        await AssertNoEventsForkEffectsAsync(latePrepareRequest.TargetSessionId);
+        await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await ownerDatabase.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{ownerSchema}".coordination_tree_commands
+            WHERE project_id = @project AND run_id = @run
+              AND requested_target_session_id = @target
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", project.ProjectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("target", latePrepareRequest.TargetSessionId);
+            Assert.Equal(0L, await command.ExecuteScalarAsync());
+        }
+        await RestoreRunnerRoleAsync();
+
+        var lateCompleteRequest = forkRequest with
+        {
+            IdempotencyKey = "fork-owner-complete-late-revoke",
+            TargetSessionId = "fork-owner-complete-late-revoke"
+        };
+        var ownerStreamId = $"coordination/{project.ProjectId}/{RunId}/root";
+        using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
+        await using (var lockConnection = await ownerDatabase.OpenConnectionAsync())
+        await using (var observationConnection = await ownerDatabase.OpenConnectionAsync())
+        await using (var ownerLock = await lockConnection.BeginTransactionAsync())
+        {
+            await using (var lockStream = new NpgsqlCommand($"""
+                SELECT stream_id FROM "{ownerSchema}".outbox_streams
+                WHERE stream_id = @stream FOR UPDATE
+                """, lockConnection, ownerLock))
+            {
+                lockStream.Parameters.AddWithValue("stream", ownerStreamId);
+                Assert.Equal(ownerStreamId, await lockStream.ExecuteScalarAsync());
+            }
+
+            var lateCompleteTask = SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
+                runToken,
+                lateCompleteRequest);
+            try
+            {
+                await WaitForBlockedSqlAsync(
+                    observationConnection,
+                    lockConnection.ProcessID,
+                    $"""UPDATE "{ownerSchema}".outbox_streams SET last_sequence""");
+                await RevokeRoleAsync(
+                    projects.PrivilegedFixtureDataSource,
+                    runnerRole.AssignmentId,
+                    runnerRole.Revision);
+            }
+            finally
+            {
+                await ownerLock.RollbackAsync();
+            }
+
+            using var deniedComplete = await lateCompleteTask.WaitAsync(TimeSpan.FromSeconds(30));
+            await AssertStatusAsync(deniedComplete, HttpStatusCode.Forbidden);
+            var unregistered = await ReadJsonAsync<CoordinationSessionForkResult>(deniedComplete);
+            Assert.Equal(CoordinationForkRegistrationState.Unregistered, unregistered.RegistrationState);
+            Assert.Equal("run_selection_permission_denied", unregistered.UnavailableCode);
+
+            await using var verifyDatabase = NpgsqlDataSource.Create(_connectionString);
+            await using var connection = await verifyDatabase.OpenConnectionAsync();
+            await using var verify = new NpgsqlCommand($"""
+                SELECT
+                    (SELECT count(*) FROM "{ownerSchema}".coordination_sessions
+                     WHERE project_id = @project AND run_id = @run AND session_id = @target),
+                    (SELECT count(*) FROM "{ownerSchema}".coordination_requests
+                     WHERE project_id = @project AND run_id = @run
+                       AND recipient_session_id = @target),
+                    (SELECT count(*) FROM "{ownerSchema}".outbox_events
+                     WHERE id = @command AND event_type = 'orchestrator.session.forked'),
+                    (SELECT count(*) FROM "{ownerSchema}".outbox_events
+                     WHERE id = @command AND event_type = 'orchestrator.session.fork_unregistered'),
+                    (SELECT result ->> 'registrationState'
+                     FROM "{ownerSchema}".coordination_tree_commands WHERE command_id = @command),
+                    (SELECT count(*) FROM "{eventsSchema}".sessions
+                     WHERE project_id = @project AND run_id = @run AND session_id = @target),
+                    (SELECT count(*) FROM "{eventsSchema}".session_fork_lineage
+                     WHERE project_id = @project AND run_id = @run AND target_session_id = @target)
+                """, connection);
+            verify.Parameters.AddWithValue("project", project.ProjectId);
+            verify.Parameters.AddWithValue("run", RunId);
+            verify.Parameters.AddWithValue("target", lateCompleteRequest.TargetSessionId);
+            verify.Parameters.AddWithValue("command", unregistered.CommandId);
+            await using var reader = await verify.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal(0L, reader.GetInt64(0));
+            Assert.Equal(0L, reader.GetInt64(1));
+            Assert.Equal(0L, reader.GetInt64(2));
+            Assert.Equal(1L, reader.GetInt64(3));
+            Assert.Equal("unregistered", reader.GetString(4));
+            Assert.Equal(1L, reader.GetInt64(5));
+            Assert.Equal(1L, reader.GetInt64(6));
+        }
+        await RestoreRunnerRoleAsync();
+
+        using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
+        await using (var lockConnection = await ownerDatabase.OpenConnectionAsync())
+        await using (var observationConnection = await ownerDatabase.OpenConnectionAsync())
+        await using (var ownerLock = await lockConnection.BeginTransactionAsync())
+        {
+            await using (var lockCommand = new NpgsqlCommand($"""
+                SELECT command_id FROM "{ownerSchema}".coordination_tree_commands
+                WHERE command_id = @command FOR UPDATE
+                """, lockConnection, ownerLock))
+            {
+                lockCommand.Parameters.AddWithValue("command", ownerForkResult.CommandId);
+                Assert.Equal(ownerForkResult.CommandId, await lockCommand.ExecuteScalarAsync());
+            }
+
+            var blockedReplay = SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
+                runToken,
+                forkRequest);
+            try
+            {
+                await WaitForBlockedSqlAsync(
+                    observationConnection,
+                    lockConnection.ProcessID,
+                    $"""coordination_tree_commands%FOR UPDATE""");
+                await RevokeRoleAsync(
+                    projects.PrivilegedFixtureDataSource,
+                    runnerRole.AssignmentId,
+                    runnerRole.Revision);
+            }
+            finally
+            {
+                await ownerLock.RollbackAsync();
+            }
+
+            using var deniedReplay = await blockedReplay.WaitAsync(TimeSpan.FromSeconds(30));
+            await AssertStatusAsync(deniedReplay, HttpStatusCode.Forbidden);
+        }
+        await RestoreRunnerRoleAsync();
+
+        using var preFailureDecisionResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(preFailureDecisionResponse, HttpStatusCode.OK);
+        var preFailureDecision =
+            await ReadJsonAsync<CoordinatorDecisionStateView>(preFailureDecisionResponse);
+        Assert.True(preFailureDecision.CanDispatch);
+        Assert.Null(preFailureDecision.PendingGate);
+
+        long pendingGateStateVersion;
+        using (var pendingFailureGate = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/questions",
+                   runToken,
+                   new AskCoordinatorQuestionRequest(
+                       preFailureDecision.StateVersion,
+                       "failure-pending-gate-question",
+                       "failure-pending-gate-once",
+                       "execution-detail",
+                       "Should the recovered work continue?",
+                       ["continue"],
+                       true)))
+        {
+            await AssertStatusAsync(pendingFailureGate, HttpStatusCode.OK);
+            var pendingGateResult =
+                await ReadJsonAsync<CoordinatorDecisionOperationResponse>(pendingFailureGate);
+            Assert.True(pendingGateResult.Accepted);
+            Assert.Equal("failure-pending-gate-once", pendingGateResult.PendingGate?.RequestId);
+            pendingGateStateVersion = pendingGateResult.StateVersion;
+        }
+
+        var historicalFence = preFailureDecision.ExecutionFence;
+        var historicalRows = await ReadOwnerFenceHistoryAsync(
+            _connectionString, ownerSchema, project.ProjectId, historicalFence);
+        var contextBindingBeforeFailure = await ReadSelectionContextBindingSnapshotAsync(
+            _connectionString, ownerSchema, project.ProjectId, historicalFence);
+        Assert.NotNull(contextBindingBeforeFailure);
+        var grantsBeforeFailure = await ReadGrantStateCountsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        Assert.True(grantsBeforeFailure.Total > 0);
+
+        using var runStatusResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(runStatusResponse, HttpStatusCode.OK);
+        var runStatus = await ReadJsonAsync<OwnerRunStatus>(runStatusResponse);
+        using var rootStatusResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(rootStatusResponse, HttpStatusCode.OK);
+        var rootStatus = await ReadJsonAsync<SessionStatusSnapshot>(rootStatusResponse);
+        var failureRequest = new ReportRunFailureRequest(
+            runStatus.ExecutionFence,
+            runStatus.StateVersion,
+            rootStatus.StateVersion,
+            "integration-runtime-failure",
+            OwnerRunFailureState.Indeterminate,
+            "runtime_lost",
+            "sdk-turn-unknown");
+        using var failureResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/turn-failure",
+            runToken,
+            failureRequest);
+        await AssertStatusAsync(failureResponse, HttpStatusCode.OK);
+        var failure = await ReadJsonAsync<RunExecutionTransitionResult>(failureResponse);
+        Assert.Equal("indeterminate", failure.State);
+        Assert.True(failure.ExecutionFence > runStatus.ExecutionFence);
+        Assert.Equal("runtime_lost", failure.CauseCode);
+        Assert.Equal("sdk-turn-unknown", failure.Reference);
+
+        using var failedRunStatusResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(failedRunStatusResponse, HttpStatusCode.OK);
+        var failedRunStatus = await ReadJsonAsync<OwnerRunStatus>(failedRunStatusResponse);
+        Assert.Equal("indeterminate", failedRunStatus.ExecutionState);
+        Assert.Equal("runtime_lost", failedRunStatus.CauseCode);
+        Assert.Equal("sdk-turn-unknown", failedRunStatus.Reference);
+        using var failedRootStatusResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(failedRootStatusResponse, HttpStatusCode.OK);
+        var failedRootStatus = await ReadJsonAsync<SessionStatusSnapshot>(failedRootStatusResponse);
+        Assert.Equal(failure.ExecutionFence, failedRootStatus.ExecutionFence);
+        Assert.Equal(CoordinationActivityState.Unknown, failedRootStatus.Activity);
+        Assert.Equal("unavailable", failedRootStatus.RuntimeEffectsState);
+        Assert.Equal("indeterminate", failedRootStatus.RunExecution.State);
+        Assert.Equal("runtime_lost", failedRootStatus.RunExecution.CauseCode);
+        Assert.Equal("sdk-turn-unknown", failedRootStatus.RunExecution.Reference);
+        using var failedDecisionResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(failedDecisionResponse, HttpStatusCode.OK);
+        var failedDecision = await ReadJsonAsync<CoordinatorDecisionStateView>(failedDecisionResponse);
+        Assert.Equal(failure.ExecutionFence, failedDecision.ExecutionFence);
+        Assert.Equal(pendingGateStateVersion + 1, failedDecision.StateVersion);
+        Assert.Null(failedDecision.PendingGate);
+        Assert.True(failedDecision.CanDispatch);
+        Assert.True(failedDecision.OutcomeConfirmed);
+        Assert.True(failedDecision.WorkflowConfirmed);
+        var failedDecisionRow = await ReadLatestDecisionSnapshotAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        Assert.Equal(failure.ExecutionFence, failedDecisionRow.ExecutionFence);
+        Assert.Equal(failedDecision.StateVersion, failedDecisionRow.StateVersion);
+        Assert.Equal(failure.ExecutionFence, failedDecisionRow.EnvelopeFence);
+        Assert.True(failedDecisionRow.PendingGateMissing);
+        Assert.True(failedDecisionRow.ConfirmedWorkPlanPresent);
+        Assert.True(failedDecisionRow.OutcomeConfirmed);
+        Assert.True(failedDecisionRow.WorkflowConfirmed);
+        Assert.Equal("cancelled", await ReadCoordinatorGateStateAsync(
+            _connectionString, ownerSchema, project.ProjectId, "failure-pending-gate-once"));
+        Assert.Equal(
+            historicalRows.Decisions,
+            (await ReadOwnerFenceHistoryAsync(
+                _connectionString, ownerSchema, project.ProjectId, historicalFence)).Decisions);
+        Assert.Equal(
+            historicalRows.Contexts,
+            (await ReadOwnerFenceHistoryAsync(
+                _connectionString, ownerSchema, project.ProjectId, historicalFence)).Contexts);
+        var contextBindingAfterFailure = await ReadSelectionContextBindingSnapshotAsync(
+            _connectionString, ownerSchema, project.ProjectId, failure.ExecutionFence);
+        Assert.Equal(contextBindingBeforeFailure, contextBindingAfterFailure);
+        var grantsAfterFailure = await ReadGrantStateCountsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        Assert.Equal(grantsBeforeFailure.Total, grantsAfterFailure.Total);
+        Assert.Equal(0, grantsAfterFailure.CurrentActive);
+        Assert.Equal(
+            grantsBeforeFailure.Superseded + grantsBeforeFailure.CurrentActive,
+            grantsAfterFailure.Superseded);
+
+        var recoveryRequest = new RecoverRunExecutionRequest(
+            failure.ExecutionFence,
+            failure.RunStateVersion,
+            "integration-runtime-recovery",
+            "operator_recovery",
+            "recovery-approved");
+        using var recoveryResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/recovery",
+            runToken,
+            recoveryRequest);
+        await AssertStatusAsync(recoveryResponse, HttpStatusCode.OK);
+        var recovered = await ReadJsonAsync<RunExecutionTransitionResult>(recoveryResponse);
+        Assert.Equal("idle", recovered.State);
+        Assert.True(recovered.ExecutionFence > failure.ExecutionFence);
+        Assert.Equal("runtime_lost", recovered.PreviousCauseCode);
+        Assert.Equal("sdk-turn-unknown", recovered.PreviousReference);
+        using var recoveredStatusResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(recoveredStatusResponse, HttpStatusCode.OK);
+        var recoveredStatus = await ReadJsonAsync<OwnerRunStatus>(recoveredStatusResponse);
+        Assert.Equal("idle", recoveredStatus.ExecutionState);
+        Assert.Null(recoveredStatus.CauseCode);
+        Assert.Null(recoveredStatus.Reference);
+        using var recoveredRootStatusResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/status",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(recoveredRootStatusResponse, HttpStatusCode.OK);
+        var recoveredRootStatus = await ReadJsonAsync<SessionStatusSnapshot>(recoveredRootStatusResponse);
+        Assert.Equal(recovered.ExecutionFence, recoveredRootStatus.ExecutionFence);
+        Assert.Equal(CoordinationActivityState.Idle, recoveredRootStatus.Activity);
+        Assert.Equal("unavailable", recoveredRootStatus.RuntimeEffectsState);
+        Assert.Equal("idle", recoveredRootStatus.RunExecution.State);
+        using var recoveredDecisionResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(recoveredDecisionResponse, HttpStatusCode.OK);
+        var recoveredDecision = await ReadJsonAsync<CoordinatorDecisionStateView>(recoveredDecisionResponse);
+        Assert.Equal(recovered.ExecutionFence, recoveredDecision.ExecutionFence);
+        Assert.Equal(pendingGateStateVersion + 2, recoveredDecision.StateVersion);
+        Assert.Null(recoveredDecision.PendingGate);
+        Assert.True(recoveredDecision.CanDispatch);
+        Assert.True(recoveredDecision.OutcomeConfirmed);
+        Assert.True(recoveredDecision.WorkflowConfirmed);
+        var recoveredDecisionRow = await ReadLatestDecisionSnapshotAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        Assert.Equal(recovered.ExecutionFence, recoveredDecisionRow.ExecutionFence);
+        Assert.Equal(recoveredDecision.StateVersion, recoveredDecisionRow.StateVersion);
+        Assert.Equal(recovered.ExecutionFence, recoveredDecisionRow.EnvelopeFence);
+        Assert.True(recoveredDecisionRow.PendingGateMissing);
+        Assert.True(recoveredDecisionRow.ConfirmedWorkPlanPresent);
+        Assert.True(recoveredDecisionRow.OutcomeConfirmed);
+        Assert.True(recoveredDecisionRow.WorkflowConfirmed);
+        Assert.Equal("cancelled", await ReadCoordinatorGateStateAsync(
+            _connectionString, ownerSchema, project.ProjectId, "failure-pending-gate-once"));
+        var recoveredHistoryRows = await ReadOwnerFenceHistoryAsync(
+            _connectionString, ownerSchema, project.ProjectId, historicalFence);
+        Assert.Equal(historicalRows.Decisions, recoveredHistoryRows.Decisions);
+        Assert.Equal(historicalRows.Contexts, recoveredHistoryRows.Contexts);
+        var contextBindingAfterRecovery = await ReadSelectionContextBindingSnapshotAsync(
+            _connectionString, ownerSchema, project.ProjectId, recovered.ExecutionFence);
+        Assert.Equal(contextBindingBeforeFailure, contextBindingAfterRecovery);
+        var grantsAfterRecovery = await ReadGrantStateCountsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        Assert.Equal(grantsBeforeFailure.Total, grantsAfterRecovery.Total);
+        Assert.Equal(0, grantsAfterRecovery.CurrentActive);
+        Assert.Equal(
+            grantsBeforeFailure.Superseded + grantsBeforeFailure.CurrentActive,
+            grantsAfterRecovery.Superseded);
+
+        await using (var outboxDatabase = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await outboxDatabase.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT event_type, payload ->> 'runtimeEffectsState',
+                   payload ->> 'physicalEffectsReplayed'
+            FROM "{ownerSchema}".outbox_events
+            WHERE id IN (@failure, @recovery)
+            ORDER BY event_type
+            """, connection))
+        {
+            command.Parameters.AddWithValue("failure", failure.OperationId);
+            command.Parameters.AddWithValue("recovery", recovered.OperationId);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("orchestrator.run.execution_indeterminate", reader.GetString(0));
+            Assert.Equal("unavailable", reader.GetString(1));
+            Assert.True(reader.IsDBNull(2));
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("orchestrator.run.execution_recovered", reader.GetString(0));
+            Assert.Equal("unavailable", reader.GetString(1));
+            Assert.Equal("false", reader.GetString(2));
+        }
+
+        await using (var restartedOwnerFactory = new OrchestratorIntegrationFactory(
+                         _connectionString,
+                         ownerSchema,
+                         signingKey,
+                         projects.CreateHandler,
+                         () => eventsFactory.Server.CreateHandler(),
+                         cacheObjectStore,
+                         sandboxProvider))
+        using (var restartedOrchestrator = restartedOwnerFactory.CreateClient(
+                   new WebApplicationFactoryClientOptions
+                   {
+                       BaseAddress = new Uri("https://orchestrator.test")
+                   }))
+        {
+            using var restartedStatusResponse = await SendAsync(
+                restartedOrchestrator,
+                HttpMethod.Get,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/status",
+                runToken,
+                [TenantId]);
+            await AssertStatusAsync(restartedStatusResponse, HttpStatusCode.OK);
+            Assert.Equal(
+                recovered.ExecutionFence,
+                (await ReadJsonAsync<OwnerRunStatus>(restartedStatusResponse)).ExecutionFence);
+            using var restartedDecisionResponse = await SendAsync(
+                restartedOrchestrator,
+                HttpMethod.Get,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions",
+                runToken,
+                [TenantId]);
+            await AssertStatusAsync(restartedDecisionResponse, HttpStatusCode.OK);
+            var restartedDecision =
+                await ReadJsonAsync<CoordinatorDecisionStateView>(restartedDecisionResponse);
+            Assert.Equal(recovered.ExecutionFence, restartedDecision.ExecutionFence);
+            Assert.Equal(recoveredDecision.StateVersion, restartedDecision.StateVersion);
+        }
+        forkRequest = forkRequest with { ExecutionFence = recovered.ExecutionFence };
+
+        var revocationPause = forkAdmissionGate.PauseSecondOwnerAdmission();
+        var revokedForkRequest = forkRequest with
+        {
+            IdempotencyKey = "fork-owner-revoked",
+            TargetSessionId = "fork-owner-revoked-target"
+        };
+        var revokedForkTask = SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
+            runToken,
+            revokedForkRequest);
+        try
+        {
+            await revocationPause.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            await RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerRole.AssignmentId,
+                runnerRole.Revision);
+        }
+        finally
+        {
+            revocationPause.Release();
+        }
+        using var revokedFork = await revokedForkTask;
+        await AssertStatusAsync(revokedFork, HttpStatusCode.Conflict);
+        var revokedForkResult = await ReadJsonAsync<CoordinationSessionForkResult>(revokedFork);
+        Assert.Equal(
+            CoordinationForkRegistrationState.Unregistered,
+            revokedForkResult.RegistrationState);
+        Assert.Equal("session_fork_admission_denied", revokedForkResult.UnavailableCode);
+        await AssertNoEventsForkEffectsAsync(revokedForkRequest.TargetSessionId);
+
         using var revokedBinding = await SendAsync(
             orchestrator,
             HttpMethod.Get,
@@ -1358,7 +2373,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using var connection = await dataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
             SELECT
-                (SELECT count(*) FROM "{schema}".coordinator_run_selection_contexts
+                (SELECT count(*) FROM "{schema}".coordinator_run_selection_context_versions
                     WHERE project_id = @project AND run_id = @run),
                 (SELECT count(*) FROM "{schema}".coordinator_decisions
                     WHERE project_id = @project AND run_id = @run),
@@ -1374,6 +2389,239 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
     }
 
+    private static async Task<(string[] Decisions, string[] Contexts)> ReadOwnerFenceHistoryAsync(
+        string connectionString,
+        string schema,
+        string projectId,
+        long throughFence)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        var decisions = new List<string>();
+        await using (var command = new NpgsqlCommand($"""
+            SELECT state_version, request_id, decision::text
+            FROM "{schema}".coordinator_decisions
+            WHERE project_id = @project AND run_id = @run AND session_id = 'root'
+              AND execution_fence <= @fence
+            ORDER BY state_version, request_id
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", projectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("fence", throughFence);
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                decisions.Add($"{reader.GetInt64(0)}:{reader.GetString(1)}:{reader.GetString(2)}");
+        }
+
+        var contexts = new List<string>();
+        await using (var command = new NpgsqlCommand($"""
+            SELECT row_to_json(context_version)::text
+            FROM "{schema}".coordinator_run_selection_context_versions AS context_version
+            WHERE project_id = @project AND run_id = @run AND execution_fence <= @fence
+            ORDER BY execution_fence
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", projectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("fence", throughFence);
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                contexts.Add(reader.GetString(0));
+        }
+
+        return (decisions.ToArray(), contexts.ToArray());
+    }
+
+    private static async Task<(long Total, long CurrentActive, long Superseded)> ReadGrantStateCountsAsync(
+        string connectionString,
+        string schema,
+        string projectId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT count(*),
+                count(*) FILTER (WHERE is_current AND grant_state = 'active'),
+                count(*) FILTER (WHERE NOT is_current AND grant_state = 'superseded')
+            FROM "{schema}".executable_action_grants
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2));
+    }
+
+    private static async Task<(
+        long ExecutionFence,
+        long StateVersion,
+        long EnvelopeFence,
+        bool PendingGateMissing,
+        bool ConfirmedWorkPlanPresent,
+        bool OutcomeConfirmed,
+        bool WorkflowConfirmed)> ReadLatestDecisionSnapshotAsync(
+        string connectionString,
+        string schema,
+        string projectId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT execution_fence, state_version,
+                   (decision -> 'envelope' ->> 'fence')::bigint,
+                   decision -> 'envelope' ->> 'pendingGate' IS NULL,
+                   decision -> 'envelope' -> 'confirmedWorkPlan' IS NOT NULL,
+                   (decision -> 'envelope' ->> 'outcomeConfirmed')::boolean,
+                   (decision -> 'envelope' ->> 'workflowConfirmed')::boolean
+            FROM "{schema}".coordinator_decisions
+            WHERE project_id = @project AND run_id = @run AND session_id = 'root'
+            ORDER BY state_version DESC
+            LIMIT 1
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetBoolean(3),
+            reader.GetBoolean(4),
+            reader.GetBoolean(5),
+            reader.GetBoolean(6));
+    }
+
+    private static async Task<string?> ReadSelectionContextBindingSnapshotAsync(
+        string connectionString,
+        string schema,
+        string projectId,
+        long executionFence)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT (to_jsonb(context_version) - 'execution_fence' - 'created_at')::text
+            FROM "{schema}".coordinator_run_selection_context_versions AS context_version
+            WHERE project_id = @project AND run_id = @run AND execution_fence = @fence
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        command.Parameters.AddWithValue("fence", executionFence);
+        return (string?)await command.ExecuteScalarAsync();
+    }
+
+    private static async Task<string> ReadAcceptedSelectionSnapshotAsync(
+        string connectionString,
+        string schema,
+        string projectId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT accepted_selection::text
+            FROM "{schema}".accepted_runs WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        return (string?)await command.ExecuteScalarAsync()
+            ?? throw new InvalidOperationException("Expected the accepted run selection snapshot.");
+    }
+
+    private static async Task<string?> ReadSelectionContextRowAsync(
+        string connectionString,
+        string schema,
+        string projectId,
+        long executionFence)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT row_to_json(context_version)::text
+            FROM "{schema}".coordinator_run_selection_context_versions AS context_version
+            WHERE project_id = @project AND run_id = @run AND execution_fence = @fence
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        command.Parameters.AddWithValue("fence", executionFence);
+        return (string?)await command.ExecuteScalarAsync();
+    }
+
+    private static async Task WaitForBlockedSqlAsync(
+        NpgsqlConnection observer,
+        int blockerProcessId,
+        string queryPattern)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (true)
+        {
+            await using var wait = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_stat_activity
+                    WHERE @locker = ANY(pg_blocking_pids(pid))
+                      AND query ILIKE '%' || @pattern || '%')
+                """, observer);
+            wait.Parameters.AddWithValue("locker", blockerProcessId);
+            wait.Parameters.AddWithValue("pattern", queryPattern);
+            if ((bool)(await wait.ExecuteScalarAsync(timeout.Token) ?? false))
+                return;
+            await Task.Delay(20, timeout.Token);
+        }
+    }
+
+    private static async Task<(long Children, long SpawnOutboxEvents)> ReadChildRegistrationEffectsAsync(
+        string connectionString,
+        string schema,
+        string projectId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{schema}".coordination_sessions
+                    WHERE project_id = @project AND run_id = @run AND parent_session_id IS NOT NULL),
+                (SELECT count(*) FROM "{schema}".outbox_events
+                    WHERE stream_id = @stream AND event_type = 'orchestrator.session.spawn_requested')
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        command.Parameters.AddWithValue("stream", $"coordination/{projectId}/{RunId}/root");
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetInt64(0), reader.GetInt64(1));
+    }
+
+    private static async Task<(
+        string? WorkPlanItemId,
+        long ExecutionFence,
+        long LogicalTurnOrdinal,
+        long StateVersion)> ReadRuntimeOwnerRowAsync(
+        string connectionString,
+        string schema,
+        string projectId,
+        string sessionId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT work_plan_item_id, execution_fence, logical_turn_ordinal, state_version
+            FROM "{schema}".coordination_sessions
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        command.Parameters.AddWithValue("session", sessionId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (
+            reader.IsDBNull(0) ? null : reader.GetString(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3));
+    }
+
     private static async Task AssertAcceptedSandboxBindingAsync(
         string connectionString,
         string schema,
@@ -1385,7 +2633,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using (var query = new NpgsqlCommand($"""
             SELECT provider_id, resource_id, resource_generation, negotiated_capabilities::text,
                    execution_fence, project_configuration_revision
-            FROM "{schema}".coordinator_run_selection_contexts
+            FROM "{schema}".coordinator_run_selection_context_versions
             WHERE project_id = @project AND run_id = @run
             """, connection))
         {
@@ -1405,7 +2653,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         await using var mutation = new NpgsqlCommand($"""
-            UPDATE "{schema}".coordinator_run_selection_contexts
+            UPDATE "{schema}".coordinator_run_selection_context_versions
             SET resource_generation = resource_generation + 1
             WHERE project_id = @project AND run_id = @run
             """, connection);
@@ -1460,6 +2708,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         command.Parameters.AddWithValue("request", requestId);
         return (string?)await command.ExecuteScalarAsync()
             ?? throw new InvalidOperationException("Expected the addressed request gate.");
+    }
+
+    private static async Task<string> ReadCoordinatorGateStateAsync(
+        string connectionString,
+        string schema,
+        string projectId,
+        string requestId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT gate_state FROM "{schema}".coordinator_gates
+            WHERE project_id = @project AND run_id = @run AND request_id = @request
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        command.Parameters.AddWithValue("request", requestId);
+        return (string?)await command.ExecuteScalarAsync()
+            ?? throw new InvalidOperationException("Expected the coordinator gate to be persisted.");
     }
 
     private static async Task<HttpResponseMessage> SendJsonAsync<T>(
@@ -1548,6 +2815,74 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
+    private sealed class DenyingSessionsJournal : ISessionsJournal
+    {
+        public int AppendCalls { get; private set; }
+
+        public Task<SessionRecord> CreateSessionAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string sessionId,
+            SessionProviderBinding binding,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionProviderBinding> GetProviderBindingAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string sessionId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionProviderBinding> GetRunProviderBindingAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string projectId,
+            string runId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionAppendResult> AppendAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string sessionId,
+            AppendSessionEvent input,
+            CancellationToken cancellationToken = default)
+        {
+            AppendCalls++;
+            return Task.FromException<SessionAppendResult>(
+                new SessionAccessDeniedException("PolicyEvaluation append remains fail-closed."));
+        }
+
+        public Task<SessionForkResult> ForkFromExplicitEventAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            string sourceSessionId,
+            SessionForkRequest request,
+            Func<CancellationToken, Task> validateAdmission,
+            CancellationToken cancellationToken = default) =>
+            throw new SessionForkUnsupportedException("The denying journal does not support session forks.");
+
+        public Task<SessionEventPage> ReplayAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            SessionEventPageRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionEventPage> ReplayRunAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            SessionRunEventPageRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public IAsyncEnumerable<SessionEventDelivery> SubscribeAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            SessionSubscriptionRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public IAsyncEnumerable<SessionEventDelivery> SubscribeRunAsync(
+            System.Security.Claims.ClaimsPrincipal principal,
+            SessionRunSubscriptionRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
     private sealed class InMemoryObjectStore : IObjectStore
     {
         private readonly Dictionary<ObjectKey, byte[]> _objects = [];
@@ -1609,6 +2944,172 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ValidAlgorithms = [SecurityAlgorithms.RsaSha256]
                 };
             });
+    }
+
+    private sealed class ForkAdmissionGate
+    {
+        private readonly object _sync = new();
+        private int _admissionsToSkip;
+        private ForkAdmissionPause? _armedPause;
+
+        public ForkAdmissionPause PauseSecondOwnerAdmission()
+        {
+            lock (_sync)
+            {
+                if (_armedPause is not null)
+                    throw new InvalidOperationException("A fork admission pause is already armed.");
+                _admissionsToSkip = 1;
+                return _armedPause = new ForkAdmissionPause();
+            }
+        }
+
+        public async Task PauseIfArmedAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri is not { } uri ||
+                !uri.AbsolutePath.EndsWith("/fork-admission", StringComparison.Ordinal))
+                return;
+
+            ForkAdmissionPause? pause;
+            lock (_sync)
+            {
+                if (_armedPause is null)
+                    return;
+                if (_admissionsToSkip > 0)
+                {
+                    _admissionsToSkip--;
+                    return;
+                }
+                pause = _armedPause;
+                _armedPause = null;
+            }
+
+            pause.MarkPaused();
+            await pause.WaitForReleaseAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private sealed class OwnerForkRaceGate
+    {
+        private readonly TaskCompletionSource _firstResponsePaused =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _secondRequestPaused =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseFirstResponse =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseSecondRequest =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _forkRequests;
+
+        public Task WaitUntilFirstResponsePausedAsync() => _firstResponsePaused.Task;
+        public Task WaitUntilSecondRequestPausedAsync() => _secondRequestPaused.Task;
+        public void ReleaseFirstResponse() => _releaseFirstResponse.TrySetResult();
+        public void ReleaseSecondRequest() => _releaseSecondRequest.TrySetResult();
+
+        public async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            Func<Task<HttpResponseMessage>> send,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri is not { } uri ||
+                !uri.AbsolutePath.EndsWith("/fork", StringComparison.Ordinal))
+                return await send().ConfigureAwait(false);
+
+            switch (Interlocked.Increment(ref _forkRequests))
+            {
+                case 1:
+                {
+                    var response = await send().ConfigureAwait(false);
+                    _firstResponsePaused.TrySetResult();
+                    await _releaseFirstResponse.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    return response;
+                }
+                case 2:
+                    _secondRequestPaused.TrySetResult();
+                    await _releaseSecondRequest.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    break;
+            }
+
+            return await send().ConfigureAwait(false);
+        }
+    }
+
+    private sealed class OwnerForkRaceHandler(
+        HttpMessageHandler innerHandler,
+        OwnerForkRaceGate gate) : DelegatingHandler(innerHandler)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            gate.SendAsync(
+                request,
+                () => base.SendAsync(request, cancellationToken),
+                cancellationToken);
+    }
+
+    private sealed class RuntimeOwnerContextSelectionPause
+    {
+        private readonly TaskCompletionSource _paused =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _selectionReads;
+
+        public Task WaitUntilPausedAsync() => _paused.Task;
+        public void Release() => _release.TrySetResult();
+
+        public async Task PauseSecondSelectionReadAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri is not { } uri ||
+                !uri.AbsolutePath.EndsWith("/selection", StringComparison.Ordinal) ||
+                Interlocked.Increment(ref _selectionReads) != 2)
+                return;
+
+            _paused.TrySetResult();
+            await _release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private sealed class RuntimeOwnerContextSelectionBarrierHandler(
+        HttpMessageHandler innerHandler,
+        RuntimeOwnerContextSelectionPause pause) : DelegatingHandler(innerHandler)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await pause.PauseSecondSelectionReadAsync(request, cancellationToken).ConfigureAwait(false);
+            return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private sealed class ForkAdmissionPause
+    {
+        private readonly TaskCompletionSource _paused =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task WaitUntilPausedAsync() => _paused.Task;
+        public void Release() => _release.TrySetResult();
+        public void MarkPaused() => _paused.TrySetResult();
+
+        public Task WaitForReleaseAsync(CancellationToken cancellationToken) =>
+            _release.Task.WaitAsync(cancellationToken);
+    }
+
+    private sealed class ForkAdmissionBarrierHandler(
+        HttpMessageHandler innerHandler,
+        ForkAdmissionGate gate) : DelegatingHandler(innerHandler)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await gate.PauseIfArmedAsync(request, cancellationToken).ConfigureAwait(false);
+            return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private sealed class OrchestratorIntegrationFactory(
@@ -1699,7 +3200,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
-            var databaseName = new NpgsqlConnectionStringBuilder(connectionString).Database;
+            var databaseName = new NpgsqlConnectionStringBuilder(connectionString).Database
+                ?? throw new InvalidOperationException("The integration database name is missing.");
             builder.UseSetting("EventsAndSessions:Knowledge:BaseAddress", "https://knowledge.test/");
             builder.UseSetting("ProjectsConfig:BaseAddress", "https://projects.test/");
             builder.ConfigureAppConfiguration((_, configuration) =>
@@ -1740,4 +3242,5 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             });
         }
     }
+
 }

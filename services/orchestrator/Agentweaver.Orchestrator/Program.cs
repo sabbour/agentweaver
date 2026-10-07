@@ -66,7 +66,8 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(services => new CoordinationOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
-    services.GetRequiredService<TimeProvider>()));
+    services.GetRequiredService<TimeProvider>(),
+    services.GetRequiredService<CoordinatorDecisionOwnerStore>()));
 builder.Services.AddSingleton(services => new CoordinatorRunSelectionContextStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,

@@ -17,6 +17,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
     public const int MaximumPageSize = 200;
     public const int MaximumSubscriptionEvents = 10_000;
     public const int MaximumSubscriptionSeconds = 300;
+    private const int CursorVersion = 1;
     private const string InboxConsumer = "events-and-sessions.session-events";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -32,6 +33,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
     private readonly string _providerBindings;
     private readonly string _runStreams;
     private readonly string _events;
+    private readonly string _forkLineage;
     private readonly string _objectReferences;
     private readonly PostgresOutbox _outbox;
     private readonly TimeProvider _timeProvider;
@@ -52,6 +54,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         _providerBindings = $"{_schema}.session_provider_bindings";
         _runStreams = $"{_schema}.session_run_streams";
         _events = $"{_schema}.session_events";
+        _forkLineage = $"{_schema}.session_fork_lineage";
         _objectReferences = $"{_schema}.session_object_references";
         _outbox = new PostgresOutbox(dataSource, options.Schema);
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -334,6 +337,143 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return new SessionAppendResult(envelope, IsDuplicate: false);
     }
 
+    public async Task<SessionForkResult> ForkFromExplicitEventAsync(
+        ClaimsPrincipal principal,
+        string sourceSessionId,
+        SessionForkRequest request,
+        Func<CancellationToken, Task> validateAdmission,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(validateAdmission);
+        var scope = RequireScope(principal, out var actorId);
+        var source = scope.ForSession(sourceSessionId);
+        var targetIdentity = scope.ForSession(request.TargetSessionId);
+        ValidateForkRequest(source, targetIdentity, request);
+        if (actorId is null)
+            throw new SessionAuthenticationException();
+        var sourcePosition = DecodeCursor(request.SourceCursor, source);
+        if (sourcePosition < 1)
+            throw new ArgumentException("A fork cursor must identify a committed event.", nameof(request));
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var sourceSession = await ReadSessionAsync(
+            connection, transaction, source, lockRow: true, cancellationToken).ConfigureAwait(false);
+        RequireOwnedSession(sourceSession, source);
+        var binding = await ReadProviderBindingAsync(
+            connection, transaction, source.ProjectId, source.RunId, lockRow: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (binding is null ||
+            binding.ProviderId != NativePostgresSessionsProvider.ProviderId ||
+            !binding.NegotiatedCapabilities.Contains(SessionsCapabilities.Fork))
+            throw new SessionForkUnsupportedException(
+                "The pinned Sessions provider does not support explicit-event forks.");
+
+        var sourceEvent = await ReadEventByIdAsync(
+            connection, transaction, source.ProjectId, source.RunId, request.SourceEventId, cancellationToken)
+            .ConfigureAwait(false);
+        if (sourceEvent is null || sourceEvent.Identity != source || sourceEvent.Position != sourcePosition)
+            throw new SessionEventConflictException(
+                "The source event and cursor do not identify the same committed event.");
+        if (!SessionEventPayloadValidation.SupportsEventVersion(
+                sourceEvent.EventVersion, sourceEvent.Payload))
+            throw new SessionContractVersionException(
+                "The committed source event version cannot be read by this Sessions journal.");
+
+        var providerBindingHash = HashProviderBinding(binding);
+        var commandHash = HashForkRequest(source, request, sourcePosition, providerBindingHash);
+        var replay = await ReadExistingForkAsync(
+            connection, transaction, source, actorId, request.IdempotencyKey, commandHash, cancellationToken)
+            .ConfigureAwait(false);
+        if (replay is not null)
+        {
+            await validateAdmission(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return replay;
+        }
+
+        var existingTarget = await ReadSessionAsync(
+            connection, transaction, targetIdentity, lockRow: true, cancellationToken).ConfigureAwait(false);
+        if (existingTarget is not null)
+            throw new SessionEventConflictException("The target session identity is already in use.");
+
+        DateTimeOffset createdAt;
+        await using (var createTarget = new NpgsqlCommand($"""
+            INSERT INTO {_sessions} (session_id, project_id, run_id)
+            VALUES (@session, @project, @run)
+            ON CONFLICT (project_id, run_id, session_id) DO NOTHING
+            RETURNING created_at
+            """, connection, transaction))
+        {
+            AddIdentity(createTarget, targetIdentity);
+            await using var reader = await createTarget.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new SessionEventConflictException("The target session identity is already in use.");
+            createdAt = reader.GetFieldValue<DateTimeOffset>(0);
+        }
+
+        var lineage = new SessionForkLineage(
+            source,
+            sourceEvent.EventId,
+            sourceEvent.Position,
+            CursorVersion,
+            sourceEvent.SchemaVersion,
+            sourceEvent.EventVersion,
+            providerBindingHash,
+            request.SourceCursor);
+        await using (var insertLineage = new NpgsqlCommand($"""
+            INSERT INTO {_forkLineage}
+                (project_id, run_id, target_session_id, source_session_id, source_event_id,
+                 source_position, cursor_version, source_schema_version, source_event_version,
+                 provider_binding_hash, source_cursor, actor_subject, idempotency_key, command_hash)
+            VALUES (@project, @run, @target, @source, @event, @position, @cursorVersion,
+                @schemaVersion, @eventVersion, @bindingHash, @cursor, @actor, @key, @hash)
+            ON CONFLICT DO NOTHING
+            """, connection, transaction))
+        {
+            AddIdentity(insertLineage, targetIdentity);
+            insertLineage.Parameters.AddWithValue("target", NpgsqlDbType.Varchar, targetIdentity.SessionId);
+            insertLineage.Parameters.AddWithValue("source", NpgsqlDbType.Varchar, source.SessionId);
+            insertLineage.Parameters.AddWithValue("event", NpgsqlDbType.Uuid, sourceEvent.EventId);
+            insertLineage.Parameters.AddWithValue("position", NpgsqlDbType.Bigint, sourceEvent.Position);
+            insertLineage.Parameters.AddWithValue("cursorVersion", NpgsqlDbType.Integer, CursorVersion);
+            insertLineage.Parameters.AddWithValue("schemaVersion", NpgsqlDbType.Integer, sourceEvent.SchemaVersion);
+            insertLineage.Parameters.AddWithValue("eventVersion", NpgsqlDbType.Integer, sourceEvent.EventVersion);
+            insertLineage.Parameters.AddWithValue("bindingHash", NpgsqlDbType.Char, providerBindingHash);
+            insertLineage.Parameters.AddWithValue("cursor", NpgsqlDbType.Varchar, request.SourceCursor);
+            insertLineage.Parameters.AddWithValue("actor", NpgsqlDbType.Varchar, actorId);
+            insertLineage.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, request.IdempotencyKey);
+            insertLineage.Parameters.AddWithValue("hash", NpgsqlDbType.Char, commandHash);
+            if (await insertLineage.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 0)
+            {
+                var concurrentReplay = await ReadExistingForkAsync(
+                    connection,
+                    transaction,
+                    source,
+                    actorId,
+                    request.IdempotencyKey,
+                    commandHash,
+                    cancellationToken).ConfigureAwait(false);
+                if (concurrentReplay is null)
+                    throw new SessionEventConflictException("The target session identity is already in use.");
+                await validateAdmission(cancellationToken).ConfigureAwait(false);
+                await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                return concurrentReplay;
+            }
+        }
+
+        var lastPosition = await ReadRunPositionAsync(
+            connection, transaction, targetIdentity.ProjectId, targetIdentity.RunId, cancellationToken)
+            .ConfigureAwait(false);
+        await validateAdmission(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new SessionForkResult(
+            new SessionRecord(targetIdentity, createdAt, lastPosition),
+            lineage,
+            IsDuplicate: false);
+    }
+
     internal async Task<SessionEventEnvelope> AppendAddressedMessageAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -483,16 +623,47 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         string? requestCursor,
         CancellationToken cancellationToken)
     {
-        var sessionFilter = sessionId is null ? string.Empty : "AND session_id = @session";
-        await using var command = new NpgsqlCommand($"""
-            SELECT event_id, project_id, run_id, session_id, position, schema_version, event_version,
-                occurred_at, payload, object_references
-            FROM {_events}
-            WHERE project_id = @project AND run_id = @run AND position > @after
-                {sessionFilter}
-            ORDER BY position
-            LIMIT @limit
-            """, connection);
+        var queryText = sessionId is null
+            ? $"""
+                SELECT event_id, project_id, run_id, session_id, position, schema_version, event_version,
+                    occurred_at, payload, object_references
+                FROM {_events}
+                WHERE project_id = @project AND run_id = @run AND position > @after
+                ORDER BY position
+                LIMIT @limit
+                """
+            : $"""
+                WITH RECURSIVE visible_sessions(session_id, lower_position, upper_position) AS (
+                    SELECT @session, COALESCE(fork.source_position, 0)::bigint, run.last_position
+                    FROM {_runStreams} AS run
+                    LEFT JOIN {_forkLineage} AS fork
+                      ON fork.project_id = run.project_id AND fork.run_id = run.run_id
+                     AND fork.target_session_id = @session
+                    WHERE run.project_id = @project AND run.run_id = @run
+                    UNION ALL
+                    SELECT fork.source_session_id,
+                        COALESCE(parent.source_position, 0)::bigint,
+                        LEAST(visible.upper_position, fork.source_position)
+                    FROM visible_sessions AS visible
+                    JOIN {_forkLineage} AS fork
+                      ON fork.project_id = @project AND fork.run_id = @run
+                     AND fork.target_session_id = visible.session_id
+                    LEFT JOIN {_forkLineage} AS parent
+                      ON parent.project_id = @project AND parent.run_id = @run
+                     AND parent.target_session_id = fork.source_session_id
+                )
+                SELECT event.event_id, event.project_id, event.run_id, event.session_id,
+                    event.position, event.schema_version, event.event_version,
+                    event.occurred_at, event.payload, event.object_references
+                FROM {_events} AS event
+                JOIN visible_sessions AS visible ON visible.session_id = event.session_id
+                WHERE event.project_id = @project AND event.run_id = @run
+                    AND event.position > GREATEST(@after, visible.lower_position)
+                    AND event.position <= visible.upper_position
+                ORDER BY event.position
+                LIMIT @limit
+                """;
+        await using var command = new NpgsqlCommand(queryText, connection);
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, scope.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, scope.RunId);
         if (sessionId is not null)
@@ -523,6 +694,8 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateSubscriptionBounds(request.MaximumEvents, request.MaximumDurationSeconds);
+        var scope = RequireScope(principal);
+        _ = scope.ForSession(request.SessionId);
 
         var cursor = request.Cursor;
         var emitted = 0;
@@ -538,7 +711,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
                 foreach (var item in page.Events)
                 {
                     yield return new SessionEventDelivery(
-                        item, EncodeCursor(item.Identity, item.Position));
+                        item, EncodeCursor(scope.ForSession(request.SessionId), item.Position));
                     emitted++;
                     if (emitted >= request.MaximumEvents)
                         yield break;
@@ -731,6 +904,112 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         _ = SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload);
     }
 
+    private static void ValidateForkRequest(
+        SessionIdentity source,
+        SessionIdentity target,
+        SessionForkRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (source == target || request.SourceEventId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(request.SourceCursor) || request.SourceCursor.Length > 2048 ||
+            string.IsNullOrWhiteSpace(request.IdempotencyKey) || request.IdempotencyKey.Length > 128 ||
+            request.IdempotencyKey.Any(char.IsControl))
+            throw new ArgumentException("The explicit-event fork request is invalid.", nameof(request));
+    }
+
+    private async Task<SessionForkResult?> ReadExistingForkAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity source,
+        string actorId,
+        string idempotencyKey,
+        string commandHash,
+        CancellationToken cancellationToken)
+    {
+        StoredFork? stored;
+        await using (var command = new NpgsqlCommand($"""
+            SELECT target_session_id, source_session_id, source_event_id, source_position,
+                cursor_version, source_schema_version, source_event_version, provider_binding_hash,
+                source_cursor, command_hash
+            FROM {_forkLineage}
+            WHERE project_id = @project AND run_id = @run
+                AND actor_subject = @actor AND idempotency_key = @key
+            FOR UPDATE
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, source.ProjectId);
+            command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, source.RunId);
+            command.Parameters.AddWithValue("actor", NpgsqlDbType.Varchar, actorId);
+            command.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, idempotencyKey);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                return null;
+            stored = new StoredFork(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetGuid(2),
+                reader.GetInt64(3),
+                reader.GetInt32(4),
+                reader.GetInt32(5),
+                reader.GetInt32(6),
+                reader.GetString(7).TrimEnd(),
+                reader.GetString(8),
+                reader.GetString(9).TrimEnd());
+        }
+
+        if (!string.Equals(stored.CommandHash, commandHash, StringComparison.Ordinal))
+            throw new SessionEventConflictException(
+                "The fork idempotency key was already used for a different source or target.");
+        var targetIdentity = new SessionIdentity(source.ProjectId, source.RunId, stored.TargetSessionId);
+        var target = await ReadSessionAsync(
+            connection, transaction, targetIdentity, lockRow: false, cancellationToken).ConfigureAwait(false);
+        if (target is null)
+            throw new InvalidOperationException("A stored session fork has no target session.");
+        var lineage = new SessionForkLineage(
+            new SessionIdentity(source.ProjectId, source.RunId, stored.SourceSessionId),
+            stored.SourceEventId,
+            stored.SourcePosition,
+            stored.CursorVersion,
+            stored.SourceSchemaVersion,
+            stored.SourceEventVersion,
+            stored.ProviderBindingHash,
+            stored.SourceCursor);
+        return new SessionForkResult(target, lineage, IsDuplicate: true);
+    }
+
+    private static string HashForkRequest(
+        SessionIdentity source,
+        SessionForkRequest request,
+        long sourcePosition,
+        string providerBindingHash) =>
+        Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            source.ProjectId,
+            source.RunId,
+            source.SessionId,
+            request.TargetSessionId,
+            request.SourceEventId,
+            request.SourceCursor,
+            sourcePosition,
+            CursorVersion,
+            providerBindingHash
+        }, JsonOptions)));
+
+    private static string HashProviderBinding(SessionProviderBinding binding) =>
+        Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            binding.ProjectId,
+            binding.RunId,
+            binding.ProviderId,
+            AdapterVersion = binding.AdapterVersion.ToString(),
+            binding.OptionsSchemaVersion,
+            binding.OptionsRevision,
+            binding.ResourceId,
+            binding.ResourceGeneration,
+            NegotiatedCapabilities = binding.NegotiatedCapabilities
+                .OrderBy(value => value, StringComparer.Ordinal)
+        }, JsonOptions)));
+
     private static JsonElement CreateCanonicalInput(SessionIdentity identity, AppendSessionEvent input) =>
         JsonSerializer.SerializeToElement(new CanonicalInput(
             input.SchemaVersion, input.EventVersion, input.EventId,
@@ -788,7 +1067,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             var encoded = cursor.Replace('-', '+').Replace('_', '/');
             encoded = encoded.PadRight(encoded.Length + ((4 - encoded.Length % 4) % 4), '=');
             var data = JsonSerializer.Deserialize<CursorData>(Convert.FromBase64String(encoded), JsonOptions);
-            if (data is null || data.Position < 0 || data.ProjectId != projectId ||
+            if (data is null || data.Version != CursorVersion || data.Position < 0 || data.ProjectId != projectId ||
                 data.RunId != runId || data.SessionId != sessionId)
                 throw new ArgumentException("The replay cursor does not belong to this event stream.", nameof(cursor));
             return data.Position;
@@ -862,7 +1141,22 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return new DateTimeOffset(utc.Ticks - utc.Ticks % 10, TimeSpan.Zero);
     }
 
-    private sealed record CursorData(string ProjectId, string RunId, string? SessionId, long Position);
+    private sealed record CursorData(string ProjectId, string RunId, string? SessionId, long Position)
+    {
+        public int Version { get; init; } = CursorVersion;
+    }
+
+    private sealed record StoredFork(
+        string TargetSessionId,
+        string SourceSessionId,
+        Guid SourceEventId,
+        long SourcePosition,
+        int CursorVersion,
+        int SourceSchemaVersion,
+        int SourceEventVersion,
+        string ProviderBindingHash,
+        string SourceCursor,
+        string CommandHash);
 
     private sealed record ScopedEventIdentity(Guid OutboxId, string MessageId, string RetentionOwnerId);
 

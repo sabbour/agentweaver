@@ -24,7 +24,7 @@ public sealed class EventsAndSessionsMigrationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task FreshSchemaAppliesAddressedMessagesThenProjectFacts()
+    public async Task FreshSchemaAppliesAddressedMessagesProjectFactsAndExplicitForks()
     {
         await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
         await EventsAndSessionsMigrator.VerifyAsync(_fixture.DataSource, _schema);
@@ -35,7 +35,7 @@ public sealed class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var command = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".sessions_schema_migrations
             """, connection);
-        Assert.Equal(3, Convert.ToInt32(await command.ExecuteScalarAsync()));
+        Assert.Equal(4, Convert.ToInt32(await command.ExecuteScalarAsync()));
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public sealed class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(7L, reader.GetInt64(0));
-        Assert.Equal(3L, reader.GetInt64(1));
+        Assert.Equal(4L, reader.GetInt64(1));
     }
 
     [Fact]
