@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
@@ -1127,6 +1128,51 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         await _journal.CreateSessionAsync(_owner, "session-2", stored);
         Assert.True(stored.Matches(await _journal.GetProviderBindingAsync(_owner, "session-2")));
         Assert.True(stored.Matches(await _journal.GetProviderBindingAsync(_owner, "session-1")));
+    }
+
+    [Fact]
+    public async Task PersistedPrePolicyCapabilityPinRemainsAvailableAfterProviderRestart()
+    {
+        var legacyOwner = Principal("project-before-policy-events", "run-before-policy-events");
+        var legacyCapabilities = ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            SessionsCapabilities.Append,
+            SessionsCapabilities.Replay,
+            SessionsCapabilities.Subscribe,
+            SessionsCapabilities.ObjectReferences,
+            SessionsCapabilities.ToolCalls,
+            SessionsCapabilities.AcceptedDecisions,
+            SessionsCapabilities.AcceptedEffects);
+        var legacyBinding = new SessionProviderBinding(
+            "project-before-policy-events",
+            "run-before-policy-events",
+            NativePostgresSessionsProvider.ProviderId,
+            NativePostgresSessionsProvider.AdapterVersion,
+            NativePostgresSessionsProvider.OptionsSchemaVersion,
+            _options.OptionsRevision,
+            _options.ResourceId,
+            _options.ResourceGeneration,
+            legacyCapabilities);
+        await _journal.CreateSessionAsync(legacyOwner, "session-before-policy-events", legacyBinding);
+
+        var persisted = await _journal.GetProviderBindingAsync(
+            legacyOwner, "session-before-policy-events");
+        Assert.True(legacyBinding.Matches(persisted));
+        Assert.DoesNotContain(SessionsCapabilities.PolicyEvaluations, persisted.NegotiatedCapabilities);
+
+        var restartedProvider = new NativePostgresSessionsProvider();
+        var restartedCatalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [restartedProvider.CreateRegistration(_options)],
+            [new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId)],
+            []).Value);
+        var restartedBindingService = new SessionsProviderBindingService(
+            restartedProvider,
+            restartedCatalog,
+            new ProviderResolver(restartedCatalog),
+            _options,
+            _fixture.DataSource);
+
+        await restartedBindingService.VerifyPinnedAsync(legacyOwner, persisted);
     }
 
     [Fact]

@@ -187,11 +187,13 @@ internal sealed class CoordinationOwnerStore
         string childSessionId,
         int maxChildren,
         int maxConcurrentChildren,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         var result = await RegisterChildCoreAsync(
             actor, parent, childSessionId, CoordinationSessionKind.ChildWork, null,
-            null, maxChildren, maxConcurrentChildren, cancellationToken).ConfigureAwait(false);
+            null, maxChildren, maxConcurrentChildren, cancellationToken,
+            revalidateCurrentAuthority).ConfigureAwait(false);
         return result.Registered;
     }
 
@@ -202,12 +204,14 @@ internal sealed class CoordinationOwnerStore
         int maxChildren,
         int maxConcurrentChildren,
         CancellationToken cancellationToken,
-        ConfirmedWorkPlanItemAssociation? workPlanItemAssociation = null)
+        ConfirmedWorkPlanItemAssociation? workPlanItemAssociation = null,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         ValidateSpawnRequest(request);
         var result = await RegisterChildCoreAsync(
             actor, parent, request.SessionId, request.Kind, request,
-            workPlanItemAssociation, maxChildren, maxConcurrentChildren, cancellationToken).ConfigureAwait(false);
+            workPlanItemAssociation, maxChildren, maxConcurrentChildren, cancellationToken,
+            revalidateCurrentAuthority).ConfigureAwait(false);
         return result.Spawned
             ?? throw new CoordinationException("session_spawn_unavailable", StatusCodes.Status503ServiceUnavailable);
     }
@@ -675,7 +679,8 @@ internal sealed class CoordinationOwnerStore
         ConfirmedWorkPlanItemAssociation? workPlanItemAssociation,
         int maxChildren,
         int maxConcurrentChildren,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         CoordinationIdentity.ValidateIdentity(childSessionId, nameof(childSessionId));
@@ -708,8 +713,14 @@ internal sealed class CoordinationOwnerStore
                 throw new CoordinationException(
                     "session_work_plan_item_unavailable", StatusCodes.Status409Conflict);
 
+            var rootIdentity = new SessionIdentity(
+                parent.ProjectId, parent.RunId, parentSession.RootSessionId);
+            var rootSession = await ReadSessionAsync(
+                connection, transaction, rootIdentity, forUpdate: true, cancellationToken).ConfigureAwait(false);
+            RequireWriter(rootSession, actor);
+            RequireCurrentActiveSession(rootSession, run);
             await using var latestDecision = new NpgsqlCommand($"""
-                SELECT state_version
+                SELECT state_version, execution_fence, decision::text
                 FROM {_decisions}
                 WHERE project_id = @project AND run_id = @run AND session_id = @root
                 ORDER BY state_version DESC
@@ -718,11 +729,25 @@ internal sealed class CoordinationOwnerStore
             AddRunScope(latestDecision, parent.ProjectId, parent.RunId);
             latestDecision.Parameters.AddWithValue(
                 "root", NpgsqlDbType.Varchar, parentSession.RootSessionId);
-            var currentDecisionVersion = await latestDecision.ExecuteScalarAsync(cancellationToken)
+            await using var decisionReader = await latestDecision.ExecuteReaderAsync(cancellationToken)
                 .ConfigureAwait(false);
-            if (currentDecisionVersion is null ||
-                Convert.ToInt64(currentDecisionVersion, System.Globalization.CultureInfo.InvariantCulture) !=
-                workPlanItemAssociation.DecisionStateVersion)
+            if (!await decisionReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new CoordinationException(
+                    "session_work_plan_item_stale", StatusCodes.Status409Conflict);
+            var currentDecisionVersion = decisionReader.GetInt64(0);
+            var currentDecisionFence = decisionReader.GetInt64(1);
+            var currentDecisionJson = decisionReader.GetString(2);
+            await decisionReader.DisposeAsync().ConfigureAwait(false);
+            if (currentDecisionVersion != workPlanItemAssociation.DecisionStateVersion ||
+                currentDecisionFence != run.Fence ||
+                !RuntimeDecisionAllowsWorkPlanItem(
+                    currentDecisionJson,
+                    actor,
+                    rootIdentity,
+                    run.TenantId,
+                    run.SelectionHash,
+                    run.Fence,
+                    workPlanItemId))
                 throw new CoordinationException(
                     "session_work_plan_item_stale", StatusCodes.Status409Conflict);
         }
@@ -744,6 +769,8 @@ internal sealed class CoordinationOwnerStore
                 cancellationToken).ConfigureAwait(false);
             if (replay is not null)
             {
+                if (revalidateCurrentAuthority is not null)
+                    await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                 return new SessionRegistrationResult(
                     new RegisteredChild(
@@ -782,6 +809,8 @@ internal sealed class CoordinationOwnerStore
                 parent.SessionId, childSessionId, cancellationToken).ConfigureAwait(false);
             if (requestId is null)
                 throw new InvalidOperationException("A registered child has no pending request.");
+            if (revalidateCurrentAuthority is not null)
+                await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken);
             var registered = new RegisteredChild(
                 new SessionIdentity(parent.ProjectId, parent.RunId, childSessionId),
@@ -916,6 +945,8 @@ internal sealed class CoordinationOwnerStore
                 _timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
 
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken);
         return new SessionRegistrationResult(registeredChild, spawned);
     }
@@ -1219,6 +1250,76 @@ internal sealed class CoordinationOwnerStore
             CreateRuntimeTurnId(identity, run.Fence, session.LogicalTurnOrdinal));
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
+    }
+
+    private static bool RuntimeDecisionAllowsWorkPlanItem(
+        string decisionJson,
+        CoordinationActor actor,
+        SessionIdentity root,
+        string tenantId,
+        string acceptedSelectionHash,
+        long executionFence,
+        string workPlanItemId)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(decisionJson);
+            if (!document.RootElement.TryGetProperty("envelope", out var envelope) ||
+                envelope.ValueKind != JsonValueKind.Object ||
+                !HasNumber(envelope, "version", CoordinatorDecisionStateEnvelope.CurrentVersion) ||
+                !HasString(envelope, "issuer", actor.Issuer) ||
+                !HasString(envelope, "subject", actor.Subject) ||
+                !HasString(envelope, "tenantId", tenantId) ||
+                !HasString(envelope, "projectId", root.ProjectId) ||
+                !HasString(envelope, "runId", root.RunId) ||
+                !HasString(envelope, "rootSessionId", root.SessionId) ||
+                !HasString(envelope, "acceptedSelectionHash", acceptedSelectionHash) ||
+                !HasNumber(envelope, "fence", executionFence) ||
+                !HasTrue(envelope, "outcomeConfirmed") ||
+                !HasObject(envelope, "outcomeSpecification") ||
+                !HasTrue(envelope, "workflowConfirmed") ||
+                !HasObject(envelope, "selectedWorkflow") ||
+                !HasNull(envelope, "pendingGate") ||
+                !HasNull(envelope, "candidateWorkPlan") ||
+                !envelope.TryGetProperty("confirmedWorkPlan", out var confirmedPlan) ||
+                confirmedPlan.ValueKind != JsonValueKind.Object ||
+                !confirmedPlan.TryGetProperty("items", out var items) ||
+                items.ValueKind != JsonValueKind.Array)
+                return false;
+
+            return items.EnumerateArray().Any(item =>
+                item.ValueKind == JsonValueKind.Object &&
+                item.TryGetProperty("id", out var id) &&
+                id.ValueKind == JsonValueKind.String &&
+                string.Equals(id.GetString(), workPlanItemId, StringComparison.Ordinal));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        static bool HasString(JsonElement element, string propertyName, string expected) =>
+            element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.String &&
+            string.Equals(property.GetString(), expected, StringComparison.Ordinal);
+
+        static bool HasNumber(JsonElement element, string propertyName, long expected) =>
+            element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.Number &&
+            property.TryGetInt64(out var value) &&
+            value == expected;
+
+        static bool HasTrue(JsonElement element, string propertyName) =>
+            element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.True;
+
+        static bool HasObject(JsonElement element, string propertyName) =>
+            element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.Object;
+
+        static bool HasNull(JsonElement element, string propertyName) =>
+            element.TryGetProperty(propertyName, out var property) &&
+            property.ValueKind == JsonValueKind.Null;
     }
 
     private async Task<SessionInterruptionIntentSnapshot> ReadInterruptionIntentAsync(

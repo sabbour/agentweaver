@@ -972,6 +972,65 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Null(revisedPlanResult.PendingGate);
         Assert.Equal(3, sandboxProvider.NegotiationCount);
 
+        var registrationEffectsBeforeRevocation = await ReadChildRegistrationEffectsAsync(
+            _connectionString, ownerSchema, project.ProjectId);
+        await using (var lockSource = NpgsqlDataSource.Create(_connectionString))
+        await using (var lockConnection = await lockSource.OpenConnectionAsync())
+        await using (var observationConnection = await lockSource.OpenConnectionAsync())
+        await using (var ownerLock = await lockConnection.BeginTransactionAsync())
+        {
+            await using (var lockRun = new NpgsqlCommand($"""
+                SELECT execution_fence
+                FROM "{ownerSchema}".accepted_runs
+                WHERE project_id = @project AND run_id = @run
+                FOR UPDATE
+                """, lockConnection, ownerLock))
+            {
+                lockRun.Parameters.AddWithValue("project", project.ProjectId);
+                lockRun.Parameters.AddWithValue("run", RunId);
+                Assert.Equal(root.ExecutionFence, await lockRun.ExecuteScalarAsync());
+            }
+
+            var blockedRegistration = SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
+                runToken,
+                new RegisterChildRequest("revoked-while-waiting"));
+            var waiting = false;
+            using var lockWaitDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            while (!waiting)
+            {
+                await using var wait = new NpgsqlCommand("""
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_stat_activity
+                        WHERE @locker = ANY(pg_blocking_pids(pid)))
+                    """, observationConnection);
+                wait.Parameters.AddWithValue("locker", lockConnection.ProcessID);
+                waiting = (bool)(await wait.ExecuteScalarAsync(lockWaitDeadline.Token))!;
+                if (!waiting)
+                    await Task.Delay(20, lockWaitDeadline.Token);
+            }
+
+            await RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerRole.AssignmentId,
+                runnerRole.Revision);
+            await ownerLock.RollbackAsync();
+            using var deniedRegistration = await blockedRegistration.WaitAsync(TimeSpan.FromSeconds(20));
+            await AssertStatusAsync(deniedRegistration, HttpStatusCode.Forbidden);
+        }
+        Assert.Equal(
+            registrationEffectsBeforeRevocation,
+            await ReadChildRegistrationEffectsAsync(_connectionString, ownerSchema, project.ProjectId));
+        runnerRole = await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            runnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+
         using var childResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
@@ -989,25 +1048,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new RegisterChildRequest("child"));
         await AssertStatusAsync(childReplay, HttpStatusCode.Created);
         Assert.Equal(child, await ReadJsonAsync<RegisteredChild>(childReplay));
-
-        using var secondChildResponse = await SendJsonAsync(
-            orchestrator,
-            HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
-            runToken,
-            new RegisterChildRequest("child-two"));
-        await AssertStatusAsync(secondChildResponse, HttpStatusCode.Created);
-        var childTwo = await ReadJsonAsync<RegisteredChild>(secondChildResponse);
-        using var overConcurrentLimit = await SendJsonAsync(
-            orchestrator,
-            HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
-            runToken,
-            new RegisterChildRequest("child-three"));
-        Assert.Equal(HttpStatusCode.Conflict, overConcurrentLimit.StatusCode);
-        Assert.Contains(
-            "run_concurrent_child_limit_exceeded",
-            await overConcurrentLimit.Content.ReadAsStringAsync());
 
         using var events = eventsFactory.CreateClient(new WebApplicationFactoryClientOptions
         {
@@ -1079,6 +1119,130 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal("child", presented.Recipient.SessionId);
         Assert.Equal(AddressedMessageStatus.Delivered, presented.Status);
         Assert.Equal("active", boundary.ExecutionState);
+
+        using var secondChildResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/spawn",
+            runToken,
+            new SpawnSessionRequest(
+                "child-two",
+                CoordinationSessionKind.ChildWork,
+                "child-two-spawn",
+                "Execute the confirmed work item.",
+                WorkPlanItemId: "implement-1"));
+        await AssertStatusAsync(secondChildResponse, HttpStatusCode.Accepted);
+        var spawnedChildTwo = await ReadJsonAsync<SpawnedSession>(secondChildResponse);
+        var childTwo = new RegisteredChild(
+            spawnedChildTwo.Node.Identity,
+            "root",
+            spawnedChildTwo.PendingRequestId,
+            spawnedChildTwo.Node.ExecutionFence);
+        using var childTwoBindingResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child-two/owner-binding",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(childTwoBindingResponse, HttpStatusCode.OK);
+        var childTwoBinding = await ReadJsonAsync<CoordinationSessionBinding>(childTwoBindingResponse);
+        using var childTwoBoundaryResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child-two/turn-boundary",
+            runToken,
+            new TurnBoundaryRequest(childTwo.ExecutionFence, childTwoBinding.StateVersion));
+        await AssertStatusAsync(childTwoBoundaryResponse, HttpStatusCode.OK);
+        Assert.Equal(
+            "active",
+            (await ReadJsonAsync<TurnBoundaryResult>(childTwoBoundaryResponse)).ExecutionState);
+        using var overConcurrentLimit = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
+            runToken,
+            new RegisterChildRequest("child-three"));
+        Assert.Equal(HttpStatusCode.Conflict, overConcurrentLimit.StatusCode);
+        Assert.Contains(
+            "run_concurrent_child_limit_exceeded",
+            await overConcurrentLimit.Content.ReadAsStringAsync());
+
+        var selectionPause = new RuntimeOwnerContextSelectionPause();
+        await using (var runtimeOwnerFactory = new OrchestratorIntegrationFactory(
+                         _connectionString,
+                         ownerSchema,
+                         signingKey,
+                         () => new RuntimeOwnerContextSelectionBarrierHandler(
+                             projects.CreateHandler(), selectionPause),
+                         () => eventsFactory.Server.CreateHandler(),
+                         cacheObjectStore,
+                         sandboxProvider))
+        using (var runtimeOwnerClient = runtimeOwnerFactory.CreateClient(
+                   new WebApplicationFactoryClientOptions
+                   {
+                       BaseAddress = new Uri("https://orchestrator.test")
+                   }))
+        {
+            var runtimeOwnerPath =
+                $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child-two/runtime-owner-context";
+            var runtimeOwnerTask = SendAsync(
+                runtimeOwnerClient, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]);
+            try
+            {
+                await selectionPause.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                var ownerBeforeDecisionChange = await ReadRuntimeOwnerRowAsync(
+                    _connectionString, ownerSchema, project.ProjectId, "child-two");
+                Assert.Equal("implement-1", ownerBeforeDecisionChange.WorkPlanItemId);
+
+                using var pendingOwnerContextGate = await SendJsonAsync(
+                    orchestrator,
+                    HttpMethod.Post,
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/questions",
+                    runToken,
+                    new AskCoordinatorQuestionRequest(
+                        15,
+                        "runtime-owner-context-question",
+                        "runtime-owner-context-gate",
+                        "execution-detail",
+                        "Should the approved work item continue?",
+                        ["continue"],
+                        true));
+                Assert.Equal(HttpStatusCode.OK, pendingOwnerContextGate.StatusCode);
+                var pendingGateResult =
+                    await ReadJsonAsync<CoordinatorDecisionOperationResponse>(pendingOwnerContextGate);
+                Assert.True(pendingGateResult.Accepted);
+                Assert.Equal(16, pendingGateResult.StateVersion);
+                Assert.Equal("runtime-owner-context-gate", pendingGateResult.PendingGate?.RequestId);
+                Assert.Equal(
+                    ownerBeforeDecisionChange,
+                    await ReadRuntimeOwnerRowAsync(
+                        _connectionString, ownerSchema, project.ProjectId, "child-two"));
+            }
+            finally
+            {
+                selectionPause.Release();
+            }
+
+            using var staleRuntimeOwnerContext =
+                await runtimeOwnerTask.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.Equal(HttpStatusCode.Conflict, staleRuntimeOwnerContext.StatusCode);
+        }
+
+        using (var answerOwnerContextGate = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/decisions/gates/runtime-owner-context-gate/answer",
+                   runToken,
+                   new AnswerCoordinatorGateRequest(
+                       16, "runtime-owner-context-answer", "continue", null)))
+        {
+            Assert.Equal(HttpStatusCode.OK, answerOwnerContextGate.StatusCode);
+            var answeredOwnerContextGate =
+                await ReadJsonAsync<CoordinatorDecisionOperationResponse>(answerOwnerContextGate);
+            Assert.True(answeredOwnerContextGate.Accepted);
+            Assert.Equal(17, answeredOwnerContextGate.StateVersion);
+            Assert.Null(answeredOwnerContextGate.PendingGate);
+        }
 
         using var boundaryRetryResponse = await SendJsonAsync(
             orchestrator,
@@ -1534,6 +1698,57 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
     }
 
+    private static async Task<(long Children, long SpawnOutboxEvents)> ReadChildRegistrationEffectsAsync(
+        string connectionString,
+        string schema,
+        string projectId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{schema}".coordination_sessions
+                    WHERE project_id = @project AND run_id = @run AND parent_session_id IS NOT NULL),
+                (SELECT count(*) FROM "{schema}".outbox_events
+                    WHERE stream_id = @stream AND event_type = 'orchestrator.session.spawn_requested')
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        command.Parameters.AddWithValue("stream", $"coordination/{projectId}/{RunId}/root");
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetInt64(0), reader.GetInt64(1));
+    }
+
+    private static async Task<(
+        string? WorkPlanItemId,
+        long ExecutionFence,
+        long LogicalTurnOrdinal,
+        long StateVersion)> ReadRuntimeOwnerRowAsync(
+        string connectionString,
+        string schema,
+        string projectId,
+        string sessionId)
+    {
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        await using var connection = await dataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT work_plan_item_id, execution_fence, logical_turn_ordinal, state_version
+            FROM "{schema}".coordination_sessions
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            """, connection);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("run", RunId);
+        command.Parameters.AddWithValue("session", sessionId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (
+            reader.IsDBNull(0) ? null : reader.GetString(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3));
+    }
+
     private static async Task AssertAcceptedSandboxBindingAsync(
         string connectionString,
         string schema,
@@ -1878,6 +2093,44 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
             pause.MarkPaused();
             await pause.WaitForReleaseAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private sealed class RuntimeOwnerContextSelectionPause
+    {
+        private readonly TaskCompletionSource _paused =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _selectionReads;
+
+        public Task WaitUntilPausedAsync() => _paused.Task;
+        public void Release() => _release.TrySetResult();
+
+        public async Task PauseSecondSelectionReadAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri is not { } uri ||
+                !uri.AbsolutePath.EndsWith("/selection", StringComparison.Ordinal) ||
+                Interlocked.Increment(ref _selectionReads) != 2)
+                return;
+
+            _paused.TrySetResult();
+            await _release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private sealed class RuntimeOwnerContextSelectionBarrierHandler(
+        HttpMessageHandler innerHandler,
+        RuntimeOwnerContextSelectionPause pause) : DelegatingHandler(innerHandler)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            await pause.PauseSecondSelectionReadAsync(request, cancellationToken).ConfigureAwait(false);
+            return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
         }
     }
 

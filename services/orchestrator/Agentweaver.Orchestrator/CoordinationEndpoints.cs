@@ -245,6 +245,24 @@ public static class CoordinationEndpoints
             if (currentOwner != owner)
                 throw new CoordinationException(
                     "runtime_owner_context_stale", StatusCodes.Status409Conflict);
+            var currentDecision = await decisions.ReadCurrentAsync(
+                actor, root, selection, cancellationToken).ConfigureAwait(false);
+            var currentWorkPlanItem = currentDecision.State.ConfirmedWorkPlan?.Plan.Items.FirstOrDefault(item =>
+                string.Equals(item.Id, owner.WorkPlanItemId, StringComparison.Ordinal));
+            if (currentDecision.StateVersion != decision.StateVersion ||
+                currentDecision.SelectionHash != decision.SelectionHash ||
+                currentDecision.State.Fence != owner.ExecutionFence ||
+                !currentDecision.State.CanDispatch ||
+                currentWorkPlanItem is null ||
+                !string.Equals(currentWorkPlanItem.AgentId, workPlanItem.AgentId, StringComparison.Ordinal) ||
+                !string.Equals(
+                    currentWorkPlanItem.ModelSelectionReference,
+                    workPlanItem.ModelSelectionReference,
+                    StringComparison.Ordinal))
+                throw new CoordinationException(
+                    "runtime_owner_context_stale", StatusCodes.Status409Conflict);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
 
             return Results.Ok(new RuntimeOwnerContext(
                 1,
@@ -339,7 +357,10 @@ public static class CoordinationEndpoints
                 CoordinatorWorkflowCatalog.ReadMaxChildren(selection.Selection.Snapshot),
                 CoordinatorWorkflowCatalog.ReadMaxConcurrentChildren(selection.Selection.Snapshot),
                 cancellationToken,
-                workPlanItemAssociation).ConfigureAwait(false);
+                workPlanItemAssociation,
+                currentCancellationToken => RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, currentCancellationToken))
+                .ConfigureAwait(false);
             return Results.Accepted(value: spawned);
         }, cancellationToken);
 
@@ -1371,7 +1392,10 @@ public static class CoordinationEndpoints
                 request.SessionId,
                 CoordinatorWorkflowCatalog.ReadMaxChildren(selection.Selection.Snapshot),
                 CoordinatorWorkflowCatalog.ReadMaxConcurrentChildren(selection.Selection.Snapshot),
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                currentCancellationToken => RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, currentCancellationToken))
+                .ConfigureAwait(false);
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             await events.EnsureSessionAsync(context, child.Identity, cancellationToken).ConfigureAwait(false);

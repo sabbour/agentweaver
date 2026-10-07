@@ -348,6 +348,42 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(409, error.StatusCode);
     }
 
+    [Theory]
+    [InlineData("selection-hash")]
+    [InlineData("fence")]
+    [InlineData("dispatch")]
+    [InlineData("work-plan-item")]
+    public async Task SpawnRequiresTheLatestDecisionEnvelopeToAuthorizeItsWorkPlanItem(string mismatch)
+    {
+        var selectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        await SeedCoordinatorDecisionVersionAsync(
+            1,
+            planItemId: mismatch == "work-plan-item" ? "other-item" : "work-item-1",
+            acceptedSelectionHash: mismatch == "selection-hash" ? new string('b', 64) : null,
+            executionFence: mismatch == "fence" ? _acceptedRoot.ExecutionFence + 1 : null,
+            dispatchable: mismatch != "dispatch");
+        var request = new SpawnSessionRequest(
+            "invalid-envelope-child",
+            CoordinationSessionKind.ChildWork,
+            "invalid-envelope-spawn",
+            "Execute the confirmed work item.",
+            WorkPlanItemId: "work-item-1");
+
+        var error = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.SpawnSessionAsync(
+                _actor,
+                _root,
+                request,
+                100,
+                32,
+                CancellationToken.None,
+                new ConfirmedWorkPlanItemAssociation("work-item-1", 1, selectionHash)));
+        Assert.Equal(409, error.StatusCode);
+
+        var tree = await _store.ReadSessionTreeAsync(_actor, _root, CancellationToken.None);
+        Assert.DoesNotContain(tree.Nodes, node => node.Identity.SessionId == request.SessionId);
+    }
+
     [Fact]
     public async Task RuntimeOwnerStateReadsPersistedWorkPlanLinkAndRejectsStaleDecisionVersion()
     {
@@ -884,11 +920,48 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             cancellationToken: CancellationToken.None);
     }
 
-    private async Task SeedCoordinatorDecisionVersionAsync(long stateVersion)
+    private async Task SeedCoordinatorDecisionVersionAsync(
+        long stateVersion,
+        string planItemId = "work-item-1",
+        string? acceptedSelectionHash = null,
+        long? executionFence = null,
+        bool dispatchable = true)
     {
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         if (stateVersion == 1)
         {
+            var envelope = JsonSerializer.Serialize(new
+            {
+                envelope = new
+                {
+                    version = CoordinatorDecisionStateEnvelope.CurrentVersion,
+                    issuer = _actor.Issuer,
+                    subject = _actor.Subject,
+                    tenantId = _selection.Authorization.TenantId,
+                    projectId = _root.ProjectId,
+                    runId = _root.RunId,
+                    rootSessionId = _root.SessionId,
+                    acceptedSelectionHash = acceptedSelectionHash ??
+                        CoordinationOwnerStore.HashSelection(_selection.Selection),
+                    projectRevision = _selection.Selection.ProjectRevision,
+                    projectConfigurationRevision = _selection.Selection.ProjectConfigurationRevision,
+                    platformRuntimeRevision = _selection.Selection.PlatformRuntimeRevision,
+                    contextRevision = _selection.Selection.ContextRevision,
+                    fence = executionFence ?? _acceptedRoot.ExecutionFence,
+                    outcomeSpecification = new { id = "outcome-1" },
+                    outcomeConfirmed = dispatchable,
+                    nextClarifyingQuestionIndex = 0,
+                    selectedWorkflow = new { id = "workflow-1" },
+                    workflowConfirmed = true,
+                    confirmedWorkPlan = new { items = new[] { new { id = planItemId } } },
+                    confirmedSelectionContext = (object?)null,
+                    candidateWorkPlan = (object?)null,
+                    candidateSelectionContext = (object?)null,
+                    lastScopeDiff = (object?)null,
+                    pendingGate = (object?)null,
+                    decisionReceipts = Array.Empty<object>()
+                }
+            }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
             await using var insert = new NpgsqlCommand($"""
                 INSERT INTO "{_schema}".coordinator_decisions
                     (project_id, run_id, session_id, request_id, decision_id,
@@ -908,7 +981,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             insert.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, _acceptedRoot.ExecutionFence);
             insert.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, stateVersion);
             insert.Parameters.AddWithValue("hash", NpgsqlDbType.Char, new string('a', 64));
-            insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, "{}");
+            insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, envelope);
             await insert.ExecuteNonQueryAsync();
             return;
         }

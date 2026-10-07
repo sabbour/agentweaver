@@ -22,7 +22,7 @@ public static class SessionsCapabilities
 
     public static ImmutableHashSet<string> All { get; } = ImmutableHashSet.Create(
         StringComparer.Ordinal, Append, Replay, Subscribe, ObjectReferences,
-        ToolCalls, PolicyEvaluations, AcceptedDecisions, AcceptedEffects);
+        ToolCalls, AcceptedDecisions, AcceptedEffects);
 }
 
 public sealed record PostgresSessionsProviderOptions(
