@@ -1,8 +1,8 @@
 # Agentweaver 1.x documentation
 
-Agentweaver 1.x is a rebuild on the `v1` branch. The current source contains provider contracts, foundation libraries, Identity Broker, Projects & Config, Knowledge, and Events & Sessions service candidates, and Azure infrastructure definitions.
+Agentweaver 1.x is a rebuild on the `v1` branch. The current source contains provider contracts, foundation libraries, Identity Broker, Projects & Config, Knowledge, Events & Sessions, and Gateway service candidates, and Azure infrastructure definitions.
 
-The source includes accepted P0 foundations and unpublished Identity Broker, Projects & Config, Knowledge, and Events & Sessions service candidates. It does not provide a deployed product platform, publish packages or images, or prove that the dedicated Azure environment has been provisioned.
+The source includes accepted P0 foundations and unpublished Identity Broker, Projects & Config, Knowledge, Events & Sessions, and Gateway service candidates. It does not provide a deployed product platform, publish packages or images, or prove that the dedicated Azure environment has been provisioned.
 
 This site documents code and procedures that exist in the `v1` source. Proposed architecture records stay in the repository and do not describe implemented capabilities.
 
@@ -12,6 +12,7 @@ This site documents code and procedures that exist in the `v1` source. Proposed 
 | --- | --- |
 | [Build and use](./guide/build-and-use) | Restore, build, test, and compose foundation libraries. |
 | [Testing](./guide/testing) | Run current tests and read their limits. |
+| [Gateway/BFF](./guide/gateway) | Use the versioned REST/SSE entry and discover its live OpenAPI contract. |
 | [Azure acceptance](./guide/azure-acceptance) | Compile infrastructure and prepare an approved acceptance run. |
 
 ## Architecture

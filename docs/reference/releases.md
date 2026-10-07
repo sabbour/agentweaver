@@ -16,6 +16,7 @@
 | `Agentweaver.ObjectStore.AzureBlob` | Library | `0.0.0` |
 | `Agentweaver.Identity.Broker` | Service | `0.0.0` |
 | `Agentweaver.EventsAndSessions` | Service | `0.0.0` |
+| `Agentweaver.Gateway` | Service | `0.1.0` |
 | `Agentweaver.Environment` | Library | `0.0.0` |
 | `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `0.0.0` |
 | `Agentweaver.Knowledge` | Service | `0.0.0` |
@@ -25,6 +26,8 @@ image digests. The existing Identity Broker image `f989` remains separate from
 this package baseline. Package components use the 0.0.0 initial baseline. Their
 initial release notes come from the archived P0 changesets referenced by the prior
 release receipt.
+The Gateway is a source-only service candidate at `0.1.0`; its manifest entry and
+documentation do not claim deployment or live acceptance.
 The Orchestrator Core compatibility entries include both Abstractions and Providers,
 matching its direct project references.
 The runtime library pins its native SDK dependency and references Abstractions

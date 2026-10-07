@@ -3,6 +3,7 @@
     "docs/index.md",
     "docs/guide/build-and-use.md",
     "docs/guide/testing.md",
+    "docs/guide/gateway.md",
     "docs/guide/azure-acceptance.md",
     "docs/diagrams/README.md",
     "docs/architecture/overview.md",
@@ -131,7 +132,21 @@
         "services/projects-config/"
       ],
       "required": [
-        "docs/architecture/projects-config.md"
+        "docs/architecture/projects-config.md",
+        "docs/reference/contracts.md",
+        "docs/guide/testing.md"
+      ]
+    },
+    {
+      "name": "Gateway REST and SSE",
+      "sourcePrefixes": [
+        "services/gateway/"
+      ],
+      "required": [
+        "docs/architecture/design/services-and-release.md",
+        "docs/reference/contracts.md",
+        "docs/guide/gateway.md",
+        "docs/guide/testing.md"
       ]
     },
     {

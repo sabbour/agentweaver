@@ -442,6 +442,40 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             runContext, ProjectAuthorityResourceType.Project, project.ProjectId,
             ProjectAuthorizationPermission.ReadProjects));
 
+        var viewerAssignment = await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            orchestratorMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Viewer);
+        var unboundViewerToken = CreateSignedAccessToken(orchestratorSubject);
+        var purposeBoundViewerToken = CreateSignedAccessToken(
+            orchestratorSubject,
+            new Claim("project_id", project.ProjectId),
+            new Claim("run_id", RunId),
+            new Claim("purpose", "secret-redemption"));
+        using var runBoundViewerRead = await SendAsync(
+            projects.Client, HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}?runId={RunId}", runToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, runBoundViewerRead.StatusCode);
+        AssertNoStore(runBoundViewerRead);
+        using var mismatchedRunViewerRead = await SendAsync(
+            projects.Client, HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}?runId=other-run", runToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, mismatchedRunViewerRead.StatusCode);
+        using var unboundViewerRead = await SendAsync(
+            projects.Client, HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}?runId={RunId}", unboundViewerToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, unboundViewerRead.StatusCode);
+        using var purposeBoundViewerRead = await SendAsync(
+            projects.Client, HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}?runId={RunId}", purposeBoundViewerToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, purposeBoundViewerRead.StatusCode);
+        using var duplicateRunViewerRead = await SendAsync(
+            projects.Client, HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}?runId={RunId}&runId={RunId}", runToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, duplicateRunViewerRead.StatusCode);
+
         var defaults = new PlatformRuntimeDefaults
         {
             ModelSelection = new ModelSelectionSettings("platform-model"),
@@ -542,6 +576,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         AddBearerAndTenant(afterRevocationRequest, runToken, TenantId);
         using var afterRevocationCannotStartRun = await projects.Client.SendAsync(afterRevocationRequest);
         Assert.Equal(HttpStatusCode.Forbidden, afterRevocationCannotStartRun.StatusCode);
+        await RevokeRoleAsync(
+            projects.PrivilegedFixtureDataSource, viewerAssignment.AssignmentId, 1);
+        using var afterViewerRevocation = await SendAsync(
+            projects.Client, HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}?runId={RunId}", runToken, [TenantId]);
+        Assert.Equal(HttpStatusCode.NotFound, afterViewerRevocation.StatusCode);
 
         await using (var verifyDb = CreateDbContext(projects.PrivilegedFixtureDataSource))
         {

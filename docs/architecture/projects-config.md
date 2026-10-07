@@ -32,6 +32,8 @@ The Identity broker validates upstream identity but does not forward upstream te
 | --- | --- |
 | `POST /api/projects` | Create an active project and its initial configuration revision. |
 | `GET /api/projects` | List projects visible through current project roles; a tenant administrator sees all projects in that tenant. |
+| `GET /api/projects/{projectId}` | Read an authorized project summary. |
+| `GET /api/projects/{projectId}?runId={runId}` | Read the project summary for an exact bound run after rechecking the caller's current project read role. |
 | `PATCH /api/projects/{projectId}` | Change project name or lifecycle state using an expected project revision. Archive rather than physically delete. |
 | `GET /api/projects/{projectId}/configuration?revision={n}` | Read the current or a retained configuration revision. |
 | `PUT /api/projects/{projectId}/configuration` | Append a configuration revision using an expected configuration revision. |
@@ -78,6 +80,10 @@ write permission; adding Cost cardinality does not widen authorization.
 Run-selection accept and read responses are `no-store`. The current
 authorization-context GET also uses `no-store`; it returns grouped permissions
 and membership/role revisions, not assignment rows or transferable credentials.
+The run-bound project-summary GET requires exactly one `runId` query parameter,
+an exact signed project/run binding, and a current project Owner, Contributor, or
+Viewer role (or tenant administrator); it returns `no-store` so consumers can
+recheck authorization before forwarding run-scoped data.
 See [Environment egress](./environment-egress.md) for how a privileged consumer
 uses both current authorization and the immutable selection without a separate
 membership or role cache.
