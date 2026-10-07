@@ -17,19 +17,20 @@ export async function readNativeReleaseConfig(root, { reportWarnings = true } = 
   return { packages, config };
 }
 
-export async function createNativeReleasePlan(root) {
+export async function createNativeReleasePlan(root, { allowEmpty = false } = {}) {
   const { packages, config } = await readNativeReleaseConfig(root);
   const [changesets, preState] = await Promise.all([
     readChangesets(packages.rootDir),
     readPreState(packages.rootDir),
   ]);
-  if (changesets.length === 0 && (preState == null || preState.mode !== "exit")) {
+  if (!allowEmpty && changesets.length === 0 && (preState == null || preState.mode !== "exit")) {
     throw new Error("No unreleased changesets found.");
   }
 
   return {
     packages,
     config,
+    changesets,
     releasePlan: assembleReleasePlan(changesets, packages, config, preState),
   };
 }
