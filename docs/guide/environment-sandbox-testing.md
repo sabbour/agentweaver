@@ -28,6 +28,25 @@ Kata/nested-virtualization availability, Cilium datapath enforcement,
 AgentHost configure/readiness, Core run pins, or automatic terminal-run
 reclamation.
 
+The production-authority HTTP and PostgreSQL integration is in the Identity
+Broker test project:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj `
+  --filter "FullyQualifiedName~BrokerIssuedOwnerAndSeparateRunSelectionAuthorizeWorkspaceVolumeHttpEffects" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+This test uses a broker-issued JWT, real Projects membership/role checks and
+immutable run selection, Environment HTTP routes, and disposable PostgreSQL
+lease/lifecycle state. It covers authorized provision, inspect, repeated
+placement-only abandonment, exact resource UID/generation/fence, stale fences,
+viewer/foreign/selection denials, role revocation after selection, and a late
+provider callback fenced into retirement. Only the Workspace provider, Sandbox
+provider, and Cilium policy-resource boundary are controlled; it is not a live
+Kubernetes or datapath test. Sandbox observations remain `Pending` without
+AgentHost configure evidence.
+
 Build the service and all referenced provider projects with:
 
 ```powershell

@@ -172,11 +172,14 @@ sequenceDiagram
 
 ## Integration and evidence boundary
 
-The selector labels form the boundary that a future Environment/Sandbox
-composition must place on the corresponding environment pods. This source slice
-does not update sandbox claims or templates, add Kubernetes RBAC/workload
-identity, or bind the existing run/environment registration producer. The host
-is wired but is not deployed by this work. Policy verification proves only that the
+The Environment-owned Sandbox composition propagates these selector labels
+into the owner-specific Sandbox template and checks them on the actual Pod. The
+Network provider remains responsible only for Cilium policy; it does not create
+or own Sandbox resources. See the
+[Environment Sandbox architecture](environment-sandbox.md) for that separate
+composition. This source slice does not add Kubernetes RBAC/workload identity
+or bind the existing run/environment registration producer. The host is wired
+but is not deployed by this work. Policy verification proves only that the
 expected Kubernetes object was persisted and observed. Real datapath probes and
 live cluster evidence are reserved for the separate network-acceptance work;
 no probe or deployment is performed by these tests.

@@ -9,6 +9,9 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Providers;
+using Agentweaver.Providers.Sandbox.AgentSandbox;
+using Agentweaver.Providers.Storage.AzureFiles;
 using EnvironmentService::Agentweaver.Environment;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -34,7 +37,31 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             _signingCertificate.Password,
             X509KeyStorageFlags.EphemeralKeySet);
         var signingKey = new X509SecurityKey(signingCertificate);
-        await using var projects = await ProjectsConfigResourceServer.StartAsync(_connectionString, signingKey);
+        var sandboxOptions = new AgentSandboxOptions(
+            1,
+            "sandbox-options-1",
+            "agentweaver",
+            AzureFilesCsiProviderMetadata.ProviderId,
+            "ghcr.io/agentweaver/agenthost:1",
+            "kata-vm",
+            "kata-qemu",
+            "500m",
+            "512Mi",
+            60,
+            100);
+        var storageOptions = new AzureFilesCsiOptions(
+            1, "options-1", "agentweaver", "azure-files", 100, 60, 100);
+        var ciliumOptions = new CiliumEgressProviderOptions(
+            "agentweaver",
+            new Version(1, 0, 0),
+            1,
+            "cilium-options-1",
+            ImmutableDictionary<string, ImmutableDictionary<string, string>>.Empty
+                .WithComparers(StringComparer.Ordinal));
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            _connectionString,
+            signingKey,
+            providerCatalog: CreateSandboxProviderCatalog(sandboxOptions, storageOptions, ciliumOptions));
 
         var platformAdminToken = await IssueTokenAsync(
             "projects.admin", [TenantId], "workspace-volume-admin", null, null, ["platform_admin"]);
@@ -100,8 +127,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             project.ProjectId,
             ProjectAuthorityRole.Owner,
             ProjectAuthorityRole.Orchestrator);
+        var sandboxRevocationOwner = await AddProjectActorAsync(
+            "projects.admin projects.orchestrator",
+            "sandbox-revocation-owner",
+            project.ProjectId,
+            ProjectAuthorityRole.Owner,
+            ProjectAuthorityRole.Orchestrator);
         var ownerSelectionAssignment = Assert.Single(
             owner.Assignments,
+            assignment => assignment.Role == ProjectAuthorityRole.Orchestrator);
+        var sandboxRevocationAssignment = Assert.Single(
+            sandboxRevocationOwner.Assignments,
             assignment => assignment.Role == ProjectAuthorityRole.Orchestrator);
         var viewer = await AddProjectActorAsync(
             "api.read",
@@ -184,7 +220,38 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 {
                     Revision = "provider-catalog-v1",
                     AvailableModelSelectionReferences = ImmutableHashSet.Create(
-                        StringComparer.Ordinal, "platform-model")
+                        StringComparer.Ordinal, "platform-model"),
+                    ProviderRequirements =
+                    [
+                        new ProviderRequirement
+                        {
+                            Seam = ProviderSeam.Sandbox,
+                            RequiredAdapterVersion = AgentSandboxProviderMetadata.AdapterVersion.ToString(),
+                            RequiredOptionsSchemaVersion = AgentSandboxOptions.CurrentOptionsSchemaVersion,
+                            RequiredCapabilities = ImmutableHashSet.Create(
+                                StringComparer.Ordinal,
+                                SandboxCapabilities.VmIsolation,
+                                SandboxCapabilities.WorkspacePersistentVolumeClaim)
+                        },
+                        new ProviderRequirement
+                        {
+                            Seam = ProviderSeam.Storage,
+                            RequiredAdapterVersion = AzureFilesCsiProviderMetadata.AdapterVersion.ToString(),
+                            RequiredOptionsSchemaVersion = AzureFilesCsiOptions.CurrentOptionsSchemaVersion,
+                            RequiredCapabilities = ImmutableHashSet.Create(
+                                StringComparer.Ordinal,
+                                WorkspaceVolumeCapabilities.ReadWriteOnce)
+                        },
+                        new ProviderRequirement
+                        {
+                            Seam = ProviderSeam.NetworkPolicy,
+                            RequiredAdapterVersion = ciliumOptions.AdapterVersion.ToString(),
+                            RequiredOptionsSchemaVersion = ciliumOptions.OptionsSchemaVersion,
+                            RequiredL3L4Capabilities = ImmutableHashSet.Create(
+                                StringComparer.Ordinal,
+                                CiliumEgressCapabilities.L3L4)
+                        }
+                    ]
                 }
             })
         })
@@ -195,14 +262,28 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         var selectionObserver = new RunSelectionObserver();
-        var provider = new CountingWorkspaceVolumeProvider();
+        using var sandboxKubernetesHttpClient = new HttpClient
+        {
+            BaseAddress = new Uri("https://kubernetes.test/")
+        };
+        var sandboxKubernetesClient = new KubernetesAgentSandboxClient(sandboxKubernetesHttpClient);
+        var provider = new CountingWorkspaceVolumeProvider(sandboxKubernetesClient.ClusterIdentity);
+        var sandboxProvider = new CountingSandboxProvider(
+            sandboxOptions,
+            sandboxKubernetesClient.ClusterIdentity);
+        var ciliumStore = new InMemoryCiliumPolicyResourceStore();
         await using var environment = await WorkspaceVolumeApiTestServer.StartAsync(
             _connectionString,
             signingKey,
             () => new ObservingProjectsConfigHandler(
                 projects.CreateHandler(),
                 selectionObserver),
-            provider);
+            provider,
+            sandboxProvider,
+            sandboxOptions,
+            sandboxKubernetesClient,
+            ciliumOptions,
+            ciliumStore);
         var lifecycleStore = environment.CreateStore();
         var environmentId = $"environment-{Guid.NewGuid():N}";
         var volumeId = $"volume-{Guid.NewGuid():N}";
@@ -213,6 +294,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 environmentOwner, 0, EnvironmentLifecycleState.Active, "register-environment"),
             CancellationToken.None);
         var fence = registration.Snapshot.Fence;
+        using (var applyEgress = await SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            "/api/network-egress/apply",
+            owner.Token,
+            new ApplyEnvironmentEgressRequest(fence, 1, 0, "apply-network-policy")))
+        {
+            await AssertStatusAsync(applyEgress, HttpStatusCode.OK);
+            using var applied = JsonDocument.Parse(await applyEgress.Content.ReadAsStringAsync());
+            Assert.True(applied.RootElement.GetProperty("readyForDispatch").GetBoolean());
+            Assert.True(applied.RootElement
+                .GetProperty("appliedState")
+                .GetProperty("objectVerified")
+                .GetBoolean());
+        }
         var volumePath =
             $"/api/projects/{project.ProjectId}/runs/{RunId}/environments/{environmentId}/workspace-volumes";
         var specification = new WorkspaceVolumeSpec(
@@ -239,6 +335,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var createdVolume = await ReadJsonAsync<EnvironmentWorkspaceVolumeSnapshot>(create);
         Assert.Equal(EnvironmentWorkspaceVolumeState.Requested, createdVolume.Phase);
 
+        var selectionReadsBeforeWorkspaceProvision = selectionObserver.SelectionReadCount;
         using var provision = await SendJsonAsync(
             environment.Client,
             HttpMethod.Post,
@@ -247,7 +344,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new WorkspaceVolumeApiTransitionRequest(1, 0, 0, "provision-volume"));
         await AssertStatusAsync(provision, HttpStatusCode.OK);
         Assert.Equal(1, provider.ProvisionCalls);
-        Assert.Equal(2, selectionObserver.SelectionReadCount);
+        Assert.Equal(selectionReadsBeforeWorkspaceProvision + 1, selectionObserver.SelectionReadCount);
 
         using var viewerRead = await SendAsync(
             environment.Client, HttpMethod.Get, $"{volumePath}/{volumeId}", viewer.Token, [TenantId]);
@@ -292,6 +389,207 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(0, provider.ReleaseCalls);
         await AssertVolumeUnchangedAsync(lifecycleStore, fence, volumeId, beforeDeniedWrites);
 
+        var sandboxLeaseStore = environment.CreateSandboxStore();
+        var sandboxPath =
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/environments/{environmentId}/sandbox";
+        var sandboxProvisionRequest = new SandboxProvisionApiRequest(
+            volumeId,
+            beforeDeniedWrites.ResourceGeneration,
+            beforeDeniedWrites.DataGeneration,
+            "/workspace/agentweaver/project",
+            ReadOnly: false,
+            NetworkPolicyGeneration: 1,
+            "sandbox-provision");
+        using (var sandboxProvision = await SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/provision",
+            owner.Token,
+            sandboxProvisionRequest))
+        {
+            await AssertStatusAsync(sandboxProvision, HttpStatusCode.Accepted);
+            var result = await ReadJsonAsync<EnvironmentSandboxResult>(sandboxProvision);
+            Assert.Equal(SandboxLeaseState.Active, result.State);
+            Assert.False(result.ReadyForDispatch);
+            Assert.Equal(1, sandboxProvider.ProvisionCalls);
+        }
+
+        using (var sandboxInspect = await SendAsync(
+            environment.Client,
+            HttpMethod.Get,
+            $"{sandboxPath}/?networkPolicyGeneration=1",
+            owner.Token,
+            [TenantId]))
+        {
+            await AssertStatusAsync(sandboxInspect, HttpStatusCode.Accepted);
+            var result = await ReadJsonAsync<EnvironmentSandboxResult>(sandboxInspect);
+            Assert.Equal(SandboxObservedState.Pending, result.Observation!.State);
+            Assert.False(result.ReadyForDispatch);
+            Assert.Equal(2, sandboxProvider.DescribeCalls);
+        }
+
+        var sandboxLease = await sandboxLeaseStore.GetCurrentAsync(fence, CancellationToken.None);
+        Assert.NotNull(sandboxLease);
+        Assert.Equal(SandboxLeaseState.Active, sandboxLease.State);
+        var abandon = new SandboxAbandonApiRequest(
+            sandboxLease.ResourceGeneration,
+            sandboxLease.ProviderFencingGeneration,
+            "sandbox-abandon");
+        using (var viewerAbandon = await SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/abandon",
+            viewer.Token,
+            abandon))
+            await AssertForbiddenAsync(viewerAbandon, "project_write_not_authorized");
+        using (var ownerWithoutSelectionAbandon = await SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/abandon",
+            ownerWithoutSelection.Token,
+            abandon))
+            await AssertForbiddenAsync(ownerWithoutSelectionAbandon, "run_selection_not_authorized");
+        using (var foreignOwnerAbandon = await SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/abandon",
+            foreignOwner.Token,
+            abandon))
+            await AssertForbiddenAsync(foreignOwnerAbandon, "project_write_not_authorized");
+        using (var staleFence = await SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/abandon",
+            owner.Token,
+            abandon with
+            {
+                ProviderFencingGeneration = abandon.ProviderFencingGeneration + 1,
+                IdempotencyKey = "stale-sandbox-fence"
+            }))
+            await AssertConflictAsync(staleFence, "sandbox_fence_stale");
+
+        var selectionReadsBeforeSandboxRevocation = selectionObserver.SelectionReadCount;
+        selectionObserver.RevokeAfterNextSelectionRead(() =>
+            RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                sandboxRevocationAssignment.AssignmentId,
+                1));
+        using (var revokedSandboxAbandon = await SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/abandon",
+            sandboxRevocationOwner.Token,
+            abandon with { IdempotencyKey = "revoked-sandbox-abandon" }))
+            await AssertForbiddenAsync(revokedSandboxAbandon, "authorization_changed");
+        Assert.Equal(selectionReadsBeforeSandboxRevocation + 1, selectionObserver.SelectionReadCount);
+        Assert.Equal(0, sandboxProvider.ReleaseCalls);
+        var unchangedSandboxLease = await sandboxLeaseStore.GetCurrentAsync(fence, CancellationToken.None);
+        Assert.NotNull(unchangedSandboxLease);
+        Assert.Equal(sandboxLease.State, unchangedSandboxLease.State);
+        Assert.Equal(sandboxLease.CurrentFencingGeneration, unchangedSandboxLease.CurrentFencingGeneration);
+
+        using (var sandboxAbandon = await SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/abandon",
+            owner.Token,
+            abandon))
+        {
+            await AssertStatusAsync(sandboxAbandon, HttpStatusCode.OK);
+            var result = await ReadJsonAsync<EnvironmentSandboxResult>(sandboxAbandon);
+            Assert.Equal(SandboxLeaseState.Released, result.State);
+        }
+        Assert.Equal(1, sandboxProvider.ReleaseCalls);
+        var exactRelease = Assert.IsType<SandboxReleaseRequest>(sandboxProvider.LastReleaseRequest);
+        Assert.Equal(fence, exactRelease.Fence);
+        Assert.Equal("sandbox-claim-uid", exactRelease.Resource.ResourceId);
+        Assert.Equal(sandboxLease.ResourceGeneration, exactRelease.Resource.Generation);
+        Assert.Equal(sandboxLease.ProviderFencingGeneration, exactRelease.FencingGeneration);
+        var releasedSandboxLease = await sandboxLeaseStore.GetAsync(
+            fence, sandboxLease.ResourceGeneration, CancellationToken.None);
+        Assert.NotNull(releasedSandboxLease);
+        Assert.Equal(SandboxLeaseState.Released, releasedSandboxLease.State);
+        Assert.False(releasedSandboxLease.IsCurrent);
+        using (var replayAbandon = await SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/abandon",
+            owner.Token,
+            abandon))
+            await AssertStatusAsync(replayAbandon, HttpStatusCode.OK);
+        Assert.Equal(1, sandboxProvider.ReleaseCalls);
+
+        var callbackGate = sandboxProvider.DeferNextProvision();
+        var lateProvisionRequest = sandboxProvisionRequest with
+        {
+            IdempotencyKey = "late-sandbox-provision"
+        };
+        var lateProvisionTask = SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/provision",
+            owner.Token,
+            lateProvisionRequest);
+        await callbackGate.Started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var lateLease = await sandboxLeaseStore.GetCurrentAsync(fence, CancellationToken.None);
+        Assert.NotNull(lateLease);
+        Assert.Equal(SandboxLeaseState.Provisioning, lateLease.State);
+        using (var abandonDuringProvision = await SendJsonAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/abandon",
+            owner.Token,
+            new SandboxAbandonApiRequest(
+                lateLease.ResourceGeneration,
+                lateLease.ProviderFencingGeneration,
+                "abandon-during-provider-call")))
+        {
+            await AssertStatusAsync(abandonDuringProvision, HttpStatusCode.Accepted);
+            var result = await ReadJsonAsync<EnvironmentSandboxResult>(abandonDuringProvision);
+            Assert.Equal(SandboxLeaseState.Releasing, result.State);
+        }
+        Assert.Equal(1, sandboxProvider.ReleaseCalls);
+        callbackGate.AllowCompletion.TrySetResult();
+        using (var lateProvision = await lateProvisionTask.WaitAsync(TimeSpan.FromSeconds(30)))
+        {
+            await AssertStatusAsync(lateProvision, HttpStatusCode.Accepted);
+            var result = await ReadJsonAsync<EnvironmentSandboxResult>(lateProvision);
+            Assert.Equal(SandboxLeaseState.Releasing, result.State);
+            Assert.False(result.ReadyForDispatch);
+        }
+        var fencedLateLease = await sandboxLeaseStore.GetAsync(
+            fence, lateLease.ResourceGeneration, CancellationToken.None);
+        Assert.NotNull(fencedLateLease);
+        Assert.Equal(SandboxLeaseState.Releasing, fencedLateLease.State);
+        Assert.True(fencedLateLease.CurrentFencingGeneration > fencedLateLease.ProviderFencingGeneration);
+        Assert.NotNull(fencedLateLease.ProvisionedResource);
+        using (var reconcileLateProvision = await SendAsync(
+            environment.Client,
+            HttpMethod.Post,
+            $"{sandboxPath}/reconcile?networkPolicyGeneration=1",
+            owner.Token,
+            [TenantId]))
+            await AssertStatusAsync(reconcileLateProvision, HttpStatusCode.OK);
+        Assert.Equal(2, sandboxProvider.ReleaseCalls);
+        var releasedLateLease = await sandboxLeaseStore.GetAsync(
+            fence, lateLease.ResourceGeneration, CancellationToken.None);
+        Assert.NotNull(releasedLateLease);
+        Assert.Equal(SandboxLeaseState.Released, releasedLateLease.State);
+        Assert.False(releasedLateLease.IsCurrent);
+        Assert.Equal(
+            fencedLateLease.ProvisionedResource!.Resource,
+            sandboxProvider.LastReleaseRequest!.Resource);
+        Assert.Equal(lateLease.ResourceGeneration, sandboxProvider.LastReleaseRequest!.Resource.Generation);
+        Assert.Equal(lateLease.ProviderFencingGeneration, sandboxProvider.LastReleaseRequest.FencingGeneration);
+        Assert.Equal(fence, sandboxProvider.LastReleaseRequest.Fence);
+        await AssertVolumeUnchangedAsync(lifecycleStore, fence, volumeId, beforeDeniedWrites);
+        var activeAfterSandboxRetirement = await lifecycleStore.GetAsync(
+            environmentOwner, CancellationToken.None);
+        Assert.NotNull(activeAfterSandboxRetirement);
+        Assert.Equal(EnvironmentLifecycleState.Active, activeAfterSandboxRetirement.State);
+        Assert.Equal(fence, activeAfterSandboxRetirement.Fence);
+
+        var selectionReadsBeforeRevocation = selectionObserver.SelectionReadCount;
         selectionObserver.RevokeAfterNextSelectionRead(() =>
             RevokeRoleAsync(
                 projects.PrivilegedFixtureDataSource,
@@ -311,7 +609,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 beforeRevocation.DataGeneration,
                 "revoked-before-provider-effect"));
         await AssertForbiddenAsync(revokedBeforeEffect, "authorization_changed");
-        Assert.Equal(selectionReadsBeforeDeniedWrites + 1, selectionObserver.SelectionReadCount);
+        Assert.Equal(selectionReadsBeforeRevocation + 1, selectionObserver.SelectionReadCount);
         Assert.Equal(1, provider.ProvisionCalls);
         Assert.Equal(0, provider.ReleaseCalls);
         await AssertVolumeUnchangedAsync(lifecycleStore, fence, volumeId, beforeRevocation);
@@ -328,6 +626,38 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(code, body.RootElement.GetProperty("code").GetString());
     }
 
+    private static async Task AssertConflictAsync(HttpResponseMessage response, string code)
+    {
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(code, body.RootElement.GetProperty("code").GetString());
+    }
+
+    private static ProviderCatalog CreateSandboxProviderCatalog(
+        AgentSandboxOptions sandboxOptions,
+        AzureFilesCsiOptions storageOptions,
+        CiliumEgressProviderOptions ciliumOptions)
+    {
+        var result = ProviderCatalog.Create(
+            [
+                AgentSandboxProviderMetadata.CreateRegistration(sandboxOptions),
+                AzureFilesCsiProviderMetadata.CreateRegistration(storageOptions),
+                ciliumOptions.CreateRegistration()
+            ],
+            [
+                new ProviderSelection(ProviderSeam.Sandbox, AgentSandboxProviderMetadata.ProviderId),
+                new ProviderSelection(ProviderSeam.Storage, AzureFilesCsiProviderMetadata.ProviderId)
+            ],
+            [],
+            layerSelections:
+            [
+                new ProviderLayerSelection(
+                    NetworkPolicyLayer.L3L4,
+                    CiliumEgressPolicyAdapter.ProviderId)
+            ]);
+        return Assert.IsType<ProviderCatalog>(result.Value);
+    }
+
     private static async Task AssertVolumeUnchangedAsync(
         IEnvironmentLifecycleStore store,
         EnvironmentGenerationFence fence,
@@ -341,6 +671,192 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(expected.DataGeneration, actual.DataGeneration);
         Assert.Equal(expected.Phase, actual.Phase);
         Assert.Equal(expected.Resource, actual.Resource);
+    }
+
+    private sealed class CountingSandboxProvider(
+        AgentSandboxOptions options,
+        string clusterIdentity) : ISandboxProvider
+    {
+        private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+        private ProvisionGate? _nextProvisionGate;
+        private int _provisionCalls;
+        private int _describeCalls;
+        private int _releaseCalls;
+        private SandboxProvisionedResource? _lastProvisionedResource;
+        private Guid _lastOperationId;
+
+        public int ProvisionCalls => Volatile.Read(ref _provisionCalls);
+        public int DescribeCalls => Volatile.Read(ref _describeCalls);
+        public int ReleaseCalls => Volatile.Read(ref _releaseCalls);
+        public SandboxReleaseRequest? LastReleaseRequest { get; private set; }
+
+        public ProvisionGate DeferNextProvision()
+        {
+            var gate = new ProvisionGate();
+            if (Interlocked.CompareExchange(ref _nextProvisionGate, gate, null) is not null)
+                throw new InvalidOperationException("A Sandbox provider call is already deferred.");
+            return gate;
+        }
+
+        public async Task<SandboxProvisionedResource> ProvisionAsync(
+            SandboxProvisionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _provisionCalls);
+            _lastOperationId = request.OperationId;
+            var claimUid = request.ResourceGeneration == 1
+                ? "sandbox-claim-uid"
+                : $"sandbox-claim-uid-{request.ResourceGeneration}";
+            var resource = new ProviderResourceRef(
+                ProviderSeam.Sandbox,
+                request.Candidate.ProviderId,
+                claimUid,
+                request.ResourceGeneration);
+            var binding = new SandboxProviderBindingSnapshot(
+                request.Candidate.ProviderId,
+                request.Candidate.AdapterVersion.ToString(),
+                request.Candidate.OptionsSchemaVersion,
+                request.Candidate.OptionsRevision,
+                JsonSerializer.SerializeToElement(options, JsonOptions),
+                JsonSerializer.SerializeToElement(new
+                {
+                    clusterIdentity,
+                    @namespace = options.Namespace,
+                    claimUid = resource.ResourceId,
+                    operationId = request.OperationId.ToString("N")
+                }, JsonOptions));
+            var provisioned = new SandboxProvisionedResource(
+                resource,
+                new SandboxEndpointReference(Guid.NewGuid()),
+                new SandboxPlacementReference("test-placement"),
+                request.Candidate.AdvertisedCapabilities,
+                [],
+                binding).Validate();
+            _lastProvisionedResource = provisioned;
+
+            var gate = Interlocked.Exchange(ref _nextProvisionGate, null);
+            if (gate is not null)
+            {
+                gate.Started.TrySetResult();
+                await gate.AllowCompletion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            return provisioned;
+        }
+
+        public Task<SandboxObservation> DescribeAsync(
+            SandboxDescribeRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _describeCalls);
+            var resource = _lastProvisionedResource
+                ?? throw new InvalidOperationException("No test Sandbox resource has been provisioned.");
+            if (resource.Resource != request.Resource)
+                throw new InvalidOperationException("The described Sandbox resource is not the test provider's current resource.");
+            return Task.FromResult(new SandboxObservation(
+                request.Resource,
+                SandboxObservedState.Pending,
+                request.FencingGeneration,
+                VmIsolationVerified: true,
+                WorkspaceAttachmentVerified: true,
+                VerifiedNetworkGeneration: null,
+                StartupPhases: [],
+                ProvisionOperationId: _lastOperationId,
+                ProvisionedResource: resource).ValidateFor(request));
+        }
+
+        public Task<IReadOnlyList<SandboxObservation>> ListOwnedAsync(
+            SandboxListOwnedRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("The integration scenario does not exercise provider recovery.");
+
+        public Task<SandboxReleaseReceipt> ReleaseAsync(
+            SandboxReleaseRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _releaseCalls);
+            LastReleaseRequest = request;
+            return Task.FromResult(new SandboxReleaseReceipt(
+                request.Resource,
+                request.IdempotencyKey,
+                SandboxReleaseDisposition.Released).ValidateFor(request));
+        }
+
+        public sealed class ProvisionGate
+        {
+            public TaskCompletionSource Started { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public TaskCompletionSource AllowCompletion { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+    }
+
+    private sealed class InMemoryCiliumPolicyResourceStore : ICiliumPolicyResourceStore
+    {
+        private readonly Dictionary<(string Namespace, string Name), CiliumNetworkPolicyDocument> _resources = [];
+        private long _version;
+
+        public Task<CiliumNetworkPolicyDocument?> GetAsync(
+            string @namespace,
+            string name,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(_resources.GetValueOrDefault((@namespace, name)));
+
+        public Task<CiliumNetworkPolicyDocument> CreateAsync(
+            CiliumNetworkPolicyDocument policy,
+            CancellationToken cancellationToken)
+        {
+            var key = (policy.Metadata.Namespace, policy.Metadata.Name);
+            if (_resources.ContainsKey(key))
+                throw new CiliumPolicyException("kubernetes_conflict", "The test policy already exists.");
+            var persisted = policy with
+            {
+                Metadata = policy.Metadata with
+                {
+                    ResourceVersion = NextVersion(),
+                    Generation = 1
+                }
+            };
+            _resources.Add(key, persisted);
+            return Task.FromResult(persisted);
+        }
+
+        public Task<CiliumNetworkPolicyDocument> ReplaceAsync(
+            CiliumNetworkPolicyDocument policy,
+            string expectedResourceVersion,
+            CancellationToken cancellationToken)
+        {
+            var key = (policy.Metadata.Namespace, policy.Metadata.Name);
+            if (!_resources.TryGetValue(key, out var current) ||
+                current.Metadata.ResourceVersion != expectedResourceVersion)
+                throw new CiliumPolicyException("stale_generation", "The test policy resource version changed.");
+            var persisted = policy with
+            {
+                Metadata = policy.Metadata with
+                {
+                    ResourceVersion = NextVersion(),
+                    Generation = (current.Metadata.Generation ?? 0) + 1
+                }
+            };
+            _resources[key] = persisted;
+            return Task.FromResult(persisted);
+        }
+
+        public Task DeleteAsync(
+            string @namespace,
+            string name,
+            string expectedResourceVersion,
+            CancellationToken cancellationToken)
+        {
+            var key = (@namespace, name);
+            if (!_resources.TryGetValue(key, out var current) ||
+                current.Metadata.ResourceVersion != expectedResourceVersion)
+                throw new CiliumPolicyException("stale_generation", "The test policy resource version changed.");
+            _resources.Remove(key);
+            return Task.CompletedTask;
+        }
+
+        private string NextVersion() =>
+            (++_version).ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private sealed class RunSelectionObserver
@@ -395,7 +911,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
-    private sealed class CountingWorkspaceVolumeProvider : IWorkspaceVolumeProvider
+    private sealed class CountingWorkspaceVolumeProvider(string clusterIdentity) : IWorkspaceVolumeProvider
     {
         private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
         private int _provisionCalls;
@@ -416,14 +932,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 "1.0.0",
                 1,
                 "options-1",
-                JsonSerializer.SerializeToElement(new { namespaceName = "agentweaver" }, JsonOptions),
+                JsonSerializer.SerializeToElement(
+                    new AzureFilesCsiOptions(1, "options-1", "agentweaver", "azure-files", 100, 60, 100),
+                    JsonOptions),
                 JsonSerializer.SerializeToElement(new
                 {
                     @namespace = "agentweaver",
                     claimName = "claim-1",
                     claimUid = "claim-uid",
                     pvName = "pv-1",
-                    pvUid = "pv-uid"
+                    pvUid = "pv-uid",
+                    clusterIdentity
                 }, JsonOptions));
             return Task.FromResult(new WorkspaceVolumeResource(
                 resource,
@@ -464,11 +983,19 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         public IEnvironmentLifecycleStore CreateStore() =>
             new EnvironmentLifecycleStore(_dataSource, TimeProvider.System);
 
+        public ISandboxLeaseStore CreateSandboxStore() =>
+            new EnvironmentSandboxLeaseStore(_dataSource, TimeProvider.System);
+
         public static async Task<WorkspaceVolumeApiTestServer> StartAsync(
             string connectionString,
             SecurityKey signingKey,
             Func<HttpMessageHandler> projectsHandlerFactory,
-            IWorkspaceVolumeProvider provider)
+            IWorkspaceVolumeProvider provider,
+            ISandboxProvider sandboxProvider,
+            AgentSandboxOptions sandboxOptions,
+            KubernetesAgentSandboxClient sandboxKubernetesClient,
+            CiliumEgressProviderOptions ciliumOptions,
+            ICiliumPolicyResourceStore ciliumStore)
         {
             var dataSource = NpgsqlDataSource.Create(connectionString);
             try
@@ -491,10 +1018,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             services.AddSingleton(dataSource);
                             services.AddSingleton(TimeProvider.System);
                             services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
+                            services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
                             services.AddScoped<WorkspaceVolumeService>();
                             services.AddScoped<EnvironmentEgressManager>();
+                            services.AddScoped<CiliumEgressPolicyAdapter>();
+                            services.AddScoped<EnvironmentSandboxManager>();
                             services.AddScoped<EnvironmentWorkspaceVolumeManager>();
                             services.AddSingleton<IWorkspaceVolumeProvider>(provider);
+                            services.AddSingleton<ISandboxProvider>(sandboxProvider);
+                            services.AddSingleton(sandboxOptions);
+                            services.AddSingleton(sandboxKubernetesClient);
+                            services.AddSingleton(ciliumOptions);
+                            services.AddSingleton<ICiliumPolicyResourceStore>(ciliumStore);
                             services.AddHttpClient<IProjectsConfigClient, ProjectsConfigHttpClient>(client =>
                                 client.BaseAddress = new Uri("https://projects.test/"))
                                 .ConfigurePrimaryHttpMessageHandler(projectsHandlerFactory);

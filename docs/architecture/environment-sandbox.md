@@ -159,8 +159,11 @@ change cluster configuration.
 ## Test and evidence boundary
 
 The focused commands and limits are listed in the
-[Sandbox testing guide](../guide/environment-sandbox-testing.md). The tests use
-a fake Kubernetes HTTP handler and disposable PostgreSQL. They do not prove
+[Sandbox testing guide](../guide/environment-sandbox-testing.md). The provider
+test uses a fake Kubernetes HTTP handler. The production-authority API
+integration uses real Broker, Projects, and Environment HTTP paths plus
+disposable PostgreSQL; it controls only the Workspace provider, Sandbox
+provider, and Cilium resource-store boundaries. These tests do not prove
 RuntimeClass or nested-virtualization availability on AKS, datapath enforcement,
 AgentHost configuration, run pin acceptance by Core, or deployed service
 configuration.
