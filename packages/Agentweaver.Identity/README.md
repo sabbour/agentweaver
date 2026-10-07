@@ -85,7 +85,9 @@ actual Environment placement UID and generation. The registered profile fixes
 the configure and observation HTTPS endpoints.
 
 `IRuntimeRegistrationOwner` must check current authority with genuine actor
-credentials. Stored actor identifiers cannot replace authentication.
+credentials supplied through `RuntimeActorAuthorization`. This protected-memory
+input is not a claim or permission receipt. Each owner must authenticate it and
+check its current permissions. Stored actor identifiers cannot replace authentication.
 `IRuntimeBootstrapDelivery` belongs to the Environment owner. It delivers a
 short-lived credential out of band to the exact registered placement. Its receipt
 contains references, the configuration hash, and placement/fence evidence, not a

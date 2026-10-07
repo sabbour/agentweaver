@@ -34,11 +34,19 @@ public sealed record RuntimeRegistration(
     RuntimeRegistrationState State,
     DateTimeOffset ExpiresAt);
 
+public sealed class RuntimeActorAuthorization(SecretCredential bearer, string? tenantSelector)
+{
+    [JsonIgnore]
+    public SecretCredential Bearer { get; } = bearer;
+    public string? TenantSelector { get; } = tenantSelector;
+    public override string ToString() => nameof(RuntimeActorAuthorization) + " [REDACTED]";
+}
+
 // The implementation must use fresh authenticated owner credentials, never a saved actor ID.
 public interface IRuntimeRegistrationOwner
 {
     Task<RuntimeRegistration> ReadCurrentAsync(
-        Guid runtimeInstanceId, CancellationToken cancellationToken);
+        Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken);
 }
 
 public sealed record RuntimeBootstrapDeliveryReceipt(
@@ -58,6 +66,7 @@ public interface IRuntimeBootstrapDelivery
 {
     Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
         RuntimeRegistration registration,
+        RuntimeActorAuthorization actor,
         Guid operationId,
         Guid grantId,
         string configurationHash,

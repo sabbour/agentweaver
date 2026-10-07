@@ -62,7 +62,8 @@ public sealed class RuntimeContractTests
             receipt.Audience, receipt.ConfigurationHash, credential);
         var issue = new RuntimeCredentialIssue(receipt, credential);
         var exchange = new RuntimeCredentialExchange(receipt, credential, false);
-        foreach (var value in new object[] { proof, issue, exchange })
+        var actor = new RuntimeActorAuthorization(credential, "tenant");
+        foreach (var value in new object[] { proof, issue, exchange, actor })
         {
             Assert.DoesNotContain(raw, JsonSerializer.Serialize(value));
             Assert.DoesNotContain(raw, value.ToString());
