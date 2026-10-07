@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "V1 services, contracts, and adapters",
-  "alt": "Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator/Core candidates. The runtime library connects native SDK callbacks to authenticated Orchestrator source receipts. Events fetches receipt references and commits immutable Cost accounting. Environment reuses its canonical retained-lease placement reader. The journal rejects untrusted PolicyEvaluation writes. AzureBlobObjectStore and AzureKeyVaultSecretRedemption implement their provider interfaces. Source structure, not deployment or paid model proof.",
+  "alt": "Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator/Core candidates and their provider adapters. The runtime library connects native SDK callbacks to authenticated Orchestrator receipts. Events fetches receipt references and commits immutable Cost accounting. Environment retains its canonical placement lease during internal lookup and denies public run-bound enrollment. The journal requires trusted Orchestrator receipts for PolicyEvaluation writes. This source structure does not prove deployment, paid model execution, or physical runtime recovery.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -28,6 +28,12 @@
       "id": "journal-composition",
       "label": "Events & Sessions candidate",
       "subLabel": "Host and direct project references.",
+      "tier": 1
+    },
+    {
+      "id": "orchestrator-composition",
+      "label": "Orchestrator candidate",
+      "subLabel": "Session-tree owner and mapped runtime context.",
       "tier": 1
     },
     {
@@ -130,6 +136,20 @@
         "visible": true
       },
       "group": "journal-composition"
+    },
+    {
+      "id": "orchestrator-owner",
+      "label": "Orchestrator",
+      "subLabel": "Tree owner; refs: Core, Postgres, Providers.",
+      "meta": "Agentweaver.Orchestrator",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": {
+        "text": "service candidate",
+        "tone": "teal",
+        "visible": true
+      },
+      "group": "orchestrator-composition"
     },
     {
       "id": "environment-dependencies",
@@ -255,7 +275,7 @@
     }
   ],
   "layoutSnapshot": {
-    "canvasWidth": 1838.96,
+    "canvasWidth": 1538,
     "canvasHeight": 2345.6,
     "nodes": [
       { "id": "iobjectstore", "type": "card", "position": { "x": 199.04, "y": 144 }, "data": { "label": "Agentweaver.Abstractions.IObjectStore", "subLabel": "Generic object-storage contract." } },
@@ -263,6 +283,7 @@
       { "id": "iworkspacevolumeprovider", "type": "card", "position": { "x": 1196.96, "y": 144 }, "data": { "label": "IWorkspaceVolumeProvider", "subLabel": "Generation-scoped Storage contract." } },
       { "id": "sessions-dependencies", "type": "card", "position": { "x": 396.4064, "y": 492.8 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry" } },
       { "id": "events-and-sessions", "type": "card", "position": { "x": 999.5936, "y": 492.8 }, "data": { "label": "Events & Sessions", "subLabel": "PostgreSQL journal, policy evidence, and messages.", "meta": "Agentweaver.EventsAndSessions" } },
+      { "id": "orchestrator-owner", "type": "card", "position": { "x": 1150, "y": 1310 }, "data": { "label": "Orchestrator", "subLabel": "Tree owner; refs: Core, Postgres, Providers.", "meta": "Agentweaver.Orchestrator" } },
       { "id": "environment-dependencies", "type": "card", "position": { "x": 396.4064, "y": 804.8 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nAzure Files Storage" } },
       { "id": "agentweaver-environment", "type": "card", "position": { "x": 999.5936, "y": 790.8 }, "data": { "label": "Environment", "subLabel": "Owner lifecycle, egress, and workspace volumes.", "meta": "Agentweaver.Environment" } },
       { "id": "knowledge-dependencies", "type": "card", "position": { "x": 396.4064, "y": 1099.2 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry" } },
@@ -280,6 +301,11 @@
       "from": "events-and-sessions",
       "to": "sessions-dependencies",
       "label": "references"
+    },
+    {
+      "from": "orchestrator-owner",
+      "to": "events-and-sessions",
+      "label": "validates child registration and mapped context"
     },
     {
       "from": "knowledge-service",

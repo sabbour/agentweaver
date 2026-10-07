@@ -24,7 +24,7 @@ public sealed class EventsAndSessionsMigrationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task FreshSchemaAppliesAddressedMessagesThenProjectFactsAndUsage()
+    public async Task FreshSchemaAppliesAddressedMessagesProjectFactsExplicitForksAndUsage()
     {
         await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
         await EventsAndSessionsMigrator.VerifyAsync(_fixture.DataSource, _schema);
@@ -35,7 +35,7 @@ public sealed class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var command = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".sessions_schema_migrations
             """, connection);
-        Assert.Equal(6, Convert.ToInt32(await command.ExecuteScalarAsync()));
+        Assert.Equal(7, Convert.ToInt32(await command.ExecuteScalarAsync()));
     }
 
     [Fact]
@@ -67,15 +67,19 @@ public sealed class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(7L, reader.GetInt64(0));
-        Assert.Equal(6L, reader.GetInt64(1));
+        Assert.Equal(7L, reader.GetInt64(1));
     }
 
-    [Fact]
-    public async Task CurrentVersionThreeUpgradesWithoutChangingProjectFactsOrMessages()
+    [Theory]
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task AdmittedSchemaUpgradesWithoutChangingProjectFactsMessagesOrMigrationHistory(int version)
     {
         await ApplyMigrationAsync("Agentweaver.EventsAndSessions.Migrations.001_sessions_journal.sql");
         await ApplyMigrationAsync("Agentweaver.EventsAndSessions.Migrations.002_addressed_messages.sql");
         await ApplyMigrationAsync("Agentweaver.EventsAndSessions.Migrations.003_project_facts.sql");
+        if (version == 4)
+            await ApplyMigrationAsync("Agentweaver.EventsAndSessions.Migrations.004_explicit_session_forks.sql");
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
         await using (var seed = new NpgsqlCommand($"""
             INSERT INTO "{_schema}".sessions_schema_migrations (version) VALUES (1), (2), (3);
@@ -83,12 +87,22 @@ public sealed class EventsAndSessionsMigrationTests : IAsyncLifetime
             VALUES ('current-project', 9)
             """, connection))
             await seed.ExecuteNonQueryAsync();
+        if (version == 4)
+        {
+            await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+            await using var seed = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".sessions_schema_migrations (version) VALUES (4)
+                """, connection);
+            await seed.ExecuteNonQueryAsync();
+        }
+        var historyBefore = await ReadMigrationHistoryAsync(version);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             EventsAndSessionsMigrator.VerifyAsync(_fixture.DataSource, _schema));
         await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
         await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
         await EventsAndSessionsMigrator.VerifyAsync(_fixture.DataSource, _schema);
+        Assert.Equal(historyBefore, await ReadMigrationHistoryAsync(version));
 
         await using var verifyConnection = await _fixture.DataSource.OpenConnectionAsync();
         await using var verify = new NpgsqlCommand($"""
@@ -107,7 +121,7 @@ public sealed class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(9L, reader.GetInt64(0));
-        Assert.Equal(6L, reader.GetInt64(1));
+        Assert.Equal(7L, reader.GetInt64(1));
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
         Assert.True(reader.GetBoolean(4));
@@ -118,6 +132,7 @@ public sealed class EventsAndSessionsMigrationTests : IAsyncLifetime
     [InlineData(4)]
     [InlineData(5)]
     [InlineData(6)]
+    [InlineData(7)]
     public async Task MigrationRejectsVersionGaps(int lastVersion)
     {
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
@@ -144,5 +159,16 @@ public sealed class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand(sql, connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task<string> ReadMigrationHistoryAsync(int version)
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT jsonb_agg(to_jsonb(m) ORDER BY version)::text
+            FROM "{_schema}".sessions_schema_migrations m WHERE version <= @version
+            """, connection);
+        command.Parameters.AddWithValue("version", version);
+        return (string)(await command.ExecuteScalarAsync())!;
     }
 }

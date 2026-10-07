@@ -11,6 +11,8 @@
   Resume verifies that manifest before admitting another turn.
 - A durable session tree relates runs, coordinators, child work, Scribe passes, and
   operator chats. One status snapshot exposes activity, blockers, and recovery effects.
+- The logical owner records failed or indeterminate execution with cause, reference,
+  and state version; recovery advances the execution fence without claiming SDK effects.
 - One addressed-message primitive carries steering, questions, approvals, progress,
   handoffs, and errors. Receipt acknowledgment is neither task completion nor approval.
 - Coordination verbs are typed API and first-party MCP operations. Knowledge and agent
@@ -31,6 +33,16 @@ turn-boundary operations, and the durable owner outbox. It checks current Projec
 Config authority and accepted run selection; Events validates message admission
 against the exact owner outbox record and rechecks owner bindings for claim,
 presentation, and acknowledgment.
+
+Mapped child spawn checks the latest root decision envelope under the root-session
+owner lock and rejects a pending gate or a changed actor, accepted-selection hash,
+fence, dispatch state, or confirmed WorkPlan item. Registration and spawn recheck live
+Projects authority before their owner transactions commit. The read-only runtime-owner
+context endpoint returns mapped agent/model/turn metadata only after re-reading the
+child owner row and root decision and checking authority and selection again; a stale
+mapping or decision returns a conflict. The current status endpoint reports durable
+owner run state and its fence/version/cause, not live AgentHost health. These routes do
+not add a full dispatch engine, automatic AgentHost scheduler, or runtime delivery.
 
 The owner persists accepted definitions, decisions, pending gate request IDs, step
 position, and child references in its PostgreSQL schema. Its MAF checkpoint refers to
@@ -53,6 +65,14 @@ Orchestrator Core guard waits for the durable journal acknowledgment before a
 protected callback, then rechecks current authority. Downstream protected-effect
 call-site wiring is not claimed. See the
 [implemented journal and owner contract](../../architecture/events-sessions.md).
+
+An explicit owner-reported failure or indeterminate result stores its cause and
+reference with the run/session versions, advances the run fence, and marks other active
+turns indeterminate in the same transaction as its durable outbox event. Recovery
+requires the current fence and run version, advances the fence again, and returns
+failed/indeterminate logical turns to idle. This is logical state only: SDK effects
+remain unavailable, and neither interruption intent nor recovery claims an external
+effect completed, rolled back, or replayed.
 
 When a non-empty or fixed-work plan needs isolation, the Orchestrator persists the
 accepted Sandbox candidate and adapter-returned negotiation as an immutable
@@ -309,9 +329,48 @@ A detached node remains a session but no longer follows its former parent for
 coordination. The Orchestrator owns parent/child transitions; Events & Sessions owns
 ordered history and delivery state.
 
+An explicit-event fork supplies a new target session, a committed source event and its
+opaque cursor, a target node kind, the current execution fence, and an idempotency key.
+The Orchestrator reserves that target under the current actor and run, forwards the
+caller's bearer to Events & Sessions, and accepts only the returned target and immutable
+lineage that match the request. Before writing and again immediately before the journal
+transaction commits, Events asks the Orchestrator owner to validate the exact pending
+reservation, actor, accepted selection, and source fence. A direct Events fork without
+that reservation is denied. An identical retry can recover a journal fork committed
+before an interrupted response. If owner admission is revoked before commit, the Events
+transaction rolls back and the Orchestrator records an unregistered result without
+journal effects. If owner state becomes stale after a journal fork commits, the
+Orchestrator records the lineage in an explicit unregistered result and outbox event,
+creates no tree node, and keeps the target reserved; it does not treat the journal
+branch as usable child work. A fork preserves each object's existing bounded retention
+deadline; it never extends the source prefix to indefinite retention. Forking creates a
+new branch at the recorded event, not deterministic re-execution.
+
 A single status snapshot is computed from executor, WorkPlan, gate, and session state.
 It is a query, not a second state machine maintained by the web client. Its activity
 and blocker fields can coexist:
+
+The current owner `GET /api/projects/{projectId}/runs/{runId}/coordination/status`
+is narrower: it returns the durable run/root identity, execution state, fence, logical
+turn ordinal, state version, and optional failure cause/reference. It does not report
+runtime-agent presence or effects.
+
+```mermaid
+sequenceDiagram
+    participant R as Runtime owner
+    participant O as Orchestrator owner
+    participant DB as Owner PostgreSQL
+    participant X as External effects
+    R->>O: Report failed/indeterminate (fence, versions, cause, reference, key)
+    O->>DB: CAS run and source turn; persist outcome, bump fence, fence active turns
+    O->>DB: Persist idempotency receipt and failure outbox event
+    O-->>R: Outcome plus new fence and versions
+    Note over O,X: Physical effects remain unavailable/unknown; no completion or rollback is inferred
+    R->>O: Recover (current fence/version, recovery cause/reference, key)
+    O->>DB: CAS failed run; bump fence and reset failed logical turns to idle
+    O->>DB: Persist recovery receipt and outbox event
+    O-->>R: Recovered logical state plus new fence and versions
+```
 
 | Status field | Meaning for a coordinator or operator |
 | --- | --- |
@@ -417,11 +476,58 @@ boundary, not inferred from chat prose.
 | Spawn child | Create a node with a self-contained kickoff; optional model, agent, mode, and `coordinate_with_creator`; an operator chat needs run-start permission to spawn a run |
 | Subscribe to idle | Notify `once` or `always` from workflow events; no status polling loop is needed |
 | Read status snapshot | Read activity, pending blocker, plan, interruption, and recovery effects in one query |
+| Report failed/indeterminate | Persist an explicit logical outcome with cause, reference, expected fence and versions; stale requests are rejected |
+| Recover run | Advance the run fence and reset failed logical state under exact current owner versions; no physical effect is replayed or compensated |
 | Approve or reject plan | Supply the pending request id and optional rejection feedback to the gate |
 | Answer blocked question | Supply the pending request id and a valid choice or allowed free-form answer |
 | Steer | Send, redirect, amend, or stop through an addressed, fenced message |
 | Archive | Hide an owned child from active views while retaining its journal history |
-| Fork | Create new work from an explicit journal event; do not claim deterministic re-execution |
+| Fork | Create a child branch from a matching committed event/cursor pair; reserve its target and persist its lineage under the current owner fence, without promising deterministic re-execution |
+
+### Explicit-event fork registration
+
+The Orchestrator reserves the exact command and accepted-selection hash before asking
+Events to fork. Events requires an owner admission receipt both before journal work and
+after the target and lineage are staged but immediately before commit. The receipt is
+bound to the authenticated actor and exact reservation; it cannot be supplied as a
+caller assertion. The Orchestrator then revalidates the accepted selection and fence
+against the returned lineage before creating an owner tree node:
+
+```mermaid
+sequenceDiagram
+    participant Caller as Authorized caller
+    participant O as Orchestrator owner
+    participant E as Events & Sessions
+    participant DB as Owner PostgreSQL
+    Caller->>O: POST sessions/{source}/fork (target, event, cursor, kind, fence, key)
+    O->>DB: Reserve target, request hash, and accepted-selection hash
+    O->>E: POST /internal/sessions/{source}/fork with caller bearer and exact event/cursor/key
+    E->>O: Validate exact pending reservation and current actor/selection/fence
+    O-->>E: No-store admission receipt
+    E->>E: Verify committed source event and cursor; stage target and immutable lineage
+    E->>O: Revalidate admission immediately before journal commit
+    O-->>E: No-store admission receipt
+    E->>E: Commit target and lineage with unchanged object-reference deadlines
+    E-->>O: SessionForkResult(target, lineage)
+    O->>O: Revalidate actor, accepted selection, and source fence
+    alt Owner state remains current
+        O->>DB: Register child, pending request, result, and outbox atomically
+        O-->>Caller: 201 created; 200 on owner replay
+    else Events admission was denied before journal commit
+        O->>DB: Persist unregistered admission-denied result and outbox
+        O-->>Caller: 409; journal target and lineage were rolled back
+    else Fence or selection changed
+        O->>DB: Persist unregistered result and outbox; keep target reserved
+        O-->>Caller: 409; no owner tree node is created
+    end
+```
+
+An interrupted pending request is retried with the same idempotency key, target, event,
+and cursor. Events & Sessions can return its existing fork lineage; the Orchestrator
+then either completes the owner registration under the current fence or records that
+the target is unregistered. Object references keep their original retention deadlines;
+the lineage foreign key protects the explicit source event without overriding object
+retention policy for the rest of the visible prefix.
 
 Agents cap round trips on one topic; kickoff prompts carry enough context to stand
 alone. Relayed user directions are labeled as user directions. When a decision needs a

@@ -28,15 +28,15 @@ public static partial class CoordinationEndpoints
         var owner = await store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)
             .ConfigureAwait(false);
         var root = new SessionIdentity(projectId, runId, owner.RootSessionId);
+        var selectionContext = await runSelectionContexts.ReadAsync(
+                selection.Selection, owner.ExecutionFence, cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException("runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
         var decision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
             .ConfigureAwait(false);
         if (decision.State.Fence != owner.ExecutionFence ||
             decision.SelectionHash != owner.AcceptedSelectionHash ||
             !decision.State.CanDispatch || decision.State.ConfirmedWorkPlan is not { } confirmedPlan)
             throw new CoordinationException("runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
-        var selectionContext = await runSelectionContexts.ReadAsync(
-                selection.Selection, owner.ExecutionFence, cancellationToken).ConfigureAwait(false)
-            ?? CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Selection.Snapshot);
         var validatedPlan = WorkPlanValidator.ValidateAndSnapshot(
             confirmedPlan.Workflow, confirmedPlan.Plan, selectionContext);
         if (!validatedPlan.IsValid || validatedPlan.Value is null)
@@ -54,9 +54,15 @@ public static partial class CoordinationEndpoints
             throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
         var currentDecision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
             .ConfigureAwait(false);
+        var currentWorkPlanItem = currentDecision.State.ConfirmedWorkPlan?.Plan.Items.FirstOrDefault(item =>
+            string.Equals(item.Id, owner.WorkPlanItemId, StringComparison.Ordinal));
         if (currentDecision.StateVersion != decision.StateVersion ||
             currentDecision.SelectionHash != decision.SelectionHash ||
-            currentDecision.State.Fence != owner.ExecutionFence || !currentDecision.State.CanDispatch)
+            currentDecision.State.Fence != owner.ExecutionFence || !currentDecision.State.CanDispatch ||
+            currentWorkPlanItem is null ||
+            !string.Equals(currentWorkPlanItem.AgentId, workPlanItem.AgentId, StringComparison.Ordinal) ||
+            !string.Equals(currentWorkPlanItem.ModelSelectionReference,
+                workPlanItem.ModelSelectionReference, StringComparison.Ordinal))
             throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
         await RequireUnchangedAuthorizedSelectionAsync(
             context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);

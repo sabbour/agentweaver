@@ -444,6 +444,151 @@ internal sealed class CoordinatorDecisionOwnerStore
             payload.TransitionValue);
     }
 
+    internal async Task AdvanceExecutionFenceAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        long previousFence,
+        long nextFence,
+        Guid operationId,
+        string actionKind,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ValidateInput(actor, identity, selection);
+        if (nextFence != previousFence + 1 || operationId == Guid.Empty ||
+            actionKind is not ("execution.failed" or "execution.indeterminate" or "execution.recovered"))
+            throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status400BadRequest);
+
+        var latest = await ReadLatestDecisionAsync(
+            connection, transaction, identity, cancellationToken).ConfigureAwait(false);
+        if (latest is null)
+            return;
+
+        var previousBinding = CoordinatorDecisionBinding.Create(actor, identity, selection, previousFence);
+        var restored = await RestoreEnvelopeAsync(
+            latest.Envelope, previousBinding, selection.Selection, cancellationToken).ConfigureAwait(false);
+        if (!restored.IsValid || latest.StateVersion < 1 ||
+            restored.State!.Fence != previousFence)
+            throw InvalidPersistedState();
+        var currentState = restored.State;
+        ValidateStateActor(currentState, actor);
+
+        var selectionContext = await _runSelectionContexts.ReadAsync(
+            selection.Selection, previousFence, cancellationToken).ConfigureAwait(false);
+        if (selectionContext is not null)
+            await _runSelectionContexts.CarryForwardAsync(
+                connection, transaction, selection.Selection, previousFence, nextFence, cancellationToken)
+                .ConfigureAwait(false);
+
+        var nextStateResult = CoordinatorDecisionState.Restore(
+            nextFence,
+            currentState.OutcomeSpec,
+            currentState.OutcomeConfirmed,
+            currentState.NextClarifyingQuestionIndex,
+            currentState.SelectedWorkflow,
+            currentState.WorkflowConfirmed,
+            currentState.ConfirmedWorkPlan,
+            currentState.CandidateWorkPlan,
+            currentState.LastScopeDiff,
+            pendingGate: null,
+            decisionReceipts: currentState.DecisionReceipts);
+        if (!nextStateResult.IsValid || nextStateResult.Value is null)
+            throw InvalidPersistedState();
+        var nextState = nextStateResult.Value;
+        var nextBinding = CoordinatorDecisionBinding.Create(actor, identity, selection, nextFence);
+        var nextEnvelope = CoordinatorDecisionStateEnvelope.Capture(
+            nextState,
+            nextBinding,
+            nextState.ConfirmedWorkPlan is null ? null : selectionContext,
+            nextState.CandidateWorkPlan is null ? null : selectionContext);
+        if (selectionContext is null)
+            nextEnvelope = nextEnvelope with
+            {
+                ConfirmedSelectionContext = latest.Envelope.ConfirmedSelectionContext,
+                CandidateSelectionContext = latest.Envelope.CandidateSelectionContext
+            };
+
+        var pinnedBinding = selectionContext?.IsolationProviderBinding;
+        PinnedProviderBinding? ResolveBinding(PinnedProviderBindingEnvelope persisted) =>
+            pinnedBinding is not null && persisted.Matches(pinnedBinding, identity.RunId)
+                ? pinnedBinding
+                : null;
+        var validatedNextState = nextEnvelope.Restore(
+            nextBinding, pinnedBinding is null ? null : ResolveBinding);
+        if (!validatedNextState.IsValid)
+            throw InvalidPersistedState();
+
+        var stateVersion = checked(latest.StateVersion + 1);
+        var decisionId = Guid.NewGuid();
+        var requestId = $"execution-fence-{operationId:N}";
+        var commandHash = ComputeCommandHash(new
+        {
+            operationId,
+            actionKind,
+            previousFence,
+            nextFence
+        });
+        var payload = new PersistedDecisionPayload(
+            nextEnvelope,
+            true,
+            [],
+            JsonSerializer.SerializeToElement(new
+            {
+                operationId,
+                previousFence,
+                executionFence = nextFence
+            }, JsonOptions));
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO {_decisions}
+                (project_id, run_id, session_id, request_id, decision_id,
+                 actor_issuer, actor_subject, execution_fence, state_version,
+                 action_kind, idempotency_key, command_hash, decision_state, decision)
+            VALUES
+                (@project, @run, @session, @request, @decision,
+                 @issuer, @subject, @fence, @version,
+                 @action, @idempotency, @command_hash, 'accepted', @payload)
+            """, connection, transaction))
+        {
+            AddIdentity(insert, identity);
+            insert.Parameters.AddWithValue("request", NpgsqlDbType.Varchar, requestId);
+            insert.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, decisionId);
+            insert.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
+            insert.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
+            insert.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, nextFence);
+            insert.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, stateVersion);
+            insert.Parameters.AddWithValue("action", NpgsqlDbType.Varchar, actionKind);
+            insert.Parameters.AddWithValue("idempotency", NpgsqlDbType.Varchar, requestId);
+            insert.Parameters.AddWithValue("command_hash", NpgsqlDbType.Char, commandHash);
+            insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(payload, JsonOptions));
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await UpdateGateRowsAsync(
+            connection,
+            transaction,
+            actor,
+            identity,
+            latest.Envelope.PendingGate,
+            nextState,
+            requestId,
+            stateVersion,
+            cancellationToken).ConfigureAwait(false);
+        await InsertOutboxEventAsync(
+            connection,
+            transaction,
+            identity,
+            decisionId,
+            "execution.fence_advanced",
+            new { operationId, actionKind, previousFence, executionFence = nextFence, stateVersion },
+            cancellationToken).ConfigureAwait(false);
+        await SupersedeRunCurrentGrantsAsync(
+            connection, transaction, identity, cancellationToken).ConfigureAwait(false);
+    }
+
     public static string ComputeCommandHash<T>(T command) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command, JsonOptions)));
 
@@ -617,6 +762,23 @@ internal sealed class CoordinatorDecisionOwnerStore
               AND is_current AND grant_state = 'active'
             """, connection, transaction);
         AddIdentity(command, identity);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SupersedeRunCurrentGrantsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            UPDATE {_grants}
+            SET is_current = false, grant_state = 'superseded'
+            WHERE project_id = @project AND run_id = @run
+              AND is_current AND grant_state = 'active'
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 

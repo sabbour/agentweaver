@@ -23,8 +23,13 @@
     <EmbeddedResource Include="Migrations\001_coordination_owner.sql" />
     <EmbeddedResource Include="Migrations\002_typed_decisions_and_checkpoints.sql" />
     <EmbeddedResource Include="Migrations\003_accepted_run_selection_context.sql" />
-    <EmbeddedResource Include="Migrations\004_runtime_owner_context.sql" />
+    <EmbeddedResource Include="Migrations\004_session_tree.sql" />
+    <EmbeddedResource Include="Migrations\005_explicit_session_forks.sql" />
+    <EmbeddedResource Include="Migrations\006_session_fork_admission.sql" />
+    <EmbeddedResource Include="Migrations\007_execution_outcomes_and_recovery.sql" />
+    <EmbeddedResource Include="Migrations\008_run_selection_context_versions.sql" />
+    <EmbeddedResource Include="Migrations\009_runtime_owner_context.sql" />
     <EmbeddedResource Include="Migrations\runtime_registration.sql" />
-    <EmbeddedResource Include="Migrations\006_runtime_usage_source.sql" />
+    <EmbeddedResource Include="Migrations\011_runtime_usage_source.sql" />
   </ItemGroup>
 </Project>

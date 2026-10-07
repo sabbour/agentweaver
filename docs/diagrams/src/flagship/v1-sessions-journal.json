@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Sessions journal, accepted facts, and owner delivery",
-  "alt": "Events & Sessions pins the journal, commits accepted facts, and serves ordered replay. The Orchestrator validates current Projects authority, accepted selection, work item, turn, and Environment placement. The canonical Environment manager retains its lease during the internal run-read callback. Native SDK observations require a validated bearer and separate Identity observe credential. Orchestrator commits immutable source receipts after authority checks and SQL waits. Events accepts only the receipt ID, fetches trusted owner evidence, and commits immutable Cost pricing, rate card, ledger, source hash, and inbox before acknowledgment. Weighted nano-AIU is not multiplied again. This diagram describes local source contracts, not deployment or paid model execution.",
+  "alt": "Events & Sessions commits journal facts and serves ordered replay. Orchestrator rechecks current Projects authority, accepted decision, persisted selection context, work item, turn, and Environment placement after waits. Owner-admitted forks commit verified journal lineage before child registration, while old provider pins deny forks. Native SDK observations require a validated bearer and separate Identity observe credential. Events fetches the source receipt by ID and commits immutable Cost accounting before acknowledgment, without multiplying weighted nano-AIU again. These local source contracts do not prove deployment, paid model execution, or physical runtime recovery.",
   "autonumber": true,
   "participants": [
     {
@@ -76,11 +76,6 @@
       "type": "note",
       "over": ["api", "postgres"],
       "label": "Runtime uses password-free workload identity and verifies schema only; --migrate uses a separate privileged identity."
-    },
-    {
-      "type": "note",
-      "over": ["api", "postgres"],
-      "label": "Immutable usage receipts + Cost pins: schema v6.\nReference-only; atomic accounting; TRUNCATE denied."
     },
     {
       "type": "message",
@@ -217,7 +212,12 @@
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
-      "label": "SDK source commits first; Events accepts receiptId only.\nFixed HTTPS fetch; no caller credentials, URLs, or measurements in accounting."
+      "label": "Knowledge receipts are project facts, not session events. Orchestrator validates its owner outbox before fenced turn-boundary delivery; receipt is not approval."
+    },
+    {
+      "type": "note",
+      "over": ["caller", "api", "postgres"],
+      "label": "Current owner context. Owner-admitted forks; old pins deny forks.\nSDK source -> receiptId -> atomic Cost. Schema v7; TRUNCATE denied."
     }
   ]
 }

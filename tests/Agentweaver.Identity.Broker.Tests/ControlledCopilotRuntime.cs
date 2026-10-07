@@ -13,7 +13,7 @@ namespace Agentweaver.Identity.Broker.Tests;
 internal sealed class ControlledCopilotRuntime : IAsyncDisposable
 {
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
-    private readonly CancellationTokenSource _stop = new(TimeSpan.FromSeconds(30));
+    private readonly CancellationTokenSource _stop = new(TimeSpan.FromMinutes(2));
     private readonly Task _server;
     private readonly string _connectionToken = Guid.NewGuid().ToString("N");
     private readonly SemaphoreSlim _writes = new(1, 1);

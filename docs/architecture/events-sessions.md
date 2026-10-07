@@ -6,9 +6,9 @@ accepted-effect fact stream; it is not a deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal, serves ordered run-event replay, appends Knowledge-owned accepted-effect receipts as project facts, presents Orchestrator owner-outbox messages at fenced turn boundaries, and admits PolicyEvaluation only from immutable Orchestrator receipts after current Core and owner-session validation, repeated after SQL lock waits." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal, serves ordered run-event replay, appends Knowledge-owned accepted-effect receipts as project facts, and presents Orchestrator owner-outbox messages at fenced turn boundaries. The Orchestrator validates mapped child context against current decisions and authority. Events admits PolicyEvaluation only from immutable Orchestrator receipts after current authority and owner-session checks." />
   </a>
-  <figcaption>Run-bound session events, project-scoped facts, and addressed messages have separate addresses and storage. Generic PolicyEvaluation appends are rejected; the receipt-reference route fetches immutable Orchestrator evidence and revalidates admission before commit. The figure describes source behavior, not a deployment topology.</figcaption>
+  <figcaption>Run-bound session events, project-scoped facts, and addressed messages have separate addresses and storage. Generic PolicyEvaluation appends are rejected; the receipt-reference route fetches immutable Orchestrator evidence and revalidates admission before commit. The Orchestrator validates mapped context against current owner state and authority. The figure describes source behavior, not a deployment topology.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
 
@@ -34,12 +34,12 @@ The broader Sessions and coordination design remains Proposed for those workflow
 ## Usage storage and Copilot pricing
 
 The service owns separate append-only `usage_ledger` and immutable
-`usage_rate_cards` tables. Migration `004_copilot_usage.sql` adds these tables after
-the session journal, addressed messages, and project facts. The migration preserves
-both current version-3 schemas and the earlier version-2 project-fact layout.
-Migration `005_native_sdk_usage.sql` adds cache-write values and permits unknown
-request counts. Migration `006_native_usage_receipts.sql` adds immutable source
-receipts and run-scoped Cost bindings. Ordinary startup requires version 6.
+`usage_rate_cards` tables. Migration `005_copilot_usage.sql` adds these tables after
+the session journal, addressed messages, project facts, and explicit session forks.
+The migration preserves admitted version-4 schemas and the earlier version-2 project-fact layout.
+Migration `006_native_sdk_usage.sql` adds cache-write values and permits unknown
+request counts. Migration `007_native_usage_receipts.sql` adds immutable source
+receipts and run-scoped Cost bindings. Ordinary startup requires version 7.
 
 `PostgresUsageLedger` implements the low-level `IUsageLedger` storage contract.
 An entry records tenant, project, run, session, agent, model metadata, measurements,
@@ -110,6 +110,17 @@ Events & Sessions. Events asks the Orchestrator to verify that the complete mess
 matches that outbox record, that both sessions belong to the active run, and that
 sender/recipient writer and execution fences are current. It persists the journal
 reference and Events-side outbox/inbox transactionally.
+
+For mapped child work, the Orchestrator checks the latest root decision envelope under
+the root-session lock before it creates the owner child and spawn outbox records. The
+envelope must still authorize dispatch of the exact confirmed WorkPlan item, with the
+current actor, accepted-selection hash, and execution fence and no pending gate. Child
+registration and spawn recheck live Projects authority before transaction commit. The
+read-only runtime-owner-context endpoint re-reads the child owner row and latest root
+decision, then rechecks Projects authority and accepted selection before returning
+agent/model/turn metadata. A changed owner row, decision version, mapping, fence, or
+pending gate returns a conflict rather than stale context; it does not cancel or schedule
+runtime work.
 
 At an explicit owner turn-boundary request, the Orchestrator asks Events to claim and
 present the next addressed message. Events re-reads the current owner session binding

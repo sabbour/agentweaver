@@ -157,13 +157,217 @@ public sealed record AcceptedRoot(
 
 public sealed record RegisterChildRequest(string SessionId, string? WorkPlanItemId = null);
 
-internal sealed record ConfirmedWorkPlanItemAssociation(
-    string WorkPlanItemId, long DecisionStateVersion, string SelectionHash);
+public enum CoordinationSessionKind
+{
+    Coordinator,
+    ChildWork,
+    Scribe,
+    OperatorChat,
+    ChildRun
+}
 
-internal sealed record SessionRuntimeOwnerState(
-    string RootSessionId, string WorkPlanItemId, string TenantId,
-    string AcceptedSelectionHash, long ExecutionFence, long LogicalTurnOrdinal,
-    long StateVersion, string RuntimeTurnId);
+public enum CoordinationActivityState
+{
+    Busy,
+    Idle,
+    Unknown
+}
+
+public enum CoordinationInterruptionIntentState
+{
+    None,
+    Requested,
+    Acknowledged
+}
+
+public enum CoordinationLifecycleState
+{
+    Active,
+    Cancelled,
+    Completed,
+    Archived
+}
+
+public enum IdleNotificationMode
+{
+    Once,
+    Always
+}
+
+public enum IdleNotificationSourceState
+{
+    Available,
+    Unavailable
+}
+
+public enum CoordinationBlockerKind
+{
+    AwaitingInput,
+    AwaitingPlanApproval,
+    AwaitingApproval,
+    AwaitingOutcomeConfirmation
+}
+
+public enum CoordinationSteeringAction
+{
+    Stop,
+    Redirect,
+    Amend
+}
+
+public sealed record SpawnSessionRequest(
+    string SessionId,
+    CoordinationSessionKind Kind,
+    string IdempotencyKey,
+    string Kickoff,
+    string? UserQuote = null,
+    string? CoordinatorInstructions = null,
+    string? WorkPlanItemId = null);
+
+internal sealed record ConfirmedWorkPlanItemAssociation(
+    string WorkPlanItemId,
+    long DecisionStateVersion,
+    string SelectionHash);
+
+public sealed record SessionTreeCommandRequest(long ExecutionFence, string IdempotencyKey);
+
+public sealed record CoordinationSessionForkRequest(
+    long ExecutionFence,
+    string IdempotencyKey,
+    string TargetSessionId,
+    Guid SourceEventId,
+    string SourceCursor,
+    CoordinationSessionKind Kind);
+
+public enum CoordinationForkRegistrationState
+{
+    RegistrationPending,
+    Registered,
+    Unregistered
+}
+
+public sealed record CoordinationSessionForkResult(
+    Guid CommandId,
+    SessionIdentity Source,
+    string TargetSessionId,
+    CoordinationSessionKind Kind,
+    long ExecutionFence,
+    CoordinationForkRegistrationState RegistrationState,
+    SessionTreeNode? Node,
+    string? PendingRequestId,
+    SessionForkLineage? Lineage,
+    string? UnavailableCode,
+    bool IsDuplicate);
+
+public sealed record SubscribeToIdleRequest(
+    string SubscriberSessionId,
+    long ExecutionFence,
+    string IdempotencyKey,
+    IdleNotificationMode Mode);
+
+public sealed record ResolveCoordinatorGateRequest(
+    long ExpectedStateVersion,
+    string IdempotencyKey);
+
+public sealed record SteerSessionRequest(
+    string RecipientSessionId,
+    string IdempotencyKey,
+    AddressedMessageDeliveryMode DeliveryMode,
+    CoordinationSteeringAction Action,
+    JsonElement Instruction,
+    string? UserQuote = null,
+    string? CoordinatorInstructions = null);
+
+public sealed record SessionTreeNode(
+    SessionIdentity Identity,
+    string? ParentSessionId,
+    string RootSessionId,
+    CoordinationSessionKind Kind,
+    bool Detached,
+    CoordinationLifecycleState Lifecycle,
+    long ExecutionFence,
+    long LogicalTurnOrdinal,
+    long StateVersion,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? ArchivedAt);
+
+public sealed record SessionTreeSnapshot(
+    string RootSessionId,
+    ImmutableArray<SessionTreeNode> Nodes);
+
+public sealed record SessionStatusBlocker(
+    CoordinationBlockerKind Kind,
+    string RequestId,
+    ImmutableArray<string> Choices,
+    bool AllowsFreeform,
+    string? Prompt);
+
+public sealed record SessionStatusSnapshot(
+    SessionIdentity Identity,
+    string? ParentSessionId,
+    string RootSessionId,
+    CoordinationSessionKind Kind,
+    bool Detached,
+    CoordinationActivityState Activity,
+    string? ActivityUnavailableCode,
+    CoordinationLifecycleState Lifecycle,
+    long ExecutionFence,
+    long StateVersion,
+    ImmutableArray<SessionStatusBlocker> Blockers,
+    string RuntimeEffectsState,
+    string RuntimeEffectsUnavailableCode,
+    SessionInterruptionIntentSnapshot InterruptionIntent,
+    OwnerRunExecutionSnapshot RunExecution);
+
+public sealed record OwnerRunExecutionSnapshot(
+    string State,
+    long StateVersion,
+    string? CauseCode,
+    string? Reference);
+
+public sealed record SessionInterruptionIntentSnapshot(
+    CoordinationInterruptionIntentState State,
+    Guid? OwnerMessageId,
+    string? CauseCode);
+
+public sealed record CoordinationIdleNotification(
+    Guid NotificationId,
+    SessionIdentity Target,
+    SessionIdentity Subscriber,
+    long ExecutionFence,
+    long LogicalTurnOrdinal,
+    long StateVersion);
+
+public sealed record SpawnedSession(
+    SessionTreeNode Node,
+    string PendingRequestId,
+    Guid CommandId,
+    string DispatchState);
+
+public sealed record IdleSubscriptionResult(
+    Guid SubscriptionId,
+    string TargetSessionId,
+    string SubscriberSessionId,
+    IdleNotificationMode Mode,
+    long ExecutionFence,
+    bool Active,
+    IdleNotificationSourceState NotificationSourceState,
+    string? NotificationSourceUnavailableCode);
+
+public sealed record CoordinationTreeCommandResult(
+    Guid CommandId,
+    string Command,
+    string SourceSessionId,
+    string? TargetSessionId,
+    long ExecutionFence,
+    string State);
+
+public sealed record CoordinationSpawnCommand(
+    Guid CommandId,
+    SessionIdentity Parent,
+    SpawnSessionRequest Request,
+    string PendingRequestId,
+    long ExecutionFence);
 
 public sealed record RegisteredChild(
     SessionIdentity Identity,
@@ -218,7 +422,24 @@ public sealed record TurnBoundaryResult(
     string ExecutionState,
     bool PendingWake,
     AddressedMessageEnvelope? PresentedMessage,
-    ImmutableArray<ParentNotification> ParentNotifications = default);
+    ImmutableArray<ParentNotification> ParentNotifications = default,
+    string RuntimeTurnId = "",
+    long ExecutionFence = 0,
+    long RunStateVersion = 0,
+    string? CauseCode = null,
+    string? Reference = null,
+    Guid? OperationId = null,
+    bool IsDuplicate = false);
+
+internal sealed record SessionRuntimeOwnerState(
+    string RootSessionId,
+    string WorkPlanItemId,
+    string TenantId,
+    string AcceptedSelectionHash,
+    long ExecutionFence,
+    long LogicalTurnOrdinal,
+    long StateVersion,
+    string RuntimeTurnId);
 
 public sealed record OwnerRunStatus(
     string ProjectId,
@@ -227,6 +448,54 @@ public sealed record OwnerRunStatus(
     long ExecutionFence,
     long LogicalTurnOrdinal,
     string ExecutionState,
+    long StateVersion,
+    string? CauseCode = null,
+    string? Reference = null);
+
+public enum OwnerRunFailureState
+{
+    Failed,
+    Indeterminate
+}
+
+public sealed record ReportRunFailureRequest(
+    long ExecutionFence,
+    long ExpectedRunStateVersion,
+    long ExpectedSessionStateVersion,
+    string IdempotencyKey,
+    OwnerRunFailureState State,
+    string CauseCode,
+    string Reference);
+
+public sealed record RecoverRunExecutionRequest(
+    long ExecutionFence,
+    long ExpectedRunStateVersion,
+    string IdempotencyKey,
+    string CauseCode,
+    string Reference);
+
+public sealed record RunExecutionTransitionResult(
+    Guid OperationId,
+    SessionIdentity Session,
+    string PreviousState,
+    string State,
+    long PreviousExecutionFence,
+    long ExecutionFence,
+    long LogicalTurnOrdinal,
+    long PreviousSessionStateVersion,
+    long SessionStateVersion,
+    long PreviousRunStateVersion,
+    long RunStateVersion,
+    string? CauseCode,
+    string? Reference,
+    string? PreviousCauseCode,
+    string? PreviousReference,
+    ImmutableArray<SessionExecutionFenceChange> FencedSessions,
+    bool IsDuplicate = false);
+
+public sealed record SessionExecutionFenceChange(
+    string SessionId,
+    string State,
     long StateVersion);
 
 public sealed record ParentNotification(

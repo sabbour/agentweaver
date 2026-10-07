@@ -19,10 +19,11 @@ public static class SessionsCapabilities
     public const string PolicyEvaluations = "sessions.policy.evaluations";
     public const string AcceptedDecisions = "sessions.decisions.accepted";
     public const string AcceptedEffects = "sessions.effects.accepted";
+    public const string Fork = "sessions.events.fork";
 
-    public static ImmutableHashSet<string> All { get; } = ImmutableHashSet.Create(
+        public static ImmutableHashSet<string> All { get; } = ImmutableHashSet.Create(
         StringComparer.Ordinal, Append, Replay, Subscribe, ObjectReferences,
-        ToolCalls, PolicyEvaluations, AcceptedDecisions, AcceptedEffects);
+            ToolCalls, PolicyEvaluations, AcceptedDecisions, AcceptedEffects, Fork);
 }
 
 public sealed record PostgresSessionsProviderOptions(

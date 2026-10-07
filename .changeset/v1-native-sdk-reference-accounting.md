@@ -15,3 +15,5 @@ Recheck current registration, grant, Core authority, and Environment placement a
 Reuse the canonical retained-lease placement reader without changing public write permissions.
 Recheck current authority after SDK preparation and immediately before native session creation.
 Reject statement-level truncation of source history, accounting receipts, and Cost pins.
+Preserve admitted session-tree and fork migrations before adding native usage migrations.
+Reuse the current owner context without rebuilding missing Sandbox selection bindings.
