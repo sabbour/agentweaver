@@ -83,6 +83,8 @@ builder.Services.AddSingleton<IExecutableActionGrantOwnerLookup>(services =>
     services.GetRequiredService<ExecutableActionGrantOwnerStore>());
 builder.Services.AddSingleton<IExecutableActionSourceReceiptWriter>(services =>
     services.GetRequiredService<ExecutableActionGrantOwnerStore>());
+builder.Services.AddSingleton<IExecutableActionPolicyEvaluationReceiptWriter>(services =>
+    services.GetRequiredService<ExecutableActionGrantOwnerStore>());
 builder.Services.AddSingleton(services => new PostgresMafCheckpointStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
@@ -92,6 +94,8 @@ builder.Services.AddHttpClient<ProjectsRunSelectionClient>()
 builder.Services.AddHttpClient<EventsAddressedMessageClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
+builder.Services.AddTransient<IExecutableActionPolicyEvaluationJournal>(services =>
+    services.GetRequiredService<EventsAddressedMessageClient>());
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
 {

@@ -35,10 +35,19 @@ of falling back to a new default. The service emits bounded pin evidence through
 existing telemetry helper without recording option values, credentials, or raw resource
 IDs. See the [journal service reference](events-sessions.md).
 
-Event version 2 defines a typed PolicyEvaluation payload, but the native journal does not
-advertise `sessions.policy.evaluations` or accept these events from generic run-scoped
-callers. Actor equality does not prove Orchestrator Core writer provenance. The capability
-must remain unavailable until that trusted writer path is implemented.
+Event version 2 defines a typed PolicyEvaluation payload. The native journal advertises
+`sessions.policy.evaluations` for new run pins, but generic run-scoped callers cannot append
+these events because actor equality does not prove Orchestrator Core writer provenance.
+Each run keeps its exact persisted capability set across provider upgrades: older pins
+remain usable for ordinary append, replay, subscribe, and additional session registration,
+but the new receipt route returns `409` for a pin without this capability and does not
+advance the journal. New runs negotiate the expanded set.
+
+The receipt route accepts only an immutable Orchestrator receipt ID. Owner writes and
+Events admission require current Core writer authority, accepted selection, and a matching
+active owner session/run, actor, and fence; each rechecks authority after owner-row lock
+waits, including duplicate attempts. Allow also requires its exact active grant. Deny and
+Error can reference an issued inactive grant, but remain non-authorizing facts.
 
 The Orchestrator Core also contains the source-only `agt.dotnet-yaml` Policy provider.
 It requires a deny-by-default platform policy, rejects unsupported AGT actions, and

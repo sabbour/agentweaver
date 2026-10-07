@@ -63,6 +63,9 @@ public static partial class CoordinationEndpoints
         coordination.MapGet(
             "/policy-evaluations/{receiptId:guid}",
             ReadPolicyEvaluationReceiptAsync);
+        coordination.MapGet(
+            "/policy-evaluations/{receiptId:guid}/admission",
+            ValidatePolicyEvaluationReceiptAdmissionAsync);
 
         app.MapPost(
             "/internal/projects/{projectId}/runs/{runId}/coordination/message-route",
@@ -809,6 +812,24 @@ public static partial class CoordinationEndpoints
             _ = await projects.ReadSelectionForReadAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
             return Results.Ok(receipt);
+        }, cancellationToken);
+
+    private static Task<IResult> ValidatePolicyEvaluationReceiptAdmissionAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ExecutableActionGrantOwnerStore grants,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var receipt = await grants.ValidateReceiptAdmissionAsync(
+                actor, projectId, runId, receiptId, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(new PolicyEvaluationReceiptAdmissionAcknowledgment(
+                receiptId, receipt.Identity));
         }, cancellationToken);
 
     private static Task<IResult> AcceptRootAsync(

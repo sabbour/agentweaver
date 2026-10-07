@@ -7,9 +7,12 @@ egress intent, and workspace-volume orchestration; its Azure Files CSI adapter o
 provisions or releases generation-pinned Kubernetes claims. These are source
 candidates, not deployed services. The native journal includes typed, redacted
 PolicyEvaluation evidence but rejects generic writes without trusted Core-writer
-provenance. The event and policy adapter are not action grants or a wired
-protected-effect guard. Provider, journal, addressed-message, and Storage contracts
-stay separate from the Azure, PostgreSQL, Kubernetes, and AGT adapters and services.
+provenance. The event and policy adapter are not action grants. Orchestrator Core's action guard
+checks current grants and awaits a durable receipt acknowledgment; Events admits
+PolicyEvaluation only from immutable Orchestrator receipts after current owner
+validation. Downstream protected-effect call-site wiring is not claimed. Provider,
+journal, addressed-message, and Storage contracts stay separate from the Azure,
+PostgreSQL, Kubernetes, and AGT adapters and services.
 
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 

@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Sessions journal, accepted facts, and owner delivery",
-  "alt": "Projects & Config validates current permission and accepted run selection. Events & Sessions pins the journal, commits accepted facts, and serves ordered replay. After a fresh authority check and owner CAS, the Orchestrator commits the trusted accepted-run Sandbox binding with the winning plan decision, gate, grants, and outbox, then persists owner receipts and fenced message delivery. Runtime owner context derives the agent, accepted model, and deterministic turn from the current confirmed work item. The registration candidate also checks the actual Environment lease and exact registered profile; public write gates deny run-bound tokens pending the separate internal read-only lookup. Complete native SDK accounting remains pending.",
+  "alt": "Projects & Config validates current permission and accepted run selection. Events & Sessions pins the journal, commits accepted facts, and serves ordered replay. After a fresh authority check and owner CAS, the Orchestrator commits the trusted accepted-run Sandbox binding with the winning plan decision, gate, grants, and outbox (its adapter only resolves existing resources), persists owner receipts and fenced message delivery; every receipt commit and Events admission checks current Core write authority and owner session/run fence after lock waits, while Allow also requires its exact active grant. A separate runtime-owner-context lookup checks the accepted decision and current authority, deriving the agent, accepted model, and deterministic turn from the current confirmed work item. The registration candidate also checks the actual Environment lease and exact registered profile. Public write gates deny run-bound tokens pending the separate internal read-only lookup. Complete native SDK accounting remains pending.",
   "autonumber": true,
   "participants": [
     {
@@ -146,7 +146,7 @@
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
-      "label": "Generic PolicyEvaluation append fails closed: actor=sub/run scope do not prove Core provenance; #1846 receipt consumer is not wired."
+      "label": "Receipt ID only; generic append denied. Owner and Events recheck writer/selection and session/run fence after waits/retries; Allow needs exact active grant."
     },
     {
       "type": "activation",

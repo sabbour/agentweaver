@@ -4,13 +4,15 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
 internal sealed class EventsAddressedMessageClient(
     HttpClient httpClient,
-    OrchestratorOptions options)
+    OrchestratorOptions options,
+    IHttpContextAccessor httpContextAccessor) : IExecutableActionPolicyEvaluationJournal
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -71,6 +73,78 @@ internal sealed class EventsAddressedMessageClient(
             if (session?.Identity != identity)
                 throw new CoordinationException(
                     "events_session_registration_contract_invalid", StatusCodes.Status502BadGateway);
+        }
+    }
+
+    public async Task<ExecutableActionPolicyEvaluationAppendResult> AppendReceiptAsync(
+        SessionIdentity identity,
+        Guid receiptId,
+        CancellationToken cancellationToken = default)
+    {
+        if (receiptId == Guid.Empty)
+            throw new CoordinationException(
+                "events_policy_receipt_reference_invalid", StatusCodes.Status400BadRequest);
+        var context = httpContextAccessor.HttpContext
+            ?? throw new CoordinationException(
+                "events_policy_receipt_context_unavailable", StatusCodes.Status503ServiceUnavailable);
+        var owner = RequireEventsOwner(context, identity);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(owner, $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/policy-evaluations"))
+        {
+            Content = JsonContent.Create(new PolicyEvaluationReceiptReferenceRequest(receiptId), options: JsonOptions)
+        };
+        request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new CoordinationException(
+                "events_policy_receipt_unavailable", StatusCodes.Status502BadGateway, exception);
+        }
+
+        using (response)
+        {
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                throw new CoordinationException(
+                    "events_policy_receipt_denied", StatusCodes.Status403Forbidden);
+            if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Created) ||
+                response.Headers.CacheControl?.NoStore != true)
+                throw new CoordinationException(
+                    "events_policy_receipt_unavailable", StatusCodes.Status502BadGateway);
+
+            PolicyEvaluationAppendAcknowledgment? acknowledgment;
+            try
+            {
+                acknowledgment = await response.Content.ReadFromJsonAsync<PolicyEvaluationAppendAcknowledgment>(
+                    JsonOptions, cancellationToken).ConfigureAwait(false);
+            }
+            catch (JsonException exception)
+            {
+                throw new CoordinationException(
+                    "events_policy_receipt_contract_invalid", StatusCodes.Status502BadGateway, exception);
+            }
+            var duplicate = response.StatusCode == HttpStatusCode.OK;
+            if (acknowledgment is null ||
+                acknowledgment.ReceiptId != receiptId ||
+                acknowledgment.Identity != identity ||
+                acknowledgment.Position < 1 ||
+                acknowledgment.IsDuplicate != duplicate)
+                throw new CoordinationException(
+                    "events_policy_receipt_contract_invalid", StatusCodes.Status502BadGateway);
+            return new ExecutableActionPolicyEvaluationAppendResult(duplicate);
         }
     }
 
