@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Xunit;
@@ -98,6 +99,34 @@ public sealed class RuntimeOwnerHttpTransportTests
             RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(address)));
         using var handler = RuntimeOwnerHttpTransport.CreateHandler();
         Assert.False(handler.AllowAutoRedirect);
+    }
+
+    [Fact]
+    public async Task RegistrationClientAcceptsTheOrchestratorCanonicalStringEnumContract()
+    {
+        var registration = new RuntimeRegistration(Guid.NewGuid(), 1,
+            new RuntimeBinding("https://broker.test/", Guid.NewGuid().ToString("D"), "tenant", "project", "run",
+                "session", "agent", "turn", 1, 1, 1, "context:1", new string('a', 64), 1, "environment",
+                "placement", 1, "profile", new Uri("https://runtime.test/configure"),
+                new Uri("https://orchestrator.test/internal/runtime/observations"))
+            {
+                EnvironmentCurrentFencingGeneration = 2,
+                EnvironmentProviderFencingGeneration = 3
+            }, RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(1));
+        var handler = new RecordingHandler(request =>
+        {
+            var response = Response(request, registration);
+            response.Content = JsonContent.Create(registration, options: new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            {
+                Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+            });
+            return Task.FromResult(response);
+        });
+        using var client = new HttpClient(handler);
+        var owner = new RuntimeRegistrationHttpClient(client, new Uri("https://orchestrator.test/"));
+        Assert.Equal(registration, await owner.ReadCurrentAsync(registration.RuntimeInstanceId,
+            new RuntimeActorAuthorization(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(2)), "tenant"),
+            default));
     }
 
     private static HttpResponseMessage Response<T>(HttpRequestMessage request, T body) => new(HttpStatusCode.OK)

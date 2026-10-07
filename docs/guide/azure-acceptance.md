@@ -19,6 +19,13 @@ kubectl kustomize deploy\k8s\acceptance\foundation-probe
 They validate source and local rendering only; they do not contact Azure or
 prove a running service.
 
+Identity runtime-table permission checks use disposable PostgreSQL principals.
+The canonical definition permits head CAS updates and append-only audit writes
+through the existing runtime role. It does not create new Azure identities or
+execute the operator bootstrap. Those local compatibility checks are separate
+from Foundation Probe evidence and full current-authority SDK accounting
+acceptance.
+
 ## Deployment
 
 Use the guarded exact-source command in the [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md).

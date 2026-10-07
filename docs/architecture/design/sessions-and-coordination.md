@@ -59,6 +59,26 @@ owner writes; stale or revoked requests leave no new binding. If no registered
 adapter can provide the first negotiation, the plan request returns `503`; no
 synthetic resource or generation is created.
 
+### Runtime registration and accounting source candidate
+
+The Orchestrator runtime registration store creates server-owned identities and
+immutable binding revisions. Its raw storage read is not authorization.
+The authenticated owner adapter must compare current Projects selection,
+execution fence, session/work item, Environment lease, and fixed profile.
+Core execution fences, placement generations, and Environment provider/current
+fences remain distinct.
+
+The `Agentweaver.AgentRuntime` library uses the pinned native Copilot SDK.
+Its model catalog, effective model ID, SDK session ID/version, nullable
+measurements, and already-weighted nano-AIU come from that SDK. Credential
+values remain in protected memory. The library is not an AgentHost executable,
+scheduler, or new provider resolver.
+
+The storage and Broker transport source does not prove complete SDK ingestion.
+Full acceptance still requires genuine current owner and placement checks,
+immutable observation persistence, and a separate priced Events receipt.
+See the [runtime credential contract](../../reference/contracts#runtime-credential-source-candidate).
+
 ## Today in 0.x
 
 Paths refer to the 0.x code on the `dev` branch. In 0.x, an AgentHost agent turn is a

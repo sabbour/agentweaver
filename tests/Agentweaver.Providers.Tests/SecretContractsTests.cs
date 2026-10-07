@@ -53,12 +53,15 @@ public sealed class SecretContractsTests
     public void CredentialExpiresAndCanBeInvalidatedWithoutDiagnosticDisclosure()
     {
         var credential = new SecretCredential(Placeholder, Now.AddMinutes(1), _clock);
+        Assert.True(credential.IsUsable());
         Assert.Equal(Placeholder, credential.GetValue());
         _clock.UtcNow = Now.AddMinutes(1);
+        Assert.False(credential.IsUsable());
         Assert.Throws<InvalidOperationException>(() => credential.GetValue());
         _clock.UtcNow = Now;
         credential.Invalidate();
         credential.Invalidate();
+        Assert.False(credential.IsUsable());
         var error = Assert.Throws<InvalidOperationException>(() => credential.GetValue());
 
         Assert.DoesNotContain(Placeholder, credential.ToString());
@@ -90,6 +93,7 @@ public sealed class SecretContractsTests
         Assert.Equal(Placeholder, credential.GetValue());
         Assert.DoesNotContain(Placeholder, JsonSerializer.Serialize(credential), StringComparison.Ordinal);
         credential.Invalidate();
+        Assert.False(credential.IsUsable());
         Assert.Throws<InvalidOperationException>(() => credential.LimitLifetime(Now.AddMinutes(1)));
         Assert.Throws<InvalidOperationException>(() => credential.GetValue());
     }
@@ -103,6 +107,7 @@ public sealed class SecretContractsTests
         if (backendExpired) _clock.UtcNow = Now.AddSeconds(1);
         Assert.Throws<InvalidOperationException>(() =>
             credential.LimitLifetime(backendExpired ? Now.AddMinutes(10) : Now));
+        Assert.False(credential.IsUsable());
         _clock.UtcNow = Now;
         Assert.Throws<InvalidOperationException>(() => credential.GetValue());
         Assert.Throws<InvalidOperationException>(() => credential.LimitLifetime(Now.AddMinutes(1)));

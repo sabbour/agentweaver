@@ -10,6 +10,7 @@
 | `Agentweaver.Persistence.Postgres` | Library | `0.0.0` |
 | `Agentweaver.Secrets.AzureKeyVault` | Library | `0.0.0` |
 | `Agentweaver.Identity` | Library | `0.0.0` |
+| `Agentweaver.AgentRuntime` | Library | `0.0.0` |
 | `Agentweaver.Telemetry` | Library | `0.0.0` |
 | `Agentweaver.Telemetry.AzureMonitor` | Library | `0.0.0` |
 | `Agentweaver.ObjectStore.AzureBlob` | Library | `0.0.0` |
@@ -25,6 +26,10 @@ initial release notes come from the archived P0 changesets referenced by the pri
 release receipt.
 The Orchestrator Core compatibility entries include both Abstractions and Providers,
 matching its direct project references.
+The runtime library pins its native SDK dependency and references Abstractions
+and Identity. Environment now references Identity for its separate bootstrap
+profile contract. These source components do not create an AgentHost image,
+publish credentials, or prove end-to-end SDK accounting acceptance.
 
 Each product component change needs a fresh `.changeset` record. The record names the manifest component ID and semver intent. Documentation-only changes do not need a changeset.
 

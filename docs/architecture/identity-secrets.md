@@ -45,7 +45,26 @@ The Key Vault adapter uses an injected credential or explicit `WorkloadIdentityC
 
 The adapter requests the exact Key Vault version. A returned credential expires within five minutes or at the earlier vault expiry. The grant store keeps references and binding snapshots, not secret values.
 
-No grant-management HTTP endpoint exists. Read [contracts and endpoints](../reference/contracts) for the implemented route list and [configuration](../reference/contracts#identity-host-configuration) for host keys.
+No secret-redemption grant-management HTTP endpoint exists. Read [contracts and endpoints](../reference/contracts) for the implemented route list and [configuration](../reference/contracts#identity-host-configuration) for host keys.
+
+## Separate runtime credential candidate
+
+Runtime configure and observe grants use a separate Identity-owned store. They
+do not widen secret redemption, OAuth claims, or project roles. The optional
+Broker owner routes require a validated bearer and an independent cryptographic
+nonce bound to the exact runtime registration, purpose, audience, and expiry.
+OpenIddict supplies expiry through its validated principal metadata.
+
+Identity captures only a verifier before database waits. After the grant lock
+is acquired, it checks the exact stored binding and fresh owner authority.
+Expiry or authority loss after that verified proof records immutable revocation
+before denial. An already-expired input is rejected without claiming a verified
+nonce or durable cleanup. Audit tables permit only `SELECT` and `INSERT`; grant
+heads also permit CAS updates.
+
+Storage and Broker HTTP tests cover these boundaries. They do not prove the full
+current-Core, Environment placement, native SDK, and accounting path. See the
+[runtime credential source contract](../reference/contracts#runtime-credential-source-candidate).
 
 ## PostgreSQL authentication and workload boundary
 

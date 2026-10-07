@@ -258,9 +258,34 @@ These routes belong to the unpublished Identity broker candidate. They are servi
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL connectivity. |
 
-The service has no grant-administration HTTP endpoint. The browser consent UI is not implemented.
+The service has no secret-grant administration HTTP endpoint. The browser consent UI is not implemented.
 
 Broker access tokens contain the local broker `sub`, registered OAuth scopes, and resource audience. They do not forward upstream tenant or role claims and do not assign Projects roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Downstream resource services obtain current effective permissions through its versioned owner contract rather than maintain duplicate membership or role records or caches; OAuth scopes and signed project/run bindings constrain requests but do not create authority.
+
+### Runtime credential source candidate
+
+Optional runtime bootstrap configuration enables a separate purpose-bound store.
+These routes require the existing validated Broker audience and return
+`Cache-Control: no-store`. A bearer or a configure body alone cannot prove a
+runtime nonce. Current owner authority, exact registration, purpose, audience,
+configuration hash, revision, expiry, and cryptographic verifier must match.
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /internal/runtime/bootstrap/request` | Current-registration delivery receipt; no credential in the receipt. |
+| `POST /internal/runtime/bootstrap/verify-pending` | Pending nonce verification only; cannot consume or issue a source credential. |
+| `POST /internal/runtime/bootstrap/consume` | CAS consumption receipt after completed Environment delivery. |
+| `POST /internal/runtime/bootstrap/exchange` | Transient observe credential; exact replay returns the original receipt without a credential. |
+| `POST /internal/runtime/source/verify` | Fresh current-registration and purpose-bound nonce verification. |
+| `POST /internal/runtime/source/rotate` | New source revision and transient credential. |
+| `POST /internal/runtime/source/revoke` | Immutable revocation receipt. |
+
+Identity captures a verifier while the protected credential is live, before
+database waits. Expiry during a grant-lock wait yields explicit denial and
+durable revocation for the exact verified nonce. An already-expired input is
+rejected before verification; that rejection does not prove durable cleanup.
+Storage and actual Broker HTTP tests isolate the owner and delivery boundaries.
+Full current-Core, placement, native SDK, and accounting acceptance is pending.
 
 ## Projects & Config authorization context
 
@@ -349,6 +374,8 @@ current event-delivery boundaries.
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTenantId` | Explicit Entra tenant ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityClientId` | Explicit Entra client ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTokenFilePath` | Absolute projected token-file path. |
+| `IdentityBroker:RuntimeBootstrap:OrchestratorOwnerAddress` / `EnvironmentOwnerAddress` | Optional composition; both fixed HTTPS root owner addresses are required when configured. |
+| `IdentityBroker:RuntimeBootstrap:BootstrapLifetime` / `SourceLifetime` | Explicit positive lifetimes bounded by the current registration and actor expiry. |
 
 The host does not use ambient credentials or a development-certificate fallback.
 
@@ -362,6 +389,10 @@ Runtime and schema migration use separate connection strings, projected workload
 | Explicit migration | Run the executable with only `--migrate`; provide `ConnectionStrings:IdentityBrokerMigration` and `IdentityBroker:Migration:WorkloadIdentityTenantId`, `WorkloadIdentityClientId`, and `WorkloadIdentityTokenFilePath`. | A separate migration Entra role owns `identity_broker` and applies migrations. Its workload identity receives no Azure resource role. |
 
 The database bootstrap and reviewed grant SQL are operator-run steps. The ordinary host checks that the schema exists and no migrations are pending; it fails rather than creating roles or changing the schema.
+The four runtime grant tables have narrower masks: grant heads allow
+`SELECT`, `INSERT`, and `UPDATE`; revisions, operations, and receipts allow
+only `SELECT` and `INSERT`. Runtime deletion, audit updates, schema creation,
+and migration-history writes remain forbidden.
 
 ## AKS Application Routing preview
 

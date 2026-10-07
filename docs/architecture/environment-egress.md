@@ -172,6 +172,19 @@ sequenceDiagram
 
 ## Integration and evidence boundary
 
+### Runtime bootstrap profile candidate
+
+The separate runtime bootstrap profile registry belongs to Environment. A
+profile identifies fixed HTTPS configure and observation endpoints for an exact
+tenant, project, run, Environment, and Sandbox resource UID/generation.
+Unknown profiles or a different placement fail explicitly.
+
+A profile match does not create a lease, prove current owner authority, or
+authorize an SDK session. Delivery must verify the Identity pending nonce and
+fresh Projects, Orchestrator, and lease state before and after transport.
+The current profile tests do not prove that complete delivery path. See the
+[separate runtime credential contract](../reference/contracts#runtime-credential-source-candidate).
+
 The selector labels form the boundary that a future Environment/Sandbox
 composition must place on the corresponding environment pods. This source slice
 does not update sandbox claims or templates, add Kubernetes RBAC/workload

@@ -143,9 +143,31 @@ It returns only a grant receipt. It cannot consume a nonce, configure a runtime,
 or issue a source credential. Credential values travel only over the fixed
 authenticated HTTPS owner channel; they are not stored in an outbox.
 
-The current store tests cover persistence and cryptographic lifecycle only.
-They do not prove the remote authenticated runtime channel or native SDK source.
-The full Broker/Projects/Orchestrator/runtime/Events proof remains in progress.
+Before the first database wait, Identity captures a verifier from a live protected
+credential. It does not read the value after expiry. If the credential expires
+while waiting for the grant lock, Identity denies the request and records
+revocation for the exact verified nonce. Foreign proofs cannot change grant state.
+An input that already has a past expiry is rejected before grant verification.
+This input rejection does not prove durable owner-side revocation.
+
+The Broker HTTP test uses an actual Broker-issued bearer and a separate nonce.
+It covers pending verification, consumption, exchange, source verification,
+rotation, revocation, and cookie-only denial. It isolates the owner and delivery
+boundaries. The full current-Core, placement, SDK, and accounting proof remains
+in progress.
+
+When runtime bootstrap is configured, the existing validated Broker audience
+protects these routes. The routes return `Cache-Control: no-store`.
+
+| Route | Result |
+| --- | --- |
+| `POST /internal/runtime/bootstrap/request` | Delivery receipt for the current registered placement |
+| `POST /internal/runtime/bootstrap/verify-pending` | Proof-only pending grant receipt; no credential issuance |
+| `POST /internal/runtime/bootstrap/consume` | Consumed bootstrap receipt |
+| `POST /internal/runtime/bootstrap/exchange` | Short-lived source credential; replay returns the original receipt without a credential |
+| `POST /internal/runtime/source/verify` | Current purpose-bound source receipt |
+| `POST /internal/runtime/source/rotate` | New source revision and transient credential |
+| `POST /internal/runtime/source/revoke` | Immutable revocation receipt |
 
 The host supplies native .NET configuration through its deployment secret/configuration sources:
 

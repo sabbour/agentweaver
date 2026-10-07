@@ -10,7 +10,8 @@ public static class RuntimeOwnerHttpTransport
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-        MaxDepth = 16
+        MaxDepth = 16,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
     public static HttpClientHandler CreateHandler() => new() { AllowAutoRedirect = false };

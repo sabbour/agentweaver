@@ -40,6 +40,7 @@ public sealed record RuntimeCredentialHttpRequest(
     Guid GrantId,
     Guid RuntimeInstanceId,
     long Revision,
+    [property: JsonConverter(typeof(JsonStringEnumConverter<RuntimeCredentialPurpose>))]
     RuntimeCredentialPurpose Purpose,
     Uri Audience,
     string ConfigurationHash,

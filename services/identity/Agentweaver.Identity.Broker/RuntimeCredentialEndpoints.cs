@@ -1,8 +1,8 @@
-using System.Globalization;
 using System.Security.Claims;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.AspNetCore.Authorization;
+using OpenIddict.Abstractions;
 using OpenIddict.Validation.AspNetCore;
 
 namespace Agentweaver.Identity.Broker;
@@ -96,19 +96,18 @@ public static class RuntimeCredentialEndpoints
         SecretCredential? bearer = null;
         try
         {
-            var options = context.RequestServices.GetRequiredService<IdentityBrokerOptions>();
-            var issuer = SingleClaim(context.User, "iss");
             var subject = SingleClaim(context.User, "sub");
-            var expiry = SingleClaim(context.User, "exp");
+            var expiry = context.User.GetExpirationDate();
             var authorization = context.Request.Headers.Authorization.ToString();
-            if (issuer != options.Issuer || !Guid.TryParseExact(subject, "D", out _) ||
-                !long.TryParse(expiry, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) ||
+            // OpenIddict validates the issuer and stores expiry in private principal metadata.
+            if (context.User.Identity?.IsAuthenticated != true || !Guid.TryParseExact(subject, "D", out _) ||
+                expiry is null ||
                 !authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ||
                 authorization.Length > 16_391 || authorization[7..].Any(char.IsWhiteSpace) ||
                 context.Request.Headers["X-Agentweaver-Tenant"].Count > 1)
                 throw new RuntimeAuthorizationException("runtime_actor_invalid");
             var time = context.RequestServices.GetRequiredService<TimeProvider>();
-            bearer = new SecretCredential(authorization[7..], DateTimeOffset.FromUnixTimeSeconds(seconds), time);
+            bearer = new SecretCredential(authorization[7..], expiry.Value, time);
             var actor = new RuntimeActorAuthorization(
                 bearer, context.Request.Headers["X-Agentweaver-Tenant"].SingleOrDefault());
             var authority = new RuntimeGrantAuthority(

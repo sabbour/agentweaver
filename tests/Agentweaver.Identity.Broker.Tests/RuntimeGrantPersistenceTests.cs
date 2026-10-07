@@ -1,6 +1,8 @@
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
 using Xunit;
 
@@ -160,7 +162,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
     }
 
     [Fact]
-    public async Task WrongAudienceSecretRuntimeAndPostAwaitOwnerChangeDenyWithoutConsumingNonce()
+    public async Task ForeignProofsDoNotMutateGrantsAndCurrentOwnerLossDurablyRevokesTheBoundNonce()
     {
         var connectionString = await postgres.CreateDatabaseAsync();
         await using var dataSource = NpgsqlDataSource.Create(connectionString);
@@ -195,11 +197,115 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         owner.ChangeAfterRead = owner.Reads + 2;
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             authority.ConsumeBootstrapAsync(correct, Guid.NewGuid()));
-        Assert.Equal(1, await db.RuntimeGrantRevisions.CountAsync());
+        Assert.Equal(2, await db.RuntimeGrantRevisions.CountAsync());
+        Assert.Equal(RuntimeCredentialState.Revoked,
+            (await db.RuntimeGrantRevisions.SingleAsync(row => row.Revision == 2)).State);
         owner.Registration = originalRegistration;
         owner.ChangeAfterRead = null;
-        Assert.Equal(RuntimeCredentialState.Consumed,
-            (await authority.ConsumeBootstrapAsync(correct, Guid.NewGuid())).State);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            authority.ConsumeBootstrapAsync(correct, Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task CurrentOwnerRevocationAddsAnImmutableRevocationBeforeDenyingTheActualSourceCredential()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var options = CreateOptions(dataSource);
+        await IdentityBrokerMigrator.MigrateAsync(dataSource, options);
+        var clock = new StorageClock();
+        var owner = new StorageOwner();
+        var delivery = new StorageDelivery { Clock = clock };
+        await using var db = new IdentityBrokerDbContext(options);
+        var authority = new RuntimeGrantAuthority(
+            db, owner, delivery, CreatePolicy(), CreateActor(), clock);
+        var delivered = await authority.DeliverBootstrapAsync(
+            owner.Registration.RuntimeInstanceId, new string('a', 64), Guid.NewGuid());
+        var bootstrap = Proof(delivered.GrantId, 1, RuntimeCredentialPurpose.Configure,
+            owner.Registration.Binding.ConfigureEndpoint, delivery.Credential!, owner,
+            delivered.ConfigurationHash);
+        await authority.ConsumeBootstrapAsync(bootstrap, Guid.NewGuid());
+        var exchanged = await authority.ExchangeBootstrapAsync(
+            Proof(delivered.GrantId, 2, RuntimeCredentialPurpose.Configure,
+                bootstrap.Audience, delivery.Credential!, owner, bootstrap.ConfigurationHash),
+            Guid.NewGuid());
+        Assert.NotNull(exchanged.Credential);
+        var source = Proof(exchanged.Receipt.GrantId, 1, RuntimeCredentialPurpose.Observe,
+            owner.Registration.Binding.ObservationEndpoint, exchanged.Credential, owner, bootstrap.ConfigurationHash);
+        owner.Registration = owner.Registration with { State = RuntimeRegistrationState.Revoked };
+        var foreign = Proof(source.GrantId, 1, RuntimeCredentialPurpose.Observe,
+            source.Audience, new SecretCredential(new string('f', 64), exchanged.Credential.ExpiresAt, clock),
+            owner, source.ConfigurationHash);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => authority.VerifySourceAsync(foreign));
+        Assert.Equal(1, await db.RuntimeGrantRevisions.CountAsync(row => row.GrantId == source.GrantId));
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => authority.VerifySourceAsync(source));
+        await using var restarted = new IdentityBrokerDbContext(options);
+        var revisions = await restarted.RuntimeGrantRevisions.AsNoTracking()
+            .Where(row => row.GrantId == source.GrantId).OrderBy(row => row.Revision).ToArrayAsync();
+        Assert.Equal(2, revisions.Length);
+        Assert.Equal(RuntimeCredentialState.Active, revisions[0].State);
+        Assert.Equal(RuntimeCredentialState.Revoked, revisions[1].State);
+        Assert.Equal(2, (await restarted.RuntimeGrantHeads.AsNoTracking()
+            .SingleAsync(row => row.GrantId == source.GrantId)).CurrentRevision);
+    }
+
+    [Fact]
+    public async Task ActualSourceCredentialExpiringWhileAwaitingTheDatabaseLockIsDurablyRevokedWithoutReadingItsValue()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+        var options = CreateOptions(dataSource);
+        await IdentityBrokerMigrator.MigrateAsync(dataSource, options);
+        var clock = new StorageClock();
+        var owner = new StorageOwner();
+        var delivery = new StorageDelivery { Clock = clock };
+        var actor = CreateActor(clock);
+        await using var setup = new IdentityBrokerDbContext(options);
+        var authority = new RuntimeGrantAuthority(setup, owner, delivery, CreatePolicy(), actor, clock);
+        var delivered = await authority.DeliverBootstrapAsync(
+            owner.Registration.RuntimeInstanceId, new string('a', 64), Guid.NewGuid());
+        var bootstrap = Proof(delivered.GrantId, 1, RuntimeCredentialPurpose.Configure,
+            owner.Registration.Binding.ConfigureEndpoint, delivery.Credential!, owner,
+            delivered.ConfigurationHash);
+        var consumed = await authority.ConsumeBootstrapAsync(bootstrap, Guid.NewGuid());
+        var exchanged = await authority.ExchangeBootstrapAsync(
+            Proof(delivered.GrantId, consumed.Revision, RuntimeCredentialPurpose.Configure,
+                bootstrap.Audience, bootstrap.Credential, owner, bootstrap.ConfigurationHash), Guid.NewGuid());
+        Assert.NotNull(exchanged.Credential);
+        var source = Proof(exchanged.Receipt.GrantId, exchanged.Receipt.Revision, RuntimeCredentialPurpose.Observe,
+            owner.Registration.Binding.ObservationEndpoint, exchanged.Credential, owner, bootstrap.ConfigurationHash);
+        await using var blocker = await dataSource.OpenConnectionAsync();
+        await using var blockingTransaction = await blocker.BeginTransactionAsync();
+        await using (var hold = new NpgsqlCommand("""
+            SELECT current_revision FROM identity_broker.runtime_grant_heads
+            WHERE grant_id = @grant FOR UPDATE
+            """, blocker, blockingTransaction))
+        {
+            hold.Parameters.AddWithValue("grant", source.GrantId);
+            await hold.ExecuteScalarAsync();
+        }
+        var signal = new GrantLockSignal();
+        await using var waiting = new IdentityBrokerDbContext(
+            new DbContextOptionsBuilder<IdentityBrokerDbContext>(options).AddInterceptors(signal).Options);
+        var verification = new RuntimeGrantAuthority(
+            waiting, owner, delivery, CreatePolicy(), actor, clock).VerifySourceAsync(source);
+        await signal.Executing.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        clock.Advance(TimeSpan.FromMinutes(3));
+        Assert.False(exchanged.Credential.IsUsable());
+        Assert.Throws<InvalidOperationException>(() => exchanged.Credential.GetValue());
+        await blockingTransaction.CommitAsync();
+        var error = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => verification);
+        Assert.Equal("runtime_grant_expired", error.Code);
+        await using var restarted = new IdentityBrokerDbContext(options);
+        var current = await restarted.RuntimeGrantRevisions.AsNoTracking()
+            .SingleAsync(row => row.GrantId == source.GrantId && row.Revision == 2);
+        Assert.Equal(RuntimeCredentialState.Revoked, current.State);
+        Assert.Equal(2, await restarted.RuntimeGrantRevisions.CountAsync(row => row.GrantId == source.GrantId));
+        var ordinaryExpired = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            new RuntimeGrantAuthority(waiting, owner, delivery, CreatePolicy(), actor, clock)
+                .VerifySourceAsync(source));
+        Assert.Equal("runtime_credential_unavailable", ordinaryExpired.Code);
+        Assert.Equal(2, await restarted.RuntimeGrantRevisions.CountAsync(row => row.GrantId == source.GrantId));
     }
 
     [Fact]
@@ -275,8 +381,9 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
     private static RuntimeCredentialPolicy CreatePolicy() =>
         new("https://broker.test/", TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2));
 
-    private static RuntimeActorAuthorization CreateActor() =>
-        new(new SecretCredential("storage-test-actor", DateTimeOffset.UtcNow.AddMinutes(5)), "tenant");
+    private static RuntimeActorAuthorization CreateActor(TimeProvider? timeProvider = null) =>
+        new(new SecretCredential("storage-test-actor",
+            (timeProvider ?? TimeProvider.System).GetUtcNow().AddMinutes(5), timeProvider), "tenant");
 
     private static RuntimeCredentialProof Proof(
         Guid grantId, long revision, RuntimeCredentialPurpose purpose, Uri audience,
@@ -319,6 +426,7 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
         public SecretCredential? Credential { get; private set; }
         public int Deliveries { get; private set; }
         public bool WrongPlacement { get; init; }
+        public TimeProvider Clock { get; init; } = TimeProvider.System;
         public Func<RuntimeRegistration, Guid, Guid, string, SecretCredential, Task>? VerifyPending { get; set; }
 
         public async Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
@@ -328,18 +436,43 @@ public sealed class RuntimeGrantPersistenceTests(PostgresContainerFixture postgr
             cancellationToken.ThrowIfCancellationRequested();
             _ = actor.Bearer.GetValue();
             Deliveries++;
-            Credential = new SecretCredential(credential.GetValue(), credential.ExpiresAt);
+            Credential = new SecretCredential(credential.GetValue(), credential.ExpiresAt, Clock);
             if (VerifyPending is not null)
                 await VerifyPending(registration, operationId, grantId, configurationHash, credential);
+            var now = Clock.GetUtcNow();
+            var deliveredAt = new DateTimeOffset(now.UtcTicks - now.UtcTicks % 10, TimeSpan.Zero);
             return new RuntimeBootstrapDeliveryReceipt(
                 operationId, grantId, registration.RuntimeInstanceId, registration.Revision,
                 WrongPlacement ? "foreign-placement" : registration.Binding.PlacementUid,
                 registration.Binding.PlacementGeneration, registration.Binding.ExecutionFence,
-                configurationHash, DateTimeOffset.UtcNow)
+                configurationHash, deliveredAt)
             {
                 EnvironmentCurrentFencingGeneration = registration.Binding.EnvironmentCurrentFencingGeneration,
                 EnvironmentProviderFencingGeneration = registration.Binding.EnvironmentProviderFencingGeneration
             };
+        }
+
+    }
+
+    private sealed class StorageClock : TimeProvider
+    {
+        private long _ticks = DateTimeOffset.UtcNow.UtcTicks;
+        public override DateTimeOffset GetUtcNow() => new(Interlocked.Read(ref _ticks), TimeSpan.Zero);
+        public void Advance(TimeSpan duration) => Interlocked.Add(ref _ticks, duration.Ticks);
+    }
+
+    private sealed class GrantLockSignal : DbCommandInterceptor
+    {
+        public TaskCompletionSource Executing { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("runtime_grant_heads", StringComparison.Ordinal) &&
+                command.CommandText.Contains("FOR UPDATE", StringComparison.Ordinal))
+                Executing.TrySetResult();
+            return ValueTask.FromResult(result);
         }
     }
 }
