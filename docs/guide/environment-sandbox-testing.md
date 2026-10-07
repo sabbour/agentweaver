@@ -47,8 +47,14 @@ viewer/foreign/selection denials, and a late provider callback gated at the
 Kubernetes claim-create response and fenced into retirement. It also reads the
 versioned placement projection with an owner that lacks `ReadRunSelection`,
 asserts that no selection read occurs, and rejects a viewer without
-`WriteProjects`. It runs the production Sandbox provider and Kubernetes client
-against a fake Kubernetes HTTP API; only the Workspace provider and Cilium
+`WriteProjects`. The internal run-bound placement route succeeds for an
+Orchestrator token with exact project/run bindings and `ReadRunSelection`, while
+the public placement route still rejects that token for lack of `WriteProjects`.
+The same integration checks unbound owners, viewers, missing roles, mismatched
+project/run/tenant, wrong Environment audience, and role revocation between
+fresh Core checks. Placement reads do not fetch run selection or cause provider
+effects. It runs the production Sandbox provider and Kubernetes client against
+a fake Kubernetes HTTP API; only the Workspace provider and Cilium
 policy-resource boundary are controlled. It is not a live Kubernetes or
 datapath test. Sandbox observations remain `Pending` without AgentHost configure
 evidence.

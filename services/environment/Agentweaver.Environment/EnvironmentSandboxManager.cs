@@ -340,15 +340,37 @@ public sealed class EnvironmentSandboxManager(
             cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentPlacementAsync(
+    public Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentPlacementAsync(
         CurrentCallerRequest caller,
         string projectId,
         string runId,
         string environmentId,
+        CancellationToken cancellationToken) =>
+        GetCurrentPlacementCoreAsync(
+            caller, projectId, runId, environmentId, runBoundRead: false, cancellationToken);
+
+    internal Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentRunBoundPlacementAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        CancellationToken cancellationToken) =>
+        GetCurrentPlacementCoreAsync(
+            caller, projectId, runId, environmentId, runBoundRead: true, cancellationToken);
+
+    private async Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentPlacementCoreAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        bool runBoundRead,
         CancellationToken cancellationToken)
     {
-        var authorization = await egressManager.GetAuthorizedRunEnvironmentControlAsync(
-            caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+        var authorization = runBoundRead
+            ? await egressManager.GetAuthorizedRunEnvironmentPlacementReadAsync(
+                caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false)
+            : await egressManager.GetAuthorizedRunEnvironmentControlAsync(
+                caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
         var lifecycle = await lifecycleStore.GetAsync(authorization.Owner, cancellationToken).ConfigureAwait(false)
             ?? throw new EnvironmentLifecycleException(
                 "environment_unknown",
@@ -356,8 +378,12 @@ public sealed class EnvironmentSandboxManager(
         await lifecycleStore.RequireActiveAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
         var lease = await leaseStore.GetCurrentAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
         await lifecycleStore.RequireActiveAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
-        await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
-            caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
+        if (runBoundRead)
+            await egressManager.EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
+                caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
+        else
+            await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
+                caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
         var currentLease = await leaseStore.GetCurrentAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
         if (!SameCurrentPlacementLease(lease, currentLease))
             throw new EnvironmentLifecycleException(

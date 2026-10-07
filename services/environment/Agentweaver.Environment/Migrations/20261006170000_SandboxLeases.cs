@@ -199,8 +199,13 @@ public sealed class SandboxLeases : Migration
             filter: "\"release_receipt_json\" IS NULL");
     }
 
-    protected override void Down(MigrationBuilder migrationBuilder) =>
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropTable(
+            name: "sandbox_late_resource_cleanups",
+            schema: EnvironmentDbContext.Schema);
         migrationBuilder.DropTable(
             name: "sandbox_leases",
             schema: EnvironmentDbContext.Schema);
+    }
 }

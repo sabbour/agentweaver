@@ -163,7 +163,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new JwtSecurityTokenHandler().ReadJwtToken(runnerBootstrapToken).Claims, "sub");
         var runnerMembership = await AddMembershipAsync(
             projects.PrivilegedFixtureDataSource, runnerSubject, TenantId);
-        await AssignRoleAsync(
+        var runSelectionAssignment = await AssignRoleAsync(
             projects.PrivilegedFixtureDataSource,
             runnerMembership.MembershipId,
             ProjectAuthorityResourceType.Project,
@@ -183,6 +183,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             project.ProjectId,
             RunId,
             ["platform_admin"]);
+        var missingRoleSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(ownerWithoutSelection.Token).Claims, "sub");
+        var missingRoleRunId = $"run-{Guid.NewGuid():N}";
+        await CreateRunBindingGrantAsync(missingRoleSubject, project.ProjectId, missingRoleRunId);
+        var missingRoleRunToken = await IssueTokenAsync(
+            "projects.admin projects.orchestrator",
+            [TenantId],
+            "workspace-volume-owner-without-selection",
+            project.ProjectId,
+            missingRoleRunId,
+            []);
 
         using (var updateDefaults = new HttpRequestMessage(HttpMethod.Put, "/api/platform/runtime-defaults/")
         {
@@ -439,6 +450,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.False(sandboxProvisionResult.ReadyForDispatch);
         }
         var selectionReadsBeforePlacementProjection = selectionObserver.SelectionReadCount;
+        EnvironmentSandboxPlacementProjectionV1 publicPlacementProjection;
         using (var sandboxPlacement = await SendAsync(
             environment.Client,
             HttpMethod.Get,
@@ -447,24 +459,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             [TenantId]))
         {
             await AssertStatusAsync(sandboxPlacement, HttpStatusCode.OK);
-            var projection = await ReadJsonAsync<EnvironmentSandboxPlacementProjectionV1>(sandboxPlacement);
+            publicPlacementProjection =
+                await ReadJsonAsync<EnvironmentSandboxPlacementProjectionV1>(sandboxPlacement);
             var currentLease = await sandboxLeaseStore.GetCurrentAsync(fence, CancellationToken.None);
             Assert.NotNull(currentLease);
-            Assert.Equal(1, projection.ContractVersion);
-            Assert.Equal(TenantId, projection.TenantId);
-            Assert.Equal(project.ProjectId, projection.ProjectId);
-            Assert.Equal(RunId, projection.RunId);
-            Assert.Equal(environmentId, projection.EnvironmentId);
-            Assert.Equal(fence.LifecycleGeneration, projection.LifecycleGeneration);
-            Assert.Equal(currentLease.CurrentFencingGeneration, projection.CurrentFencingGeneration);
-            Assert.Equal(currentLease.ProviderFencingGeneration, projection.ProviderFencingGeneration);
-            Assert.Equal(currentLease.LeaseRevision, projection.LeaseRevision);
-            Assert.Equal(currentLease.LeaseExpiresAt, projection.LeaseExpiresAt);
-            Assert.True(projection.IsCurrent);
-            Assert.Equal(SandboxLeaseState.Active, projection.State);
-            Assert.Equal(currentLease.ProvisionedResource!.Resource, projection.Resource);
-            Assert.Equal(currentLease.ProvisionedResource.Endpoint, projection.Endpoint);
-            Assert.Equal(currentLease.ProvisionedResource.Placement, projection.Placement);
+            Assert.Equal(1, publicPlacementProjection.ContractVersion);
+            Assert.Equal(TenantId, publicPlacementProjection.TenantId);
+            Assert.Equal(project.ProjectId, publicPlacementProjection.ProjectId);
+            Assert.Equal(RunId, publicPlacementProjection.RunId);
+            Assert.Equal(environmentId, publicPlacementProjection.EnvironmentId);
+            Assert.Equal(fence.LifecycleGeneration, publicPlacementProjection.LifecycleGeneration);
+            Assert.Equal(currentLease.CurrentFencingGeneration, publicPlacementProjection.CurrentFencingGeneration);
+            Assert.Equal(currentLease.ProviderFencingGeneration, publicPlacementProjection.ProviderFencingGeneration);
+            Assert.Equal(currentLease.LeaseRevision, publicPlacementProjection.LeaseRevision);
+            Assert.Equal(currentLease.LeaseExpiresAt, publicPlacementProjection.LeaseExpiresAt);
+            Assert.True(publicPlacementProjection.IsCurrent);
+            Assert.Equal(SandboxLeaseState.Active, publicPlacementProjection.State);
+            Assert.Equal(currentLease.ProvisionedResource!.Resource, publicPlacementProjection.Resource);
+            Assert.Equal(currentLease.ProvisionedResource.Endpoint, publicPlacementProjection.Endpoint);
+            Assert.Equal(currentLease.ProvisionedResource.Placement, publicPlacementProjection.Placement);
         }
         Assert.Equal(selectionReadsBeforePlacementProjection, selectionObserver.SelectionReadCount);
         using (var viewerPlacement = await SendAsync(
@@ -474,6 +487,89 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             viewer.Token,
             [TenantId]))
             await AssertForbiddenAsync(viewerPlacement, "project_write_not_authorized");
+
+        var internalPlacementPath = $"{sandboxPath}/v1/internal/placement";
+        var selectionReadsBeforeInternalPlacement = selectionObserver.SelectionReadCount;
+        var authorizationReadsBeforeInternalPlacement = selectionObserver.AuthorizationContextReadCount;
+        var sandboxCreatesBeforeInternalPlacement = sandboxKubernetesHandler.CreateCount;
+        var sandboxDeletesBeforeInternalPlacement = sandboxKubernetesHandler.DeleteRequests.Count;
+        using (var runBoundPlacement = await SendAsync(
+            environment.Client, HttpMethod.Get, internalPlacementPath, runToken, [TenantId]))
+        {
+            await AssertStatusAsync(runBoundPlacement, HttpStatusCode.OK);
+            Assert.Equal(
+                publicPlacementProjection,
+                await ReadJsonAsync<EnvironmentSandboxPlacementProjectionV1>(runBoundPlacement));
+        }
+        Assert.Equal(
+            authorizationReadsBeforeInternalPlacement + 2,
+            selectionObserver.AuthorizationContextReadCount);
+        using (var publicRunBoundPlacement = await SendAsync(
+            environment.Client, HttpMethod.Get, $"{sandboxPath}/v1/placement", runToken, [TenantId]))
+            await AssertForbiddenAsync(publicRunBoundPlacement, "project_write_not_authorized");
+        using (var unboundOwnerPlacement = await SendAsync(
+            environment.Client, HttpMethod.Get, internalPlacementPath, ownerWithoutSelection.Token, [TenantId]))
+            await AssertForbiddenAsync(unboundOwnerPlacement, "run_selection_not_authorized");
+        using (var viewerRunBoundPlacement = await SendAsync(
+            environment.Client, HttpMethod.Get, internalPlacementPath, viewer.Token, [TenantId]))
+            await AssertForbiddenAsync(viewerRunBoundPlacement, "run_selection_not_authorized");
+        using (var missingRolePlacement = await SendAsync(
+            environment.Client,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{missingRoleRunId}/environments/{environmentId}/sandbox/v1/internal/placement",
+            missingRoleRunToken,
+            [TenantId]))
+            await AssertForbiddenAsync(missingRolePlacement, "run_selection_not_authorized");
+        using (var foreignProjectPlacement = await SendAsync(
+            environment.Client,
+            HttpMethod.Get,
+            $"/api/projects/{foreignProject.ProjectId}/runs/{RunId}/environments/{environmentId}/sandbox/v1/internal/placement",
+            runToken,
+            [TenantId]))
+            await AssertForbiddenAsync(foreignProjectPlacement, "authorization_context_mismatch");
+        using (var foreignRunPlacement = await SendAsync(
+            environment.Client,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}-foreign/environments/{environmentId}/sandbox/v1/internal/placement",
+            runToken,
+            [TenantId]))
+            await AssertForbiddenAsync(foreignRunPlacement, "authorization_context_mismatch");
+        using (var foreignTenantPlacement = await SendAsync(
+            environment.Client,
+            HttpMethod.Get,
+            internalPlacementPath,
+            runToken,
+            [Guid.NewGuid().ToString("D")]))
+            Assert.Equal(HttpStatusCode.Forbidden, foreignTenantPlacement.StatusCode);
+
+        var wrongAudienceJwt = new JwtSecurityToken(
+            issuer: new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+            audience: "https://wrong-environment.test",
+            claims: [new System.Security.Claims.Claim("sub", "placement-wrong-audience")],
+            notBefore: DateTime.UtcNow.AddMinutes(-1),
+            expires: DateTime.UtcNow.AddMinutes(5),
+            signingCredentials: new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
+        wrongAudienceJwt.Header["typ"] = "at+jwt";
+        using (var wrongAudiencePlacement = await SendAsync(
+            environment.Client,
+            HttpMethod.Get,
+            internalPlacementPath,
+            new JwtSecurityTokenHandler().WriteToken(wrongAudienceJwt),
+            [TenantId]))
+            Assert.Equal(HttpStatusCode.Unauthorized, wrongAudiencePlacement.StatusCode);
+
+        selectionObserver.RevokeAfterNextAuthorizationContext(() =>
+            RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runSelectionAssignment.AssignmentId,
+                runSelectionAssignment.Revision));
+        using (var revokedRunBoundPlacement = await SendAsync(
+            environment.Client, HttpMethod.Get, internalPlacementPath, runToken, [TenantId]))
+            await AssertForbiddenAsync(revokedRunBoundPlacement, "authorization_changed");
+
+        Assert.Equal(selectionReadsBeforeInternalPlacement, selectionObserver.SelectionReadCount);
+        Assert.Equal(sandboxCreatesBeforeInternalPlacement, sandboxKubernetesHandler.CreateCount);
+        Assert.Equal(sandboxDeletesBeforeInternalPlacement, sandboxKubernetesHandler.DeleteRequests.Count);
         Assert.Equal(3, sandboxKubernetesHandler.CreateCount);
         sandboxKubernetesHandler.MarkSandboxReady();
         var attachedWorkspace = await lifecycleStore.GetWorkspaceVolumeAsync(
@@ -1337,9 +1433,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     private sealed class RunSelectionObserver
     {
         private Func<Task>? _afterNextSelectionRead;
+        private Func<Task>? _afterNextAuthorizationContextRead;
         private int _selectionReadCount;
+        private int _authorizationContextReadCount;
 
         public int SelectionReadCount => Volatile.Read(ref _selectionReadCount);
+        public int AuthorizationContextReadCount => Volatile.Read(ref _authorizationContextReadCount);
 
         public void RevokeAfterNextSelectionRead(Func<Task> action)
         {
@@ -1348,13 +1447,29 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 throw new InvalidOperationException("A run-selection revocation is already armed.");
         }
 
+        public void RevokeAfterNextAuthorizationContext(Func<Task> action)
+        {
+            ArgumentNullException.ThrowIfNull(action);
+            if (Interlocked.CompareExchange(ref _afterNextAuthorizationContextRead, action, null) is not null)
+                throw new InvalidOperationException("An authorization-context revocation is already armed.");
+        }
+
         public async Task OnResponseAsync(
             HttpRequestMessage request,
             HttpResponseMessage response)
         {
-            if (request.Method != HttpMethod.Get ||
-                request.RequestUri is not { } uri ||
-                !uri.AbsolutePath.EndsWith("/selection", StringComparison.Ordinal))
+            if (request.Method != HttpMethod.Get || request.RequestUri is not { } uri)
+                return;
+
+            if (string.Equals(uri.AbsolutePath, "/api/authorization/context", StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref _authorizationContextReadCount);
+                var authorizationAction = Interlocked.Exchange(ref _afterNextAuthorizationContextRead, null);
+                if (response.IsSuccessStatusCode && authorizationAction is not null)
+                    await authorizationAction().ConfigureAwait(false);
+                return;
+            }
+            if (!uri.AbsolutePath.EndsWith("/selection", StringComparison.Ordinal))
                 return;
 
             Interlocked.Increment(ref _selectionReadCount);

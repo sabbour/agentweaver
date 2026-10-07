@@ -745,6 +745,40 @@ public sealed class EnvironmentEgressManager(
         EnsureAuthorizationUnchangedAsync(
             caller, owner, authorization, requireRunSelection: false, cancellationToken);
 
+    internal async Task<(EnvironmentOwnerIdentity Owner, ProjectAuthorizationContextResponse Authorization)>
+        GetAuthorizedRunEnvironmentPlacementReadAsync(
+            CurrentCallerRequest caller,
+            string projectId,
+            string runId,
+            string environmentId,
+            CancellationToken cancellationToken)
+    {
+        var authorization = await ReadCurrentAuthorizationContextAsync(
+            caller, projectId, runId, tenantId: null, cancellationToken).ConfigureAwait(false);
+        if (!HasRunBoundPlacementReadAuthority(authorization, projectId, runId))
+            throw new ProjectsConfigApiException(
+                "run_selection_not_authorized",
+                "The current caller must have ReadRunSelection authority bound to this exact project and run.");
+        return (
+            new EnvironmentOwnerIdentity(authorization.TenantId, projectId, runId, environmentId),
+            authorization);
+    }
+
+    internal async Task EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
+        CurrentCallerRequest caller,
+        EnvironmentOwnerIdentity owner,
+        ProjectAuthorizationContextResponse authorization,
+        CancellationToken cancellationToken)
+    {
+        var current = await ReadCurrentAuthorizationContextAsync(
+            caller, owner, cancellationToken).ConfigureAwait(false);
+        if (!SameAuthorizationContext(authorization, current) ||
+            !HasRunBoundPlacementReadAuthority(current, owner.ProjectId, owner.RunId))
+            throw new ProjectsConfigApiException(
+                "authorization_changed",
+                "The current caller's run-bound read authority changed during placement resolution.");
+    }
+
     internal async Task<CiliumPolicyObservation> VerifyNetworkForSandboxAsync(
         CurrentCallerRequest caller,
         EnvironmentGenerationFence fence,
@@ -913,6 +947,17 @@ public sealed class EnvironmentEgressManager(
             string.Equals(resource.ResourceId, projectId, StringComparison.Ordinal) &&
             resource.Permissions.Any(grant =>
                 grant.Permission == permission && grant.RoleRevision > 0));
+
+    private static bool HasRunBoundPlacementReadAuthority(
+        ProjectAuthorizationContextResponse authorization,
+        string projectId,
+        string runId) =>
+        string.Equals(authorization.BoundProjectId, projectId, StringComparison.Ordinal) &&
+        string.Equals(authorization.BoundRunId, runId, StringComparison.Ordinal) &&
+        HasPermission(
+            authorization,
+            projectId,
+            ProjectAuthorizationPermission.ReadRunSelection);
 
     private static string GetPostcheckFailureCode(ProjectsConfigApiException exception) =>
         exception.Code is "authorization_context_mismatch" or

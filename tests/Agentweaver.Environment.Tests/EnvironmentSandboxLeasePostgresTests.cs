@@ -2,6 +2,11 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Npgsql;
+using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace Agentweaver.Environment.Tests;
@@ -416,14 +421,20 @@ public sealed class EnvironmentSandboxLeasePostgresTests(EnvironmentPostgresFixt
         Assert.Equal(lateResource.Resource, firstClaim.ProvisionedResource.Resource);
         Assert.Null(await store.ClaimNextLateResourceCleanupAsync(currentFence, CancellationToken.None));
 
+        var releaseReceipt = new SandboxReleaseReceipt(
+            lateResource.Resource,
+            firstClaim.IdempotencyKey,
+            SandboxReleaseDisposition.Released);
         time.Advance(TimeSpan.FromMinutes(2));
+        var expiredClaim = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            store.CompleteLateResourceCleanupAsync(
+                currentFence, firstClaim, releaseReceipt, CancellationToken.None));
+        Assert.Equal("sandbox_late_cleanup_claim_expired", expiredClaim.Code);
+
         var retryClaim = await store.ClaimNextLateResourceCleanupAsync(currentFence, CancellationToken.None);
         Assert.NotNull(retryClaim);
         Assert.NotEqual(firstClaim.ClaimToken, retryClaim.ClaimToken);
-        var releaseReceipt = new SandboxReleaseReceipt(
-            lateResource.Resource,
-            retryClaim.IdempotencyKey,
-            SandboxReleaseDisposition.Released);
+        Assert.Equal(firstClaim.IdempotencyKey, retryClaim.IdempotencyKey);
         var staleClaim = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
             store.CompleteLateResourceCleanupAsync(
                 currentFence, firstClaim, releaseReceipt, CancellationToken.None));
@@ -438,7 +449,47 @@ public sealed class EnvironmentSandboxLeasePostgresTests(EnvironmentPostgresFixt
             currentFence, released.ResourceGeneration, CancellationToken.None);
         Assert.NotNull(durableLease);
         Assert.Equal(SandboxLeaseState.Released, durableLease.State);
+        Assert.Equal(released.LeaseRevision, durableLease.LeaseRevision);
+        Assert.Equal(released.UpdatedAt, durableLease.UpdatedAt);
         Assert.Equal(provisioned.Resource, durableLease.ProvisionedResource!.Resource);
+    }
+
+    [Fact]
+    public async Task SandboxLeaseMigrationCanBeRolledBackAndReappliedOnPostgres()
+    {
+        await using var container = new PostgreSqlBuilder("postgres:16-alpine").Build();
+        await container.StartAsync();
+        await using var dataSource = NpgsqlDataSource.Create(container.GetConnectionString());
+        var options = new DbContextOptionsBuilder<EnvironmentDbContext>()
+            .UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history",
+                EnvironmentDbContext.Schema))
+            .Options;
+
+        await EnvironmentMigrator.MigrateAsync(dataSource, options);
+        await using (var context = new EnvironmentDbContext(options))
+            await context.GetService<IMigrator>()
+                .MigrateAsync("20261006160000_WorkspaceVolumeCleanup");
+        await using (var connection = await dataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            """
+            SELECT to_regclass('environment.sandbox_late_resource_cleanups') IS NULL
+               AND to_regclass('environment.sandbox_leases') IS NULL
+            """,
+            connection))
+            Assert.True((bool)(await command.ExecuteScalarAsync())!);
+
+        await using (var context = new EnvironmentDbContext(options))
+            await context.GetService<IMigrator>()
+                .MigrateAsync("20261006170000_SandboxLeases");
+        await using (var connection = await dataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            """
+            SELECT to_regclass('environment.sandbox_late_resource_cleanups') IS NOT NULL
+               AND to_regclass('environment.sandbox_leases') IS NOT NULL
+            """,
+            connection))
+            Assert.True((bool)(await command.ExecuteScalarAsync())!);
     }
 
     [Fact]

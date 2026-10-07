@@ -47,28 +47,34 @@ Environment separately verifies the selected Cilium policy generation.
 
 ## Authorization and API
 
-All five Sandbox routes require an authenticated caller and fresh Projects
+All six Sandbox routes require an authenticated caller and fresh Projects
 authority. Provision, inspect, abandon, and reconcile require target-project
 `WriteProjects` plus the separate `ReadRunSelection` permission before they
 read the immutable run selection or contact Kubernetes. They compare the fresh
 authorization and selection again after asynchronous work and before accepting
-provider callbacks. The placement projection requires only fresh
+provider callbacks. The public placement projection requires fresh
 `WriteProjects` authority; it does not read run selection or contact Kubernetes.
+The internal run-bound placement read requires fresh `ReadRunSelection` authority
+and exact non-null project/run token bindings. The Environment JWT middleware
+continues to enforce the configured Environment audience for both routes.
 
 | Route | Operation |
 | --- | --- |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/provision` | Validate the exact Workspace generation and Cilium policy generation, reserve an owner lease, then provision the selected adapter. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox?networkPolicyGeneration={generation}` | Inspect the current lease. It reports `ReadyForDispatch` only after fresh Cilium verification and exact provider observation. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Return the versioned owner-local projection of the exact current, active, unexpired lease and its placement references. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Return the same projection to a run-bound caller with exact project/run bindings and `ReadRunSelection`; no run selection is fetched and no provider effect occurs. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/abandon` | Explicitly abandon one current resource generation and provider fence. The request is not itself proof of ownership; fresh Projects authorization and the durable owner CAS are required. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource. A network-policy generation may be supplied to verify readiness. |
 
-The v1 placement projection reads `ISandboxLeaseStore.GetCurrentAsync` under
-the exact active Environment owner fence, then rechecks fresh `WriteProjects`
-authority and the active lifecycle, then reads the locked current lease again.
-The two snapshots must match on operation, owner fence, resource generation,
-lease revision, provider/current fences, state, current flag, and expiry; this
-rejects a lease retired or replaced during the authorization wait. It returns
+Both v1 placement routes use one `ISandboxLeaseStore.GetCurrentAsync` reader
+under the exact active Environment owner fence. The public route rechecks fresh
+`WriteProjects`; the internal route rechecks fresh `ReadRunSelection` and the
+same exact project/run binding after the first lease read. Both recheck the
+active lifecycle and read the locked current lease again. The two snapshots
+must match on operation, owner fence, resource generation, lease revision,
+provider/current fences, state, current flag, and expiry; this rejects a lease
+retired or replaced during the authorization wait. The projection returns
 the tenant/project/run/Environment tuple, lifecycle and provider fences, lease
 revision/expiry/current state, and the exact resource, endpoint, and opaque
 placement references recorded by the lease. It does not derive lease data from
@@ -146,9 +152,10 @@ records that exact result in the late-resource cleanup table instead of
 overwriting the terminal lease. Reconciliation discovers it under the current
 owner authorization, claims one item at a time, and releases it with the
 original provider binding and fence. Claims expire for recovery after a
-reconciler stops; receipt persistence verifies the current lifecycle fence and
-claim token atomically. Provider failures remain visible and leave the cleanup
-available for retry.
+reconciler stops; receipt persistence verifies the current lifecycle fence,
+claim token, and unexpired persisted claim atomically. A matching duplicate
+receipt remains idempotent after completion. Provider failures remain visible
+and leave the cleanup available for retry.
 
 ## Retirement and storage retention
 

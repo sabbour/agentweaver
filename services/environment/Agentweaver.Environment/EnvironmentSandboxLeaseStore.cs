@@ -792,6 +792,7 @@ public sealed class EnvironmentSandboxLeaseStore(
               AND provider_resource_fingerprint = @provider_resource_fingerprint
               AND release_receipt_json IS NULL
               AND (claim_expires_at IS NULL OR claim_expires_at <= @updated_at)
+            RETURNING claim_expires_at
             """, connection, transaction))
         {
             AddOwnerParameters(update, fence.Owner);
@@ -800,10 +801,12 @@ public sealed class EnvironmentSandboxLeaseStore(
             update.Parameters.AddWithValue("claim_token", NpgsqlDbType.Uuid, claimToken);
             update.Parameters.AddWithValue("claim_expires_at", NpgsqlDbType.TimestampTz, claimExpiresAt);
             update.Parameters.AddWithValue("updated_at", NpgsqlDbType.TimestampTz, now);
-            if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            await using var reader = await update.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 throw new EnvironmentLifecycleException(
                     "sandbox_late_cleanup_claim_conflict",
                     "The late Sandbox resource cleanup changed before it could be claimed.");
+            claimExpiresAt = reader.GetFieldValue<DateTimeOffset>(0);
         }
 
         var lease = await ReadByGenerationAsync(
@@ -892,8 +895,9 @@ public sealed class EnvironmentSandboxLeaseStore(
 
         string? persistedReceiptJson;
         Guid? persistedClaimToken;
+        DateTimeOffset? persistedClaimExpiresAt;
         await using (var select = new NpgsqlCommand($"""
-            SELECT claim_token, release_receipt_json
+            SELECT claim_token, claim_expires_at, release_receipt_json
             FROM {LateResourceCleanups}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND run_id = @run_id AND environment_id = @environment_id
@@ -911,7 +915,10 @@ public sealed class EnvironmentSandboxLeaseStore(
                     "sandbox_late_cleanup_unknown",
                     "The exact late Sandbox cleanup claim is not recorded.");
             persistedClaimToken = reader.IsDBNull(0) ? null : reader.GetGuid(0);
-            persistedReceiptJson = reader.IsDBNull(1) ? null : reader.GetString(1);
+            persistedClaimExpiresAt = reader.IsDBNull(1)
+                ? null
+                : reader.GetFieldValue<DateTimeOffset>(1);
+            persistedReceiptJson = reader.IsDBNull(2) ? null : reader.GetString(2);
         }
 
         if (persistedReceiptJson is not null)
@@ -932,6 +939,14 @@ public sealed class EnvironmentSandboxLeaseStore(
                 "The late Sandbox cleanup claim was superseded before its receipt could be committed.");
 
         var updatedAt = timeProvider.GetUtcNow();
+        if (persistedClaimExpiresAt != claim.ClaimExpiresAt)
+            throw new EnvironmentLifecycleException(
+                "sandbox_late_cleanup_claim_stale",
+                "The late Sandbox cleanup claim expiry changed before its receipt could be committed.");
+        if (persistedClaimExpiresAt is not { } claimExpiresAt || claimExpiresAt <= updatedAt)
+            throw new EnvironmentLifecycleException(
+                "sandbox_late_cleanup_claim_expired",
+                "The late Sandbox cleanup claim expired before its receipt could be committed.");
         await using (var update = new NpgsqlCommand($"""
             UPDATE {LateResourceCleanups}
             SET claim_token = NULL,
@@ -943,6 +958,8 @@ public sealed class EnvironmentSandboxLeaseStore(
               AND resource_generation = @resource_generation
               AND provider_resource_fingerprint = @provider_resource_fingerprint
               AND claim_token = @claim_token
+              AND claim_expires_at = @claim_expires_at
+              AND claim_expires_at > @updated_at
               AND release_receipt_json IS NULL
             """, connection, transaction))
         {
@@ -950,6 +967,7 @@ public sealed class EnvironmentSandboxLeaseStore(
             update.Parameters.AddWithValue("resource_generation", NpgsqlDbType.Bigint, lease.ResourceGeneration);
             update.Parameters.AddWithValue("provider_resource_fingerprint", NpgsqlDbType.Text, fingerprint);
             update.Parameters.AddWithValue("claim_token", NpgsqlDbType.Uuid, claim.ClaimToken);
+            update.Parameters.AddWithValue("claim_expires_at", NpgsqlDbType.TimestampTz, claimExpiresAt);
             update.Parameters.AddWithValue(
                 "release_receipt_json",
                 NpgsqlDbType.Jsonb,

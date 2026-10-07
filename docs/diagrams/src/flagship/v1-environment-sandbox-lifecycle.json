@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["environment", "projects"],
-      "label": "The Environment owner already exists. Lease admission is per Environment; it is not a cluster-wide resource quota."
+      "label": "The owner already exists. Lease admission is per Environment, and run-bound placement reads require exact claims."
     },
     {
       "type": "message",
