@@ -8,6 +8,7 @@ const output = join(root, 'artifacts', 'coverage', 'dotnet');
 const manifest = join(root, '.config', 'dotnet-tools.json');
 const suites = [
   ['orchestrator-core', 'Agentweaver.Orchestrator.Core.Tests'],
+  ['source-control', 'Agentweaver.SourceControl.Tests'],
   ['providers', 'Agentweaver.Providers.Tests'],
   ['postgres', 'Agentweaver.Persistence.Postgres.Tests'],
   ['keyvault', 'Agentweaver.Secrets.AzureKeyVault.Tests'],
@@ -27,6 +28,7 @@ const expectedAssemblies = [
   'Agentweaver.Abstractions',
   'Agentweaver.Orchestrator',
   'Agentweaver.Orchestrator.Core',
+  'Agentweaver.SourceControl',
   'Agentweaver.Providers',
   'Agentweaver.Persistence.Postgres',
   'Agentweaver.Secrets.AzureKeyVault',
