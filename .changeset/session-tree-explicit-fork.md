@@ -1,4 +1,6 @@
 ---
+"Agentweaver.Abstractions": minor
+"Agentweaver.EventsAndSessions": minor
 "Agentweaver.Orchestrator": minor
 ---
 
