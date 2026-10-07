@@ -165,8 +165,14 @@ operations, parent notifications, typed decision/gate persistence, and MAF check
 It also owns current executable-grant lookup and redacted PolicyEvaluation receipt
 production. Admission validates the exact owner outbox message and current session
 relationship and fences; acknowledging a correlated reply exposes input without approving
-a gate. The services connect through protected HTTP contracts, not a shared transaction.
-The reserved positive Events receipt consumer remains #1846 work after #1848 admission.
+a gate. Events & Sessions consumes PolicyEvaluation evidence only by receipt ID, validates
+current Orchestrator admission before and inside the journal transaction, and commits the
+event with its native inbox, position, and outbox state. The Orchestrator receipt writer
+rechecks the actual actor and current Core write authority/accepted selection immediately
+before owner commit; Allow additionally rechecks its exact current grant, expiry, and
+fence. The Core guard waits for the durable Events acknowledgment and rechecks authority
+before its protected callback. The services connect through protected HTTP contracts,
+not a shared transaction; downstream protected-effect call-site wiring is not claimed.
 There is no background message relay, automatic AgentHost scheduler, or full dispatch engine.
 Usage accounting and product AgentHost/Gateway integration remain future work.
 

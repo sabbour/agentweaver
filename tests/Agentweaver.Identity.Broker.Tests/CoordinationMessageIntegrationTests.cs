@@ -244,6 +244,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         EventsIntegrationFactory? eventsFactoryReference = null;
         var admissions = new List<(HttpStatusCode Status, bool NoStore, string Body)>();
         var forkAdmissionGate = new ForkAdmissionGate();
+        var ownerForkRaceGate = new OwnerForkRaceGate();
         var cacheObjectStore = new InMemoryObjectStore();
         var sandboxProvider = new ControlledSandboxResourceProvider();
         await using var orchestratorFactory = new OrchestratorIntegrationFactory(
@@ -251,9 +252,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ownerSchema,
             signingKey,
             projects.CreateHandler,
-            () => new CapturingHandler(
-                eventsFactoryReference!.Server.CreateHandler(),
-                (status, noStore, body) => admissions.Add((status, noStore, body))),
+            () => new OwnerForkRaceHandler(
+                new CapturingHandler(
+                    eventsFactoryReference!.Server.CreateHandler(),
+                    (status, noStore, body) => admissions.Add((status, noStore, body))),
+                ownerForkRaceGate),
             cacheObjectStore,
             sandboxProvider);
         await using var eventsFactory = new EventsIntegrationFactory(
@@ -268,6 +271,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var orchestrator = orchestratorFactory.CreateClient(new WebApplicationFactoryClientOptions
         {
             BaseAddress = new Uri("https://orchestrator.test")
+        });
+        using var events = eventsFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://events.test")
         });
 
         using var rootResponse = await SendJsonAsync(
@@ -675,13 +682,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims,
                 "integration-jwt"));
         var receiptStore = orchestratorFactory.Services.GetRequiredService<ExecutableActionGrantOwnerStore>();
-        var denyingJournal = new DenyingSessionsJournal();
+        var policyJournal = orchestratorFactory.Services
+            .GetRequiredService<IExecutableActionPolicyEvaluationJournal>();
         var sourceReceiptGuard = new ExecutableActionGuard(
             policyProvider,
             policyOptions,
-            denyingJournal,
+            policyJournal,
             receiptStore,
-            sourceReceiptWriter: receiptStore);
+            sourceReceiptWriter: receiptStore,
+            evaluationReceiptWriter: receiptStore);
         var effectInvoked = false;
         var receiptInvocation = new ExecutableActionInvocation(
             receiptPrincipal,
@@ -704,6 +713,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         httpContextAccessor.HttpContext = authorityContext;
         ExecutableActionGuardResult<string> receiptAttempt;
         ExecutableActionGuardResult<string> duplicateReceiptAttempt;
+        var duplicateEffectInvoked = false;
         try
         {
             receiptAttempt = await sourceReceiptGuard.ExecuteAsync(
@@ -717,7 +727,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 receiptInvocation,
                 _ =>
                 {
-                    effectInvoked = true;
+                    duplicateEffectInvoked = true;
                     return Task.FromResult("unexpected");
                 });
         }
@@ -725,14 +735,51 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             httpContextAccessor.HttpContext = previousHttpContext;
         }
-        Assert.Equal(PolicyEvaluationOutcome.Error, receiptAttempt.Outcome);
-        Assert.Equal(PolicyEvaluationReasonCode.EvaluationFailed, receiptAttempt.ReasonCode);
-        Assert.False(receiptAttempt.EffectInvoked);
-        Assert.False(effectInvoked);
+        Assert.True(
+            receiptAttempt.Outcome == PolicyEvaluationOutcome.Allow,
+            $"Policy guard returned {receiptAttempt.Outcome}/{receiptAttempt.ReasonCode}; " +
+            $"effectInvoked={receiptAttempt.EffectInvoked}.");
+        Assert.True(receiptAttempt.EffectInvoked);
+        Assert.True(effectInvoked);
         Assert.Equal(PolicyEvaluationReasonCode.EvaluationFailed, duplicateReceiptAttempt.ReasonCode);
         Assert.False(duplicateReceiptAttempt.EffectInvoked);
-        Assert.False(effectInvoked);
-        Assert.Equal(1, denyingJournal.AppendCalls);
+        Assert.False(duplicateEffectInvoked);
+
+        using var policyReplay = await SendAsync(
+            events,
+            HttpMethod.Get,
+            "/internal/sessions/root/events",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(policyReplay, HttpStatusCode.OK);
+        using var policyJournalPage = JsonDocument.Parse(await policyReplay.Content.ReadAsStringAsync());
+        var policyJournalEvent = Assert.Single(policyJournalPage.RootElement.GetProperty("events").EnumerateArray());
+        Assert.Equal("policyEvaluation", policyJournalEvent.GetProperty("kind").GetString());
+        Assert.Equal(receiptId, policyJournalEvent.GetProperty("eventId").GetGuid());
+        using var receiptRetry = await SendJsonAsync(
+            events,
+            HttpMethod.Post,
+            $"/internal/sessions/{root.RootSessionId}/policy-evaluations",
+            runToken,
+            new PolicyEvaluationReceiptReferenceRequest(receiptId));
+        Assert.Equal(HttpStatusCode.OK, receiptRetry.StatusCode);
+        Assert.True(receiptRetry.Headers.CacheControl?.NoStore);
+        var retryAcknowledgment =
+            await ReadJsonAsync<PolicyEvaluationAppendAcknowledgment>(receiptRetry);
+        Assert.True(retryAcknowledgment.IsDuplicate);
+        Assert.Equal(policyJournalEvent.GetProperty("position").GetInt64(), retryAcknowledgment.Position);
+
+        using var callerSuppliedOwner = await SendJsonAsync(
+            events,
+            HttpMethod.Post,
+            $"/internal/sessions/{root.RootSessionId}/policy-evaluations",
+            runToken,
+            new
+            {
+                receiptId,
+                ownerUrl = "https://127.0.0.1/"
+            });
+        Assert.Equal(HttpStatusCode.BadRequest, callerSuppliedOwner.StatusCode);
 
         using var storedReceiptResponse = await SendAsync(
             orchestrator,
@@ -749,6 +796,85 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(receiptGrantId, storedReceipt.Evidence.GrantId);
         Assert.Equal(ReceiptActionId, storedReceipt.Evidence.ActionId);
         Assert.Equal(PolicyEvaluationOutcome.Allow, storedReceipt.Evidence.Outcome);
+        Assert.Equal(receiptIssuer, storedReceipt.Issuer);
+        Assert.Equal(
+            new SessionIdentity(project.ProjectId, RunId, root.RootSessionId),
+            storedReceipt.Identity);
+
+        string inactiveGrantId;
+        string inactiveGrantRevision;
+        string inactiveGrantStep;
+        string inactiveGrantPurpose;
+        string inactiveGrantAction;
+        long inactiveGrantFence;
+        await using (var database = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await database.OpenConnectionAsync())
+        await using (var query = new NpgsqlCommand($"""
+            SELECT grant_id, revision, step_id, purpose, action_ids, execution_fence
+            FROM "{ownerSchema}".executable_action_grants
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+              AND actor_id = @actor
+              AND (NOT is_current OR grant_state <> 'active' OR expires_at <= clock_timestamp())
+            ORDER BY created_at DESC
+            LIMIT 1
+            """, connection))
+        {
+            query.Parameters.AddWithValue("project", project.ProjectId);
+            query.Parameters.AddWithValue("run", RunId);
+            query.Parameters.AddWithValue("session", root.RootSessionId);
+            query.Parameters.AddWithValue("actor", currentRunnerSubject);
+            await using var reader = await query.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            inactiveGrantId = reader.GetString(0);
+            inactiveGrantRevision = reader.GetString(1);
+            inactiveGrantStep = reader.GetString(2);
+            inactiveGrantPurpose = reader.GetString(3);
+            var inactiveActions = JsonSerializer.Deserialize<string[]>(reader.GetString(4)) ?? [];
+            Assert.NotEmpty(inactiveActions);
+            inactiveGrantAction = inactiveActions[0];
+            inactiveGrantFence = reader.GetInt64(5);
+        }
+
+        var deniedReceiptId = Guid.NewGuid();
+        var deniedInvocation = receiptInvocation with
+        {
+            StepId = inactiveGrantStep,
+            ActionId = inactiveGrantAction,
+            Purpose = inactiveGrantPurpose,
+            GrantReference = new ExecutableActionGrantReference(
+                inactiveGrantId, inactiveGrantRevision),
+            Fence = inactiveGrantFence,
+            EventId = deniedReceiptId
+        };
+        httpContextAccessor.HttpContext = authorityContext;
+        ExecutableActionGuardResult<string> deniedReceiptAttempt;
+        try
+        {
+            deniedReceiptAttempt = await sourceReceiptGuard.ExecuteAsync(
+                deniedInvocation,
+                _ => Task.FromResult("unexpected"));
+        }
+        finally
+        {
+            httpContextAccessor.HttpContext = previousHttpContext;
+        }
+        Assert.Equal(PolicyEvaluationOutcome.Deny, deniedReceiptAttempt.Outcome);
+        Assert.Equal(PolicyEvaluationReasonCode.NoEffectiveGrant, deniedReceiptAttempt.ReasonCode);
+        Assert.False(deniedReceiptAttempt.EffectInvoked);
+        using var deniedReceiptResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/policy-evaluations/{deniedReceiptId:D}",
+            runToken,
+            [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, deniedReceiptResponse.StatusCode);
+        var deniedReceipt = await deniedReceiptResponse.Content.ReadFromJsonAsync<PolicyEvaluationReceiptView>(
+            CoordinationJsonOptions);
+        Assert.NotNull(deniedReceipt);
+        Assert.Equal(PolicyEvaluationOutcome.Deny, deniedReceipt.Evidence.Outcome);
+        Assert.Equal(PolicyEvaluationReasonCode.NoEffectiveGrant, deniedReceipt.Evidence.ReasonCode);
+        Assert.Equal(inactiveGrantId, deniedReceipt.Evidence.GrantId);
+
         using var callerReceiptWrite = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
@@ -1049,10 +1175,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(childReplay, HttpStatusCode.Created);
         Assert.Equal(child, await ReadJsonAsync<RegisteredChild>(childReplay));
 
-        using var events = eventsFactory.CreateClient(new WebApplicationFactoryClientOptions
-        {
-            BaseAddress = new Uri("https://events.test")
-        });
         using var forgedAdmission = await SendJsonAsync(
             events,
             HttpMethod.Post,
@@ -1365,7 +1487,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             [TenantId]);
         await AssertStatusAsync(senderReplay, HttpStatusCode.OK);
         using var journal = JsonDocument.Parse(await senderReplay.Content.ReadAsStringAsync());
-        var journalEvent = Assert.Single(journal.RootElement.GetProperty("events").EnumerateArray());
+        var journalEvent = Assert.Single(
+            journal.RootElement.GetProperty("events").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == "addressedMessage");
         Assert.Equal("addressedMessage", journalEvent.GetProperty("kind").GetString());
         Assert.Equal(
             presented.MessageId,
@@ -1498,28 +1622,53 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             forkEventId,
             forkCursor,
             CoordinationSessionKind.ChildWork);
-        using var ownerFork = await SendJsonAsync(
+        var firstOwnerForkTask = SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
             runToken,
             forkRequest);
-        await AssertStatusAsync(ownerFork, HttpStatusCode.Created);
-        var ownerForkResult = await ReadJsonAsync<CoordinationSessionForkResult>(ownerFork);
-        Assert.Equal(CoordinationForkRegistrationState.Registered, ownerForkResult.RegistrationState);
-        Assert.Equal(forkEventId, ownerForkResult.Lineage?.SourceEventId);
-        Assert.Equal(forkCursor, ownerForkResult.Lineage?.SourceCursor);
+        CoordinationSessionForkResult ownerForkResult;
+        CoordinationSessionForkResult ownerForkReplayResult;
+        try
+        {
+            await ownerForkRaceGate.WaitUntilFirstResponsePausedAsync()
+                .WaitAsync(TimeSpan.FromSeconds(30));
+            var secondOwnerForkTask = SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
+                runToken,
+                forkRequest);
+            await ownerForkRaceGate.WaitUntilSecondRequestPausedAsync()
+                .WaitAsync(TimeSpan.FromSeconds(30));
 
-        using var ownerForkReplay = await SendJsonAsync(
-            orchestrator,
-            HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/fork",
-            runToken,
-            forkRequest);
-        await AssertStatusAsync(ownerForkReplay, HttpStatusCode.OK);
-        var ownerForkReplayResult = await ReadJsonAsync<CoordinationSessionForkResult>(ownerForkReplay);
-        Assert.True(ownerForkReplayResult.IsDuplicate);
-        Assert.Equal(ownerForkResult.CommandId, ownerForkReplayResult.CommandId);
+            ownerForkRaceGate.ReleaseFirstResponse();
+            using (var ownerFork = await firstOwnerForkTask)
+            {
+                await AssertStatusAsync(ownerFork, HttpStatusCode.Created);
+                ownerForkResult = await ReadJsonAsync<CoordinationSessionForkResult>(ownerFork);
+                Assert.Equal(
+                    CoordinationForkRegistrationState.Registered,
+                    ownerForkResult.RegistrationState);
+                Assert.Equal(forkEventId, ownerForkResult.Lineage?.SourceEventId);
+                Assert.Equal(forkCursor, ownerForkResult.Lineage?.SourceCursor);
+            }
+
+            ownerForkRaceGate.ReleaseSecondRequest();
+            using var ownerForkReplay = await secondOwnerForkTask;
+            await AssertStatusAsync(ownerForkReplay, HttpStatusCode.OK);
+            ownerForkReplayResult =
+                await ReadJsonAsync<CoordinationSessionForkResult>(ownerForkReplay);
+            Assert.True(ownerForkReplayResult.IsDuplicate);
+            Assert.Equal(ownerForkResult.CommandId, ownerForkReplayResult.CommandId);
+        }
+        finally
+        {
+            ownerForkRaceGate.ReleaseFirstResponse();
+            ownerForkRaceGate.ReleaseSecondRequest();
+        }
+
         await using (var database = NpgsqlDataSource.Create(_connectionString))
         await using (var connection = await database.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand($"""
@@ -1529,18 +1678,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 (SELECT count(*) FROM "{eventsSchema}".session_fork_lineage
                  WHERE project_id = @project AND run_id = @run AND target_session_id = @target),
                 (SELECT retain_until::text FROM "{eventsSchema}".session_object_references
-                 WHERE project_id = @project AND run_id = @run AND event_id = @event)
+                 WHERE project_id = @project AND run_id = @run AND event_id = @event),
+                (SELECT count(*) FROM "{ownerSchema}".coordination_sessions
+                 WHERE project_id = @project AND run_id = @run
+                   AND session_id = @target AND parent_session_id = 'root'),
+                (SELECT count(*) FROM "{ownerSchema}".outbox_events
+                 WHERE id = @command AND event_type = 'orchestrator.session.forked')
             """, connection))
         {
             command.Parameters.AddWithValue("project", project.ProjectId);
             command.Parameters.AddWithValue("run", RunId);
             command.Parameters.AddWithValue("target", forkRequest.TargetSessionId);
             command.Parameters.AddWithValue("event", forkEventId);
+            command.Parameters.AddWithValue("command", ownerForkResult.CommandId);
             await using var reader = await command.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
             Assert.Equal(1L, reader.GetInt64(0));
             Assert.Equal(1L, reader.GetInt64(1));
             Assert.Equal(originalForkRetention, reader.GetString(2));
+            Assert.Equal(1L, reader.GetInt64(3));
+            Assert.Equal(1L, reader.GetInt64(4));
         }
 
         using var runStatusResponse = await SendAsync(
@@ -1682,7 +1839,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using var connection = await dataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
             SELECT
-                (SELECT count(*) FROM "{schema}".coordinator_run_selection_contexts
+                (SELECT count(*) FROM "{schema}".coordinator_run_selection_context_versions
                     WHERE project_id = @project AND run_id = @run),
                 (SELECT count(*) FROM "{schema}".coordinator_decisions
                     WHERE project_id = @project AND run_id = @run),
@@ -1760,7 +1917,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using (var query = new NpgsqlCommand($"""
             SELECT provider_id, resource_id, resource_generation, negotiated_capabilities::text,
                    execution_fence, project_configuration_revision
-            FROM "{schema}".coordinator_run_selection_contexts
+            FROM "{schema}".coordinator_run_selection_context_versions
             WHERE project_id = @project AND run_id = @run
             """, connection))
         {
@@ -1780,7 +1937,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         await using var mutation = new NpgsqlCommand($"""
-            UPDATE "{schema}".coordinator_run_selection_contexts
+            UPDATE "{schema}".coordinator_run_selection_context_versions
             SET resource_generation = resource_generation + 1
             WHERE project_id = @project AND run_id = @run
             """, connection);
@@ -2096,6 +2253,64 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
+    private sealed class OwnerForkRaceGate
+    {
+        private readonly TaskCompletionSource _firstResponsePaused =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _secondRequestPaused =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseFirstResponse =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseSecondRequest =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _forkRequests;
+
+        public Task WaitUntilFirstResponsePausedAsync() => _firstResponsePaused.Task;
+        public Task WaitUntilSecondRequestPausedAsync() => _secondRequestPaused.Task;
+        public void ReleaseFirstResponse() => _releaseFirstResponse.TrySetResult();
+        public void ReleaseSecondRequest() => _releaseSecondRequest.TrySetResult();
+
+        public async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            Func<Task<HttpResponseMessage>> send,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri is not { } uri ||
+                !uri.AbsolutePath.EndsWith("/fork", StringComparison.Ordinal))
+                return await send().ConfigureAwait(false);
+
+            switch (Interlocked.Increment(ref _forkRequests))
+            {
+                case 1:
+                {
+                    var response = await send().ConfigureAwait(false);
+                    _firstResponsePaused.TrySetResult();
+                    await _releaseFirstResponse.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    return response;
+                }
+                case 2:
+                    _secondRequestPaused.TrySetResult();
+                    await _releaseSecondRequest.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    break;
+            }
+
+            return await send().ConfigureAwait(false);
+        }
+    }
+
+    private sealed class OwnerForkRaceHandler(
+        HttpMessageHandler innerHandler,
+        OwnerForkRaceGate gate) : DelegatingHandler(innerHandler)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            gate.SendAsync(
+                request,
+                () => base.SendAsync(request, cancellationToken),
+                cancellationToken);
+    }
+
     private sealed class RuntimeOwnerContextSelectionPause
     {
         private readonly TaskCompletionSource _paused =
@@ -2192,7 +2407,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             builder.ConfigureTestServices(services =>
             {
                 services.RemoveAll<NpgsqlDataSource>();
-                services.AddSingleton(NpgsqlDataSource.Create(connectionString));
+                services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(connectionString));
                 services.RemoveAll<ProviderCatalog>();
                 services.AddSingleton(CreateSandboxProviderCatalog());
                 AddJwtBearer(services, signingKey);
@@ -2279,12 +2494,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             builder.ConfigureTestServices(services =>
             {
                 services.RemoveAll<NpgsqlDataSource>();
-                services.AddSingleton(NpgsqlDataSource.Create(connectionString));
-                services.RemoveAll<EventsHost::Agentweaver.EventsAndSessions.ISessionsProviderBinder>();
-                services.AddSingleton<EventsHost::Agentweaver.EventsAndSessions.ISessionsProviderBinder>(
-                    new ForkEnabledSessionsProviderBinder(
-                        new PostgresSessionsProviderOptions(
-                            "postgres-test", databaseName, 1, schema, "integration-v1")));
+                services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(connectionString));
                 AddJwtBearer(services, signingKey);
                 services.AddHttpClient<
                         EventsHost::Agentweaver.EventsAndSessions.IProjectsAuthorizationContextClient,
@@ -2298,44 +2508,4 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
-    private sealed class ForkEnabledSessionsProviderBinder(PostgresSessionsProviderOptions options)
-        : EventsHost::Agentweaver.EventsAndSessions.ISessionsProviderBinder
-    {
-        public Task<SessionProviderBinding> ResolveAndPinAsync(
-            System.Security.Claims.ClaimsPrincipal principal,
-            CancellationToken cancellationToken = default)
-        {
-            if (!EventsHost::Agentweaver.EventsAndSessions.SessionIdentityClaims.TryGetScope(
-                    principal, out var scope) || scope is null)
-                throw new EventsHost::Agentweaver.EventsAndSessions.SessionAuthenticationException();
-            return Task.FromResult(CreateBinding(scope.Value));
-        }
-
-        public Task VerifyPinnedAsync(
-            System.Security.Claims.ClaimsPrincipal principal,
-            SessionProviderBinding binding,
-            CancellationToken cancellationToken = default)
-        {
-            if (!EventsHost::Agentweaver.EventsAndSessions.SessionIdentityClaims.TryGetScope(
-                    principal, out var scope) || scope is null)
-                throw new EventsHost::Agentweaver.EventsAndSessions.SessionAuthenticationException();
-            if (!binding.Matches(CreateBinding(scope.Value)))
-                throw new SessionPinnedProviderUnavailableException(
-                    "The test Sessions provider binding changed.");
-            return Task.CompletedTask;
-        }
-
-        private SessionProviderBinding CreateBinding(
-            EventsHost::Agentweaver.EventsAndSessions.SessionRunScope scope) =>
-            new(
-                scope.ProjectId,
-                scope.RunId,
-                EventsHost::Agentweaver.EventsAndSessions.NativePostgresSessionsProvider.ProviderId,
-                EventsHost::Agentweaver.EventsAndSessions.NativePostgresSessionsProvider.AdapterVersion,
-                EventsHost::Agentweaver.EventsAndSessions.NativePostgresSessionsProvider.OptionsSchemaVersion,
-                options.OptionsRevision,
-                options.ResourceId,
-                options.ResourceGeneration,
-                EventsHost::Agentweaver.EventsAndSessions.SessionsCapabilities.All.Add("sessions.events.fork"));
-    }
 }

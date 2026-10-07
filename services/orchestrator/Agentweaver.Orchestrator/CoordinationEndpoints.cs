@@ -86,6 +86,9 @@ public static class CoordinationEndpoints
         coordination.MapGet(
             "/policy-evaluations/{receiptId:guid}",
             ReadPolicyEvaluationReceiptAsync);
+        coordination.MapGet(
+            "/policy-evaluations/{receiptId:guid}/admission",
+            ValidatePolicyEvaluationReceiptAdmissionAsync);
 
         app.MapPost(
             "/internal/projects/{projectId}/runs/{runId}/coordination/message-route",
@@ -213,6 +216,10 @@ public static class CoordinationEndpoints
             var owner = await store.ReadRuntimeOwnerStateAsync(
                 actor, identity, cancellationToken).ConfigureAwait(false);
             var root = new SessionIdentity(projectId, runId, owner.RootSessionId);
+            var selectionContext = await runSelectionContexts.ReadAsync(
+                    selection.Selection, owner.ExecutionFence, cancellationToken).ConfigureAwait(false)
+                ?? throw new CoordinationException(
+                    "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
             var decision = await decisions.ReadCurrentAsync(
                 actor, root, selection, cancellationToken).ConfigureAwait(false);
             if (decision.State.Fence != owner.ExecutionFence ||
@@ -222,9 +229,6 @@ public static class CoordinationEndpoints
                 throw new CoordinationException(
                     "runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
 
-            var selectionContext = await runSelectionContexts.ReadAsync(
-                    selection.Selection, owner.ExecutionFence, cancellationToken).ConfigureAwait(false)
-                ?? CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Selection.Snapshot);
             var validatedPlan = WorkPlanValidator.ValidateAndSnapshot(
                 confirmedPlan.Workflow, confirmedPlan.Plan, selectionContext);
             if (!validatedPlan.IsValid || validatedPlan.Value is null)
@@ -396,7 +400,10 @@ public static class CoordinationEndpoints
                 selectionHash,
                 maxChildren,
                 maxConcurrentChildren,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                currentCancellationToken => RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, currentCancellationToken))
+                .ConfigureAwait(false);
             if (prepared.RegistrationState == CoordinationForkRegistrationState.Registered)
                 return Results.Ok(prepared);
             if (prepared.RegistrationState == CoordinationForkRegistrationState.Unregistered)
@@ -420,7 +427,10 @@ public static class CoordinationEndpoints
             {
                 var unregistered = await store.FinalizeSessionForkAdmissionFailureAsync(
                     actor, source, request, selectionHash, cancellationToken).ConfigureAwait(false);
-                return Results.Conflict(unregistered);
+                return unregistered.RegistrationState == CoordinationForkRegistrationState.Registered &&
+                       unregistered.IsDuplicate
+                    ? Results.Ok(unregistered)
+                    : Results.Conflict(unregistered);
             }
             var currentSelection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
@@ -437,7 +447,13 @@ public static class CoordinationEndpoints
                 maxChildren,
                 maxConcurrentChildren,
                 prepared.IsDuplicate,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                currentCancellationToken => RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, currentCancellationToken))
+                .ConfigureAwait(false);
+            if (completed.RegistrationState == CoordinationForkRegistrationState.Unregistered &&
+                completed.UnavailableCode == "run_selection_permission_denied")
+                return Results.Json(completed, statusCode: StatusCodes.Status403Forbidden);
             return completed.RegistrationState == CoordinationForkRegistrationState.Registered
                 ? Results.Json(completed, statusCode: completed.IsDuplicate
                     ? StatusCodes.Status200OK : StatusCodes.Status201Created)
@@ -1332,6 +1348,24 @@ public static class CoordinationEndpoints
             return Results.Ok(receipt);
         }, cancellationToken);
 
+    private static Task<IResult> ValidatePolicyEvaluationReceiptAdmissionAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ExecutableActionGrantOwnerStore grants,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var receipt = await grants.ValidateReceiptAdmissionAsync(
+                actor, projectId, runId, receiptId, cancellationToken).ConfigureAwait(false);
+            return Results.Ok(new PolicyEvaluationReceiptAdmissionAcknowledgment(
+                receiptId, receipt.Identity));
+        }, cancellationToken);
+
     private static Task<IResult> AcceptRootAsync(
         string projectId,
         string runId,
@@ -1626,13 +1660,14 @@ public static class CoordinationEndpoints
         {
             context.Response.Headers.CacheControl = "no-store";
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
-            _ = await projects.ReadAcceptedSelectionAsync(
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
             var result = await store.ReportRunFailureAsync(
                 actor,
                 new SessionIdentity(projectId, runId, sessionId),
                 request,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                selection).ConfigureAwait(false);
             return Results.Ok(result);
         }, cancellationToken);
 
@@ -1649,10 +1684,10 @@ public static class CoordinationEndpoints
         {
             context.Response.Headers.CacheControl = "no-store";
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
-            _ = await projects.ReadAcceptedSelectionAsync(
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
             var result = await store.RecoverRunExecutionAsync(
-                actor, projectId, runId, request, cancellationToken).ConfigureAwait(false);
+                actor, projectId, runId, request, cancellationToken, selection).ConfigureAwait(false);
             return Results.Ok(result);
         }, cancellationToken);
 

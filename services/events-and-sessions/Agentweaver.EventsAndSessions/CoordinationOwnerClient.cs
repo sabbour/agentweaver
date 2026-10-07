@@ -33,6 +33,18 @@ public interface ICoordinationOwnerClient
         SessionIdentity source,
         SessionForkRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<PolicyEvaluationReceiptView> ReadPolicyEvaluationReceiptAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        Guid receiptId,
+        CancellationToken cancellationToken = default);
+
+    Task ValidatePolicyEvaluationReceiptAdmissionAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        Guid receiptId,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class CoordinationOwnerClientException(
@@ -50,7 +62,11 @@ public sealed class CoordinationOwnerClient(
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
+        UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+        Converters =
+        {
+            new System.Text.Json.Serialization.JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)
+        }
     };
 
     public Task<MessageRouteBinding> ValidateMessageRouteAsync(
@@ -111,6 +127,64 @@ public sealed class CoordinationOwnerClient(
             throw new CoordinationOwnerClientException(
                 "coordination_owner_contract_invalid", StatusCodes.Status502BadGateway);
         return receipt;
+    }
+
+    public async Task<PolicyEvaluationReceiptView> ReadPolicyEvaluationReceiptAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        Guid receiptId,
+        CancellationToken cancellationToken = default)
+    {
+        if (receiptId == Guid.Empty)
+            throw new CoordinationOwnerClientException(
+                "coordination_owner_receipt_reference_invalid", StatusCodes.Status400BadRequest);
+
+        var receipt = await SendAsync<PolicyEvaluationReceiptView>(
+            context,
+            HttpMethod.Get,
+            $"/api/projects/{Uri.EscapeDataString(identity.ProjectId)}/runs/{Uri.EscapeDataString(identity.RunId)}/coordination/policy-evaluations/{receiptId:D}",
+            content: null,
+            cancellationToken).ConfigureAwait(false);
+        var subjects = context.User.FindAll("sub").Take(2).ToArray();
+        try
+        {
+            if (subjects.Length != 1 ||
+                receipt.ReceiptId != receiptId ||
+                receipt.Issuer != options.ExpectedIssuer ||
+                receipt.Identity != identity ||
+                receipt.Evidence.ActorId != subjects[0].Value)
+                throw new CoordinationOwnerClientException(
+                    "coordination_owner_receipt_contract_invalid", StatusCodes.Status502BadGateway);
+            SessionEventPayloadValidation.ValidateAndGetReferences(receipt.Evidence);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new CoordinationOwnerClientException(
+                "coordination_owner_receipt_contract_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+
+        return receipt;
+    }
+
+    public async Task ValidatePolicyEvaluationReceiptAdmissionAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        Guid receiptId,
+        CancellationToken cancellationToken = default)
+    {
+        if (receiptId == Guid.Empty)
+            throw new CoordinationOwnerClientException(
+                "coordination_owner_receipt_reference_invalid", StatusCodes.Status400BadRequest);
+
+        var admission = await SendAsync<PolicyEvaluationReceiptAdmissionAcknowledgment>(
+            context,
+            HttpMethod.Get,
+            $"/api/projects/{Uri.EscapeDataString(identity.ProjectId)}/runs/{Uri.EscapeDataString(identity.RunId)}/coordination/policy-evaluations/{receiptId:D}/admission",
+            content: null,
+            cancellationToken).ConfigureAwait(false);
+        if (admission.ReceiptId != receiptId || admission.Identity != identity)
+            throw new CoordinationOwnerClientException(
+                "coordination_owner_receipt_admission_invalid", StatusCodes.Status502BadGateway);
     }
 
     private async Task<T> SendAsync<T>(

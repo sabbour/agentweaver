@@ -10,17 +10,15 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-internal sealed record PolicyEvaluationReceiptView(
-    Guid ReceiptId,
-    PolicyEvaluationSessionPayload Evidence,
-    DateTimeOffset CreatedAt);
-
 internal sealed class ExecutableActionGrantOwnerStore(
     NpgsqlDataSource dataSource,
     OrchestratorOptions options,
     TimeProvider timeProvider,
     ProjectsRunSelectionClient projects,
-    IHttpContextAccessor httpContextAccessor) : IExecutableActionGrantOwnerLookup, IExecutableActionSourceReceiptWriter
+    IHttpContextAccessor httpContextAccessor) :
+    IExecutableActionGrantOwnerLookup,
+    IExecutableActionSourceReceiptWriter,
+    IExecutableActionPolicyEvaluationReceiptWriter
 {
     private const int MaximumIdLength = 256;
     private readonly string _schema = $"\"{options.Schema}\"";
@@ -271,6 +269,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 identity,
                 receipt.ReceiptId,
                 evidence,
+                requireCurrentGrant: true,
                 cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -289,11 +288,99 @@ internal sealed class ExecutableActionGrantOwnerStore(
         }
     }
 
+    public async Task<ExecutableActionSourceReceiptWriteResult> StoreAsync(
+        ExecutableActionPolicyEvaluationReceipt receipt,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        var context = httpContextAccessor.HttpContext;
+        if (context is null)
+            return new ExecutableActionSourceReceiptWriteResult(
+                ExecutableActionSourceReceiptWriteStatus.Unavailable);
+
+        CoordinationActor actor;
+        CoordinationRunScope scope;
+        try
+        {
+            actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+            CoordinationIdentity.RequireScopes(context.User);
+            scope = CoordinationIdentity.RequireRunScope(context.User);
+        }
+        catch (CoordinationException)
+        {
+            return new ExecutableActionSourceReceiptWriteResult(
+                ExecutableActionSourceReceiptWriteStatus.Rejected);
+        }
+
+        if (receipt.Outcome is not (PolicyEvaluationOutcome.Deny or PolicyEvaluationOutcome.Error) ||
+            receipt.GrantReference is null ||
+            !IsIdentifier(receipt.SessionId) ||
+            !IsIdentifier(receipt.StepId) ||
+            !IsIdentifier(receipt.GrantReference.GrantId) ||
+            !IsIdentifier(receipt.GrantReference.Revision) ||
+            !IsIdentifier(receipt.Purpose) ||
+            !IsIdentifier(receipt.ActionId) ||
+            receipt.Fence < 1 ||
+            receipt.ProviderId != AgtPolicyProvider.ProviderId ||
+            receipt.AdapterVersion != AgtPolicyProvider.AdapterVersion.ToString() ||
+            receipt.OptionsSchemaVersion < 1 ||
+            !IsIdentifier(receipt.OptionsRevision) ||
+            !IsValidOutcomeReason(receipt.Outcome, receipt.ReasonCode))
+            return new ExecutableActionSourceReceiptWriteResult(
+                ExecutableActionSourceReceiptWriteStatus.Rejected);
+
+        try
+        {
+            var authorized = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, scope.ProjectId, scope.RunId, cancellationToken).ConfigureAwait(false);
+            var evidence = new PolicyEvaluationSessionPayload(
+                actor.Subject,
+                authorized.Authorization.TenantId,
+                receipt.StepId,
+                receipt.GrantReference.GrantId,
+                receipt.GrantReference.Revision,
+                receipt.Purpose,
+                receipt.ActionId,
+                receipt.Outcome,
+                receipt.ReasonCode,
+                receipt.Fence,
+                receipt.ProviderId,
+                receipt.AdapterVersion,
+                receipt.OptionsSchemaVersion,
+                receipt.OptionsRevision);
+            return await PersistReceiptAsync(
+                actor,
+                new SessionIdentity(scope.ProjectId, scope.RunId, receipt.SessionId),
+                receipt.ReceiptId,
+                evidence,
+                requireCurrentGrant: false,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (CoordinationException exception) when (
+            exception.StatusCode is StatusCodes.Status400BadRequest or
+                StatusCodes.Status403Forbidden or StatusCodes.Status404NotFound or
+                StatusCodes.Status409Conflict)
+        {
+            return new ExecutableActionSourceReceiptWriteResult(
+                ExecutableActionSourceReceiptWriteStatus.Rejected);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return new ExecutableActionSourceReceiptWriteResult(
+                ExecutableActionSourceReceiptWriteStatus.Unavailable);
+        }
+    }
+
     private async Task<ExecutableActionSourceReceiptWriteResult> PersistReceiptAsync(
         CoordinationActor actor,
         SessionIdentity identity,
         Guid receiptId,
         PolicyEvaluationSessionPayload evidence,
+        bool requireCurrentGrant,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(actor);
@@ -305,6 +392,11 @@ internal sealed class ExecutableActionGrantOwnerStore(
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var grantValid = await IsCurrentGrantForReceiptAsync(
             connection, transaction, actor, identity, evidence, cancellationToken).ConfigureAwait(false);
+        if (!grantValid && !requireCurrentGrant)
+        {
+            grantValid = await IsIssuedGrantForReceiptAsync(
+                connection, transaction, actor, identity, evidence, cancellationToken).ConfigureAwait(false);
+        }
         if (!grantValid)
             throw new CoordinationException("policy_receipt_grant_stale", StatusCodes.Status409Conflict);
 
@@ -339,6 +431,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
             saved.Issuer != actor.Issuer)
             throw new CoordinationException("policy_receipt_conflict", StatusCodes.Status409Conflict);
 
+        await ValidateReceiptWriterAuthorityAsync(
+            actor, identity, evidence, requireCurrentGrant, cancellationToken,
+            connection, transaction).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new ExecutableActionSourceReceiptWriteResult(inserted == 1
             ? ExecutableActionSourceReceiptWriteStatus.Stored
@@ -358,9 +453,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var command = new NpgsqlCommand($"""
-            SELECT issuer, actor_id, tenant_id, step_id, grant_id, grant_revision, purpose, action_id,
-                outcome, reason_code, execution_fence, provider_id, adapter_version,
-                options_schema_version, options_revision, created_at
+            SELECT issuer, actor_id, tenant_id, session_id, step_id, grant_id, grant_revision,
+                purpose, action_id, outcome, reason_code, execution_fence, provider_id,
+                adapter_version, options_schema_version, options_revision, created_at
             FROM {_schema}.policy_evaluation_receipts
             WHERE project_id = @project AND run_id = @run AND receipt_id = @receipt
             """, connection);
@@ -376,21 +471,211 @@ internal sealed class ExecutableActionGrantOwnerStore(
         var evidence = new PolicyEvaluationSessionPayload(
             reader.GetString(1),
             reader.GetString(2),
-            reader.GetString(3),
             reader.GetString(4),
             reader.GetString(5),
             reader.GetString(6),
             reader.GetString(7),
-            ParseOutcome(reader.GetString(8)),
-            ParseReason(reader.GetString(9)),
-            reader.GetInt64(10),
-            reader.GetString(11),
+            reader.GetString(8),
+            ParseOutcome(reader.GetString(9)),
+            ParseReason(reader.GetString(10)),
+            reader.GetInt64(11),
             reader.GetString(12),
-            reader.GetInt32(13),
-            reader.GetString(14));
+            reader.GetString(13),
+            reader.GetInt32(14),
+            reader.GetString(15));
         return new PolicyEvaluationReceiptView(
-            receiptId, evidence, reader.GetFieldValue<DateTimeOffset>(15));
+            receiptId,
+            reader.GetString(0),
+            new SessionIdentity(projectId, runId, reader.GetString(3)),
+            evidence,
+            reader.GetFieldValue<DateTimeOffset>(16));
     }
+
+    internal async Task<PolicyEvaluationReceiptView> ValidateReceiptAdmissionAsync(
+        CoordinationActor actor,
+        string projectId,
+        string runId,
+        Guid receiptId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        if (!IsIdentifier(projectId) || !IsIdentifier(runId) || receiptId == Guid.Empty)
+            throw new CoordinationException("policy_receipt_invalid", StatusCodes.Status400BadRequest);
+
+        var receipt = await ReadReceiptAsync(
+            actor, projectId, runId, receiptId, cancellationToken).ConfigureAwait(false);
+        if (receipt is null)
+            throw new CoordinationException("policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+
+        var evidence = receipt.Evidence;
+        ValidateReceipt(receipt.Identity, receiptId, evidence);
+        if (receipt.Identity.ProjectId != projectId ||
+            receipt.Identity.RunId != runId ||
+            !IsValidPolicyProviderEvidence(evidence))
+            throw new CoordinationException("policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+
+        await ValidateReceiptWriterAuthorityAsync(
+            actor,
+            receipt.Identity,
+            evidence,
+            requireCurrentGrant: evidence.Outcome == PolicyEvaluationOutcome.Allow,
+            cancellationToken).ConfigureAwait(false);
+        if (evidence.Outcome is PolicyEvaluationOutcome.Deny or PolicyEvaluationOutcome.Error)
+            return receipt;
+        if (evidence.Outcome != PolicyEvaluationOutcome.Allow)
+            throw new CoordinationException("policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+
+        return receipt;
+    }
+
+    private async Task ValidateReceiptWriterAuthorityAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        PolicyEvaluationSessionPayload evidence,
+        bool requireCurrentGrant,
+        CancellationToken cancellationToken,
+        NpgsqlConnection? ownerConnection = null,
+        NpgsqlTransaction? ownerTransaction = null)
+    {
+        var context = httpContextAccessor.HttpContext
+            ?? throw new CoordinationException(
+                "policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+        var caller = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        CoordinationIdentity.RequireScopes(context.User);
+        var scope = CoordinationIdentity.RequireRunScope(context.User);
+        if (caller.Issuer != actor.Issuer ||
+            caller.Subject != actor.Subject ||
+            evidence.ActorId != actor.Subject ||
+            scope.ProjectId != identity.ProjectId ||
+            scope.RunId != identity.RunId)
+            throw new CoordinationException("policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+
+        var selectionHash = await ReadCurrentReceiptWriterSelectionHashAsync(
+            context, actor, identity, evidence, cancellationToken).ConfigureAwait(false);
+        if (ownerConnection is null)
+        {
+            if (ownerTransaction is not null)
+                throw new ArgumentException("An owner transaction requires its connection.", nameof(ownerTransaction));
+            await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            await ValidateCurrentOwnerSessionAsync(
+                connection, transaction, actor, identity, evidence, selectionHash, cancellationToken)
+                .ConfigureAwait(false);
+            await ValidateReceiptWriterSelectionUnchangedAsync(
+                context, actor, identity, evidence, selectionHash, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            if (ownerTransaction is null)
+                throw new ArgumentException("An owner connection requires its transaction.", nameof(ownerTransaction));
+            await ValidateCurrentOwnerSessionAsync(
+                ownerConnection, ownerTransaction, actor, identity, evidence, selectionHash, cancellationToken)
+                .ConfigureAwait(false);
+            await ValidateReceiptWriterSelectionUnchangedAsync(
+                context, actor, identity, evidence, selectionHash, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (requireCurrentGrant)
+        {
+            var current = await GetCurrentAsync(
+                new ExecutableActionGrantReference(evidence.GrantId, evidence.GrantRevision),
+                cancellationToken).ConfigureAwait(false);
+            var grant = current.Grant;
+            if (current.Status != ExecutableActionGrantLookupStatus.Current || grant is null ||
+                grant.Issuer != actor.Issuer ||
+                grant.ActorId != actor.Subject ||
+                grant.TenantId != evidence.TenantId ||
+                grant.ProjectId != identity.ProjectId ||
+                grant.RunId != identity.RunId ||
+                grant.SessionId != identity.SessionId ||
+                grant.StepId != evidence.StepId ||
+                !grant.ActionIds.Contains(evidence.ActionId) ||
+                grant.Reference.GrantId != evidence.GrantId ||
+                grant.Reference.Revision != evidence.GrantRevision ||
+                grant.State != ExecutableActionGrantState.Active ||
+                grant.Purpose != evidence.Purpose ||
+                grant.Fence != evidence.Fence ||
+                grant.ExpiresAt <= timeProvider.GetUtcNow())
+                throw new CoordinationException(
+                    "policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+        }
+    }
+
+    private async Task ValidateReceiptWriterSelectionUnchangedAsync(
+        HttpContext context,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        PolicyEvaluationSessionPayload evidence,
+        string expectedSelectionHash,
+        CancellationToken cancellationToken)
+    {
+        var currentSelectionHash = await ReadCurrentReceiptWriterSelectionHashAsync(
+            context, actor, identity, evidence, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(currentSelectionHash, expectedSelectionHash, StringComparison.Ordinal))
+            throw new CoordinationException(
+                "policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+    }
+
+    private async Task<string> ReadCurrentReceiptWriterSelectionHashAsync(
+        HttpContext context,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        PolicyEvaluationSessionPayload evidence,
+        CancellationToken cancellationToken)
+    {
+        var authorized = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
+        if (authorized.Authorization.Issuer != actor.Issuer ||
+            authorized.Authorization.ActorId != actor.Subject ||
+            authorized.Authorization.TenantId != evidence.TenantId ||
+            authorized.Authorization.BoundProjectId != identity.ProjectId ||
+            authorized.Authorization.BoundRunId != identity.RunId)
+            throw new CoordinationException("policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+
+        return Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(authorized.Selection.Snapshot.GetRawText())));
+    }
+
+    private async Task ValidateCurrentOwnerSessionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        PolicyEvaluationSessionPayload evidence,
+        string selectionHash,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT s.writer_issuer, s.writer_subject, s.execution_fence, s.lifecycle_state,
+                r.execution_fence, r.execution_state, r.tenant_id, r.accepted_selection_hash
+            FROM {_schema}.coordination_sessions s
+            JOIN {_schema}.accepted_runs r
+              ON r.project_id = s.project_id AND r.run_id = s.run_id
+            WHERE s.project_id = @project AND s.run_id = @run AND s.session_id = @session
+            FOR SHARE OF s, r
+            """, connection, transaction);
+        AddIdentity(command, identity);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            reader.GetString(0) != actor.Issuer ||
+            reader.GetString(1) != actor.Subject ||
+            reader.GetInt64(2) != evidence.Fence ||
+            reader.GetString(3) != "active" ||
+            reader.GetInt64(4) != evidence.Fence ||
+            reader.GetString(5) == "completed" ||
+            reader.GetString(6) != evidence.TenantId ||
+            !string.Equals(reader.GetString(7), selectionHash, StringComparison.Ordinal))
+            throw new CoordinationException(
+                "policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+    }
+
+    private static bool IsValidPolicyProviderEvidence(PolicyEvaluationSessionPayload evidence) =>
+        evidence.ProviderId == AgtPolicyProvider.ProviderId &&
+        evidence.AdapterVersion == AgtPolicyProvider.AdapterVersion.ToString() &&
+        evidence.OptionsSchemaVersion == AgtPolicyProvider.OptionsSchemaVersion &&
+        IsIdentifier(evidence.OptionsRevision);
 
     private async Task<bool> IsCurrentGrantForReceiptAsync(
         NpgsqlConnection connection,
@@ -436,6 +721,55 @@ internal sealed class ExecutableActionGrantOwnerStore(
             reader.GetInt64(12) == evidence.Fence &&
             reader.GetString(13) == "active" &&
             reader.GetInt64(14) == evidence.Fence;
+    }
+
+    private async Task<bool> IsIssuedGrantForReceiptAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        PolicyEvaluationSessionPayload evidence,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT g.is_current, g.grant_state, g.issuer, g.actor_id, g.tenant_id, g.project_id,
+                g.run_id, g.session_id, g.step_id, g.action_ids, g.purpose, g.execution_fence,
+                g.expires_at, s.execution_fence, s.lifecycle_state, r.execution_fence, r.execution_state
+            FROM {_schema}.executable_action_grants g
+            JOIN {_schema}.coordination_sessions s
+              ON s.project_id = g.project_id AND s.run_id = g.run_id AND s.session_id = g.session_id
+            JOIN {_schema}.accepted_runs r
+              ON r.project_id = g.project_id AND r.run_id = g.run_id
+            WHERE g.project_id = @project AND g.run_id = @run AND g.grant_id = @grant
+                AND g.revision = @revision
+            FOR SHARE OF g, s, r
+            """, connection, transaction);
+        AddIdentity(command, identity);
+        command.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, evidence.GrantId);
+        command.Parameters.AddWithValue("revision", NpgsqlDbType.Varchar, evidence.GrantRevision);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return false;
+
+        var actionIds = JsonSerializer.Deserialize<string[]>(reader.GetString(9));
+        var isNoLongerEffective = !reader.GetBoolean(0) ||
+            reader.GetString(1) != "active" ||
+            reader.GetFieldValue<DateTimeOffset>(12) <= timeProvider.GetUtcNow() ||
+            reader.GetInt64(11) != evidence.Fence ||
+            reader.GetInt64(13) != evidence.Fence ||
+            reader.GetInt64(15) != evidence.Fence;
+        return reader.GetString(2) == actor.Issuer &&
+            reader.GetString(3) == actor.Subject &&
+            reader.GetString(4) == evidence.TenantId &&
+            reader.GetString(5) == identity.ProjectId &&
+            reader.GetString(6) == identity.RunId &&
+            reader.GetString(7) == identity.SessionId &&
+            reader.GetString(8) == evidence.StepId &&
+            actionIds is not null && actionIds.Contains(evidence.ActionId, StringComparer.Ordinal) &&
+            reader.GetString(10) == evidence.Purpose &&
+            isNoLongerEffective &&
+            reader.GetString(14) == "active" &&
+            reader.GetString(16) != "completed";
     }
 
     private async Task<StoredReceipt?> ReadReceiptRowAsync(

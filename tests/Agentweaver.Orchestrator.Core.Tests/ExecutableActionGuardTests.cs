@@ -55,7 +55,7 @@ public sealed class ExecutableActionGuardTests
     }
 
     [Fact]
-    public async Task UnknownOrRevokedGrantDeniesWithoutCallingTheEffect()
+    public async Task UnknownOrRevokedGrantDeniesAndPersistsReceiptWithoutCallingTheEffect()
     {
         foreach (var status in new[]
         {
@@ -80,7 +80,7 @@ public sealed class ExecutableActionGuardTests
             Assert.Equal(PolicyEvaluationOutcome.Deny, result.Outcome);
             Assert.Equal(PolicyEvaluationReasonCode.NoEffectiveGrant, result.ReasonCode);
             Assert.False(effectInvoked);
-            Assert.Equal(0, journal.AppendCalls);
+            Assert.Equal(1, journal.AppendCalls);
         }
     }
 
@@ -175,7 +175,7 @@ public sealed class ExecutableActionGuardTests
     }
 
     [Fact]
-    public async Task PolicyDenyDoesNotAppendOrInvokeTheEffect()
+    public async Task PolicyDenyAppendsTrustedReceiptAndDoesNotInvokeTheEffect()
     {
         var journal = new RecordingJournal();
         var guard = CreateGuard(
@@ -194,23 +194,23 @@ public sealed class ExecutableActionGuardTests
 
         Assert.Equal(PolicyEvaluationOutcome.Deny, result.Outcome);
         Assert.False(effectInvoked);
-        Assert.Equal(0, journal.AppendCalls);
+        Assert.Equal(1, journal.AppendCalls);
     }
 
     [Fact]
-    public async Task PolicyAllowCannotBypassJournalWriterProvenanceFailure()
+    public async Task PolicyAllowCannotInvokeEffectWhenReceiptAppendFails()
     {
         var journal = new RecordingJournal
         {
-            AppendFailure = new SessionAccessDeniedException(
-                "Policy evaluation events require trusted Orchestrator Core writer provenance.")
+            AppendFailure = new InvalidOperationException("Events receipt append unavailable.")
         };
         var lookup = new GrantLookup(ExecutableActionGrantLookupResult.Current(Grant()));
         var guard = CreateGuard(journal, lookup);
+        var invocation = Invocation();
         var effectInvoked = false;
 
         var result = await guard.ExecuteAsync(
-            Invocation(),
+            invocation,
             _ =>
             {
                 effectInvoked = true;
@@ -224,12 +224,7 @@ public sealed class ExecutableActionGuardTests
         Assert.Equal(1, journal.AppendCalls);
         Assert.Equal(2, lookup.CallCount);
         Assert.Equal(new ExecutableActionGrantReference("grant-1", "revision-1"), lookup.LastReference);
-        var payload = Assert.IsType<PolicyEvaluationSessionPayload>(journal.LastAppend!.Payload);
-        Assert.Equal("tenant-1", payload.TenantId);
-        Assert.Equal("step-1", payload.StepId);
-        Assert.Equal("grant-1", payload.GrantId);
-        Assert.Equal("revision-1", payload.GrantRevision);
-        Assert.Equal(7, payload.Fence);
+        Assert.Equal(invocation.EventId, journal.LastReceiptId);
     }
 
     [Theory]
@@ -322,6 +317,32 @@ public sealed class ExecutableActionGuardTests
     }
 
     [Fact]
+    public async Task GrantRevocationAfterEventsAcknowledgmentPreventsEffect()
+    {
+        var journal = new RecordingJournal();
+        var currentGrant = Grant();
+        var lookup = new GrantLookup(
+            ExecutableActionGrantLookupResult.Current(currentGrant),
+            ExecutableActionGrantLookupResult.Current(currentGrant),
+            new(ExecutableActionGrantLookupStatus.Revoked));
+        var effectInvoked = false;
+
+        var result = await CreateGuard(journal, lookup)
+            .ExecuteAsync(Invocation(), _ =>
+            {
+                effectInvoked = true;
+                return Task.FromResult("unexpected");
+            });
+
+        Assert.Equal(PolicyEvaluationOutcome.Deny, result.Outcome);
+        Assert.Equal(PolicyEvaluationReasonCode.NoEffectiveGrant, result.ReasonCode);
+        Assert.False(result.EffectInvoked);
+        Assert.False(effectInvoked);
+        Assert.Equal(1, journal.AppendCalls);
+        Assert.Equal(3, lookup.CallCount);
+    }
+
+    [Fact]
     public async Task GrantLookupErrorAndMissingPolicyOrJournalFailClosed()
     {
         var lookupError = await CreateGuard(
@@ -331,14 +352,14 @@ public sealed class ExecutableActionGuardTests
         var missingPolicy = await new ExecutableActionGuard(
                 policyProvider: null,
                 policyOptions: Options(AllowPolicy),
-                sessionsJournal: new RecordingJournal(),
+                policyJournal: new RecordingJournal(),
                 grantOwnerLookup: new GrantLookup(
                     ExecutableActionGrantLookupResult.Current(Grant())))
             .ExecuteAsync(Invocation(), _ => Task.FromResult("unexpected"));
         var missingJournal = await new ExecutableActionGuard(
                 new AgtPolicyProvider(),
                 Options(AllowPolicy),
-                sessionsJournal: null,
+                policyJournal: null,
                 grantOwnerLookup: new GrantLookup(
                     ExecutableActionGrantLookupResult.Current(Grant())))
             .ExecuteAsync(Invocation(), _ => Task.FromResult("unexpected"));
@@ -380,7 +401,8 @@ public sealed class ExecutableActionGuardTests
             Options(policy),
             journal,
             grantOwnerLookup,
-            sourceReceiptWriter: sourceReceiptWriter ?? new SourceReceiptWriter());
+            sourceReceiptWriter: sourceReceiptWriter ?? new SourceReceiptWriter(),
+            evaluationReceiptWriter: new EvaluationReceiptWriter());
 
     private static AgtPolicyProviderOptions Options(string policy) =>
         new("agt-policy-resource", 3,
@@ -494,74 +516,46 @@ public sealed class ExecutableActionGuardTests
         }
     }
 
-    private sealed class RecordingJournal : ISessionsJournal
+    private sealed class EvaluationReceiptWriter : IExecutableActionPolicyEvaluationReceiptWriter
     {
-        public int AppendCalls { get; private set; }
-        public AppendSessionEvent? LastAppend { get; private set; }
-        public Exception? AppendFailure { get; init; }
+        public int CallCount { get; private set; }
+        public ExecutableActionPolicyEvaluationReceipt? LastReceipt { get; private set; }
 
-        public Task<SessionRecord> CreateSessionAsync(
-            ClaimsPrincipal principal,
-            string sessionId,
-            SessionProviderBinding binding,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<SessionProviderBinding> GetProviderBindingAsync(
-            ClaimsPrincipal principal,
-            string sessionId,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<SessionProviderBinding> GetRunProviderBindingAsync(
-            ClaimsPrincipal principal,
-            string projectId,
-            string runId,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<SessionAppendResult> AppendAsync(
-            ClaimsPrincipal principal,
-            string sessionId,
-            AppendSessionEvent input,
+        public Task<ExecutableActionSourceReceiptWriteResult> StoreAsync(
+            ExecutableActionPolicyEvaluationReceipt receipt,
             CancellationToken cancellationToken = default)
         {
-            AppendCalls++;
-            LastAppend = input;
-            return Task.FromException<SessionAppendResult>(
-                AppendFailure ?? new SessionAccessDeniedException("The writer is not trusted."));
+            CallCount++;
+            LastReceipt = receipt;
+            return Task.FromResult(new ExecutableActionSourceReceiptWriteResult(
+                ExecutableActionSourceReceiptWriteStatus.Stored));
         }
+    }
 
-        public Task<SessionForkResult> ForkFromExplicitEventAsync(
-            ClaimsPrincipal principal,
-            string sourceSessionId,
-            SessionForkRequest request,
-            Func<CancellationToken, Task> validateAdmission,
-            CancellationToken cancellationToken = default) =>
-            throw new SessionForkUnsupportedException("The recording journal does not support session forks.");
+    private sealed class RecordingJournal : IExecutableActionPolicyEvaluationJournal
+    {
+        public int AppendCalls { get; private set; }
+        public SessionIdentity? LastIdentity { get; private set; }
+        public Guid LastReceiptId { get; private set; }
+        public Exception? AppendFailure { get; init; }
+        public bool IsDuplicate { get; init; }
 
-        public Task<SessionEventPage> ReplayAsync(
-            ClaimsPrincipal principal,
-            SessionEventPageRequest request,
+        public Task<ExecutableActionPolicyEvaluationAppendResult> AppendReceiptAsync(
+            SessionIdentity identity,
+            Guid receiptId,
             CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+            RecordAppend(identity, receiptId);
 
-        public Task<SessionEventPage> ReplayRunAsync(
-            ClaimsPrincipal principal,
-            SessionRunEventPageRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public IAsyncEnumerable<SessionEventDelivery> SubscribeAsync(
-            ClaimsPrincipal principal,
-            SessionSubscriptionRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public IAsyncEnumerable<SessionEventDelivery> SubscribeRunAsync(
-            ClaimsPrincipal principal,
-            SessionRunSubscriptionRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        private Task<ExecutableActionPolicyEvaluationAppendResult> RecordAppend(
+            SessionIdentity identity,
+            Guid receiptId)
+        {
+            AppendCalls++;
+            LastIdentity = identity;
+            LastReceiptId = receiptId;
+            return AppendFailure is not null
+                ? Task.FromException<ExecutableActionPolicyEvaluationAppendResult>(AppendFailure)
+                : Task.FromResult(new ExecutableActionPolicyEvaluationAppendResult(IsDuplicate));
+        }
     }
 }

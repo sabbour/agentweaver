@@ -33,11 +33,13 @@ internal sealed class CoordinationOwnerStore
     private readonly string _executionOperations;
     private readonly PostgresOutbox _outbox;
     private readonly TimeProvider _timeProvider;
+    private readonly CoordinatorDecisionOwnerStore? _decisionStore;
 
     public CoordinationOwnerStore(
         NpgsqlDataSource dataSource,
         string schema,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        CoordinatorDecisionOwnerStore? decisionStore = null)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
         ValidateSchema(schema);
@@ -52,6 +54,7 @@ internal sealed class CoordinationOwnerStore
         _executionOperations = $"{_schema}.coordination_execution_operations";
         _outbox = new PostgresOutbox(dataSource, schema);
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _decisionStore = decisionStore;
     }
 
     public async Task<AcceptedRoot> AcceptRootAsync(
@@ -339,7 +342,8 @@ internal sealed class CoordinationOwnerStore
         string acceptedSelectionHash,
         int maxChildren,
         int maxConcurrentChildren,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ValidateForkRequest(request);
@@ -355,6 +359,8 @@ internal sealed class CoordinationOwnerStore
         var sourceSession = await ReadSessionAsync(
             connection, transaction, source, forUpdate: true, cancellationToken).ConfigureAwait(false);
         RequireWriter(sourceSession, actor);
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
 
         var existing = await ReadExistingForkCommandAsync(
             connection, transaction, source, actor, request.IdempotencyKey, commandHash, cancellationToken)
@@ -534,7 +540,8 @@ internal sealed class CoordinationOwnerStore
         int maxChildren,
         int maxConcurrentChildren,
         bool isDuplicate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ValidateForkRequest(request);
@@ -558,8 +565,23 @@ internal sealed class CoordinationOwnerStore
             .ConfigureAwait(false)
             ?? throw new CoordinationException(
                 "session_fork_operation_unavailable", StatusCodes.Status409Conflict);
+        CoordinationException? authorityError = null;
+        if (revalidateCurrentAuthority is not null)
+        {
+            try
+            {
+                await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+            }
+            catch (CoordinationException exception) when (
+                exception.StatusCode is StatusCodes.Status403Forbidden or StatusCodes.Status409Conflict)
+            {
+                authorityError = exception;
+            }
+        }
         if (existing.RegistrationState != CoordinationForkRegistrationState.RegistrationPending)
         {
+            if (authorityError is not null)
+                throw authorityError;
             if (existing.Lineage is not null && existing.Lineage != eventsFork.Lineage)
                 throw new CoordinationException(
                     "session_fork_contract_invalid", StatusCodes.Status502BadGateway);
@@ -567,10 +589,11 @@ internal sealed class CoordinationOwnerStore
             return existing with { IsDuplicate = true };
         }
 
-        var unavailableCode = !selectionIsCurrent ||
+        var unavailableCode = authorityError?.Code ??
+            (!selectionIsCurrent ||
             !string.Equals(acceptedSelectionHash, currentSelectionHash, StringComparison.Ordinal)
                 ? "coordinator_selection_stale"
-                : GetForkUnavailableCode(run, sourceSession, request, acceptedSelectionHash);
+                : GetForkUnavailableCode(run, sourceSession, request, acceptedSelectionHash));
         if (unavailableCode is null)
         {
             if (await FindSessionAsync(
@@ -2655,7 +2678,8 @@ internal sealed class CoordinationOwnerStore
         CoordinationActor actor,
         SessionIdentity identity,
         ReportRunFailureRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AuthorizedRunSelection? selection = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(request);
@@ -2773,6 +2797,20 @@ internal sealed class CoordinationOwnerStore
             runStateVersion = Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
         }
 
+        await AdvanceCurrentDecisionFenceAsync(
+            connection,
+            transaction,
+            actor,
+            new SessionIdentity(identity.ProjectId, identity.RunId, session.RootSessionId),
+            selection,
+            previousFence,
+            nextFence,
+            operationId,
+            request.State == OwnerRunFailureState.Failed
+                ? "execution.failed"
+                : "execution.indeterminate",
+            cancellationToken).ConfigureAwait(false);
+
         var result = new RunExecutionTransitionResult(
             operationId,
             identity,
@@ -2819,7 +2857,8 @@ internal sealed class CoordinationOwnerStore
         string projectId,
         string runId,
         RecoverRunExecutionRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AuthorizedRunSelection? selection = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(request);
@@ -2928,6 +2967,18 @@ internal sealed class CoordinationOwnerStore
             runStateVersion = Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
         }
 
+        await AdvanceCurrentDecisionFenceAsync(
+            connection,
+            transaction,
+            actor,
+            identity,
+            selection,
+            previousFence,
+            nextFence,
+            operationId,
+            "execution.recovered",
+            cancellationToken).ConfigureAwait(false);
+
         var result = new RunExecutionTransitionResult(
             operationId,
             identity,
@@ -2965,6 +3016,39 @@ internal sealed class CoordinationOwnerStore
             _timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
+    }
+
+    private Task AdvanceCurrentDecisionFenceAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity root,
+        AuthorizedRunSelection? selection,
+        long previousFence,
+        long nextFence,
+        Guid operationId,
+        string actionKind,
+        CancellationToken cancellationToken)
+    {
+        if (_decisionStore is null)
+        {
+            if (selection is not null)
+                throw new InvalidOperationException("The coordinator decision owner is not configured.");
+            return Task.CompletedTask;
+        }
+
+        ArgumentNullException.ThrowIfNull(selection);
+        return _decisionStore.AdvanceExecutionFenceAsync(
+            connection,
+            transaction,
+            actor,
+            root,
+            selection,
+            previousFence,
+            nextFence,
+            operationId,
+            actionKind,
+            cancellationToken);
     }
 
     public async Task<TurnBoundaryResult> FinishTurnAsync(

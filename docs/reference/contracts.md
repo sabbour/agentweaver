@@ -34,8 +34,14 @@ evidence plus provider/options metadata; it does not consume grants or authorize
 `ExecutableActionGuard` uses the Orchestrator-owned current-grant lookup and redacted receipt writer. It
 returns structured deny/error results for missing, stale, mismatched, expired, or unavailable grants and
 rechecks current authority, grant state, and fence after awaited operations before invoking a protected
-callback. The positive Events & Sessions receipt consumer is retained #1846 work; this source does not claim
-successful journal ingestion.
+callback. The Orchestrator receipt writer rechecks the authenticated actor and current
+`acceptRunSelection` authority/selection immediately before committing the owner receipt.
+Allow receipts also require the exact current grant, expiry, and fence; Deny/Error need
+only an issued grant and do not grant authority. For an Allow, the guard waits for the
+durable Events & Sessions receipt acknowledgment before the protected callback; Events
+accepts only the immutable receipt reference, revalidates current owner admission inside
+the journal transaction, and returns a no-store acknowledgment. Downstream
+protected-effect call sites are not claimed.
 Caller bindings require one authenticated identity whose `sub`, `project_id`, and `run_id` claims share one
 validated HTTPS issuer. The current grant descriptor must match that issuer and subject; a missing, duplicate,
 or cross-issuer binding is denied before protected effects. The owner resolves fresh tenant membership and
@@ -85,8 +91,10 @@ caller cannot submit a resource pin or override the durable binding.
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/messages/{messageId}/acknowledge` | Acknowledge a delivered message using its claim fence; receipt is not gate approval or work completion. |
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/message-route` | Events-only owner callback. Confirms the full outbound message matches the durable owner outbox, then validates active session relationship, writer, request/reply correlation, and current execution fences. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/owner-binding` | Events-only current session binding for message claim, presentation, and acknowledgment. Returns `Cache-Control: no-store`. |
-| `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context` | Read-only mapped agent/model/turn context. Returns no-store metadata only if the child owner row and latest root decision still match, dispatch remains enabled for the confirmed item with no pending gate, and Projects authority/selection remain current; otherwise returns `409`. |
+| `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context` | Read-only mapped agent/model/turn context using the shared `RuntimeOwnerContext` contract in `Agentweaver.Abstractions`. Returns no-store metadata only if the child owner row and latest root decision still match, dispatch remains enabled for the confirmed item with no pending gate, and Projects authority/selection remain current; otherwise returns `409`. |
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/fork-admission` | Events-only owner callback. Requires the forwarded authenticated actor and exact target/event/cursor/idempotency request to match a durable pending fork reservation, and revalidates the current accepted selection and execution fence. Returns a typed `SessionForkAdmissionReceipt` with `Cache-Control: no-store`; an absent, changed, stale, or terminal reservation returns `409`. |
+| `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}` | Events-only read of the immutable Orchestrator-owned PolicyEvaluation receipt. |
+| `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}/admission` | Events-only current admission check for that exact owner receipt. Every outcome requires current Core write authority and accepted selection, plus the matching actor/tenant and active owner session/run writer/fence. The owner rechecks authority after SQL row-lock waits, including duplicate receipt paths. Allow also requires the exact unexpired grant/fence; Deny/Error may reference an issued inactive grant but remain non-authorizing immutable facts. Returns no-store. |
 
 Configuration:
 
@@ -122,8 +130,9 @@ role claims are not required.
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL and current owned-schema readiness; returns `503` when the schema is absent or outdated. |
 | `POST /internal/sessions/{sessionId}` | Resolve and pin the run's native Sessions provider, then create the session. A run reuses its immutable provider binding; a different binding returns `409`. |
-| `POST /internal/sessions/{sessionId}/events` | Append an ordinary versioned typed event to the project/run journal. Returns `403` for every `PolicyEvaluation` payload; the reserved receipt-backed consumer is retained #1846 work. Ordinary appends return `201` for a new event, `200` for an identical run-scoped event-ID retry, and `409` if the ID is reused with different event content in that run. |
+| `POST /internal/sessions/{sessionId}/events` | Append an ordinary versioned typed event to the project/run journal. Returns `403` for every generic `PolicyEvaluation` payload because actor equality does not establish trusted Core provenance. Ordinary appends return `201` for a new event, `200` for an identical run-scoped event-ID retry, and `409` if the ID is reused with different event content in that run. |
 | `POST /internal/sessions/{sessionId}/fork` | Accept `SessionForkRequest` (`targetSessionId`, `sourceEventId`, `sourceCursor`, `idempotencyKey`). Requires a matching Orchestrator owner admission before journal work and immediately before transaction commit, including identical journal retries; validate that the cursor and event identify the same committed source event, then persist the target and immutable lineage. Existing object-reference retention deadlines are unchanged. Returns `201` for a new fork, `200` for an identical retry, `409` for missing/stale admission or conflicting event/cursor/target/key use, or `503` when the pinned Sessions provider does not support explicit forks. |
+| `POST /internal/sessions/{sessionId}/policy-evaluations` | Append a PolicyEvaluation using a body containing only `receiptId`. Requires the pinned provider's `sessions.policy.evaluations` capability. Events fetches the immutable receipt from the fixed Orchestrator owner, validates current admission before writing, and repeats that check inside the native journal transaction before commit. Failed revalidation rolls back event, inbox, position, references, and outbox writes. Returns a no-store acknowledgment with receipt ID, session identity, event position, and duplicate status (`201` new, `200` identical retry). |
 | `GET /internal/sessions/{sessionId}/events?cursor={cursor}&limit={limit}` | Read an ordered page for one session after an optional opaque cursor. Positions are run-wide and may have gaps in a session-only page. |
 | `GET /internal/sessions/{sessionId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll durable journal state and stream NDJSON `SessionEventDelivery` records, each containing the event and a reconnectable `nextCursor`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events?cursor={cursor}&limit={limit}` | Read a bounded, run-ordered page across all sessions in the authorized project/run. |
@@ -143,8 +152,14 @@ accepted decisions and effects, artifact references, and cache references. Event
 version 2 adds a typed `PolicyEvaluation` payload; existing version-1 payloads remain
 appendable and replayable. The generic run-scoped append route rejects every
 `PolicyEvaluation` payload because actor equality does not establish trusted Orchestrator
-Core writer provenance. The Orchestrator-owned producer persists current grants and redacted
-receipts; the reserved Events consumer is not part of this source slice. The envelope binds project/run/session; the payload contains
+Core writer provenance. The dedicated receipt-reference route fetches immutable
+Orchestrator evidence and requires current owner admission before and during its native
+transaction. Every outcome requires fresh current Core authority, accepted selection,
+matching actor/tenant, and the current owner session/run writer and fence. The owner
+rechecks Core authority and accepted selection after SQL row-lock waits and before
+returning admission success. Allow receipts additionally require an exact, active
+grant/fence match; Deny/Error receipts may reference an issued inactive grant but remain
+same-actor immutable evidence, not an allowance. The envelope binds project/run/session; the payload contains
 bounded actor/tenant/step, grant reference/revision, purpose/action/fence,
 outcome/reason, and provider/options identity metadata, with no arbitrary message or
 credential fields. Other large payload content is represented by opaque

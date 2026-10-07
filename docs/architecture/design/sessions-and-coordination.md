@@ -53,8 +53,17 @@ without approving its gate, and acknowledgment remains receipt-only. Automatic
 AgentHost scheduling, a background delivery relay, consistency manifests, Knowledge
 records, the full dispatch engine, and product UI/MCP integration remain outside this
 slice. The Orchestrator also owns current grant and redacted PolicyEvaluation receipt
-production; the positive receipt consumer in Events & Sessions remains #1846 work
-after #1848 admission. See the
+production. Events & Sessions fetches those immutable owner receipts by ID and
+revalidates current admission before and within its native journal transaction.
+Every outcome requires current Core write authority, accepted selection, and a
+matching actor/tenant; Allow receipts additionally require the exact active
+grant/fence. Deny/Error receipts need no active Allow grant but remain
+non-authorizing evidence, and every owner receipt commit rechecks current Core
+authority, accepted selection, and actor/tenant after acquiring its grant-row lock.
+Allow also gets the exact current grant/expiry/fence recheck. The
+Orchestrator Core guard waits for the durable journal acknowledgment before a
+protected callback, then rechecks current authority. Downstream protected-effect
+call-site wiring is not claimed. See the
 [implemented journal and owner contract](../../architecture/events-sessions.md).
 
 An explicit owner-reported failure or indeterminate result stores its cause and

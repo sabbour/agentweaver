@@ -208,9 +208,8 @@ public sealed class SessionsContractTests
         Assert.Equal(ProviderSeam.Sessions, registration.Descriptor.Seam);
         Assert.Equal(NativePostgresSessionsProvider.ProviderId, registration.Descriptor.Id);
         Assert.Equal(SessionsCapabilities.All, registration.Descriptor.AdvertisedCapabilities);
-        Assert.DoesNotContain(
-            SessionsCapabilities.PolicyEvaluations,
-            registration.Descriptor.AdvertisedCapabilities);
+        Assert.Contains(SessionsCapabilities.PolicyEvaluations, registration.Descriptor.AdvertisedCapabilities);
+        Assert.Contains(SessionsCapabilities.Fork, registration.Descriptor.AdvertisedCapabilities);
         var policyRequest = new ProviderResolutionRequest(
             ProviderSeam.Sessions,
             null,
@@ -224,9 +223,8 @@ public sealed class SessionsContractTests
             [new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId)],
             [new ProviderOverridePermission(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId)]).Value);
         var resolver = new ProviderResolver(catalog);
-        var unavailablePolicy = resolver.Resolve(policyRequest);
-        Assert.False(unavailablePolicy.IsSuccess);
-        Assert.Equal(ProviderErrorCode.CapabilityUnavailable, unavailablePolicy.Error!.Code);
+        var availablePolicy = resolver.Resolve(policyRequest);
+        Assert.True(availablePolicy.IsSuccess);
         var defaultCandidate = resolver.Resolve(Request()).Value!.Candidate!;
         var overrideCandidate = resolver.Resolve(Request(NativePostgresSessionsProvider.ProviderId)).Value!.Candidate!;
         Assert.Equal(defaultCandidate.ProviderId, overrideCandidate.ProviderId);

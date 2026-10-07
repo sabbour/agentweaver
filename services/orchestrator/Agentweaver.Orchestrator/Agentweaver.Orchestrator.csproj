@@ -26,5 +26,6 @@
     <EmbeddedResource Include="Migrations\005_explicit_session_forks.sql" />
     <EmbeddedResource Include="Migrations\006_session_fork_admission.sql" />
     <EmbeddedResource Include="Migrations\007_execution_outcomes_and_recovery.sql" />
+    <EmbeddedResource Include="Migrations\008_run_selection_context_versions.sql" />
   </ItemGroup>
 </Project>

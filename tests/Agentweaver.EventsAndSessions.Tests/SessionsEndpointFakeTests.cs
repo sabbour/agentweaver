@@ -81,6 +81,20 @@ public sealed class SessionsEndpointFakeTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<PolicyEvaluationReceiptView> ReadPolicyEvaluationReceiptAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            Guid receiptId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task ValidatePolicyEvaluationReceiptAdmissionAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            Guid receiptId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
             HttpContext context,
             SessionIdentity source,

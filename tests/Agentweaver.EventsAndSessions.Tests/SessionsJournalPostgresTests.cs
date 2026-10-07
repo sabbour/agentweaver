@@ -66,7 +66,7 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             []).Value);
         _resolver = new ProviderResolver(_catalog);
         _bindingService = new SessionsProviderBindingService(
-            provider, _catalog, _resolver, _options, _fixture.DataSource);
+            provider, _catalog, _resolver, _options, _fixture.DataSource, _journal);
         _binding = await _bindingService.ResolveAndPinAsync(_owner);
         await _journal.CreateSessionAsync(_owner, "session-1", _binding);
         _messages = NewMessageStore();
@@ -480,7 +480,7 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             _binding.OptionsRevision,
             _binding.ResourceId,
             _binding.ResourceGeneration,
-            _binding.NegotiatedCapabilities.Add("sessions.events.fork"));
+            SessionsCapabilities.All);
         await _journal.CreateSessionAsync(owner, sourceSessionId, forkBinding);
 
         var first = await _journal.AppendAsync(owner, sourceSessionId, Turn(Guid.NewGuid(), "turns/fork-first"));
@@ -627,7 +627,7 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             _binding.OptionsRevision,
             _binding.ResourceId,
             _binding.ResourceGeneration,
-            _binding.NegotiatedCapabilities.Add("sessions.events.fork"));
+            SessionsCapabilities.All);
         await _journal.CreateSessionAsync(owner, "fork-http-source", forkBinding);
         var first = await _journal.AppendAsync(owner, "fork-http-source", Turn(Guid.NewGuid(), "turns/http-first"));
         await _journal.AppendAsync(owner, "fork-http-source", Turn(Guid.NewGuid(), "turns/http-second"));
@@ -1131,21 +1131,15 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PersistedPrePolicyCapabilityPinRemainsAvailableAfterProviderRestart()
+    public async Task UpgradedProviderPreservesLegacyRunCapabilitiesAndPinsExpandedCapabilitiesForNewRuns()
     {
-        var legacyOwner = Principal("project-before-policy-events", "run-before-policy-events");
-        var legacyCapabilities = ImmutableHashSet.Create(
-            StringComparer.Ordinal,
-            SessionsCapabilities.Append,
-            SessionsCapabilities.Replay,
-            SessionsCapabilities.Subscribe,
-            SessionsCapabilities.ObjectReferences,
-            SessionsCapabilities.ToolCalls,
-            SessionsCapabilities.AcceptedDecisions,
-            SessionsCapabilities.AcceptedEffects);
+        var legacyRun = Principal("project-1", "legacy-run");
+        var legacyCapabilities = SessionsCapabilities.All
+            .Remove(SessionsCapabilities.PolicyEvaluations)
+            .Remove(SessionsCapabilities.Fork);
         var legacyBinding = new SessionProviderBinding(
-            "project-before-policy-events",
-            "run-before-policy-events",
+            "project-1",
+            "legacy-run",
             NativePostgresSessionsProvider.ProviderId,
             NativePostgresSessionsProvider.AdapterVersion,
             NativePostgresSessionsProvider.OptionsSchemaVersion,
@@ -1153,26 +1147,116 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             _options.ResourceId,
             _options.ResourceGeneration,
             legacyCapabilities);
-        await _journal.CreateSessionAsync(legacyOwner, "session-before-policy-events", legacyBinding);
+        await _journal.CreateSessionAsync(legacyRun, "legacy-root", legacyBinding);
 
-        var persisted = await _journal.GetProviderBindingAsync(
-            legacyOwner, "session-before-policy-events");
-        Assert.True(legacyBinding.Matches(persisted));
-        Assert.DoesNotContain(SessionsCapabilities.PolicyEvaluations, persisted.NegotiatedCapabilities);
+        var restartedJournal = new PostgresSessionsJournal(_fixture.DataSource, _options);
+        var provider = new NativePostgresSessionsProvider();
+        var upgradedBindingService = new SessionsProviderBindingService(
+            provider, _catalog, _resolver, _options, _fixture.DataSource, restartedJournal);
 
-        var restartedProvider = new NativePostgresSessionsProvider();
-        var restartedCatalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
-            [restartedProvider.CreateRegistration(_options)],
-            [new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId)],
-            []).Value);
-        var restartedBindingService = new SessionsProviderBindingService(
-            restartedProvider,
-            restartedCatalog,
-            new ProviderResolver(restartedCatalog),
-            _options,
-            _fixture.DataSource);
+        var pinned = await restartedJournal.GetRunProviderBindingAsync(
+            legacyRun, "project-1", "legacy-run");
+        await upgradedBindingService.VerifyPinnedAsync(legacyRun, pinned);
+        Assert.Equal(legacyCapabilities, pinned.NegotiatedCapabilities);
 
-        await restartedBindingService.VerifyPinnedAsync(legacyOwner, persisted);
+        Assert.DoesNotContain(SessionsCapabilities.PolicyEvaluations, pinned.NegotiatedCapabilities);
+        Assert.DoesNotContain(SessionsCapabilities.Fork, pinned.NegotiatedCapabilities);
+        var beforePolicyAppend = await ReadRunEventStateAsync();
+        Assert.Equal(0, beforePolicyAppend.Position);
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton<PostgresSessionsJournal>(restartedJournal);
+        builder.Services.AddSingleton<ISessionsJournal>(restartedJournal);
+        builder.Services.AddSingleton<ISessionsProviderBinder>(upgradedBindingService);
+        builder.Services.AddSingleton<ICoordinationOwnerClient>(new UnusedCoordinationOwnerClient());
+        await using (var app = builder.Build())
+        {
+            app.Use(async (context, next) =>
+            {
+                context.User = legacyRun;
+                await next();
+            });
+            app.UseAuthorization();
+            app.MapEventsAndSessionsEndpoints();
+            await app.StartAsync();
+
+            using var client = app.GetTestClient();
+            using var response = await client.PostAsJsonAsync(
+                "/internal/sessions/legacy-root/policy-evaluations",
+                new PolicyEvaluationReceiptReferenceRequest(Guid.NewGuid()));
+            var responseBody = await response.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("sessions_provider_binding_conflict", responseBody, StringComparison.Ordinal);
+        }
+        Assert.Equal(beforePolicyAppend, await ReadRunEventStateAsync());
+
+        var first = await restartedJournal.AppendAsync(
+            legacyRun, "legacy-root", Turn(Guid.NewGuid(), "turns/legacy-root"));
+        Assert.Equal(1, first.Event.Position);
+        var replay = await restartedJournal.ReplayAsync(
+            legacyRun, new SessionEventPageRequest("legacy-root"));
+        Assert.Equal(first.Event.EventId, Assert.Single(replay.Events).EventId);
+
+        var beforeFork = await ReadRunEventStateAsync();
+        var forkRequest = new SessionForkRequest(
+            "legacy-fork-target",
+            first.Event.EventId,
+            replay.NextCursor!,
+            "legacy-fork-once");
+        await Assert.ThrowsAsync<SessionForkUnsupportedException>(() =>
+            restartedJournal.ForkFromExplicitEventAsync(
+                legacyRun,
+                "legacy-root",
+                forkRequest,
+                static _ => Task.CompletedTask));
+        Assert.Equal(beforeFork, await ReadRunEventStateAsync());
+        await using (var verifyTarget = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var targetCount = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{_schema}".sessions
+            WHERE project_id = @project AND run_id = @run AND session_id = @target
+            """, verifyTarget))
+        {
+            targetCount.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, legacyBinding.ProjectId);
+            targetCount.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, legacyBinding.RunId);
+            targetCount.Parameters.AddWithValue("target", NpgsqlDbType.Varchar, forkRequest.TargetSessionId);
+            Assert.Equal(0L, await targetCount.ExecuteScalarAsync());
+        }
+
+        await using (var subscription = restartedJournal.SubscribeAsync(
+            legacyRun, new SessionSubscriptionRequest("legacy-root", MaximumEvents: 1))
+            .GetAsyncEnumerator())
+        {
+            Assert.True(await subscription.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(first.Event.EventId, subscription.Current.Event.EventId);
+        }
+
+        var additionalSessionBinding = await upgradedBindingService.ResolveAndPinAsync(legacyRun);
+        Assert.Equal(legacyCapabilities, additionalSessionBinding.NegotiatedCapabilities);
+        await restartedJournal.CreateSessionAsync(legacyRun, "legacy-child", additionalSessionBinding);
+        Assert.True(additionalSessionBinding.Matches(
+            await restartedJournal.GetProviderBindingAsync(legacyRun, "legacy-child")));
+
+        var newRun = Principal("project-1", "new-run");
+        var newRunBinding = await upgradedBindingService.ResolveAndPinAsync(newRun);
+        Assert.Equal(SessionsCapabilities.All, newRunBinding.NegotiatedCapabilities);
+        Assert.Contains(SessionsCapabilities.PolicyEvaluations, newRunBinding.NegotiatedCapabilities);
+
+        async Task<(long Position, long Events, long Inbox, long Outbox)> ReadRunEventStateAsync()
+        {
+            await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand($"""
+                SELECT
+                    COALESCE((SELECT last_position FROM "{_schema}".session_run_streams
+                        WHERE project_id = 'project-1' AND run_id = 'legacy-run'), 0),
+                    (SELECT count(*) FROM "{_schema}".session_events),
+                    (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts),
+                    (SELECT count(*) FROM "{_schema}".outbox_events)
+                """, connection);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            return (reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3));
+        }
     }
 
     [Fact]
@@ -1180,21 +1264,47 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
     {
         var changedOptions = _options with { OptionsRevision = "options-v2", ResourceGeneration = 5 };
         var provider = new NativePostgresSessionsProvider();
+        var registration = provider.CreateRegistration(_options);
         var changedCatalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
             [provider.CreateRegistration(changedOptions)],
             [new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId)],
             []).Value);
         var changedBindingService = new SessionsProviderBindingService(
-            provider, changedCatalog, new ProviderResolver(changedCatalog), changedOptions, _fixture.DataSource);
+            provider, changedCatalog, new ProviderResolver(changedCatalog), changedOptions,
+            _fixture.DataSource, _journal);
         var stored = await _journal.GetProviderBindingAsync(_owner, "session-1");
         await Assert.ThrowsAsync<SessionPinnedProviderUnavailableException>(() =>
             changedBindingService.VerifyPinnedAsync(_owner, stored));
 
         var missingCatalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create([], [], []).Value);
         var missingBindingService = new SessionsProviderBindingService(
-            provider, missingCatalog, new ProviderResolver(missingCatalog), _options, _fixture.DataSource);
+            provider, missingCatalog, new ProviderResolver(missingCatalog), _options,
+            _fixture.DataSource, _journal);
         await Assert.ThrowsAsync<SessionPinnedProviderUnavailableException>(() =>
             missingBindingService.VerifyPinnedAsync(_owner, stored));
+
+        var unsupportedCapabilities = stored.NegotiatedCapabilities.Add("sessions.unsupported");
+        var tampered = new SessionProviderBinding(
+            stored.ProjectId, stored.RunId, stored.ProviderId, stored.AdapterVersion,
+            stored.OptionsSchemaVersion, stored.OptionsRevision, stored.ResourceId,
+            stored.ResourceGeneration, unsupportedCapabilities);
+        await Assert.ThrowsAsync<SessionPinnedProviderUnavailableException>(() =>
+            _bindingService.VerifyPinnedAsync(_owner, tampered));
+
+        var narrowedDescriptor = registration.Descriptor with
+        {
+            AdvertisedCapabilities = stored.NegotiatedCapabilities.Remove(SessionsCapabilities.Replay)
+        };
+        var unsupportedRegistration = registration with { Descriptor = narrowedDescriptor };
+        var unsupportedCatalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [unsupportedRegistration],
+            [new ProviderSelection(ProviderSeam.Sessions, NativePostgresSessionsProvider.ProviderId)],
+            []).Value);
+        var unsupportedBindingService = new SessionsProviderBindingService(
+            provider, unsupportedCatalog, new ProviderResolver(unsupportedCatalog), _options,
+            _fixture.DataSource, _journal);
+        await Assert.ThrowsAsync<SessionPinnedProviderUnavailableException>(() =>
+            unsupportedBindingService.VerifyPinnedAsync(_owner, stored));
     }
 
     [Fact]
@@ -1406,6 +1516,20 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<PolicyEvaluationReceiptView> ReadPolicyEvaluationReceiptAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            Guid receiptId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task ValidatePolicyEvaluationReceiptAdmissionAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            Guid receiptId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
             HttpContext context,
             SessionIdentity source,
@@ -1461,5 +1585,45 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         principal.SetScopes(["openid"]);
         principal.SetResources(["agentweaver.events"]);
         return principal;
+    }
+
+    private sealed class UnusedCoordinationOwnerClient : ICoordinationOwnerClient
+    {
+        public Task<MessageRouteBinding> ValidateMessageRouteAsync(
+            HttpContext context,
+            string projectId,
+            string runId,
+            MessageRouteValidationRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("The legacy policy route must reject before owner admission.");
+
+        public Task<CoordinationSessionBinding> GetSessionBindingAsync(
+            HttpContext context,
+            string projectId,
+            string runId,
+            string sessionId,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("The legacy policy route must reject before owner admission.");
+
+        public Task<PolicyEvaluationReceiptView> ReadPolicyEvaluationReceiptAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            Guid receiptId,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("The legacy policy route must reject before owner admission.");
+
+        public Task ValidatePolicyEvaluationReceiptAdmissionAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            Guid receiptId,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("The legacy policy route must reject before owner admission.");
+
+        public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
+            HttpContext context,
+            SessionIdentity source,
+            SessionForkRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("The legacy policy route must reject before owner admission.");
     }
 }

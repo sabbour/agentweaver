@@ -28,7 +28,7 @@ public sealed class EventsAddressedMessageClientTests
             Content = JsonContent(new SessionRecord(Identity, DateTimeOffset.UtcNow, 0))
         });
         using var httpClient = new HttpClient(handler);
-        var client = new EventsAddressedMessageClient(httpClient, Options);
+        var client = new EventsAddressedMessageClient(httpClient, Options, new HttpContextAccessor());
         var context = CreateContext();
 
         await client.EnsureSessionAsync(context, Identity, CancellationToken.None);
@@ -50,7 +50,7 @@ public sealed class EventsAddressedMessageClientTests
                 0))
         });
         using var httpClient = new HttpClient(handler);
-        var client = new EventsAddressedMessageClient(httpClient, Options);
+        var client = new EventsAddressedMessageClient(httpClient, Options, new HttpContextAccessor());
 
         var error = await Assert.ThrowsAsync<CoordinationException>(() =>
             client.EnsureSessionAsync(CreateContext(), Identity, CancellationToken.None));
@@ -87,7 +87,7 @@ public sealed class EventsAddressedMessageClientTests
             return response;
         });
         using var httpClient = new HttpClient(handler);
-        var client = new EventsAddressedMessageClient(httpClient, Options);
+        var client = new EventsAddressedMessageClient(httpClient, Options, new HttpContextAccessor());
         var context = CreateContext();
         var expectedAuthorization = CoordinationIdentity.RequireBearer(context).ToString();
 
