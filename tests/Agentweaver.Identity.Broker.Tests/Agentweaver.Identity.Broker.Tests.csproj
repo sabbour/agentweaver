@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\packages\Agentweaver.SourceControl\Agentweaver.SourceControl.csproj" />
     <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" Aliases="OrchestratorHost" />
     <ProjectReference Include="..\..\services\events-and-sessions\Agentweaver.EventsAndSessions\Agentweaver.EventsAndSessions.csproj" Aliases="EventsHost" />
+    <ProjectReference Include="..\..\services\gateway\Agentweaver.Gateway\Agentweaver.Gateway.csproj" Aliases="GatewayHost" />
     <ProjectReference Include="..\..\packages\Agentweaver.AgentRuntime\Agentweaver.AgentRuntime.csproj" />
   </ItemGroup>
   <ItemGroup>

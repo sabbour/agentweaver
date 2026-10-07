@@ -142,10 +142,22 @@ public sealed class ProjectsConfigService(
         ProjectAuthorizationContext caller,
         string projectId,
         CancellationToken cancellationToken)
+        => await GetProjectAsync(caller, projectId, runId: null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<ProjectSummary> GetProjectAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string? runId,
+        CancellationToken cancellationToken)
     {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        if (runId is not null)
+        {
+            ValidateIdentifier(runId, "runId");
+            caller.RequireExactRunBinding(projectId, runId);
+        }
         var project = await FindProjectAsync(
-            caller, projectId, ProjectAccess.Read, cancellationToken).ConfigureAwait(false);
+            caller, projectId, ProjectAccess.Read, runId, cancellationToken).ConfigureAwait(false);
         return ToSummary(project);
     }
 
@@ -479,7 +491,17 @@ public sealed class ProjectsConfigService(
         string projectId,
         ProjectAccess access,
         CancellationToken cancellationToken)
+        => await FindProjectAsync(
+            caller, projectId, access, runId: null, cancellationToken).ConfigureAwait(false);
+
+    private async Task<ProjectRecord> FindProjectAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        ProjectAccess access,
+        string? runId,
+        CancellationToken cancellationToken)
     {
+        caller.RequireResourceBinding(projectId, runId);
         await EnsureCurrentMembershipAsync(caller, cancellationToken).ConfigureAwait(false);
         if (!Guid.TryParseExact(projectId, "N", out _))
             throw ProjectConfigException.NotFound();

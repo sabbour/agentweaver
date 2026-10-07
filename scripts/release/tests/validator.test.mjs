@@ -72,6 +72,10 @@ const projectReferences = new Map([
     '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
     '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
   ]],
+  ['Agentweaver.Gateway', [
+    '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
+  ]],
 ]);
 const projects = new Map(fixture.components.map((component) => {
   const references = projectReferences.get(component.id) ?? [];

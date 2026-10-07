@@ -41,6 +41,7 @@ const expectedAssemblies = [
   'Agentweaver.ObjectStore.AzureBlob',
   'Agentweaver.FoundationProbe',
   'Agentweaver.EventsAndSessions',
+  'Agentweaver.Gateway',
   'Agentweaver.Environment',
   'Agentweaver.Knowledge',
   'Agentweaver.Providers.Storage.AzureFiles',

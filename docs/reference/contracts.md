@@ -34,6 +34,34 @@ converts reported nano-AIU to AIC without a second model multiplier. Missing
 measurements or model rates return `Unpriced` with a reason and no amount.
 These methods do not authorize a model session or caller.
 
+## Gateway REST and SSE entry
+
+The unpublished `Agentweaver.Gateway` service exposes a finite versioned client API
+at `/api/v1`. `GET /openapi/v1.json` is the served route catalog and names each
+owning service. Protected routes validate an Identity Broker bearer token for the
+configured HTTPS issuer and Gateway audience, then forward that same token and the
+optional `X-Agentweaver-Tenant` selector to the owner. The Gateway does not infer
+identity or roles from request data, accept arbitrary upstream URLs, or replace
+owner-side current authorization.
+
+Owner response statuses and bodies are preserved, including `409` conflicts and
+`202 Accepted`. A `202` is an owner acceptance only; it does not prove that work
+completed. Unavailable, redirected, or contract-invalid owner calls produce a
+Gateway `502`; the finite owner timeout produces `504`. The live OpenAPI document
+describes the SSE response as `text/event-stream`; an invalid cursor is `400`.
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /openapi/v1.json` | Anonymous live OpenAPI 3.1 route and error discovery. |
+| `GET /api/v1/projects/{projectId}/runs/{runId}/events` | Bounded replay from the committed Events journal. The owner remains responsible for current run authorization. |
+| `GET /api/v1/projects/{projectId}/runs/{runId}/events/live` | SSE fan-out from committed Events pages. The Gateway rechecks exact run-bound `ReadProjects` authority before writing each event; each `id` is the Events journal cursor and is accepted on reconnect through `Last-Event-ID` or `cursor`. |
+| Other `/api/v1` routes | Explicit routes in the live OpenAPI catalog delegate to Projects & Config, Orchestrator, Knowledge, or Events; no generic pass-through exists. |
+
+The Gateway requires HTTPS `Identity:Issuer`, `Identity:Audience`, and HTTPS service
+root addresses for `Gateway:Owners:Projects`, `Gateway:Owners:Orchestrator`,
+`Gateway:Owners:Knowledge`, and `Gateway:Owners:Events`. The optional finite
+`Gateway:OwnerRequestTimeoutSeconds` is 1–120 seconds and defaults to 15.
+
 `UsageSubmission` contains an event ID, occurrence time, attribution, model
 metadata, and nullable measurements. `IUsageLedger.AppendAsync` validates and
 commits the immutable entry and rate card before returning. It returns the original
@@ -405,6 +433,7 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 | Method and path | Contract |
 | --- | --- |
 | `GET /api/authorization/context` | Versioned current effective permission context, filtered by the validated audience, `api.read` scope, purpose, optional tenant selector, and project/run bindings. Returns `Cache-Control: no-store`. |
+| `GET /api/projects/{projectId}?runId={runId}` | Read project metadata for an exactly matching run-bound token after fresh current `ReadProjects` authorization. Purpose-bound, unbound, or mismatched tokens and duplicate/unknown query parameters are denied; the response is `Cache-Control: no-store`. |
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
 

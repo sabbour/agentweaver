@@ -104,6 +104,14 @@ public sealed class ProjectAuthorizationContext
             throw ProjectConfigException.Forbidden();
     }
 
+    public void RequireExactRunBinding(string projectId, string runId)
+    {
+        if (Purpose is not null ||
+            !string.Equals(BoundProjectId, projectId, StringComparison.Ordinal) ||
+            !string.Equals(BoundRunId, runId, StringComparison.Ordinal))
+            throw ProjectConfigException.Forbidden();
+    }
+
     public ProjectAuthorizationContextResponse ToEffectiveResponse()
     {
         RequireScope(ProjectAuthorizationOwner.ApiReadScope);

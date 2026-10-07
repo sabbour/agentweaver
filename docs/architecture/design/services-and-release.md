@@ -55,6 +55,13 @@ or pods.
 
 The control plane owns durable identity, policy, coordination, decisions, and environment intent.
 The Gateway serves as a backend-for-frontend (BFF).
+The checked-in `Agentweaver.Gateway` host exposes a finite `/api/v1` REST/SSE surface
+and live `/openapi/v1.json` discovery. It validates the Broker issuer/audience and
+delegates each route to its configured HTTPS owner, forwarding the bearer token and
+optional tenant selector without replacing owner authorization. It preserves owner
+statuses and bodies; `202 Accepted` is not downstream completion. Run-event SSE reads
+committed Events journal pages and rechecks exact run-bound Projects read authority
+before each event write.
 The data plane executes agents, enforces outbound traffic, and serves applications. Core service
 code depends on the versioned .NET contracts in `Agentweaver.Abstractions`; adapters implement those
 contracts and may communicate with managed services, sidecars, or Kubernetes resources. Clients do
@@ -185,7 +192,8 @@ There is no background message relay, automatic AgentHost scheduler, or full dis
 The runtime library commits authorized SDK observations to immutable Orchestrator receipts.
 Events fetches those receipts through a reference-only route and uses the existing keyed Cost resolver.
 Its append-only ledger preserves exact totals and immutable rate-card history.
-Product AgentHost/Gateway integration, scheduling, and cloud acceptance remain future work.
+Gateway source exists, but deployment, product AgentHost integration, automatic
+scheduling, and cloud acceptance remain future work.
 
 The Gateway and Identity boundary makes viewer authorization independent of the chosen [Application
 Hosting](applications-and-surfaces.md#application-hosting) provider. The first-party MCP server uses

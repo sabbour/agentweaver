@@ -37,11 +37,13 @@ export default defineConfig({
           items: [
             { text: 'Build and use', link: '/guide/build-and-use' },
             { text: 'Testing', link: '/guide/testing' },
+            { text: 'Gateway/BFF', link: '/guide/gateway' },
           ],
         },
         {
           text: 'Use',
           items: [
+            { text: 'Gateway/BFF', link: '/guide/gateway' },
             { text: 'Azure acceptance', link: '/guide/azure-acceptance' },
             { text: 'Diagram authoring', link: '/diagrams/README' },
           ],
