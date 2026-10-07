@@ -85,7 +85,7 @@ caller cannot submit a resource pin or override the durable binding.
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/message-route` | Events-only owner callback. Confirms the full outbound message matches the durable owner outbox, then validates active session relationship, writer, request/reply correlation, and current execution fences. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/owner-binding` | Events-only current session binding for message claim, presentation, and acknowledgment. Returns `Cache-Control: no-store`. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}` | Events-only read of the immutable Orchestrator-owned PolicyEvaluation receipt. |
-| `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}/admission` | Events-only current admission check for that exact owner receipt. Every outcome requires current Core write authority, accepted selection, and matching actor/tenant; Allow additionally requires the exact unexpired grant/fence. Deny/Error do not require an active Allow grant and remain non-authorizing immutable facts. Returns no-store. |
+| `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}/admission` | Events-only current admission check for that exact owner receipt. Every outcome requires current Core write authority and accepted selection, plus the matching actor/tenant and active owner session/run writer/fence. The owner rechecks authority after SQL row-lock waits, including duplicate receipt paths. Allow also requires the exact unexpired grant/fence; Deny/Error may reference an issued inactive grant but remain non-authorizing immutable facts. Returns no-store. |
 
 Configuration:
 
@@ -145,8 +145,10 @@ appendable and replayable. The generic run-scoped append route rejects every
 Core writer provenance. The dedicated receipt-reference route fetches immutable
 Orchestrator evidence and requires current owner admission before and during its native
 transaction. Every outcome requires fresh current Core authority, accepted selection,
-and matching actor/tenant. Allow receipts additionally require an exact, active
-grant/fence match; Deny/Error receipts do not require an active Allow grant and remain
+matching actor/tenant, and the current owner session/run writer and fence. The owner
+rechecks Core authority and accepted selection after SQL row-lock waits and before
+returning admission success. Allow receipts additionally require an exact, active
+grant/fence match; Deny/Error receipts may reference an issued inactive grant but remain
 same-actor immutable evidence, not an allowance. The envelope binds project/run/session; the payload contains
 bounded actor/tenant/step, grant reference/revision, purpose/action/fence,
 outcome/reason, and provider/options identity metadata, with no arbitrary message or

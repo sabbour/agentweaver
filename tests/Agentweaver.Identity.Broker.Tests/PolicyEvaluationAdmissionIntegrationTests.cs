@@ -240,6 +240,140 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.False(effectInvoked);
     }
 
+    [Fact]
+    public async Task PolicyDenyReceiptWriterAcceptsIssuedSupersededGrantAfterBlockedGrantRead()
+    {
+        await using var harness = await CreatePolicyReceiptAdmissionHarnessAsync(
+            new PolicyOwnerAdmissionBarrier());
+        var grant = await ReadPolicyGrantAsync(harness);
+        var receiptsBefore = await ReadPolicyOwnerReceiptCountAsync(harness);
+        var eventsBefore = await ReadEventsJournalSnapshotAsync(harness);
+
+        await using var ownerDataSource = NpgsqlDataSource.Create(harness.ConnectionString);
+        await using var ownerConnection = await ownerDataSource.OpenConnectionAsync();
+        await using var ownerTransaction = await ownerConnection.BeginTransactionAsync();
+        await using (var supersedeGrant = new NpgsqlCommand($"""
+            UPDATE "{harness.OwnerSchema}".executable_action_grants
+            SET is_current = false, grant_state = 'superseded'
+            WHERE project_id = @project AND run_id = @run AND grant_id = @grant
+                AND revision = @revision AND is_current
+            """, ownerConnection, ownerTransaction))
+        {
+            supersedeGrant.Parameters.AddWithValue("project", harness.Project.ProjectId);
+            supersedeGrant.Parameters.AddWithValue("run", RunId);
+            supersedeGrant.Parameters.AddWithValue("grant", grant.GrantId);
+            supersedeGrant.Parameters.AddWithValue("revision", grant.Revision);
+            Assert.Equal(1, await supersedeGrant.ExecuteNonQueryAsync());
+        }
+
+        var effectInvoked = false;
+        var write = CreateUnappendedPolicyReceiptAsync(
+            harness, AdmissionDenyPolicy, () => effectInvoked = true);
+        await WaitForPolicyGrantLockWaitAsync(harness);
+        await ownerTransaction.CommitAsync();
+
+        var receipt = await write.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.False(effectInvoked);
+        Assert.Equal(receiptsBefore + 1, await ReadPolicyOwnerReceiptCountAsync(harness));
+        await using (var verifyGrant = await ownerDataSource.OpenConnectionAsync())
+        await using (var query = new NpgsqlCommand($"""
+            SELECT is_current, grant_state
+            FROM "{harness.OwnerSchema}".executable_action_grants
+            WHERE project_id = @project AND run_id = @run AND grant_id = @grant
+                AND revision = @revision
+            """, verifyGrant))
+        {
+            query.Parameters.AddWithValue("project", harness.Project.ProjectId);
+            query.Parameters.AddWithValue("run", RunId);
+            query.Parameters.AddWithValue("grant", grant.GrantId);
+            query.Parameters.AddWithValue("revision", grant.Revision);
+            await using var reader = await query.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.False(reader.GetBoolean(0));
+            Assert.Equal("superseded", reader.GetString(1));
+        }
+        using (var ownerResponse = await SendAsync(
+                   harness.Orchestrator,
+                   HttpMethod.Get,
+                   $"/api/projects/{harness.Project.ProjectId}/runs/{RunId}/coordination/policy-evaluations/{receipt.ReceiptId:D}",
+                   harness.RunToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, ownerResponse.StatusCode);
+            var stored = await ReadJsonAsync<PolicyEvaluationReceiptView>(ownerResponse);
+            Assert.Equal(PolicyEvaluationOutcome.Deny, stored.Evidence.Outcome);
+        }
+
+        using var appendResponse = await SendJsonAsync(
+            harness.Events,
+            HttpMethod.Post,
+            $"/internal/sessions/{harness.Root.RootSessionId}/policy-evaluations",
+            harness.RunToken,
+            new PolicyEvaluationReceiptReferenceRequest(receipt.ReceiptId));
+        Assert.Equal(HttpStatusCode.Created, appendResponse.StatusCode);
+        var acknowledgment = await ReadJsonAsync<PolicyEvaluationAppendAcknowledgment>(appendResponse);
+        Assert.Equal(eventsBefore.Position + 1, acknowledgment.Position);
+        var eventsAfter = await ReadEventsJournalSnapshotAsync(harness);
+        Assert.Equal(eventsBefore.Events + 1, eventsAfter.Events);
+        Assert.Equal(eventsBefore.Position + 1, eventsAfter.Position);
+        Assert.Equal(eventsBefore.Inbox + 1, eventsAfter.Inbox);
+        Assert.Equal(eventsBefore.Outbox + 1, eventsAfter.Outbox);
+        Assert.Equal(eventsBefore.OutboxSequence + 1, eventsAfter.OutboxSequence);
+        Assert.Equal(eventsBefore.ObjectReferences, eventsAfter.ObjectReferences);
+    }
+
+    [Theory]
+    [InlineData("deny")]
+    [InlineData("error")]
+    public async Task PolicyReceiptAdmissionRechecksWriterRoleAfterOwnerSessionLockWait(string outcome)
+    {
+        var barrier = new PolicyOwnerAdmissionBarrier();
+        await using var harness = await CreatePolicyReceiptAdmissionHarnessAsync(barrier);
+        var receipt = outcome == "deny"
+            ? await CreateUnappendedDenyReceiptAsync(harness)
+            : await CreateUnappendedPolicyReceiptAsync(harness, string.Empty);
+        var receiptsBefore = await ReadPolicyOwnerReceiptCountAsync(harness);
+        var eventsBefore = await ReadEventsJournalSnapshotAsync(harness);
+        var admissionPath =
+            $"/api/projects/{harness.Project.ProjectId}/runs/{RunId}/coordination/policy-evaluations/{receipt.ReceiptId:D}/admission";
+        barrier.ArmBeforeRequest(admissionPath, matchingRequest: 2);
+
+        var append = SendJsonAsync(
+            harness.Events,
+            HttpMethod.Post,
+            $"/internal/sessions/{harness.Root.RootSessionId}/policy-evaluations",
+            harness.RunToken,
+            new PolicyEvaluationReceiptReferenceRequest(receipt.ReceiptId));
+        await barrier.WaitUntilBlockedAsync();
+        await using var ownerDataSource = NpgsqlDataSource.Create(harness.ConnectionString);
+        await using var ownerConnection = await ownerDataSource.OpenConnectionAsync();
+        await using var ownerTransaction = await ownerConnection.BeginTransactionAsync();
+        await using (var lockRun = new NpgsqlCommand($"""
+            SELECT run_id
+            FROM "{harness.OwnerSchema}".accepted_runs
+            WHERE project_id = @project AND run_id = @run
+            FOR UPDATE
+            """, ownerConnection, ownerTransaction))
+        {
+            lockRun.Parameters.AddWithValue("project", harness.Project.ProjectId);
+            lockRun.Parameters.AddWithValue("run", RunId);
+            Assert.Equal(RunId, await lockRun.ExecuteScalarAsync());
+        }
+
+        barrier.Release();
+        await WaitForPolicyOwnerSessionLockWaitAsync(harness);
+        await RevokeRoleAsync(
+            harness.Projects.PrivilegedFixtureDataSource,
+            harness.RunnerRole.AssignmentId,
+            harness.RunnerRole.Revision);
+        await ownerTransaction.CommitAsync();
+
+        using var response = await append.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(receiptsBefore, await ReadPolicyOwnerReceiptCountAsync(harness));
+        Assert.Equal(eventsBefore, await ReadEventsJournalSnapshotAsync(harness));
+    }
+
     [Theory]
     [InlineData("session-completed")]
     [InlineData("run-completed")]
@@ -838,6 +972,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 FROM pg_stat_activity
                 WHERE datname = current_database()
                   AND wait_event_type = 'Lock'
+                  AND cardinality(pg_blocking_pids(pid)) > 0
                   AND query LIKE '%executable_action_grants%'
             )
             """, connection);
@@ -850,6 +985,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         throw new TimeoutException("Timed out waiting for the policy owner grant-row lock.");
+    }
+
+    private static async Task WaitForPolicyOwnerSessionLockWaitAsync(
+        PolicyReceiptAdmissionHarness harness)
+    {
+        await using var database = NpgsqlDataSource.Create(harness.ConnectionString);
+        await using var connection = await database.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND wait_event_type = 'Lock'
+                  AND cardinality(pg_blocking_pids(pid)) > 0
+                  AND query LIKE '%coordination_sessions%'
+            )
+            """, connection);
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (await command.ExecuteScalarAsync() is true)
+                return;
+            await Task.Delay(50);
+        }
+
+        throw new TimeoutException("Timed out waiting for the policy owner session/run-row lock.");
     }
 
     private sealed class DuplicatePolicyReceiptJournal : IExecutableActionPolicyEvaluationJournal

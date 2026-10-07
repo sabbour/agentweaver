@@ -6,7 +6,7 @@ accepted-effect fact stream; it is not a deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal, serves ordered run-event replay, appends Knowledge-owned accepted-effect receipts as project facts, presents Orchestrator owner-outbox messages at fenced turn boundaries, and admits PolicyEvaluation only from immutable Orchestrator receipts after current owner validation." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal, serves ordered run-event replay, appends Knowledge-owned accepted-effect receipts as project facts, presents Orchestrator owner-outbox messages at fenced turn boundaries, and admits PolicyEvaluation only from immutable Orchestrator receipts after current Core and owner-session validation, repeated after SQL lock waits." />
   </a>
   <figcaption>Run-bound session events, project-scoped facts, and addressed messages have separate addresses and storage. Generic PolicyEvaluation appends are rejected; the receipt-reference route fetches immutable Orchestrator evidence and revalidates admission before commit. The figure describes source behavior, not a deployment topology.</figcaption>
 </figure>
@@ -99,15 +99,17 @@ such event because actor equality does not prove Orchestrator Core provenance.
 `POST /internal/sessions/{sessionId}/policy-evaluations` accepts only an immutable
 receipt ID. Events verifies the pinned provider capability, fetches the committed
 receipt from the fixed Orchestrator owner, and asks that owner to validate the
-receipt against current admission authority. For an Allow receipt, the owner
-rechecks current Core write authority, accepted run selection, grant
-scope/revision, expiry, and execution fence. Every outcome also requires current
-Core write authority, accepted run selection, and matching actor/tenant. Deny and
-Error receipts do not require an active Allow grant, but remain same-actor immutable
+receipt against current admission authority. Every outcome requires current Core
+write authority and accepted selection, plus a matching actor/tenant and active owner
+session/run with the same writer and execution fence. After the owner-row check can wait
+on PostgreSQL locks, the owner reads current Core authority and selection again before
+admission succeeds. For Allow, it also rechecks grant scope/revision, expiry, and fence.
+Deny and Error receipts may reference an issued inactive grant, but remain immutable
 owner facts and cannot authorize an effect.
 
 Events repeats the owner admission check from inside the PostgreSQL transaction
-before commit, including for an identical retry. The transaction commits the
+before commit, including for an identical retry. The owner repeats current Core
+authority and accepted-selection checks after owner-row lock waits. The transaction commits the
 PolicyEvaluation event, inbox identity, run position, object references, and outbox
 records together. If the recheck fails, those writes roll back. After commit, Events
 returns a no-store acknowledgment containing the receipt identity and durable event
@@ -130,10 +132,12 @@ identity with different content in the same run is a conflict. PostgreSQL, not a
 in-process counter or channel, assigns the authoritative ordered position.
 
 The Orchestrator receipt writer rechecks the actual request actor, current Projects
-`acceptRunSelection` authority, and accepted selection immediately before committing
-the owner receipt, after its grant-row lock and insert. An Allow also requires the
-exact current grant, expiry, fence, and selection; Deny/Error may refer to an issued
-inactive grant but still require current Core write authority. The Core action guard
+`acceptRunSelection` authority, and accepted selection after owner-row lock waits and
+immediately before committing the owner receipt, after its grant-row lock and insert.
+This also applies when a receipt ID already exists. An Allow also requires the exact
+current grant, expiry, fence, and selection; Deny/Error may refer to an issued inactive
+grant but still require current Core write authority and active owner session/run
+authority. The Core action guard
 then awaits the durable Events acknowledgment and rechecks current authority, grant
 state, and fence after that await. Any failed owner check, journal append, or
 post-ack recheck prevents the protected effect; evidence alone cannot grant

@@ -550,17 +550,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
             scope.RunId != identity.RunId)
             throw new CoordinationException("policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
 
-        var authorized = await projects.ReadAcceptedSelectionWithAuthorityAsync(
-            context, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
-        if (authorized.Authorization.Issuer != actor.Issuer ||
-            authorized.Authorization.ActorId != actor.Subject ||
-            authorized.Authorization.TenantId != evidence.TenantId ||
-            authorized.Authorization.BoundProjectId != identity.ProjectId ||
-            authorized.Authorization.BoundRunId != identity.RunId)
-            throw new CoordinationException("policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
-
-        var selectionHash = Convert.ToHexString(SHA256.HashData(
-            Encoding.UTF8.GetBytes(authorized.Selection.Snapshot.GetRawText())));
+        var selectionHash = await ReadCurrentReceiptWriterSelectionHashAsync(
+            context, actor, identity, evidence, cancellationToken).ConfigureAwait(false);
         if (ownerConnection is null)
         {
             if (ownerTransaction is not null)
@@ -570,6 +561,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
             await ValidateCurrentOwnerSessionAsync(
                 connection, transaction, actor, identity, evidence, selectionHash, cancellationToken)
                 .ConfigureAwait(false);
+            await ValidateReceiptWriterSelectionUnchangedAsync(
+                context, actor, identity, evidence, selectionHash, cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
         else
@@ -579,6 +572,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
             await ValidateCurrentOwnerSessionAsync(
                 ownerConnection, ownerTransaction, actor, identity, evidence, selectionHash, cancellationToken)
                 .ConfigureAwait(false);
+            await ValidateReceiptWriterSelectionUnchangedAsync(
+                context, actor, identity, evidence, selectionHash, cancellationToken).ConfigureAwait(false);
         }
 
         if (requireCurrentGrant)
@@ -607,6 +602,41 @@ internal sealed class ExecutableActionGrantOwnerStore(
         }
     }
 
+    private async Task ValidateReceiptWriterSelectionUnchangedAsync(
+        HttpContext context,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        PolicyEvaluationSessionPayload evidence,
+        string expectedSelectionHash,
+        CancellationToken cancellationToken)
+    {
+        var currentSelectionHash = await ReadCurrentReceiptWriterSelectionHashAsync(
+            context, actor, identity, evidence, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(currentSelectionHash, expectedSelectionHash, StringComparison.Ordinal))
+            throw new CoordinationException(
+                "policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+    }
+
+    private async Task<string> ReadCurrentReceiptWriterSelectionHashAsync(
+        HttpContext context,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        PolicyEvaluationSessionPayload evidence,
+        CancellationToken cancellationToken)
+    {
+        var authorized = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, identity.ProjectId, identity.RunId, cancellationToken).ConfigureAwait(false);
+        if (authorized.Authorization.Issuer != actor.Issuer ||
+            authorized.Authorization.ActorId != actor.Subject ||
+            authorized.Authorization.TenantId != evidence.TenantId ||
+            authorized.Authorization.BoundProjectId != identity.ProjectId ||
+            authorized.Authorization.BoundRunId != identity.RunId)
+            throw new CoordinationException("policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
+
+        return Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(authorized.Selection.Snapshot.GetRawText())));
+    }
+
     private async Task ValidateCurrentOwnerSessionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -626,8 +656,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
             FOR SHARE OF s, r
             """, connection, transaction);
         AddIdentity(command, identity);
-            command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
             reader.GetString(0) != actor.Issuer ||
             reader.GetString(1) != actor.Subject ||
