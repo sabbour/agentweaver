@@ -65,18 +65,22 @@ provider callbacks. The placement projection requires only fresh
 
 The v1 placement projection reads `ISandboxLeaseStore.GetCurrentAsync` under
 the exact active Environment owner fence, then rechecks fresh `WriteProjects`
-authority and the active lifecycle. It returns the tenant/project/run/Environment
-tuple, lifecycle and provider fences, lease revision/expiry/current state, and
-the exact resource, endpoint, and opaque placement references recorded by the
-lease. It does not derive lease data from `EnvironmentSandboxResult`, caller
-arguments, run selection, or runtime registration. The provider `ResourceId`
-is preserved as stored; it is not relabeled as a Kubernetes UID because a
-planned `aw-claim-*` identity and a returned Kubernetes UID are distinct values.
-Missing placement returns no content; expired, stale, non-current, foreign, or
-non-active snapshots are rejected. Provider options, release descriptors, and
-credentials are not included. Profile mapping, receiver registration, and
-delivery receipts remain the responsibility of the separately owned bootstrap
-profile adapter; absent approved production transport remains unavailable.
+authority and the active lifecycle, then reads the locked current lease again.
+The two snapshots must match on operation, owner fence, resource generation,
+lease revision, provider/current fences, state, current flag, and expiry; this
+rejects a lease retired or replaced during the authorization wait. It returns
+the tenant/project/run/Environment tuple, lifecycle and provider fences, lease
+revision/expiry/current state, and the exact resource, endpoint, and opaque
+placement references recorded by the lease. It does not derive lease data from
+`EnvironmentSandboxResult`, caller arguments, run selection, or runtime
+registration. The provider `ResourceId` is preserved as stored; it is not
+relabeled as a Kubernetes UID because a planned `aw-claim-*` identity and a
+returned Kubernetes UID are distinct values. Missing placement returns no
+content; expired, stale, non-current, foreign, or non-active snapshots are
+rejected. Provider options, release descriptors, and credentials are not
+included. Profile mapping, receiver registration, and delivery receipts remain
+the responsibility of the separately owned bootstrap profile adapter; absent
+approved production transport remains unavailable.
 
 The Environment owner must already exist and be active. These routes do not
 register or release an Environment lifecycle, create a Core run provider pin,

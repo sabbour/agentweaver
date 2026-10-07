@@ -24,11 +24,11 @@ UID preconditions.
 The manager tests confirm that missing target-project `WriteProjects`
 authority is rejected before run selection or Sandbox provider access. They
 also verify that the versioned placement projection preserves the exact
-resource identity and rejects expired, stale, non-current, and foreign leases.
-They are not a full Environment API integration test. The source tests do not
-prove live RBAC, Kata/nested-virtualization availability, Cilium datapath
-enforcement, AgentHost configure/readiness, Core run pins, or automatic
-terminal-run reclamation.
+resource identity, rejects expired/stale/non-current/foreign leases, and detects
+lease changes during the post-read authorization check. They are not a full
+Environment API integration test. The source tests do not prove live RBAC,
+Kata/nested-virtualization availability, Cilium datapath enforcement, AgentHost
+configure/readiness, Core run pins, or automatic terminal-run reclamation.
 
 The production-authority HTTP and PostgreSQL integration is in the Identity
 Broker test project:

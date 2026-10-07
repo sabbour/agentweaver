@@ -64,6 +64,46 @@ public sealed class EnvironmentSandboxManagerTests
     }
 
     [Fact]
+    public void PlacementProjectionDetectsLeaseChangesDuringAuthorization()
+    {
+        var now = DateTimeOffset.Parse("2026-10-06T12:00:00Z");
+        var owner = new EnvironmentOwnerIdentity("tenant-a", "project-a", "run-a", "environment-a");
+        var fence = new EnvironmentGenerationFence(owner, 4);
+        var lease = CreateCurrentLease(fence, now, "sandbox-uid");
+
+        Assert.True(EnvironmentSandboxManager.SameCurrentPlacementLease(lease, lease));
+        Assert.True(EnvironmentSandboxManager.SameCurrentPlacementLease(null, null));
+        Assert.False(EnvironmentSandboxManager.SameCurrentPlacementLease(lease, null));
+        Assert.False(EnvironmentSandboxManager.SameCurrentPlacementLease(
+            lease,
+            lease with { OperationId = Guid.NewGuid() }));
+        Assert.False(EnvironmentSandboxManager.SameCurrentPlacementLease(
+            lease,
+            lease with { Fence = new EnvironmentGenerationFence(owner, 5) }));
+        Assert.False(EnvironmentSandboxManager.SameCurrentPlacementLease(
+            lease,
+            lease with { ResourceGeneration = lease.ResourceGeneration + 1 }));
+        Assert.False(EnvironmentSandboxManager.SameCurrentPlacementLease(
+            lease,
+            lease with { LeaseRevision = lease.LeaseRevision + 1 }));
+        Assert.False(EnvironmentSandboxManager.SameCurrentPlacementLease(
+            lease,
+            lease with { CurrentFencingGeneration = lease.CurrentFencingGeneration + 1 }));
+        Assert.False(EnvironmentSandboxManager.SameCurrentPlacementLease(
+            lease,
+            lease with { ProviderFencingGeneration = lease.ProviderFencingGeneration + 1 }));
+        Assert.False(EnvironmentSandboxManager.SameCurrentPlacementLease(
+            lease,
+            lease with { State = SandboxLeaseState.Releasing }));
+        Assert.False(EnvironmentSandboxManager.SameCurrentPlacementLease(
+            lease,
+            lease with { IsCurrent = false }));
+        Assert.False(EnvironmentSandboxManager.SameCurrentPlacementLease(
+            lease,
+            lease with { LeaseExpiresAt = now.AddMinutes(2) }));
+    }
+
+    [Fact]
     public async Task ProvisionRequiresFreshWriteProjectsAuthorityBeforeSelectionOrProviderAccess()
     {
         var projects = new FakeProjectsConfigClient();

@@ -358,12 +358,17 @@ public sealed class EnvironmentSandboxManager(
         await lifecycleStore.RequireActiveAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
         await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
             caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
-        return lease is null
+        var currentLease = await leaseStore.GetCurrentAsync(lifecycle.Fence, cancellationToken).ConfigureAwait(false);
+        if (!SameCurrentPlacementLease(lease, currentLease))
+            throw new EnvironmentLifecycleException(
+                "sandbox_lease_stale",
+                "The current Sandbox lease changed while its placement was being authorized.");
+        return currentLease is null
             ? null
             : ProjectCurrentPlacement(
                 authorization.Owner,
                 lifecycle.Fence,
-                lease,
+                currentLease,
                 DateTimeOffset.UtcNow);
     }
 
@@ -1453,6 +1458,22 @@ public sealed class EnvironmentSandboxManager(
             provisionedResource.Endpoint,
             provisionedResource.Placement);
     }
+
+    internal static bool SameCurrentPlacementLease(
+        SandboxLeaseSnapshot? left,
+        SandboxLeaseSnapshot? right) =>
+        left is null
+            ? right is null
+            : right is not null &&
+              left.OperationId == right.OperationId &&
+              left.Fence == right.Fence &&
+              left.ResourceGeneration == right.ResourceGeneration &&
+              left.LeaseRevision == right.LeaseRevision &&
+              left.CurrentFencingGeneration == right.CurrentFencingGeneration &&
+              left.ProviderFencingGeneration == right.ProviderFencingGeneration &&
+              left.State == right.State &&
+              left.IsCurrent == right.IsCurrent &&
+              left.LeaseExpiresAt == right.LeaseExpiresAt;
 
     private static JsonSerializerOptions CreateJsonOptions()
     {
