@@ -271,6 +271,29 @@ internal static class CoordinatorAssemblyReviewPersistence
         return true;
     }
 
+    public static async Task<bool> ReactivateOpenReviewAsync(
+        IServiceScopeFactory scopeFactory,
+        string coordinatorRunId,
+        string outputRevisionId,
+        CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var now = DateTimeOffset.UtcNow;
+        var updated = await db.AssemblyReviews
+            .Where(r => r.CoordinatorRunId == coordinatorRunId
+                && r.OutputRevisionId == outputRevisionId
+                && r.DecisionSubmittedAt == null
+                && r.DecisionJson == null
+                && r.CoordinatorFailedAt != null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.CoordinatorFailedAt, (DateTimeOffset?)null)
+                .SetProperty(r => r.CoordinatorFailureReason, (string?)null)
+                .SetProperty(r => r.UpdatedAt, now), ct)
+            .ConfigureAwait(false);
+        return updated == 1;
+    }
+
     private static async Task<bool> IsWorkPlanAwaitingReviewAsync(
         MemoryDbContext db,
         string coordinatorRunId,
