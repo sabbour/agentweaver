@@ -11,6 +11,7 @@
     "docs/architecture/providers-models.md",
     "docs/architecture/projects-config.md",
     "docs/architecture/environment-egress.md",
+    "docs/architecture/environment-sandbox.md",
     "docs/architecture/identity-secrets.md",
     "docs/architecture/persistence-objects.md",
     "docs/architecture/telemetry.md",
@@ -42,6 +43,7 @@
         "docs/architecture/events-sessions.md",
         "docs/reference/contracts.md",
         "docs/guide/testing.md",
+        "docs/guide/environment-sandbox-testing.md",
         "docs/diagrams/src/flagship/v1-sessions-journal.json"
       ]
     },
@@ -141,6 +143,30 @@
         "docs/architecture/overview.md",
         "docs/architecture/design/provider-seams.md",
         "docs/guide/testing.md"
+      ]
+    },
+    {
+      "name": "Environment Sandbox leases and agent-sandbox provider",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/SandboxContracts.cs",
+        "packages/Agentweaver.Providers.Sandbox.AgentSandbox/",
+        "services/environment/Agentweaver.Environment/EnvironmentDbContext.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentEndpoints.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentEgressManager.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentLifecycleStore.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentSandboxLeaseStore.cs",
+        "services/environment/Agentweaver.Environment/EnvironmentSandboxManager.cs",
+        "services/environment/Agentweaver.Environment/Migrations/20261006170000_SandboxLeases.cs",
+        "services/environment/Agentweaver.Environment/Program.cs",
+        "tests/Agentweaver.Environment.Tests/AgentSandboxProviderTests.cs",
+        "tests/Agentweaver.Environment.Tests/EnvironmentSandboxLeasePostgresTests.cs",
+        "tests/Agentweaver.Environment.Tests/EnvironmentSandboxManagerTests.cs"
+      ],
+      "required": [
+        "docs/architecture/environment-sandbox.md",
+        "docs/architecture/design/provider-seams.md",
+        "docs/guide/environment-sandbox-testing.md",
+        "docs/diagrams/src/flagship/v1-environment-sandbox-lifecycle.json"
       ]
     },
     {
