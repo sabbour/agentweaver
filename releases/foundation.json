@@ -46,6 +46,12 @@
       "project": "packages/Agentweaver.Identity/Agentweaver.Identity.csproj"
     },
     {
+      "id": "Agentweaver.AgentRuntime",
+      "kind": "library",
+      "version": "0.0.0",
+      "project": "packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj"
+    },
+    {
       "id": "Agentweaver.Telemetry",
       "kind": "library",
       "version": "0.0.0",
@@ -119,6 +125,21 @@
     }
   ],
   "compatibility": [
+    {
+      "consumer": "Agentweaver.AgentRuntime",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.AgentRuntime",
+      "dependency": "Agentweaver.Identity",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Orchestrator",
+      "dependency": "Agentweaver.Identity",
+      "versions": ["0.0.0"]
+    },
     {
       "consumer": "Agentweaver.FoundationProbe",
       "dependency": "Agentweaver.Abstractions",
@@ -254,6 +275,11 @@
     },
     {
       "consumer": "Agentweaver.EventsAndSessions",
+      "dependency": "Agentweaver.Identity",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.EventsAndSessions",
       "dependency": "Agentweaver.Providers",
       "versions": ["0.0.0"]
     },
@@ -287,6 +313,11 @@
       "versions": [
         "0.0.0"
       ]
+    },
+    {
+      "consumer": "Agentweaver.Environment",
+      "dependency": "Agentweaver.Identity",
+      "versions": ["0.0.0"]
     },
     {
       "consumer": "Agentweaver.Environment",

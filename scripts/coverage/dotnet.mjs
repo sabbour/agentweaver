@@ -33,6 +33,7 @@ const expectedAssemblies = [
   'Agentweaver.Persistence.Postgres',
   'Agentweaver.Secrets.AzureKeyVault',
   'Agentweaver.Identity',
+  'Agentweaver.AgentRuntime',
   'Agentweaver.Identity.Broker',
   'Agentweaver.Projects.Config',
   'Agentweaver.Telemetry',

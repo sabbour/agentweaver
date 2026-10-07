@@ -182,7 +182,10 @@ fence. The Core guard waits for the durable Events acknowledgment and rechecks a
 before its protected callback. The services connect through protected HTTP contracts,
 not a shared transaction; downstream protected-effect call-site wiring is not claimed.
 There is no background message relay, automatic AgentHost scheduler, or full dispatch engine.
-Usage accounting and product AgentHost/Gateway integration remain future work.
+The runtime library commits authorized SDK observations to immutable Orchestrator receipts.
+Events fetches those receipts through a reference-only route and uses the existing keyed Cost resolver.
+Its append-only ledger preserves exact totals and immutable rate-card history.
+Product AgentHost/Gateway integration, scheduling, and cloud acceptance remain future work.
 
 The Gateway and Identity boundary makes viewer authorization independent of the chosen [Application
 Hosting](applications-and-surfaces.md#application-hosting) provider. The first-party MCP server uses

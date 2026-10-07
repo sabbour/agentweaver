@@ -34,7 +34,7 @@
     {
       "type": "note",
       "over": ["probe-host", "provider-resolver"],
-      "label": "Probe pins supplied resources without provisioning.\nProjects resolves Cost candidates by source; SDK provenance and pricing are separate."
+      "label": "Probe pins supplied resources without provisioning.\nEvents reuses the keyed Cost resolver.\nRuntime/Identity owners authorize the SDK producer."
     },
     {
       "type": "message",

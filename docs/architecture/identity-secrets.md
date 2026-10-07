@@ -45,7 +45,41 @@ The Key Vault adapter uses an injected credential or explicit `WorkloadIdentityC
 
 The adapter requests the exact Key Vault version. A returned credential expires within five minutes or at the earlier vault expiry. The grant store keeps references and binding snapshots, not secret values.
 
-No grant-management HTTP endpoint exists. Read [contracts and endpoints](../reference/contracts) for the implemented route list and [configuration](../reference/contracts#identity-host-configuration) for host keys.
+No secret-redemption grant-management HTTP endpoint exists. Read [contracts and endpoints](../reference/contracts) for the implemented route list and [configuration](../reference/contracts#identity-host-configuration) for host keys.
+
+## Separate runtime credential candidate
+
+Runtime configure and observe grants use a separate Identity-owned store. They
+do not widen secret redemption, OAuth claims, or project roles. The optional
+Broker owner routes require a validated bearer and an independent cryptographic
+nonce bound to the exact runtime registration, purpose, audience, and expiry.
+OpenIddict supplies expiry through its validated principal metadata.
+
+Identity captures only a verifier before database waits. After the grant lock
+is acquired, it checks the exact stored binding and fresh owner authority.
+Expiry or authority loss after that verified proof records immutable revocation
+before denial. An already-expired input is rejected without claiming a verified
+nonce or durable cleanup. Audit tables permit only `SELECT` and `INSERT`; grant
+heads also permit CAS updates.
+
+The auth-first SDK hook consumes a delivered configure nonce before session creation.
+It takes the model reference from the current registration and rechecks source and
+owner authority after SDK awaits. The registration candidate also pins the exact
+Environment provider, lifecycle generation, lease revision, and lease-bounded expiry.
+After SDK preparation, the hook compares the current registration, verifies the
+observe grant, and checks lifetimes and cancellation immediately before `session.create`.
+There is no asynchronous owner lookup after that final grant verification.
+These pins do not give a run-bound token public project-write authority.
+
+The combined local harness uses actual Broker OAuth, current Core membership and roles,
+accepted Projects selection, Environment lease/profile, native SDK callbacks, and Events accounting.
+It controls only external placement and SDK transport, catalog, and pricing inputs.
+Revocation before SDK preparation produces zero SDK requests and source records.
+Grant revocation, expiry, or Environment retirement during SDK preparation produces
+zero native session creations, source records, and accounting entries.
+Authority loss during source transaction waits denies the observation without accounting.
+This evidence does not prove cloud deployment or paid model execution. See the
+[runtime credential source contract](../reference/contracts#runtime-credential-source-candidate).
 
 ## PostgreSQL authentication and workload boundary
 

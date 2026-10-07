@@ -188,6 +188,8 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             "broker_users", "pending_authorizations", "secret_grant_heads", "secret_grant_revisions",
             "secret_grant_operations", "OpenIddictApplications", "OpenIddictAuthorizations",
             "OpenIddictScopes", "OpenIddictTokens", "__ef_migrations_history",
+            "runtime_grant_heads", "runtime_grant_revisions", "runtime_grant_operations",
+            "runtime_grant_operation_receipts",
         };
         foreach (var table in tables)
         {
@@ -207,6 +209,11 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             INSERT INTO identity_broker."OpenIddictScopes" VALUES (1);
             UPDATE identity_broker."OpenIddictScopes" SET id = 2;
             DELETE FROM identity_broker."OpenIddictScopes";
+            INSERT INTO identity_broker.runtime_grant_heads VALUES (1);
+            UPDATE identity_broker.runtime_grant_heads SET id = 2;
+            INSERT INTO identity_broker.runtime_grant_revisions VALUES (1);
+            INSERT INTO identity_broker.runtime_grant_operations VALUES (1);
+            INSERT INTO identity_broker.runtime_grant_operation_receipts VALUES (1);
             """, connection))
             await permitted.ExecuteNonQueryAsync();
         await using (var forbidden = new NpgsqlCommand(
@@ -214,6 +221,20 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
         {
             var error = await Assert.ThrowsAsync<PostgresException>(() => forbidden.ExecuteNonQueryAsync());
             Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, error.SqlState);
+        }
+        foreach (var table in tables.Where(table => table.StartsWith("runtime_grant_", StringComparison.Ordinal)))
+        {
+            foreach (var statement in new[]
+            {
+                $"DELETE FROM identity_broker.{QuoteIdentifier(table)}",
+                $"TRUNCATE identity_broker.{QuoteIdentifier(table)}",
+            }.Concat(table == "runtime_grant_heads" ? [] :
+                new[] { $"UPDATE identity_broker.{QuoteIdentifier(table)} SET id = 2" }))
+            {
+                await using var forbidden = new NpgsqlCommand(statement, connection);
+                var error = await Assert.ThrowsAsync<PostgresException>(() => forbidden.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, error.SqlState);
+            }
         }
         await using (var reset = new NpgsqlCommand("RESET ROLE", connection))
             await reset.ExecuteNonQueryAsync();

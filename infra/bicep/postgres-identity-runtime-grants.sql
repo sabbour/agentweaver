@@ -46,3 +46,25 @@ SELECT format(
 SELECT format(
   'GRANT SELECT ON TABLE %I.%I TO %I',
   'identity_broker', '__ef_migrations_history', :'runtime_role') \gexec
+SELECT format(
+  'REVOKE ALL ON TABLE %I.%I, %I.%I, %I.%I, %I.%I FROM PUBLIC',
+  'identity_broker', 'runtime_grant_heads',
+  'identity_broker', 'runtime_grant_revisions',
+  'identity_broker', 'runtime_grant_operations',
+  'identity_broker', 'runtime_grant_operation_receipts') \gexec
+SELECT format(
+  'REVOKE ALL ON TABLE %I.%I, %I.%I, %I.%I, %I.%I FROM %I',
+  'identity_broker', 'runtime_grant_heads',
+  'identity_broker', 'runtime_grant_revisions',
+  'identity_broker', 'runtime_grant_operations',
+  'identity_broker', 'runtime_grant_operation_receipts',
+  :'runtime_role') \gexec
+SELECT format(
+  'GRANT SELECT, INSERT, UPDATE ON TABLE %I.%I TO %I',
+  'identity_broker', 'runtime_grant_heads', :'runtime_role') \gexec
+SELECT format(
+  'GRANT SELECT, INSERT ON TABLE %I.%I, %I.%I, %I.%I TO %I',
+  'identity_broker', 'runtime_grant_revisions',
+  'identity_broker', 'runtime_grant_operations',
+  'identity_broker', 'runtime_grant_operation_receipts',
+  :'runtime_role') \gexec

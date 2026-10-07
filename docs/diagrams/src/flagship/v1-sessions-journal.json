@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Sessions journal, accepted facts, and owner delivery",
-  "alt": "Projects & Config validates current permission and accepted run selection. Events & Sessions pins the journal, commits accepted facts, and serves ordered replay. After a fresh authority check and owner CAS, the Orchestrator commits the trusted accepted-run Sandbox binding with the winning plan decision, gate, grants, and outbox (its adapter only resolves existing resources), persists owner receipts and fenced message delivery; every receipt commit and Events admission checks current Core write authority and owner session/run fence after lock waits, while Allow also requires its exact active grant. Owner-admitted session forks reserve the exact request, recheck Projects authority, and commit verified journal lineage before child registration and forked outbox delivery; only new pins advertise fork, while old pins retain their exact capability subset and deny forks. A separate runtime-owner-context lookup checks the accepted decision and current authority. Its metadata derives the accepted model/turn and current lease/profile pins; it does not prove SDK execution or usage accounting. Public Environment write gates deny run-bound enrollment; internal lookup remains read-only.",
+  "alt": "Events & Sessions commits journal facts and serves ordered replay. Orchestrator rechecks current Projects authority, accepted decision, persisted selection context, work item, turn, and Environment placement after waits. Owner-admitted forks commit verified journal lineage before child registration, while old provider pins deny forks. Native SDK observations require a validated bearer and separate Identity observe credential. Events fetches the source receipt by ID and commits immutable Cost accounting before acknowledgment, without multiplying weighted nano-AIU again. These local source contracts do not prove deployment, paid model execution, or physical runtime recovery.",
   "autonumber": true,
   "participants": [
     {
@@ -29,8 +29,8 @@
     },
     {
       "id": "provider",
-      "label": "Provider catalog +\nNative Sessions adapter",
-      "subLabel": "Resolve, negotiate, pin, verify",
+      "label": "Catalog + adapters",
+      "subLabel": "Sessions and keyed Cost",
       "icon": "box",
       "fluentIcon": "package",
       "badge": {
@@ -41,7 +41,7 @@
     {
       "id": "postgres",
       "label": "Events & Sessions\nPostgreSQL schema",
-      "subLabel": "Journal, facts, run pins, inbox",
+      "subLabel": "Journal, facts, pins, usage storage",
       "icon": "database",
       "fluentIcon": "state",
       "badge": {
@@ -217,7 +217,7 @@
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
-      "label": "Runtime-owner context rechecks decision/authority (stale is 409). Forks require owner admission; new pins support them, old pins keep exact subsets."
+      "label": "Current owner context. Owner-admitted forks; old pins deny forks.\nSDK source -> receiptId -> atomic Cost. Schema v7; TRUNCATE denied."
     }
   ]
 }

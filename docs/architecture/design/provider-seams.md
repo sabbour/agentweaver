@@ -373,6 +373,14 @@ configuration, A2A connectivity, an endpoint URI, or a Core run provider pin. It
 a model run. Those remain wider platform contract work. No provider may weaken VM isolation when the
 selection requires it.
 
+The current lease source stores the full Environment owner tuple, lifecycle generation,
+resource generation, provider/current fencing generations, lease revision, and expiry.
+Its placement getter retains the lease lock during the final authorization callback.
+The resource ID can be a planned claim identity; it is not relabeled as a physical
+Kubernetes UID. Registered runtime profiles match the complete provider reference.
+The profile callback returns the existing Orchestrator owner context under that lock.
+This lookup does not reserve authority after the HTTP response.
+
 ### Readiness, retirement, and retention
 
 `ReadyForDispatch` requires an active exact Environment fence, current `WriteProjects` and separate
@@ -666,9 +674,22 @@ The current source implements meter-keyed candidate selection through the existi
 `ProviderCatalog` and `ProviderResolver.ResolveCost`. The catalog owner supplies
 one enabled provider per source; Projects & Config's native run-selection routes
 persist the key and checked adapter/options versions, revision and capabilities.
-This independently usable source contract is not a Cost pricing adapter,
-negotiated resource binding, effective SDK model/source pin, or usage producer
-authorization. Those integrations remain separate from candidate selection.
+Projects persists candidates, not negotiated resource bindings.
+Separate source primitives add `PinCost`/`VerifyCost`, the Copilot Cost adapter,
+and an append-only PostgreSQL ledger. They do not establish effective SDK
+model/source provenance or authorize a usage producer.
+
+The separate runtime pipeline supplies that authority through a current registration,
+validated bearer, purpose-bound observe credential, and actual SDK facts.
+Orchestrator commits immutable source receipts after current owner and grant checks.
+Events accepts only receipt references and prices them through the existing keyed resolver.
+No parallel Cost resolver or model provider seam is introduced.
+
+The Copilot adapter divides reported `nano_aiu` by `1_000_000_000` to return AIC.
+Reported units already include model weighting. Quotes apply a model multiplier
+only to explicitly unweighted AI credits. Each entry retains an immutable rate-card
+version. Missing measurements or unsupported sources remain unpriced.
+The optional HTTP consumer accepts only immutable source receipt references.
 
 The Azure BYOK adapter uses deployment token rates from Azure Retail Prices, allocates
 provisioned-throughput capacity by usage share, and may reconcile estimates with Azure Cost Management

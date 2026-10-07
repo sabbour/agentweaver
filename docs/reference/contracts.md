@@ -20,6 +20,56 @@ entries containing `MeterSource` and `ProviderId`. Native
 stored `EffectiveProviderSelection`. Both retain current owner authorization.
 No new usage-writing endpoint, model-source authority, or pricing API is introduced.
 
+## Cost and usage storage contracts
+
+`CostBinding` records the meter source, provider identity, adapter version,
+configuration revision, resource generation, negotiated capabilities, and immutable
+`CostRateCard`. `PinCost` rejects changed candidate configuration. `VerifyCost`
+rejects unavailable or changed provider identity. The adapter verifies the resource
+generation and rate-card content.
+
+`ICostProvider.Price` returns an amount, unit, rate card, and `CostDisposition`.
+`Quote` requires an explicit weighted or unweighted basis. The Copilot adapter
+converts reported nano-AIU to AIC without a second model multiplier. Missing
+measurements or model rates return `Unpriced` with a reason and no amount.
+These methods do not authorize a model session or caller.
+
+`UsageSubmission` contains an event ID, occurrence time, attribution, model
+metadata, and nullable measurements. `IUsageLedger.AppendAsync` validates and
+commits the immutable entry and rate card before returning. It returns the original
+entry for an identical retry and rejects changed event or rate-card content.
+`UsageAccountingReceipt` binds the event ID, attribution, canonical SHA-256 hash,
+price disposition, amount, unit, rate-card version, and commit timestamp.
+The ledger commits before returning this receipt. A retry returns the original
+receipt without repricing. This receipt does not authorize an SDK producer.
+`GetRunTotalsAsync` returns exact agent totals and separate meter-source/unit
+amounts. Unknown measurements stay null. Incomplete pricing remains explicit.
+Native submissions retain `TurnId`, `SdkEventId`, and the complete `SdkSource`
+snapshot. Cache-read and cache-write measurements remain separate. Native callbacks
+do not supply a request count, so `RequestCount` stays null.
+
+`RuntimeUsageSourceReceipt` contains the immutable runtime registration, native
+usage submission, source hash, receipt ID, version, and recorded timestamp.
+`RuntimeUsageSourceReceiptContract` validates exact owner, SDK, model, catalog,
+event, turn, and accepted-selection pins. It rejects BYOK and changed hashes.
+This receipt proves a source observation, not a price or accounting acknowledgment.
+A stored source receipt remains readable after its original lease expires.
+That historical read does not authorize another observation.
+
+`PostgresUsageLedger.AppendWithinTransactionAsync` uses the caller's owned
+PostgreSQL transaction without a separate commit. The trusted Events consumer
+can commit its source inbox and accounting receipt with the usage entry and rate card.
+The ordinary `AppendAsync` method retains its own transaction and commit.
+
+These low-level contracts do not authenticate a remote writer.
+Migration `006_native_sdk_usage.sql` extends the service schema to version 6.
+It preserves existing history and adds cache-write values and nullable request counts.
+Migration `007_native_usage_receipts.sql` adds the reference consumer's immutable
+receipts and run Cost bindings in version 7.
+The optional native HTTP routes separately authenticate the original bearer
+and require current Core authority. Source writes also require Identity's observe credential.
+Typed action grants and opaque model references cannot replace this producer boundary.
+
 ## Orchestrator AGT Policy provider
 
 `AgtPolicyProviderOptions` supplies an opaque resource ID and generation, an options revision and schema
@@ -115,11 +165,16 @@ Configuration:
 | `ProjectsConfig:ProviderCatalog` | Optional catalog-owner snapshot used to validate the accepted Sandbox candidate. With no snapshot or no registered Sandbox resource adapter, plans needing isolation fail closed with `503`. |
 | `ProjectsConfig:AuthorizationContext:OwnerBaseAddress` / `Audience` | Trusted HTTPS Projects & Config owner and required audience for current authority and selection. |
 | `EventsAndSessions:Authorization:OwnerBaseAddress` / `Audience` | Trusted HTTPS Events & Sessions owner and required audience for session registration and message delivery. |
+| `Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress` | Optional fixed HTTPS root for current Environment lease/profile lookup. Without this key, runtime registration routes are not mapped. |
+| `Orchestrator:RuntimeUsage:BrokerOwnerAddress` | Optional fixed HTTPS Broker root for current observe-grant validation. Requires runtime registration configuration. |
 
 Runtime PostgreSQL access uses the PostgreSQL Entra token scope and TLS
 `VerifyFull`; the connection string must include the Entra role and omit a password.
 Ordinary startup verifies the service schema. Run the executable with only
 `--migrate` to apply migrations using the separate identity.
+Coordination schema version 11 also applies immutable runtime registration,
+SDK source, and observation receipt tables after the admitted session-tree and recovery migrations.
+The runtime role does not apply this migration during ordinary startup.
 
 ## Events & Sessions journal
 
@@ -139,6 +194,8 @@ role claims are not required.
 | `POST /internal/sessions/{sessionId}/events` | Append an ordinary versioned typed event to the project/run journal. Returns `403` for every generic `PolicyEvaluation` payload because actor equality does not establish trusted Core provenance. Ordinary appends return `201` for a new event, `200` for an identical run-scoped event-ID retry, and `409` if the ID is reused with different event content in that run. |
 | `POST /internal/sessions/{sessionId}/fork` | Accept `SessionForkRequest` (`targetSessionId`, `sourceEventId`, `sourceCursor`, `idempotencyKey`). Requires a matching Orchestrator owner admission before journal work and immediately before transaction commit, including identical journal retries; validate that the cursor and event identify the same committed source event, then persist the target and immutable lineage. Existing object-reference retention deadlines are unchanged. Returns `201` for a new fork, `200` for an identical retry, `409` for missing/stale admission or conflicting event/cursor/target/key use, or `503` when the pinned Sessions provider does not support explicit forks. |
 | `POST /internal/sessions/{sessionId}/policy-evaluations` | Append a PolicyEvaluation using a body containing only `receiptId`. Requires the pinned provider's `sessions.policy.evaluations` capability. Events fetches the immutable receipt from the fixed Orchestrator owner, validates current admission before writing, and repeats that check inside the native journal transaction before commit. Failed revalidation rolls back event, inbox, position, references, and outbox writes. Returns a no-store acknowledgment with receipt ID, session identity, event position, and duplicate status (`201` new, `200` identical retry). |
+| `POST /internal/sessions/{sessionId}/usage-receipts` | Optional native usage route. Accepts only `receiptId`, fetches immutable Orchestrator evidence, and commits source hash, price, rate card, ledger, and inbox atomically. Returns a no-store accounting acknowledgment. |
+| `GET /internal/projects/{projectId}/runs/{runId}/usage` | Optional native usage totals route. Requires current `ReadRunSelection` for the exact signed project/run and returns exact run and agent totals. |
 | `GET /internal/sessions/{sessionId}/events?cursor={cursor}&limit={limit}` | Read an ordered page for one session after an optional opaque cursor. Positions are run-wide and may have gaps in a session-only page. |
 | `GET /internal/sessions/{sessionId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll durable journal state and stream NDJSON `SessionEventDelivery` records, each containing the event and a reconnectable `nextCursor`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events?cursor={cursor}&limit={limit}` | Read a bounded, run-ordered page across all sessions in the authorized project/run. |
@@ -226,6 +283,8 @@ Configuration:
 | `EventsAndSessions:Database:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Required explicit workload identity for the runtime PostgreSQL Entra role. |
 | `ConnectionStrings:EventsAndSessionsMigration` | Separate PostgreSQL connection using the migration Entra role; required only by `--migrate`. |
 | `EventsAndSessions:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Separate explicit workload identity used only by `--migrate`. |
+| `EventsAndSessions:RuntimeUsage:Enabled` | Default-off reference-only SDK usage consumer and totals routes. |
+| `EventsAndSessions:OrchestratorOwner:OwnerBaseAddress` / `Audience` | Fixed HTTPS Orchestrator owner and existing required audience for immutable source receipts. |
 
 Both connection strings must omit passwords and name their Entra database role.
 Connections use TLS `VerifyFull` and the PostgreSQL Entra token scope. The runtime
@@ -233,7 +292,7 @@ identity only verifies applied migrations and uses the already-created schema; i
 cannot run DDL. Run the executable with only `--migrate` to apply embedded migrations
 with the separate privileged identity. Ordinary startup verifies the service and
 outbox schema and fails if a migration is pending. The service remains source-only: the repository does not include its deployment, a
-Gateway route, automatic AgentHost scheduling, an active delivery relay, usage ledger,
+Gateway route, automatic AgentHost scheduling, an active delivery relay,
 or consistency-manifest workflow. See the
 [Events & Sessions journal reference](../architecture/events-sessions).
 
@@ -259,9 +318,85 @@ These routes belong to the unpublished Identity broker candidate. They are servi
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL connectivity. |
 
-The service has no grant-administration HTTP endpoint. The browser consent UI is not implemented.
+The service has no secret-grant administration HTTP endpoint. The browser consent UI is not implemented.
 
 Broker access tokens contain the local broker `sub`, registered OAuth scopes, and resource audience. They do not forward upstream tenant or role claims and do not assign Projects roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Downstream resource services obtain current effective permissions through its versioned owner contract rather than maintain duplicate membership or role records or caches; OAuth scopes and signed project/run bindings constrain requests but do not create authority.
+
+### Runtime credential source candidate
+
+Optional runtime bootstrap configuration enables a separate purpose-bound store.
+These routes require the existing validated Broker audience and return
+`Cache-Control: no-store`. A bearer or a configure body alone cannot prove a
+runtime nonce. Current owner authority, exact registration, purpose, audience,
+configuration hash, revision, expiry, and cryptographic verifier must match.
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /internal/runtime/bootstrap/request` | Current-registration delivery receipt; no credential in the receipt. |
+| `POST /internal/runtime/bootstrap/verify-pending` | Pending nonce verification only; cannot consume or issue a source credential. |
+| `POST /internal/runtime/bootstrap/consume` | CAS consumption receipt after completed Environment delivery. |
+| `POST /internal/runtime/bootstrap/exchange` | Transient observe credential; exact replay returns the original receipt without a credential. |
+| `POST /internal/runtime/source/verify` | Fresh current-registration and purpose-bound nonce verification. |
+| `POST /internal/runtime/source/rotate` | New source revision and transient credential. |
+| `POST /internal/runtime/source/revoke` | Immutable revocation receipt. |
+
+Identity captures a verifier while the protected credential is live, before
+database waits. Expiry during a grant-lock wait yields explicit denial and
+durable revocation for the exact verified nonce. An already-expired input is
+rejected before verification; that rejection does not prove durable cleanup.
+Storage and Broker HTTP tests isolate the credential boundaries.
+The combined local harness separately connects actual Core, Projects, Environment,
+Orchestrator, SDK, and Events code.
+External placement and SDK transport, catalog, and pricing inputs remain controlled.
+This evidence is not cloud deployment or paid model acceptance.
+
+The runtime registration candidate exposes these authenticated, no-store owner reads.
+Registration alone does not authorize configure delivery or usage ingestion.
+Identity verifies the separate purpose-bound nonce for those operations.
+
+| Method and path | Source contract |
+| --- | --- |
+| `POST /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations` | Accepts only `EnvironmentId` and `ProfileId`. Derives model, agent, turn, selection, fence, lease, provider, and endpoint pins from current owners. |
+| `GET /internal/runtime/registrations/{runtimeInstanceId}` | Revalidates the active session/work item, accepted selection, current lease/profile, and registration revision. A raw storage read is not authorization. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Public Environment control read. Requires current `WriteProjects`; returns the exact active, unexpired, owner-fenced lease projection. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Internal run-bound placement read. Uses existing current `ReadRunSelection` for the exact signed run. Does not grant public write permission. |
+| `GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}` | Uses the canonical manager's retained lease callback to read current Orchestrator context and match a registered profile to the exact placement. Requires current run-bound `ReadRunSelection`. |
+| `POST /internal/runtime/sources/{runtimeInstanceId}` | Registers actual immutable SDK facts under the validated bearer and separate observe credential. Rechecks current owner and grant authority after waits. |
+| `POST /internal/runtime/observations` | Commits a native SDK observation under the exact current registration/source grant. Identical SDK events return the original source receipt. Changed content conflicts. |
+| `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/usage-receipts/{receiptId}` | Returns the immutable source receipt only after fresh accepted-selection and run-read checks. Events cannot substitute caller-supplied usage. |
+
+`Environment:RuntimeBootstrap:Profiles` configures exact owner/profile/provider
+registrations. An absent or mismatched registration returns explicit denial.
+No caller supplies a configure URI or observation URI. Runtime bindings separately
+pin `PlacementProviderId`, `EnvironmentLifecycleGeneration`, and
+`EnvironmentLeaseRevision`; omitted legacy pins do not change stored binding JSON.
+Lease expiry bounds registration expiry and cannot be extended by enrollment replay.
+
+Current Projects policy deliberately withholds `WriteProjects` from run-bound tokens.
+The public placement route still denies those tokens.
+The internal read-only lookup uses existing `ReadRunSelection` authority and exact
+current run/tenant binding. It reads no selection recursively and dispatches no provider effects.
+The profile callback retains the lease transaction while it reads current work-item context.
+Configure delivery still requires Identity's independently verified pending nonce.
+
+The auth-first runtime library validates the configuration hash and exact configure
+audience before consuming a delivered nonce. The current registration supplies the
+accepted model reference. Native session creation uses an explicit session token
+and the SDK's empty-mode policy; URI mode does not accept client-wide login options.
+The SDK-reported effective model must match the registered selection. No ready session
+is returned before the final registration, source-credential, and lifetime checks.
+Controlled TCP tests exercise the actual SDK RPCs and usage callbacks.
+The combined harness also commits source receipts and prices them through Events HTTP.
+Only a source receipt ID crosses the accounting admission route.
+No caller supplies a price or multiplies weighted nano-AIU again.
+The ledger preserves explicit `Estimate`, `Reconciled`, and `Unpriced` dispositions.
+
+`GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context`
+requires the authenticated current run owner and returns `Cache-Control: no-store`.
+The response contains the active child turn, accepted revisions and hash, and
+agent/model reference from its confirmed WorkPlan item. An unknown, unmapped,
+inactive, stale, or non-dispatchable child is unavailable. Caller configure JSON
+cannot set these fields.
 
 ## Projects & Config authorization context
 
@@ -350,6 +485,8 @@ current event-delivery boundaries.
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTenantId` | Explicit Entra tenant ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityClientId` | Explicit Entra client ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTokenFilePath` | Absolute projected token-file path. |
+| `IdentityBroker:RuntimeBootstrap:OrchestratorOwnerAddress` / `EnvironmentOwnerAddress` | Optional composition; both fixed HTTPS root owner addresses are required when configured. |
+| `IdentityBroker:RuntimeBootstrap:BootstrapLifetime` / `SourceLifetime` | Explicit positive lifetimes bounded by the current registration and actor expiry. |
 
 The host does not use ambient credentials or a development-certificate fallback.
 
@@ -363,6 +500,10 @@ Runtime and schema migration use separate connection strings, projected workload
 | Explicit migration | Run the executable with only `--migrate`; provide `ConnectionStrings:IdentityBrokerMigration` and `IdentityBroker:Migration:WorkloadIdentityTenantId`, `WorkloadIdentityClientId`, and `WorkloadIdentityTokenFilePath`. | A separate migration Entra role owns `identity_broker` and applies migrations. Its workload identity receives no Azure resource role. |
 
 The database bootstrap and reviewed grant SQL are operator-run steps. The ordinary host checks that the schema exists and no migrations are pending; it fails rather than creating roles or changing the schema.
+The four runtime grant tables have narrower masks: grant heads allow
+`SELECT`, `INSERT`, and `UPDATE`; revisions, operations, and receipts allow
+only `SELECT` and `INSERT`. Runtime deletion, audit updates, schema creation,
+and migration-history writes remain forbidden.
 
 ## AKS Application Routing preview
 

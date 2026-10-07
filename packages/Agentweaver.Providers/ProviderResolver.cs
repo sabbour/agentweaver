@@ -66,6 +66,76 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
             : Fail<CostProviderResolution>(candidate.Error!.Code, candidate.Error.Message);
     }
 
+    public ProviderResult<PinnedCostProviderBinding> PinCost(
+        string runId, CostProviderResolution resolution, string expectedResourceId,
+        ResourceNegotiation negotiation)
+    {
+        if (resolution is null ||
+            !catalog.TryGetMeterSource(resolution.MeterSource, out var providerId) ||
+            providerId != resolution.Candidate.ProviderId)
+            return Fail<PinnedCostProviderBinding>(ProviderErrorCode.MeterSourceMismatch,
+                "The cost meter source no longer selects the resolved provider.");
+
+        var candidate = resolution.Candidate;
+        var current = ResolveCost(new CostProviderResolutionRequest(
+            resolution.MeterSource,
+            candidate.AdapterVersion,
+            candidate.OptionsSchemaVersion,
+            candidate.RequiredCapabilities));
+        if (!current.IsSuccess || current.Value is null)
+            return Fail<PinnedCostProviderBinding>(
+                current.Error?.Code ?? ProviderErrorCode.ProviderNotFound,
+                current.Error?.Message ?? "The selected cost provider is no longer available.");
+        if (current.Value.Candidate.ProviderId != candidate.ProviderId)
+            return Fail<PinnedCostProviderBinding>(ProviderErrorCode.MeterSourceMismatch,
+                "The cost meter source no longer selects the resolved provider.");
+        if (!CandidatesMatch(current.Value.Candidate, candidate))
+            return Fail<PinnedCostProviderBinding>(ProviderErrorCode.PinnedBindingMismatch,
+                "The selected cost provider configuration changed before pinning.");
+
+        var pinned = Pin(runId, current.Value.Candidate, expectedResourceId, negotiation);
+        return pinned.IsSuccess
+            ? ProviderResult<PinnedCostProviderBinding>.Success(
+                new PinnedCostProviderBinding(current.Value.MeterSource, pinned.Value!))
+            : Fail<PinnedCostProviderBinding>(pinned.Error!.Code, pinned.Error.Message);
+    }
+
+    public ProviderResult<CostProviderResolution> VerifyCost(
+        CostProviderResolutionRequest request, CostBinding pinnedBinding)
+    {
+        if (request is null || pinnedBinding is null ||
+            !ValidRequirements(request.RequiredAdapterVersion, request.RequiredOptionsSchemaVersion,
+                request.RequiredCapabilities))
+            return Fail<CostProviderResolution>(ProviderErrorCode.InvalidConfiguration,
+                "Pinned cost verification request is invalid.");
+        if (!string.Equals(request.MeterSource, pinnedBinding.MeterSource, StringComparison.Ordinal))
+            return Fail<CostProviderResolution>(ProviderErrorCode.MeterSourceMismatch,
+                "The pinned cost binding belongs to another meter source.");
+        if (!catalog.TryGetMeterSource(request.MeterSource, out _))
+            return Fail<CostProviderResolution>(ProviderErrorCode.ProviderNotFound,
+                "The exact pinned cost meter source is no longer configured.");
+
+        var current = ResolveCost(request);
+        if (!current.IsSuccess || current.Value is null)
+            return Fail<CostProviderResolution>(
+                current.Error?.Code ?? ProviderErrorCode.ProviderNotFound,
+                current.Error?.Message ?? "The pinned cost provider is no longer available.");
+
+        var candidate = current.Value.Candidate;
+        if (candidate.ProviderId != pinnedBinding.ProviderId ||
+            candidate.AdapterVersion.ToString() != pinnedBinding.AdapterVersion ||
+            candidate.OptionsSchemaVersion != pinnedBinding.OptionsSchemaVersion ||
+            candidate.OptionsRevision != pinnedBinding.OptionsRevision ||
+            pinnedBinding.NegotiatedCapabilities is null ||
+            !candidate.RequiredCapabilities.SetEquals(pinnedBinding.NegotiatedCapabilities) ||
+            pinnedBinding.ResourceGeneration < 1 ||
+            string.IsNullOrWhiteSpace(pinnedBinding.ResourceId))
+            return Fail<CostProviderResolution>(ProviderErrorCode.PinnedBindingMismatch,
+                "The exact pinned cost provider identity or options are no longer available.");
+
+        return current;
+    }
+
     public ProviderResult<OrderedProviderResolution> ResolveOrdered(OrderedProviderResolutionRequest request)
     {
         if (request is null || !Enum.IsDefined(request.Seam) ||
@@ -166,6 +236,16 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
     private static bool ValidRequirements(Version version, int schema, ImmutableHashSet<string> capabilities) =>
         version is not null && schema >= 1 && capabilities is not null &&
         !capabilities.Any(string.IsNullOrWhiteSpace);
+
+    private static bool CandidatesMatch(ProviderCandidate left, ProviderCandidate right) =>
+        left.Seam == right.Seam &&
+        left.ProviderId == right.ProviderId &&
+        left.AdapterVersion == right.AdapterVersion &&
+        left.OptionsSchemaVersion == right.OptionsSchemaVersion &&
+        left.OptionsRevision == right.OptionsRevision &&
+        left.Hosting == right.Hosting &&
+        left.AdvertisedCapabilities.SetEquals(right.AdvertisedCapabilities) &&
+        left.RequiredCapabilities.SetEquals(right.RequiredCapabilities);
 
     public ProviderResult<PinnedOrderedProviderBinding> PinOrdered(
         string runId, OrderedProviderResolution resolution, IReadOnlyList<ProviderPinInput> inputs)

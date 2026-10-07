@@ -14,6 +14,7 @@
     <PackageReference Include="OpenIddict.Validation.SystemNetHttp" Version="7.7.1" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
+    <ProjectReference Include="..\..\..\packages\Agentweaver.Identity\Agentweaver.Identity.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Telemetry\Agentweaver.Telemetry.csproj" />
   </ItemGroup>
@@ -22,5 +23,8 @@
     <EmbeddedResource Include="Migrations\002_addressed_messages.sql" />
     <EmbeddedResource Include="Migrations\003_project_facts.sql" />
     <EmbeddedResource Include="Migrations\004_explicit_session_forks.sql" />
+    <EmbeddedResource Include="Migrations\005_copilot_usage.sql" />
+    <EmbeddedResource Include="Migrations\006_native_sdk_usage.sql" />
+    <EmbeddedResource Include="Migrations\007_native_usage_receipts.sql" />
   </ItemGroup>
 </Project>

@@ -17,6 +17,7 @@
     </PackageReference>
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\packages\Agentweaver.Identity\Agentweaver.Identity.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Providers.Sandbox.AgentSandbox\Agentweaver.Providers.Sandbox.AgentSandbox.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Providers.Storage.AzureFiles\Agentweaver.Providers.Storage.AzureFiles.csproj" />

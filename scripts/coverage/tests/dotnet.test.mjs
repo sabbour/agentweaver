@@ -22,6 +22,18 @@ const azureFilesTestProject = readFileSync(resolve(
   'Agentweaver.Providers.Storage.AzureFiles.Tests.csproj'), 'utf8');
 const sourceControlTestProject = readFileSync(resolve(
   root, 'tests', 'Agentweaver.SourceControl.Tests', 'Agentweaver.SourceControl.Tests.csproj'), 'utf8');
+const brokerTestProject = readFileSync(resolve(
+  root, 'tests', 'Agentweaver.Identity.Broker.Tests', 'Agentweaver.Identity.Broker.Tests.csproj'), 'utf8');
+
+test('the explicit .NET coverage runner covers Agent Runtime through the Broker suite', () => {
+  assert.match(runner, /\['identity-broker', 'Agentweaver\.Identity\.Broker\.Tests'\]/);
+  assert.match(runner, /'Agentweaver\.AgentRuntime',/);
+  assert.match(runsettings, /\[Agentweaver\.AgentRuntime\]\*/);
+  assert.match(solution, /packages\\Agentweaver\.AgentRuntime\\Agentweaver\.AgentRuntime\.csproj/);
+  assert.match(solution, /tests\\Agentweaver\.Identity\.Broker\.Tests\\Agentweaver\.Identity\.Broker\.Tests\.csproj/);
+  assert.match(brokerTestProject, /Agentweaver\.AgentRuntime\.csproj/);
+  assert.match(brokerTestProject, /coverlet\.collector/);
+});
 
 test('the explicit .NET coverage runner registers the Events & Sessions suite and assembly', () => {
   assert.match(runner, /\['events-and-sessions', 'Agentweaver\.EventsAndSessions\.Tests'\]/);

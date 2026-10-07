@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["environment", "projects"],
-      "label": "Placement holds the owner lock through final authority and exact-lease checks; later effects recheck independently."
+      "label": "Placement retains its lease during authority and bootstrap-context reads.\nLater effects recheck independently; public write permission is unchanged."
     },
     {
       "type": "message",

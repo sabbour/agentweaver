@@ -96,6 +96,13 @@ that reads the same Environment lease or perform provider effects. A successful
 placement read is not authorization for a later configure or provider effect;
 those operations recheck current authority and lease state independently.
 
+The runtime bootstrap profile adapter uses this same manager callback.
+It reads the fixed Orchestrator work-item context and resolves the exact registered
+profile while the lease transaction remains active.
+The callback does not request the full runtime registration or dispatch a provider effect.
+Both placement routes return no-store responses.
+This composition does not change Workspace attachment, retirement, or public write permission.
+
 The Environment owner must already exist and be active. These routes do not
 register or release an Environment lifecycle, create a Core run provider pin,
 or start a model run. The admitted Core source has no run-terminal or durable

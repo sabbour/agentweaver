@@ -10,7 +10,7 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 | Azure Files provider tests | Environment-scoped generation PVC identities, pinned Kubernetes API target, requested/configured StorageClass matching, effective reclaim-policy enforcement, claim/PV ownership checks, reclaim/delete UID preconditions, exact release receipts and retry outcomes, Azure Files mount options, Kubernetes quantity normalization, and credential-free request bodies through fake Kubernetes transports. | A live Kubernetes API/CSI driver, Azure Files durability or data erasure, Sandbox attachment, or durable flush. |
 | Environment workspace-volume tests | Real PostgreSQL owner CAS and replay, pinned provider binding, fresh Projects authorization, retry-safe no-effect rejections and HTTP status mapping, Release rejection while bound or attached, uncertain Release retry with the same idempotency key, Replace cleanup leases/retries, stale-fence rejection, and truthful blocked/pending cleanup outcomes through fake providers and Projects clients. | A deployed Environment service, live Kubernetes/CSI behavior, Azure Files data erasure, Sandbox mounting, or durable flush. |
 | Identity library tests | Exact actor, project, run, purpose, secret ID, and version grants. They cover revocation races, expiry, cancellation, and credential invalidation. | Network authentication or a deployed broker. |
-| Identity broker tests | OpenIddict validation, external login, consent, S256 PKCE, refresh replay, PostgreSQL grants, redemption HTTP, and real broker-issued tokens against Projects API source-owned memberships/roles, including forged-claim rejection and revocation. Broker-backed Orchestrator/Events integration proves fork denial without reservation, reserved fork registration/replay, revocation before journal commit with no target/lineage change, and explicit unregistered outcomes. It also proves Projects revocation during late fork-command INSERT, owner outbox UPDATE, and registered-duplicate row-lock waits; exact current-fence runtime-owner context absence; and failure/recovery decision, gate, grant, context-history, and restart behavior. Source Control integration proves typed merge approval through real Projects, Broker, and Orchestrator hosts; persisted conflicts with no merge write for revocation during repository-lock wait, redemption, readiness, and the `merge_started` check; truthful merged SHA after post-effect revocation; and replay from a fresh Orchestrator host. **COUPLED fence proof:** the real PostgreSQL advisory-lock wait precedes a Core turn-failure transition while Projects authorization remains valid; the newer decision/fence supersedes the typed approval and the current-grant lookup plus owner CAS confirms the exact grant is no longer current before persisting `source_control_run_binding_changed` with no merge PUT. The same flow rejects a changed accepted-selection PUT and checks the current GET is byte- and hash-identical, including its revision fields, both after the PUT and after the fence change. Concurrent HTTP executions wait on the repository lock, return the same merged SHA with one GitHub merge PUT, and replay from a fresh host. Authorized workspace preparation/diff uses distinct API and checkout `SecretRef` purposes and a dual API/Broker audience token against a real temporary Git origin; responses, workspace manifest, and Git config contain no checkout credential. Other coverage includes current selection authority, typed decision/gate ownership, grant and receipt persistence, Sandbox resolution and revocation, concurrent proposal idempotency, and Policy receipt admission under expired/superseded grants, current Deny, and Core-role revocation after SQL lock waits. | Deployed OAuth, Azure RBAC, Azure acceptance, production Sandbox provisioning/dispatch, an active background relay, automatic AgentHost scheduling, or gate approval/completion from message receipt. |
+| Identity broker tests | OpenIddict validation, external login, consent, S256 PKCE, refresh replay, PostgreSQL grants, redemption HTTP, and real broker-issued tokens against Projects API source-owned memberships/roles, including forged-claim rejection and revocation. The Projects API also verifies that a run-bound project-summary GET requires the exact `run` selector and a current Viewer role. Broker-backed Orchestrator/Events integration proves fork denial without reservation, reserved fork registration/replay, revocation before journal commit with no target/lineage change, and explicit unregistered outcomes. It also proves Projects revocation during late fork-command INSERT, owner outbox UPDATE, and registered-duplicate row-lock waits; exact current-fence runtime-owner context absence; and failure/recovery decision, gate, grant, context-history, and restart behavior. Source Control integration proves typed merge approval through real Projects, Broker, and Orchestrator hosts; persisted conflicts with no merge write for revocation during repository-lock wait, redemption, readiness, and the `merge_started` check; truthful merged SHA after post-effect revocation; and replay from a fresh Orchestrator host. **COUPLED fence proof:** the real PostgreSQL advisory-lock wait precedes a Core turn-failure transition while Projects authorization remains valid; the newer decision/fence supersedes the typed approval and the current-grant lookup plus owner CAS confirms the exact grant is no longer current before persisting `source_control_run_binding_changed` with no merge PUT. The same flow rejects a changed accepted-selection PUT and checks the current GET is byte- and hash-identical, including its revision fields, both after the PUT and after the fence change. Concurrent HTTP executions wait on the repository lock, return the same merged SHA with one GitHub merge PUT, and replay from a fresh host. Authorized workspace preparation/diff uses distinct API and checkout `SecretRef` purposes and a dual API/Broker audience token against a real temporary Git origin; responses, workspace manifest, and Git config contain no checkout credential. Other coverage includes current selection authority, typed decision/gate ownership, grant and receipt persistence, Sandbox resolution and revocation, concurrent proposal idempotency, and Policy receipt admission under expired/superseded grants, current Deny, and Core-role revocation after SQL lock waits. | Deployed OAuth, Azure RBAC, Azure acceptance, production Sandbox provisioning/dispatch, an active background relay, automatic AgentHost scheduling, or gate approval/completion from message receipt. |
 | PostgreSQL tests | Outbox and inbox transactions, duplicates, concurrency, leases, relay outcomes, and recovery across restart. | A broker, relay daemon, exactly-once delivery, or cross-service transaction. |
 | Events & Sessions tests | Provider-neutral contracts and the P0 Identity Broker principal profile; explicit runtime/migration Entra configuration with no identity fallback; PostgreSQL token refresh and password rejection; project/run-scoped IDs; append, deduplication/conflicts, PolicyEvaluation redaction and provenance checks, receipt-reference admission/no-store acknowledgments/transaction rollback, legacy capability pins, fork prefix lineage and authenticated idempotent retries, owner-admission revocation, migration, and rollback. Addressed-message tests cover idempotency, ordering, leases/fencing, transactional outbox, acknowledgments, expiry, and undeliverable state. PostgreSQL coverage uses disposable containers. | Workload-identity federation, production Entra grants, live cloud migration, AgentHost integration, protected-effect call-site enforcement, or production-scale replica behavior. |
 | Environment egress tests | Purpose-aware FQDN/CIDR intersection, Projects authorization freshness, Cilium options and policy rendering, resource-version/generation fencing, object readback, and provider pinning with fake Kubernetes resources. | Sandbox claim/template labels, Kubernetes RBAC/workload identity, a deployed Cilium datapath, actual network reachability, or public HTTPS/Remote MCP L7 mediation. |
@@ -67,6 +67,65 @@ rewriting its fingerprint or stored history.
 
 These tests exercise candidate selection only. They do not prove SDK model-source
 provenance, resource negotiation, pricing, or positive usage ingestion.
+
+## Cost bindings, pricing, and usage storage
+
+The additive Provider tests cover Cost resource pins, changed configuration, and
+missing or changed providers. Existing candidate-selection and legacy snapshot
+tests remain unchanged.
+
+The Events & Sessions tests cover weighted nano-AIU pricing, unweighted quotes,
+missing measurements, immutable rate cards, and redacted binding diagnostics.
+The disposable-PostgreSQL tests cover concurrent duplicates, content conflicts,
+restart, immutable history, transaction rollback, and exact run/agent totals.
+Receipt tests read the committed hash and immutable price through a separate
+PostgreSQL connection. Duplicate retries return the identical receipt.
+Migration tests cover fresh Events version 7, admitted version-3 and version-4 upgrades,
+the legacy version-2 project-fact layout, and rejected version gaps.
+Orchestrator migration tests upgrade admitted version 8 and native intermediate versions 9 and 10 to version 11.
+Repeated migration and startup checks preserve the original migration history.
+
+The combined Broker test connects actual OAuth and bearer validation, current Core
+memberships/roles, immutable Projects selection, Environment lease/profile, Orchestrator
+registration and source receipt, native SDK callbacks, and Events HTTP/PostgreSQL accounting.
+The test controls only external placement, SDK transport/events/catalog, and pricing inputs.
+It does not seed producer authority or take a desired model from caller JSON.
+
+The five scenarios cover successful accounting, Broker revocation before SDK creation,
+observe-grant revocation during an observation lock wait, registration revocation
+before the source lock opens, and Environment retirement during an observation wait.
+Three additional scenarios hold the actual SDK `status.get` response before creation.
+They revoke the genuine Broker grant, retire the actual Environment lease, or wait
+for the real source credential to expire. Each proves zero `session.create` requests,
+source records, and accounting entries.
+The positive scenario commits duplicate native callbacks to one immutable receipt,
+then verifies reference-only ingestion and exact `0.00123456725 AIC` accounting.
+The multiplier is not applied a second time.
+Database checks reject mutation and truncation of source and accounting history.
+They check each table's statement trigger and attempt dependent, multi-table, and
+`CASCADE` truncation. Stored rows and pins remain identical, and receipt replay succeeds.
+
+The fixture disposes the receiver before its caller credential and HTTP transport.
+Failure output retains the exercise error and cleanup errors.
+Direct console stages identify pending owner requests, SQL waits, native SDK responses,
+and cleanup when a test aborts before Xunit reports a result.
+Broker hosts own their registered PostgreSQL pools.
+Native fixture SQL connections use a fixture-owned data source that closes during cleanup.
+Repeated-host and full-suite checks verify that owned connections return to zero after disposal.
+Broker coverage includes the Agent Runtime library through the existing test project and collector.
+
+The canonical Sandbox integration also covers public write versus internal run-read
+permission, three current-authority reads, and retained-lease protection against competing retirement.
+Neither placement route reads the accepted selection recursively or dispatches provider effects.
+These local tests do not prove deployed hosts, live AKS placement, or paid model output.
+
+After the Release build, run the combined source scenarios with:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~AuthorityLossDuringSdkPreparationPreventsNativeSessionCreation
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerIssuedOwnerAndSeparateRunSelectionAuthorizeWorkspaceVolumeHttpEffects
+```
 
 ## Validate the documentation site
 

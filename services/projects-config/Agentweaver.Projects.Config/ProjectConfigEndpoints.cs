@@ -98,6 +98,7 @@ public static class ProjectConfigEndpoints
 
         projects.MapGet("/{projectId}", async (
             string projectId,
+            string? run,
             HttpContext context,
             ProjectsConfigService service,
             ProjectAuthorizationOwner authorizationOwner,
@@ -108,7 +109,8 @@ public static class ProjectConfigEndpoints
                 return Results.Ok(await service.GetProjectAsync(
                     await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
                     projectId,
-                    cancellationToken).ConfigureAwait(false));
+                    cancellationToken,
+                    run).ConfigureAwait(false));
             }
             catch (ProjectConfigException exception)
             {

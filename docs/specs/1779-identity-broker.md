@@ -115,6 +115,63 @@ The backend receives the exact requested SecretRef version.
 
 ## Host and deployment contract
 
+### Runtime credential source candidate (#1850)
+
+The source contains a separate runtime grant store. It does not use the
+Key Vault secret-redemption grant or change human OAuth clients or claims.
+The store keeps cryptographic nonce verifiers, exact runtime/actor/selection/
+placement bindings, purpose, audience, revision, state, expiry, and configuration
+hash. PostgreSQL revisions and operation receipts are append-only.
+
+The reviewed grant SQL permits `SELECT`, `INSERT`, and `UPDATE` on runtime grant
+heads. Runtime grant revisions, operations, and receipts permit only `SELECT`
+and `INSERT`. The runtime cannot delete these records, update audit records,
+create schema objects, or write migration history. A disposable PostgreSQL test
+runs the credential lifecycle through a separate restricted runtime login.
+
+Initial bootstrap material is delivered only through the Environment-owned
+out-of-band boundary. A completed delivery receipt is required before nonce
+consumption. Consumption, source exchange, and rotation use row-locked CAS.
+Exact operation replay returns the original receipt, not a persisted credential
+value. Each asynchronous owner lookup uses genuine protected actor credentials
+and rechecks the current registration. Missing delivery or owner authorization
+must fail explicitly.
+
+The pending-ticket verifier checks the exact nonce, delivery operation,
+configuration hash, audience, expiry, and current registration before delivery.
+It returns only a grant receipt. It cannot consume a nonce, configure a runtime,
+or issue a source credential. Credential values travel only over the fixed
+authenticated HTTPS owner channel; they are not stored in an outbox.
+
+Before the first database wait, Identity captures a verifier from a live protected
+credential. It does not read the value after expiry. If the credential expires
+while waiting for the grant lock, Identity denies the request and records
+revocation for the exact verified nonce. Foreign proofs cannot change grant state.
+An input that already has a past expiry is rejected before grant verification.
+This input rejection does not prove durable owner-side revocation.
+
+The Broker HTTP test uses an actual Broker-issued bearer and a separate nonce.
+It covers pending verification, consumption, exchange, source verification,
+rotation, revocation, and cookie-only denial. It isolates the owner and delivery
+boundaries. The combined local harness separately connects actual current Core,
+Projects, Environment, Orchestrator, native SDK, and Events accounting code.
+It controls only external placement and SDK transport, catalog, and pricing inputs.
+It covers revocation before SDK creation and authority loss during source transaction waits.
+This evidence does not prove cloud deployment or paid model execution.
+
+When runtime bootstrap is configured, the existing validated Broker audience
+protects these routes. The routes return `Cache-Control: no-store`.
+
+| Route | Result |
+| --- | --- |
+| `POST /internal/runtime/bootstrap/request` | Delivery receipt for the current registered placement |
+| `POST /internal/runtime/bootstrap/verify-pending` | Proof-only pending grant receipt; no credential issuance |
+| `POST /internal/runtime/bootstrap/consume` | Consumed bootstrap receipt |
+| `POST /internal/runtime/bootstrap/exchange` | Short-lived source credential; replay returns the original receipt without a credential |
+| `POST /internal/runtime/source/verify` | Current purpose-bound source receipt |
+| `POST /internal/runtime/source/rotate` | New source revision and transient credential |
+| `POST /internal/runtime/source/revoke` | Immutable revocation receipt |
+
 The host supplies native .NET configuration through its deployment secret/configuration sources:
 
 | Configuration key | Requirement |
@@ -123,6 +180,8 @@ The host supplies native .NET configuration through its deployment secret/config
 | `ConnectionStrings:IdentityBrokerMigration` | Used only by `--migrate`; separate Entra-only schema-owner role; no password |
 | `ConnectionStrings:IdentityBrokerBootstrap` | Used only by `--bootstrap-identity-postgres`; connects to `postgres` as the approved Entra administrator with `VerifyFull` TLS and no password |
 | `IdentityBroker:Bootstrap:*` | Exact PostgreSQL FQDN, administrator username, initial database name, runtime and migration role names, and the two UAMI principal object IDs |
+| `IdentityBroker:RuntimeBootstrap:OrchestratorOwnerAddress` / `EnvironmentOwnerAddress` | Optional runtime credential composition; both fixed HTTPS root owner addresses are required when configured |
+| `IdentityBroker:RuntimeBootstrap:BootstrapLifetime` / `SourceLifetime` | Explicit positive credential lifetimes, bounded by current registration and actor expiry |
 | `IdentityBroker:Issuer` | Public, absolute HTTPS issuer |
 | `IdentityBroker:Signing:PfxPath` | Mounted private-key certificate for signing, token encryption, and key-ring protection |
 | `IdentityBroker:Signing:PfxPassword` | Deployment secret, never a checked-in value |

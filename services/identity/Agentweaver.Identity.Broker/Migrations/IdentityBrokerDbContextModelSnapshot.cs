@@ -133,6 +133,156 @@ namespace Agentweaver.Identity.Broker.Migrations
                     b.ToTable("pending_authorizations", "identity_broker");
                 });
 
+            modelBuilder.Entity("Agentweaver.Identity.Broker.RuntimeGrantHead", b =>
+                {
+                    b.Property<Guid>("GrantId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("grant_id");
+
+                    b.Property<long>("CurrentRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("current_revision");
+
+                    b.HasKey("GrantId");
+
+                    b.ToTable("runtime_grant_heads", "identity_broker", t =>
+                        {
+                            t.HasCheckConstraint("ck_runtime_grant_heads_revision", "current_revision > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Identity.Broker.RuntimeGrantOperation", b =>
+                {
+                    b.Property<Guid>("OperationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<Guid>("GrantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("grant_id");
+
+                    b.Property<string>("RequestHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_hash");
+
+                    b.HasKey("OperationId");
+
+                    b.ToTable("runtime_grant_operations", "identity_broker");
+                });
+
+            modelBuilder.Entity("Agentweaver.Identity.Broker.RuntimeGrantOperationReceipt", b =>
+                {
+                    b.Property<Guid>("OperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("operation_id");
+
+                    b.Property<string>("ReceiptJson")
+                        .IsRequired()
+                        .HasMaxLength(16384)
+                        .HasColumnType("character varying(16384)")
+                        .HasColumnName("receipt_json");
+
+                    b.HasKey("OperationId");
+
+                    b.ToTable("runtime_grant_operation_receipts", "identity_broker");
+                });
+
+            modelBuilder.Entity("Agentweaver.Identity.Broker.RuntimeGrantRevision", b =>
+                {
+                    b.Property<Guid>("GrantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("grant_id");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("Audience")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("audience");
+
+                    b.Property<string>("ConfigurationHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("configuration_hash");
+
+                    b.Property<Guid>("DeliveryOperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("delivery_operation_id");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<string>("Issuer")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)")
+                        .HasColumnName("issuer");
+
+                    b.Property<int>("Purpose")
+                        .HasColumnType("integer")
+                        .HasColumnName("purpose");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recorded_at");
+
+                    b.Property<string>("RegistrationHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("registration_hash");
+
+                    b.Property<string>("RegistrationJson")
+                        .IsRequired()
+                        .HasMaxLength(16384)
+                        .HasColumnType("character varying(16384)")
+                        .HasColumnName("registration_json");
+
+                    b.Property<long>("RegistrationRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("registration_revision");
+
+                    b.Property<Guid>("RuntimeInstanceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("runtime_instance_id");
+
+                    b.Property<int>("State")
+                        .HasColumnType("integer")
+                        .HasColumnName("state");
+
+                    b.Property<string>("VerifierHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("verifier_hash");
+
+                    b.HasKey("GrantId", "Revision");
+
+                    b.HasIndex("RuntimeInstanceId");
+
+                    b.ToTable("runtime_grant_revisions", "identity_broker", t =>
+                        {
+                            t.HasCheckConstraint("ck_runtime_grant_hashes", "registration_hash ~ '^[0-9a-f]{64}$' AND verifier_hash ~ '^[0-9a-f]{64}$' AND configuration_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_runtime_grant_lifetime", "expires_at > recorded_at OR state = 2");
+
+                            t.HasCheckConstraint("ck_runtime_grant_purpose", "purpose IN (0, 1)");
+
+                            t.HasCheckConstraint("ck_runtime_grant_revision", "revision > 0 AND registration_revision > 0");
+
+                            t.HasCheckConstraint("ck_runtime_grant_state", "state IN (0, 1, 2)");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Identity.Broker.SecretGrantHead", b =>
                 {
                     b.Property<string>("GrantId")
@@ -448,6 +598,24 @@ namespace Agentweaver.Identity.Broker.Migrations
                     b.HasIndex("ApplicationId", "Status", "Subject", "Type");
 
                     b.ToTable("OpenIddictTokens", "identity_broker");
+                });
+
+            modelBuilder.Entity("Agentweaver.Identity.Broker.RuntimeGrantOperationReceipt", b =>
+                {
+                    b.HasOne("Agentweaver.Identity.Broker.RuntimeGrantOperation", null)
+                        .WithOne()
+                        .HasForeignKey("Agentweaver.Identity.Broker.RuntimeGrantOperationReceipt", "OperationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Identity.Broker.RuntimeGrantRevision", b =>
+                {
+                    b.HasOne("Agentweaver.Identity.Broker.RuntimeGrantHead", null)
+                        .WithMany()
+                        .HasForeignKey("GrantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Agentweaver.Identity.Broker.SecretGrantRevision", b =>

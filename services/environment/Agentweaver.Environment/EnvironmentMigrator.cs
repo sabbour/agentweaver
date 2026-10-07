@@ -23,6 +23,7 @@ public static class EnvironmentMigrator
                AND pg_catalog.to_regclass('"environment"."owners"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."lifecycle_operations"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."owner_effects"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."sandbox_leases"') IS NOT NULL
             """,
             connection);
         if (await schemaCheck.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
@@ -68,6 +69,11 @@ public static class EnvironmentMigrator
                AND has_table_privilege(current_user, 'environment.owner_effects', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'environment.owner_effects', 'DELETE')
                AND NOT has_table_privilege(current_user, 'environment.owner_effects', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.sandbox_leases', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.sandbox_leases', 'INSERT')
+               AND has_table_privilege(current_user, 'environment.sandbox_leases', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_leases', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_leases', 'TRUNCATE')
             """,
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)

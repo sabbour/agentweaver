@@ -40,6 +40,11 @@ internal sealed class ProjectsRunSelectionClient(
         ReadSelectionWithAuthorityAsync(
             context, projectId, runId, "acceptRunSelection", cancellationToken, refreshAuthority: true);
 
+    internal Task<AuthorizedRunSelection> ReadSelectionForReadWithAuthorityAsync(
+        HttpContext context, string projectId, string runId, CancellationToken cancellationToken) =>
+        ReadSelectionWithAuthorityAsync(
+            context, projectId, runId, "readRunSelection", cancellationToken, refreshAuthority: true);
+
     private async Task<AuthorizedRunSelection> ReadSelectionWithAuthorityAsync(
         HttpContext context,
         string projectId,

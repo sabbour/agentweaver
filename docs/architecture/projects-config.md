@@ -32,7 +32,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | --- | --- |
 | `POST /api/projects` | Create an active project and its initial configuration revision. |
 | `GET /api/projects` | List projects visible through current project roles; a tenant administrator sees all projects in that tenant. |
-| `GET /api/projects/{projectId}` | Read an authorized project summary. |
+| `GET /api/projects/{projectId}?run={runId}` | Read an authorized project summary. The optional `run` selector must match a run-bound caller's exact run; project-read roles are still required. |
 | `PATCH /api/projects/{projectId}` | Change project name or lifecycle state using an expected project revision. Archive rather than physically delete. |
 | `GET /api/projects/{projectId}/configuration?revision={n}` | Read the current or a retained configuration revision. |
 | `PUT /api/projects/{projectId}/configuration` | Append a configuration revision using an expected configuration revision. |

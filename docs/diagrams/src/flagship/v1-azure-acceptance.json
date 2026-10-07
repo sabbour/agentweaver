@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Foundation Probe acceptance evidence",
-  "alt": "The optional read-only Foundation Probe verifier validates image build provenance separately from native infrastructure deployment provenance and scope. It observes a completed Job, checks its image and native receipt, and queries correlated Azure Monitor evidence. It is not the P0 shipping smoke-test gate.",
+  "alt": "The optional read-only Foundation Probe verifier validates image build provenance separately from native infrastructure deployment provenance and scope. It observes a completed Job, checks its image and native receipt, and queries correlated Azure Monitor evidence. Local Identity runtime-table permission checks remain separate from this evidence gate. It is not the P0 shipping smoke-test gate.",
   "autonumber": true,
   "participants": [
     {

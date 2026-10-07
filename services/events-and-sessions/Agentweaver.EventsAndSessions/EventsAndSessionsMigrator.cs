@@ -7,7 +7,7 @@ namespace Agentweaver.EventsAndSessions;
 
 public static class EventsAndSessionsMigrator
 {
-    private const int CurrentSchemaVersion = 4;
+    private const int CurrentSchemaVersion = 7;
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
 
@@ -53,7 +53,10 @@ public static class EventsAndSessionsMigrator
         if (applied.Any(version => version is < 1 or > CurrentSchemaVersion) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
-            (applied.Contains(4) && !applied.Contains(3)))
+            (applied.Contains(4) && !applied.Contains(3)) ||
+            (applied.Contains(5) && !applied.Contains(4)) ||
+            (applied.Contains(6) && !applied.Contains(5)) ||
+            (applied.Contains(7) && !applied.Contains(6)))
             throw new InvalidOperationException("Unsupported Events & Sessions schema version.");
 
         var legacyProjectFactsV2 = false;
@@ -105,6 +108,9 @@ public static class EventsAndSessionsMigrator
                 3 when legacyProjectFactsV2 => "Agentweaver.EventsAndSessions.Migrations.002_addressed_messages.sql",
                 3 => "Agentweaver.EventsAndSessions.Migrations.003_project_facts.sql",
                 4 => "Agentweaver.EventsAndSessions.Migrations.004_explicit_session_forks.sql",
+                5 => "Agentweaver.EventsAndSessions.Migrations.005_copilot_usage.sql",
+                6 => "Agentweaver.EventsAndSessions.Migrations.006_native_sdk_usage.sql",
+                7 => "Agentweaver.EventsAndSessions.Migrations.007_native_usage_receipts.sql",
                 _ => throw new InvalidOperationException("Unsupported Events & Sessions schema version.")
             };
             await using var resource = typeof(EventsAndSessionsMigrator).Assembly.GetManifestResourceStream(resourceName)
@@ -141,7 +147,7 @@ public static class EventsAndSessionsMigrator
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 3),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 4),
-                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2, 3, 4)),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -158,7 +164,18 @@ public static class EventsAndSessionsMigrator
                 to_regclass(@messageThreads) IS NOT NULL,
                 to_regclass(@messages) IS NOT NULL,
                 to_regclass(@messageBindings) IS NOT NULL,
-                to_regclass(@forkLineage) IS NOT NULL
+                to_regclass(@forkLineage) IS NOT NULL,
+                to_regclass(@usageLedger) IS NOT NULL,
+                to_regclass(@usageRateCards) IS NOT NULL,
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 5),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 6),
+                EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(@usageLedger)
+                    AND attname = 'cache_write_tokens' AND attnum > 0 AND NOT attisdropped),
+                EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(@usageLedger)
+                    AND attname = 'request_count' AND attnum > 0 AND NOT attisdropped AND NOT attnotnull),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 7),
+                to_regclass(@usageBindings) IS NOT NULL,
+                to_regclass(@usageReceipts) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.sessions");
         command.Parameters.AddWithValue("bindings", NpgsqlDbType.Text, $"{schema}.session_provider_bindings");
@@ -173,14 +190,20 @@ public static class EventsAndSessionsMigrator
         command.Parameters.AddWithValue("messageThreads", NpgsqlDbType.Text, $"{schema}.addressed_message_threads");
         command.Parameters.AddWithValue("messages", NpgsqlDbType.Text, $"{schema}.addressed_messages");
         command.Parameters.AddWithValue("messageBindings", NpgsqlDbType.Text, $"{schema}.messaging_provider_bindings");
+        command.Parameters.AddWithValue("usageLedger", NpgsqlDbType.Text, $"{schema}.usage_ledger");
+        command.Parameters.AddWithValue("usageRateCards", NpgsqlDbType.Text, $"{schema}.usage_rate_cards");
+        command.Parameters.AddWithValue("usageBindings", NpgsqlDbType.Text, $"{schema}.usage_run_cost_bindings");
+        command.Parameters.AddWithValue("usageReceipts", NpgsqlDbType.Text, $"{schema}.usage_source_receipts");
         command.Parameters.AddWithValue("forkLineage", NpgsqlDbType.Text, $"{schema}.session_fork_lineage");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) ||
             reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
             reader.GetInt64(3) != 1 || reader.GetInt64(4) != 0 ||
-            reader.GetInt64(5) != 1 || reader.GetInt64(6) != 1 ||
-            reader.GetInt64(7) != 0 ||
-            Enumerable.Range(8, 14).Any(column => !reader.GetBoolean(column)))
+            reader.GetInt64(5) != 1 || reader.GetInt64(6) != 1 || reader.GetInt64(7) != 0 ||
+            Enumerable.Range(8, 16).Any(column => !reader.GetBoolean(column)) ||
+            reader.GetInt64(24) != 1 || reader.GetInt64(25) != 1 ||
+            !reader.GetBoolean(26) || !reader.GetBoolean(27) ||
+            reader.GetInt64(28) != 1 || !reader.GetBoolean(29) || !reader.GetBoolean(30))
             throw new InvalidOperationException(
                 "Events & Sessions schema is not current; run the explicit --migrate command.");
     }

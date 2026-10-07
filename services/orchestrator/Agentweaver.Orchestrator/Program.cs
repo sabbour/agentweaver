@@ -139,6 +139,8 @@ builder.Services.AddScoped(services => new ExecutableActionGuard(
     services.GetRequiredService<TimeProvider>(),
     services.GetService<IExecutableActionSourceReceiptWriter>(),
     services.GetService<IExecutableActionPolicyEvaluationReceiptWriter>()));
+var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
+var runtimeUsageEnabled = builder.Services.AddRuntimeUsageSource(builder.Configuration);
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
 {
@@ -181,6 +183,10 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
 });
 app.MapCoordinationEndpoints();
 app.MapSourceControlEndpoints();
+if (runtimeRegistrationEnabled)
+    app.MapRuntimeRegistrationEndpoints();
+if (runtimeUsageEnabled)
+    app.MapRuntimeUsageSourceEndpoints();
 app.Run();
 
 static string Required(IConfiguration configuration, string key) =>

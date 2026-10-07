@@ -141,11 +141,12 @@ public sealed class ProjectsConfigService(
     public async Task<ProjectSummary> GetProjectAsync(
         ProjectAuthorizationContext caller,
         string projectId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? runId = null)
     {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         var project = await FindProjectAsync(
-            caller, projectId, ProjectAccess.Read, cancellationToken).ConfigureAwait(false);
+            caller, projectId, ProjectAccess.Read, cancellationToken, runId).ConfigureAwait(false);
         return ToSummary(project);
     }
 
@@ -478,9 +479,10 @@ public sealed class ProjectsConfigService(
         ProjectAuthorizationContext caller,
         string projectId,
         ProjectAccess access,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? runId = null)
     {
-        caller.RequireResourceBinding(projectId);
+        caller.RequireResourceBinding(projectId, runId);
         await EnsureCurrentMembershipAsync(caller, cancellationToken).ConfigureAwait(false);
         if (!Guid.TryParseExact(projectId, "N", out _))
             throw ProjectConfigException.NotFound();

@@ -2,7 +2,7 @@
   "version": 2,
   "source": {
     "file": "v1-storage-volume-provisioning.json",
-    "sha256": "8c973f37b52a5aad7c69ff8499db816ef62cbfa14993529f181747cafa896e10"
+    "sha256": "f26e07bde25983794eed53b8bb680d8ee89b6e148a2703e6c56ab5ce68901d02"
   },
   "drawio": {
     "file": "v1-storage-volume-provisioning.drawio",

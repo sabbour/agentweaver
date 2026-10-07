@@ -130,7 +130,7 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<NpgsqlDataSource>();
-            services.AddSingleton(NpgsqlDataSource.Create(_connectionString));
+            services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(_connectionString));
 
             // Must be a `Configure` call, not `PostConfigure`: the framework's own internal
             // `PostConfigureOpenIdConnectOptions` only builds `options.ConfigurationManager`

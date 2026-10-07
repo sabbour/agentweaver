@@ -58,8 +58,12 @@ See the [Events & Sessions journal](docs/architecture/events-sessions.md) for it
 implemented contract, PostgreSQL ownership, provider pin, and current limits.
 
 Provider selection covers exclusive and platform-singleton seams, ordered Guardrails/
-Telemetry sets, and layered Network Policy (required L3/L4, optional L7). Cost
-meter-keyed and Application Hosting per-app selection remain subsequent work; callers
+Telemetry sets, layered Network Policy (required L3/L4, optional L7), and meter-keyed
+Cost selection. The source also connects authenticated native SDK observations
+to immutable Orchestrator receipts and reference-only Events accounting.
+The local harness covers current owner authority and exact Copilot AI-credit pricing.
+It does not prove deployment, paid model execution, or an AgentHost scheduler.
+Application Hosting per-app selection remains subsequent work; callers
 receive an explicit error for unsupported single-provider resolution rather than a
 fallback. Resolving a descriptor produces a candidate, not a provisioned resource.
 A run binding pins negotiated capabilities only after provisioning; layered pinning
