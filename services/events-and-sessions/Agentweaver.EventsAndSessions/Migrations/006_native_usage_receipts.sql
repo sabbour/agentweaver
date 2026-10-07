@@ -31,3 +31,10 @@ CREATE TRIGGER usage_run_cost_bindings_append_only
 CREATE TRIGGER usage_source_receipts_append_only
     BEFORE UPDATE OR DELETE ON {schema}.usage_source_receipts
     FOR EACH ROW EXECUTE FUNCTION {schema}.reject_usage_receipt_mutation();
+
+CREATE TRIGGER usage_run_cost_bindings_no_truncate
+    BEFORE TRUNCATE ON {schema}.usage_run_cost_bindings
+    FOR EACH STATEMENT EXECUTE FUNCTION {schema}.reject_usage_receipt_mutation();
+CREATE TRIGGER usage_source_receipts_no_truncate
+    BEFORE TRUNCATE ON {schema}.usage_source_receipts
+    FOR EACH STATEMENT EXECUTE FUNCTION {schema}.reject_usage_receipt_mutation();

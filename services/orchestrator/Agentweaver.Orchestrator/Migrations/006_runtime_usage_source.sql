@@ -40,3 +40,10 @@ CREATE TRIGGER runtime_sdk_sources_append_only
 CREATE TRIGGER runtime_usage_observations_append_only
     BEFORE UPDATE OR DELETE ON {schema}.runtime_usage_observations
     FOR EACH ROW EXECUTE FUNCTION {schema}.reject_runtime_usage_mutation();
+
+CREATE TRIGGER runtime_sdk_sources_no_truncate
+    BEFORE TRUNCATE ON {schema}.runtime_sdk_sources
+    FOR EACH STATEMENT EXECUTE FUNCTION {schema}.reject_runtime_usage_mutation();
+CREATE TRIGGER runtime_usage_observations_no_truncate
+    BEFORE TRUNCATE ON {schema}.runtime_usage_observations
+    FOR EACH STATEMENT EXECUTE FUNCTION {schema}.reject_runtime_usage_mutation();

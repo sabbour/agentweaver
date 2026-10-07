@@ -30,6 +30,14 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
+    [Theory]
+    [InlineData("grant")]
+    [InlineData("lease")]
+    [InlineData("expiry")]
+    public Task AuthorityLossDuringSdkPreparationPreventsNativeSessionCreation(string loss) =>
+        BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            false, $"sdk-preparation-{loss}");
+
     private async Task VerifyRunBoundRuntimeRegistrationWithCurrentEnvironmentAsync(
         string ownerSchema, SecurityKey signingKey, ProjectsConfigResourceServer projects,
         EventsIntegrationFactory events, string runToken, RuntimeOwnerContext owner, Guid membershipId,
@@ -136,7 +144,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 settings["IdentityBroker__RuntimeBootstrap__OrchestratorOwnerAddress"] = "https://orchestrator.test/";
                 settings["IdentityBroker__RuntimeBootstrap__EnvironmentOwnerAddress"] = "https://environment.test/";
                 settings["IdentityBroker__RuntimeBootstrap__BootstrapLifetime"] = "00:01:00";
-                settings["IdentityBroker__RuntimeBootstrap__SourceLifetime"] = "00:02:00";
+                settings["IdentityBroker__RuntimeBootstrap__SourceLifetime"] =
+                    sourceLoss == "sdk-preparation-expiry" ? "00:00:10" : "00:02:00";
             },
             configureServices: services =>
             {
@@ -221,7 +230,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(RuntimeBootstrapReceiverState.Pending, receiver.State);
             Assert.Empty(sdk.Requests);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-            if (revokeSourceBeforeSdk)
+            var duringSdkPreparation = sourceLoss?.StartsWith("sdk-preparation-", StringComparison.Ordinal) == true;
+            if (revokeSourceBeforeSdk || duringSdkPreparation)
             {
                 RuntimeCredentialProof? exchanged = null;
                 var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -239,17 +249,29 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     exchanged = new(grant.GrantId, grant.RuntimeInstanceId, grant.Revision, grant.Purpose,
                         grant.Audience, grant.ConfigurationHash,
                         new SecretCredential(exchange.CredentialValue, grant.ExpiresAt));
-                    output.WriteLine("Captured actual Broker source exchange for the pre-SDK wait.");
+                    output.WriteLine("Captured actual Broker source exchange for the creation-authority wait.");
                 };
-                inspectOwnerResponse = async (request, response, token) =>
+                if (duringSdkPreparation)
                 {
-                    if (exchanged is null || request.RequestUri?.AbsolutePath !=
-                        $"/internal/runtime/registrations/{registration.RuntimeInstanceId:D}" ||
-                        !response.IsSuccessStatusCode)
-                        return;
-                    held.TrySetResult();
-                    await release.Task.WaitAsync(token);
-                };
+                    sdk.BeforeStatusResponse = async token =>
+                    {
+                        Assert.NotNull(exchanged);
+                        held.TrySetResult();
+                        await release.Task.WaitAsync(token);
+                    };
+                }
+                else
+                {
+                    inspectOwnerResponse = async (request, response, token) =>
+                    {
+                        if (exchanged is null || request.RequestUri?.AbsolutePath !=
+                            $"/internal/runtime/registrations/{registration.RuntimeInstanceId:D}" ||
+                            !response.IsSuccessStatusCode)
+                            return;
+                        held.TrySetResult();
+                        await release.Task.WaitAsync(token);
+                    };
+                }
                 var configure = receiver.ConfigureAsync(bootstrap, configuration, Guid.NewGuid(), Guid.NewGuid(),
                     RuntimeCopilotSessionTests.SdkCredential(), timeout.Token);
                 try
@@ -258,30 +280,79 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     if (configure.IsCompleted)
                         await configure;
                     await held.Task.WaitAsync(timeout.Token);
-                    output.WriteLine("Holding the final actual pre-SDK runtime registration response.");
+                    output.WriteLine(duringSdkPreparation
+                        ? "Holding the actual SDK status.get response before native session creation."
+                        : "Holding the final actual pre-SDK runtime registration response.");
                     Assert.NotNull(exchanged);
-                    Assert.Empty(sdk.Requests);
-                    Assert.Equal(RuntimeCredentialState.Revoked,
-                        (await runtimeBroker.RevokeAsync(exchanged, Guid.NewGuid(), timeout.Token)).State);
+                    Assert.DoesNotContain(sdk.Requests, request => request.Method == "session.create");
+                    if (duringSdkPreparation)
+                        Assert.Contains(sdk.Requests, request => request.Method == "status.get");
+                    else
+                        Assert.Empty(sdk.Requests);
+                    switch (sourceLoss)
+                    {
+                        case "sdk-preparation-expiry":
+                            var remaining = exchanged.Credential.ExpiresAt - DateTimeOffset.UtcNow;
+                            if (remaining > TimeSpan.Zero)
+                                await Task.Delay(remaining + TimeSpan.FromMilliseconds(20), timeout.Token);
+                            Assert.False(exchanged.Credential.IsUsable());
+                            break;
+                        case "sdk-preparation-lease":
+                            using (var response = await SendAsync(projects.Client, HttpMethod.Get,
+                                "/api/authorization/context", runToken, [registration.Binding.TenantId]))
+                            {
+                                await AssertStatusAsync(response, HttpStatusCode.OK);
+                                var current = await ReadAuthorizationContextAsync(response);
+                                await environment.RetireCurrentLeaseAsync(new(
+                                    current.Issuer, current.ActorId, current.MembershipRevision), timeout.Token);
+                            }
+                            break;
+                        default:
+                            Assert.Equal(RuntimeCredentialState.Revoked,
+                                (await runtimeBroker.RevokeAsync(exchanged, Guid.NewGuid(), timeout.Token)).State);
+                            break;
+                    }
                 }
                 finally
                 {
                     release.TrySetResult();
                     inspectOwnerResponse = null;
                     inspectRuntimeResponse = null;
+                    sdk.BeforeStatusResponse = null;
                 }
-                var failure = await Assert.ThrowsAsync<AggregateException>(() => configure);
-                Assert.All(failure.InnerExceptions, exception => Assert.IsType<RuntimeAuthorizationException>(exception));
-                Assert.Empty(sdk.Requests);
+                if (sourceLoss == "sdk-preparation-expiry")
+                {
+                    var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => configure);
+                    Assert.Equal("runtime_credential_unavailable", failure.Code);
+                }
+                else
+                {
+                    var failure = await Assert.ThrowsAsync<AggregateException>(() => configure);
+                    Assert.All(failure.InnerExceptions, exception => Assert.IsType<RuntimeAuthorizationException>(exception));
+                }
+                Assert.DoesNotContain(sdk.Requests, request => request.Method == "session.create");
+                if (!duringSdkPreparation)
+                    Assert.Empty(sdk.Requests);
                 Assert.Equal(RuntimeBootstrapReceiverState.Failed, receiver.State);
                 exchanged!.Credential.Invalidate();
                 await AssertNativeSourceCountsAsync(ownerSchema, 0, 0);
+                await AssertNativeAccountingCountsAsync(eventsSchema, 0);
                 await using var scope = brokerFactory.Services.CreateAsyncScope();
                 var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
-                var revision = await db.RuntimeGrantRevisions.AsNoTracking()
-                    .SingleAsync(row => row.GrantId == exchanged.GrantId && row.Revision == 2);
-                Assert.Equal(RuntimeCredentialState.Revoked, revision.State);
-                output.WriteLine($"Actual Broker revoke during last pre-SDK registration wait denied with zero SDK requests: {elapsed.Elapsed}");
+                if (sourceLoss == "sdk-preparation-expiry")
+                {
+                    var revision = await db.RuntimeGrantRevisions.AsNoTracking()
+                        .SingleAsync(row => row.GrantId == exchanged.GrantId);
+                    Assert.Equal(RuntimeCredentialState.Active, revision.State);
+                    Assert.True(revision.ExpiresAt <= DateTimeOffset.UtcNow);
+                }
+                else if (sourceLoss != "sdk-preparation-lease")
+                {
+                    var revision = await db.RuntimeGrantRevisions.AsNoTracking()
+                        .SingleAsync(row => row.GrantId == exchanged.GrantId && row.Revision == 2);
+                    Assert.Equal(RuntimeCredentialState.Revoked, revision.State);
+                }
+                output.WriteLine($"Actual creation-authority loss {sourceLoss ?? "pre-SDK revoke"} denied with zero native sessions, source writes, or accounting: {elapsed.Elapsed}");
                 return;
             }
             var session = await receiver.ConfigureAsync(
@@ -395,6 +466,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(sourceReceipt.Usage.Attribution, accepted.Accounting.Attribution);
         Assert.Equal(0.00123456725m, accepted.Accounting.Amount);
         Assert.Equal(CostDisposition.Estimate, accepted.Accounting.Disposition);
+        await AssertNativeHistoryImmutabilityAsync(eventsSchema,
+            [("usage_source_receipts", "source_receipt_id"), ("usage_run_cost_bindings", "meter_source")],
+            "reject_usage_receipt_mutation");
+        await AssertNativeAccountingCountsAsync(eventsSchema, 1);
         using var replay = await SendJsonAsync(client, HttpMethod.Post, path, runToken,
             new RuntimeUsageReceiptReferenceRequest(sourceReceipt.ReceiptId));
         await AssertStatusAsync(replay, HttpStatusCode.OK);
@@ -421,12 +496,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             SELECT (SELECT count(*) FROM "{eventsSchema}".usage_ledger),
                    (SELECT count(*) FROM "{eventsSchema}".usage_rate_cards),
                    (SELECT count(*) FROM "{eventsSchema}".usage_source_receipts),
+                   (SELECT count(*) FROM "{eventsSchema}".usage_run_cost_bindings),
                    (SELECT count(*) FROM "{eventsSchema}".consumer_inbox_receipts
                     WHERE consumer_id = 'events.native-sdk-usage.v1')
             """, connection);
         await using var reader = await check.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        Assert.All(Enumerable.Range(0, 4), column => Assert.Equal(1L, reader.GetInt64(column)));
+        Assert.All(Enumerable.Range(0, 5), column => Assert.Equal(1L, reader.GetInt64(column)));
     }
 
     private sealed class RuntimeServiceRouter(
@@ -468,16 +544,61 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(observations, reader.GetInt64(1));
     }
 
-    private async Task AssertNativeSourceImmutabilityAsync(string schema)
+    private async Task AssertNativeAccountingCountsAsync(string schema, long expected)
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync();
-        foreach (var table in new[] { "runtime_sdk_sources", "runtime_usage_observations" })
+        await using var command = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{schema}".usage_ledger),
+                   (SELECT count(*) FROM "{schema}".usage_rate_cards),
+                   (SELECT count(*) FROM "{schema}".usage_source_receipts),
+                   (SELECT count(*) FROM "{schema}".usage_run_cost_bindings),
+                   (SELECT count(*) FROM "{schema}".consumer_inbox_receipts
+                    WHERE consumer_id = 'events.native-sdk-usage.v1')
+            """, connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.All(Enumerable.Range(0, 5), column => Assert.Equal(expected, reader.GetInt64(column)));
+    }
+
+    private Task AssertNativeSourceImmutabilityAsync(string schema) =>
+        AssertNativeHistoryImmutabilityAsync(schema,
+            [("runtime_sdk_sources", "runtime_instance_id"), ("runtime_usage_observations", "receipt_id")],
+            "reject_runtime_usage_mutation");
+
+    private async Task AssertNativeHistoryImmutabilityAsync(
+        string schema, (string Table, string Identity)[] tables, string rejectionFunction)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+        async Task<string> SnapshotAsync(string table, string identity)
         {
+            await using var snapshot = new NpgsqlCommand($"""
+                SELECT coalesce(jsonb_agg(to_jsonb(history) ORDER BY {identity}), '[]'::jsonb)::text
+                FROM "{schema}".{table} AS history
+                """, connection);
+            return Assert.IsType<string>(await snapshot.ExecuteScalarAsync());
+        }
+        var before = new Dictionary<string, string>();
+        foreach (var (table, identity) in tables)
+        {
+            before[table] = await SnapshotAsync(table, identity);
+            Assert.NotEqual("[]", before[table]);
+            await using var guard = new NpgsqlCommand("""
+                SELECT count(*) FROM pg_trigger
+                WHERE tgrelid = to_regclass(@table) AND tgname = @trigger
+                  AND NOT tgisinternal AND tgenabled = 'O' AND tgtype = 34
+                  AND tgfoid = to_regprocedure(@function)
+                """, connection);
+            guard.Parameters.AddWithValue("table", $"\"{schema}\".{table}");
+            guard.Parameters.AddWithValue("trigger", $"{table}_no_truncate");
+            guard.Parameters.AddWithValue("function", $"\"{schema}\".{rejectionFunction}()");
+            Assert.Equal(1L, await guard.ExecuteScalarAsync());
             foreach (var sql in new[]
             {
-                $"""UPDATE "{schema}".{table} SET recorded_at = recorded_at + interval '1 second'""",
-                $"""DELETE FROM "{schema}".{table}"""
+                $"""UPDATE "{schema}".{table} SET {identity} = {identity}""",
+                $"""DELETE FROM "{schema}".{table}""",
+                $"""TRUNCATE "{schema}".{table} CASCADE"""
             })
             {
                 await using var command = new NpgsqlCommand(sql, connection);
@@ -485,6 +606,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Assert.Contains("append-only", rejected.MessageText);
             }
         }
+        var targets = string.Join(", ", tables.Select(table => $"\"{schema}\".{table.Table}"));
+        foreach (var sql in new[] { $"TRUNCATE {targets}", $"TRUNCATE {targets} CASCADE" })
+        {
+            await using var command = new NpgsqlCommand(sql, connection);
+            var rejected = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync());
+            Assert.Contains("append-only", rejected.MessageText);
+        }
+        foreach (var (table, identity) in tables)
+            Assert.Equal(before[table], await SnapshotAsync(table, identity));
     }
 
     private async Task VerifyNativeSourceAuthorityAfterWaitAsync(

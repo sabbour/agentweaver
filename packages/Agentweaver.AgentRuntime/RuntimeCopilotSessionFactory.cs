@@ -39,8 +39,10 @@ public sealed class RuntimeCopilotSessionFactory
         RuntimeRegistration registration,
         string acceptedModelSelectionReference,
         SecretCredential sdkCredential,
+        Func<CancellationToken, Task> requireCreationAuthority,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(requireCreationAuthority);
         RuntimeContractValidation.Validate(registration);
         if (!_modelBindings.TryGetValue(acceptedModelSelectionReference, out var requestedModel))
             throw new RuntimeAuthorizationException("runtime_model_reference_unavailable");
@@ -72,6 +74,10 @@ public sealed class RuntimeCopilotSessionFactory
             var selected = matches[0];
             var status = await client.GetStatusAsync(cancellationToken);
             var sdkSessionId = $"agentweaver-runtime-{registration.RuntimeInstanceId:D}";
+            await requireCreationAuthority(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!sdkCredential.IsUsable())
+                throw new RuntimeAuthorizationException("runtime_sdk_credential_unavailable");
             session = await client.CreateSessionAsync(new SessionConfig
             {
                 SessionId = sdkSessionId,

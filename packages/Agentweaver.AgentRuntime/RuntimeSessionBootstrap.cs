@@ -50,19 +50,23 @@ public sealed class RuntimeSessionBootstrap(
                 source.Receipt.Audience != registration.Binding.ObservationEndpoint)
                 throw new RuntimeAuthorizationException("runtime_source_credential_unavailable");
             var sourceProof = SourceProof(source);
-            await RequireUnchangedAsync(registration, cancellationToken);
-            var verifiedSource = await broker.VerifySourceAsync(sourceProof, cancellationToken);
-            RequireRegistrationReceipt(verifiedSource, registration);
-            if (!source.Credential.IsUsable() || !sdkCredential.IsUsable())
-                throw new RuntimeAuthorizationException("runtime_credential_unavailable");
+            async Task RequireSourceAuthorityAsync(CancellationToken token)
+            {
+                await RequireUnchangedAsync(registration, token);
+                if (!sourceProof.Credential.IsUsable() || !sdkCredential.IsUsable())
+                    throw new RuntimeAuthorizationException("runtime_credential_unavailable");
+                var verifiedSource = await broker.VerifySourceAsync(sourceProof, token);
+                RequireRegistrationReceipt(verifiedSource, registration);
+                RequireCurrent(registration, actor, timeProvider);
+                token.ThrowIfCancellationRequested();
+                if (verifiedSource.ExpiresAt <= timeProvider.GetUtcNow() ||
+                    !sourceProof.Credential.IsUsable() || !sdkCredential.IsUsable())
+                    throw new RuntimeAuthorizationException("runtime_credential_unavailable");
+            }
+            await RequireSourceAuthorityAsync(cancellationToken);
             session = await sessions.CreateHostedAsync(
-                registration, modelReference, sdkCredential, cancellationToken);
-            await RequireUnchangedAsync(registration, cancellationToken);
-            verifiedSource = await broker.VerifySourceAsync(sourceProof, cancellationToken);
-            RequireRegistrationReceipt(verifiedSource, registration);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!source.Credential.IsUsable() || !sdkCredential.IsUsable())
-                throw new RuntimeAuthorizationException("runtime_credential_unavailable");
+                registration, modelReference, sdkCredential, RequireSourceAuthorityAsync, cancellationToken);
+            await RequireSourceAuthorityAsync(cancellationToken);
             return new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,
                 session, owner, broker, actor, timeProvider);
         }

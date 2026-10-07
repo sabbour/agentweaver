@@ -24,6 +24,9 @@ The credential fixes the runtime, revision, configuration hash, audience, and ex
 `RuntimeSessionBootstrap` consumes a delivered configure nonce before SDK binding.
 It derives the model reference from the current registration, exchanges the consumed
 nonce for an observe credential, and rechecks authority after native SDK awaits.
+After SDK preparation, it compares the current registration before verifying the
+observe grant. It checks credential lifetimes and cancellation immediately before
+`session.create`, with no intervening asynchronous owner lookup.
 Only a fully initialized immutable session is returned. Initialization failure revokes
 or invalidates the source credential and disposes the SDK session.
 
@@ -37,6 +40,8 @@ Identical SDK events return the original receipt. Changed event content conflict
 Events accepts only that receipt ID through its separate usage route.
 It fetches the source receipt from the fixed Orchestrator owner and commits
 the price, immutable rate card, ledger entry, payload hash, and inbox together.
+Database triggers reject updates, deletes, and statement-level truncation of source
+records, accounting receipts, and run-scoped Cost bindings.
 The source receipt and accounting acknowledgment are different contracts.
 A committed source receipt survives restart and supports explicit accounting retries.
 The library does not run a relay or persist the in-memory callback queue.

@@ -109,6 +109,8 @@ It reads the model reference from the current registration, not the configure bo
 It exchanges the consumed nonce for a source credential and checks current authority
 before and after native session creation. It returns one fully initialized immutable
 session; failures dispose the SDK session and revoke or invalidate the source credential.
+The final creation check follows SDK preparation: current registration comparison,
+observe-grant verification, then immediate lifetime and cancellation checks.
 Usage reads also check current registration and source authority.
 
 The runtime library registers actual SDK facts and commits callbacks to the Orchestrator.
@@ -116,8 +118,9 @@ The source writer rechecks the observe grant and current registration after data
 Its immutable source receipt preserves the nullable native measurements and weighted nano-AIU.
 Events accepts only the receipt ID, fetches trusted owner evidence, and commits
 the immutable price, rate card, ledger, source hash, and inbox together.
-The combined local harness covers successful accounting and authority loss before SDK creation
-or during source transaction waits. It does not prove deployed dispatch or paid model execution.
+The combined local harness covers successful accounting and authority loss before
+and during SDK preparation, or during source transaction waits.
+It does not prove deployed dispatch or paid model execution.
 See the [runtime credential contract](../../reference/contracts#runtime-credential-source-candidate).
 
 ## Today in 0.x

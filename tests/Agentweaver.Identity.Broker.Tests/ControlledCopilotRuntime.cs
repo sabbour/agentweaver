@@ -31,6 +31,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public string ModelId { get; set; } = "controlled-model";
     public string? EffectiveModelId { get; set; }
     public Action? BeforeEffectiveModelResponse { get; set; }
+    public Func<CancellationToken, Task>? BeforeStatusResponse { get; set; }
     public bool EmitUsageAfterCreate { get; set; } = true;
     public Guid UsageEventId { get; } = Guid.NewGuid();
     public DateTimeOffset UsageTimestamp { get; } = DateTimeOffset.UtcNow;
@@ -114,6 +115,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                             };
                             break;
                         case "status.get":
+                            if (BeforeStatusResponse is not null)
+                                await BeforeStatusResponse(_stop.Token);
                             result = new { version = "controlled-runtime-v1", protocolVersion = 3 };
                             break;
                         case "session.create":

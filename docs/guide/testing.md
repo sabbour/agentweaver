@@ -82,10 +82,16 @@ It does not seed producer authority or take a desired model from caller JSON.
 The five scenarios cover successful accounting, Broker revocation before SDK creation,
 observe-grant revocation during an observation lock wait, registration revocation
 before the source lock opens, and Environment retirement during an observation wait.
+Three additional scenarios hold the actual SDK `status.get` response before creation.
+They revoke the genuine Broker grant, retire the actual Environment lease, or wait
+for the real source credential to expire. Each proves zero `session.create` requests,
+source records, and accounting entries.
 The positive scenario commits duplicate native callbacks to one immutable receipt,
 then verifies reference-only ingestion and exact `0.00123456725 AIC` accounting.
 The multiplier is not applied a second time.
 Database checks reject mutation and truncation of source and accounting history.
+They check each table's statement trigger and attempt dependent, multi-table, and
+`CASCADE` truncation. Stored rows and pins remain identical, and receipt replay succeeds.
 
 The canonical Sandbox integration also covers public write versus internal run-read
 permission, three current-authority reads, and retained-lease protection against competing retirement.
@@ -96,6 +102,7 @@ After the Release build, run the combined source scenarios with:
 
 ```powershell
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~AuthorityLossDuringSdkPreparationPreventsNativeSessionCreation
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerIssuedOwnerAndSeparateRunSelectionAuthorizeWorkspaceVolumeHttpEffects
 ```
 

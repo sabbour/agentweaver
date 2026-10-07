@@ -16,7 +16,7 @@ public sealed class RuntimeCopilotSessionTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var session = await factory.CreateHostedAsync(
             registration, registration.Binding.ModelSelectionReference!,
-            SdkCredential(), timeout.Token);
+            SdkCredential(), _ => Task.CompletedTask, timeout.Token);
         await using var usage = session.ReadUsageAsync(timeout.Token).GetAsyncEnumerator();
         Assert.True(await usage.MoveNextAsync());
         var observation = usage.Current;
@@ -46,7 +46,7 @@ public sealed class RuntimeCopilotSessionTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var error = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             Factory(external).CreateHostedAsync(registration,
-                registration.Binding.ModelSelectionReference!, SdkCredential(), timeout.Token));
+                registration.Binding.ModelSelectionReference!, SdkCredential(), _ => Task.CompletedTask, timeout.Token));
         Assert.Equal("runtime_sdk_effective_model_mismatch", error.Code);
         Assert.Contains(external.Requests, request => request.Method == "session.destroy");
     }
@@ -58,7 +58,7 @@ public sealed class RuntimeCopilotSessionTests
         var registration = Registration();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var session = await Factory(external).CreateHostedAsync(
-            registration, registration.Binding.ModelSelectionReference!, SdkCredential(), timeout.Token);
+            registration, registration.Binding.ModelSelectionReference!, SdkCredential(), _ => Task.CompletedTask, timeout.Token);
         var data = new { model = external.ModelId };
         await external.EmitUsageAsync(data);
         await external.EmitUsageAsync(data);
@@ -88,7 +88,7 @@ public sealed class RuntimeCopilotSessionTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             Factory(external).CreateHostedAsync(
-                registration, registration.Binding.ModelSelectionReference!, credential, timeout.Token));
+                registration, registration.Binding.ModelSelectionReference!, credential, _ => Task.CompletedTask, timeout.Token));
         Assert.Equal("runtime_sdk_credential_unavailable", failure.Code);
         Assert.Contains(external.Requests, request => request.Method == "session.destroy");
         Assert.False(credential.IsUsable());
@@ -104,7 +104,7 @@ public sealed class RuntimeCopilotSessionTests
         var registration = Registration();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var session = await Factory(external).CreateHostedAsync(
-            registration, registration.Binding.ModelSelectionReference!, SdkCredential(), timeout.Token);
+            registration, registration.Binding.ModelSelectionReference!, SdkCredential(), _ => Task.CompletedTask, timeout.Token);
         await external.EmitUsageAsync(external.UsageData(
             model: foreign == "model" ? "other-model" : null,
             initiator: foreign == "initiator" ? "subagent" : null),
@@ -113,6 +113,45 @@ public sealed class RuntimeCopilotSessionTests
         var error = await Assert.ThrowsAsync<RuntimeAuthorizationException>(async () =>
             await usage.MoveNextAsync());
         Assert.Equal("runtime_sdk_usage_binding_invalid", error.Code);
+    }
+
+    [Fact]
+    public async Task SdkCredentialInvalidationDuringPreparationCannotCreateANativeSession()
+    {
+        var credential = SdkCredential();
+        await using var external = new ControlledCopilotRuntime
+        {
+            BeforeStatusResponse = _ =>
+            {
+                credential.Invalidate();
+                return Task.CompletedTask;
+            }
+        };
+        var registration = Registration();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            Factory(external).CreateHostedAsync(registration,
+                registration.Binding.ModelSelectionReference!, credential, _ => Task.CompletedTask, timeout.Token));
+        Assert.Equal("runtime_sdk_credential_unavailable", failure.Code);
+        Assert.Contains(external.Requests, request => request.Method == "status.get");
+        Assert.DoesNotContain(external.Requests, request => request.Method == "session.create");
+    }
+
+    [Fact]
+    public async Task CreationAuthorityIsRequiredAfterSdkPreparationAndBeforeSessionCreation()
+    {
+        await using var external = new ControlledCopilotRuntime();
+        var registration = Registration();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            Factory(external).CreateHostedAsync(registration,
+                registration.Binding.ModelSelectionReference!, SdkCredential(), _ =>
+                {
+                    Assert.Contains(external.Requests, request => request.Method == "status.get");
+                    throw new RuntimeAuthorizationException("runtime_registration_stale");
+                }, timeout.Token));
+        Assert.Equal("runtime_registration_stale", failure.Code);
+        Assert.DoesNotContain(external.Requests, request => request.Method == "session.create");
     }
 
     internal static RuntimeCopilotSessionFactory Factory(ControlledCopilotRuntime external) =>

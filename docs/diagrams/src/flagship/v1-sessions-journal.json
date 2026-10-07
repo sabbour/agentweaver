@@ -80,7 +80,7 @@
     {
       "type": "note",
       "over": ["api", "postgres"],
-      "label": "Usage receipts + Cost pins: schema v6.\nReference-only admission; atomic price/ledger/inbox."
+      "label": "Immutable usage receipts + Cost pins: schema v6.\nReference-only; atomic accounting; TRUNCATE denied."
     },
     {
       "type": "message",

@@ -54,6 +54,8 @@ The accounting receipt binds the canonical SHA-256 hash, attribution, immutable
 price, rate-card version, and commit timestamp. Identical retries return the original
 receipt. Changed content for the same event ID conflicts.
 Database triggers reject changes and truncation of history.
+Statement-level guards also reject `TRUNCATE`, including dependent and multi-table
+operations, on native source records, accounting receipts, and run-scoped Cost bindings.
 
 Totals retain separate meter-source and unit groups. A missing measurement makes
 that measurement total unknown. An unpriced entry makes the run or agent pricing
