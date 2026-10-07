@@ -67,6 +67,55 @@ policy-resource boundary are controlled. It is not a live Kubernetes or
 datapath test. Sandbox observations remain `Pending` without AgentHost configure
 evidence.
 
+## Orchestrator runtime context and recovery
+
+The Orchestrator requires the selected Sandbox binding from the immutable,
+persisted run-selection context for the session's exact current execution
+fence. It does not rebuild a missing binding from accepted-selection JSON or a
+run snapshot. If that versioned context is absent, the runtime-owner-context
+endpoint returns `runtime_owner_context_unavailable`; a lease or owner
+registration alone does not prove that an SDK process is attached or ready.
+
+Run the focused PostgreSQL owner-store races with:
+
+```powershell
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj `
+  --filter "FullyQualifiedName~RevalidatesAfter" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+These five cases cover revocation after a blocked fork-command insert,
+revocation after a blocked owner-outbox sequence update, and fresh authority
+checks after registered-duplicate command-row waits. They assert rollback of
+the reservation or registration and the explicit unregistered result. They use
+real PostgreSQL lock waits with a test authority callback; use the Broker
+integration below for Projects-role revocation through the actual HTTP path.
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj `
+  --filter "FullyQualifiedName~BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+The Broker-backed Orchestrator/Events integration waits for the real owner SQL
+insert or outbox update, revokes the Projects role, and then verifies the late
+authority check. A revoked Prepare leaves no reservation. If revocation occurs
+after Events commits a fork but before owner registration, the owner returns an
+explicit unregistered result with no child, request, or forked outbox record;
+the Events journal lineage remains. A registered duplicate blocked on its
+command row is also denied after revocation.
+
+The same integration verifies that an active, confirmed-mapped child cannot
+obtain runtime-owner context when its exact current-fence Sandbox context is
+missing, and that this denial has no owner side effects. Failure and recovery
+advance the current decision and execution fence, cancel a pending gate, and
+carry the exact Sandbox binding into a new versioned context without changing
+prior decision or context versions. Run-wide grants are superseded, not
+reissued or resurrected. Recovered logical run state does not make physical
+effects available: they remain `unavailable`, and the recovery outbox records
+`physicalEffectsReplayed=false`. These checks do not prove physical SDK
+readiness or replay.
+
 Build the service and all referenced provider projects with:
 
 ```powershell
