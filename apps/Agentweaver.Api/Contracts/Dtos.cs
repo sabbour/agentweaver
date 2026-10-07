@@ -531,6 +531,8 @@ public sealed record ReviewRequest
 /// </summary>
 public sealed record AssemblyReviewRequest
 {
+    [JsonPropertyName("review_request_id")]
+    public string? ReviewRequestId { get; init; }
     [JsonPropertyName("output_revision_id")]
     public string? OutputRevisionId { get; init; }
     [JsonPropertyName("approved")]
@@ -1436,6 +1438,7 @@ public sealed record SteerRequest
     [JsonPropertyName("target_child_run_id")] public string? TargetChildRunId { get; init; }
     [JsonPropertyName("instruction")] public string? Instruction { get; init; }
     [JsonPropertyName("output_revision_id")] public string? OutputRevisionId { get; init; }
+    [JsonPropertyName("review_request_id")] public string? ReviewRequestId { get; init; }
 }
 
 /// <summary>

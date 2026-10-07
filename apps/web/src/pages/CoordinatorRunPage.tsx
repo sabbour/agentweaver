@@ -239,6 +239,7 @@ interface OrchState {
   phase: OrchPhase;
   reason?: string;
   diff?: string;
+  reviewRequestId?: string;
   outputRevisionId?: string;
   conflictFiles?: string[];
   conflictBranch?: string;
@@ -280,27 +281,27 @@ const RUN_LEVEL_RETRYABLE = new Set<string>(['failed', 'merge_failed']);
 // coordinator.assembly_* event type -> phase. These event types may not be emitted
 // yet; absence simply means we fall through to the status field / work-plan status.
 const ASSEMBLY_EVENT_PHASE: Record<string, { phase: OrchPhase; priority?: number }> = {
-  'coordinator.assembly_started': { phase: 'assembling' },
-  'coordinator.assembly_rai_started': { phase: 'rai' },
-  'coordinator.assembly_rai_completed': { phase: 'assembling' },
-  'coordinator.assembly_review_requested': { phase: 'in_review' },
-  'coordinator.assembly_review_approved': { phase: 'merge' },
+  'coordinator.assembly_started': { phase: 'assembling', priority: 4 },
+  'coordinator.assembly_rai_started': { phase: 'rai', priority: 4 },
+  'coordinator.assembly_rai_completed': { phase: 'assembling', priority: 4 },
+  'coordinator.assembly_review_requested': { phase: 'in_review', priority: 4 },
+  'coordinator.assembly_review_approved': { phase: 'merge', priority: 4 },
   // The run failed while the review gate was still open, but the gate was DELIBERATELY preserved so
   // the human can still view the changes. Keep the orchestration in the review phase (emitted after
   // assembly_failed) so the UI shows the "review still available" message instead of kicking the
   // operator out. Combined with a terminal run status this drives the preserved-review branch.
   'coordinator.assembly_review_preserved': { phase: 'in_review', priority: 4 },
-  'coordinator.assembly_changes_requested': { phase: 'dispatching', priority: 3 }, // re-dispatch resets the phase
-  'coordinator.assembly_merge_started': { phase: 'merge' },
-  'coordinator.assembly_merge_completed': { phase: 'scribe' },
-  'coordinator.assembly_merge_failed': { phase: 'failed', priority: 3 },
-  'merge.conflicted': { phase: 'needs_resolution', priority: 3 },
+  'coordinator.assembly_changes_requested': { phase: 'dispatching', priority: 4 }, // re-dispatch resets the phase
+  'coordinator.assembly_merge_started': { phase: 'merge', priority: 4 },
+  'coordinator.assembly_merge_completed': { phase: 'scribe', priority: 4 },
+  'coordinator.assembly_merge_failed': { phase: 'failed', priority: 4 },
+  'merge.conflicted': { phase: 'needs_resolution', priority: 4 },
   'coordinator.assembly_scribe_started': { phase: 'scribe' },
   'coordinator.assembly_scribe_completed': { phase: 'scribe' },
-  'coordinator.assembly_completed': { phase: 'complete', priority: 3 },
-  'coordinator.assembly_failed': { phase: 'failed', priority: 3 },
-  'coordinator.assembly_blocked': { phase: 'blocked', priority: 3 },
-  'coordinator.assembly_declined': { phase: 'declined', priority: 3 },
+  'coordinator.assembly_completed': { phase: 'complete', priority: 4 },
+  'coordinator.assembly_failed': { phase: 'failed', priority: 4 },
+  'coordinator.assembly_blocked': { phase: 'blocked', priority: 4 },
+  'coordinator.assembly_declined': { phase: 'declined', priority: 4 },
 };
 
 function planningPhaseForEvent(type: string): OrchPhase | undefined {
@@ -530,6 +531,11 @@ function requireAssemblyReviewRevisionId(revisionId: string | undefined): string
   return revisionId;
 }
 
+function requireAssemblyReviewRequestId(requestId: string | undefined, runId: string): string {
+  // Older persisted review rows use the coordinator run ID as their request identity.
+  return requestId || runId;
+}
+
 function assemblyReviewPhaseForEvent(evt: RunStreamEvent, fallback: OrchPhase): OrchPhase {
   const gateKind = readGateKind(evt.payload);
   if (evt.type === 'coordinator.assembly_review_requested') {
@@ -687,6 +693,7 @@ function deriveOrchState(
     return {
       phase: fieldPhase,
       reason: normalizeCoordinatorReasonForPhase(reasonField, fieldPhase),
+      reviewRequestId: readStr(winner.payload, ['reviewRequestId', 'review_request_id']),
       outputRevisionId: readStr(winner.payload, ['outputRevisionId', 'output_revision_id']),
       ineligibleSubtasks: reasonField && isIneligibleSubtasksReason(reasonField)
         ? parseIneligibleIdsFromReason(reasonField).map((id) => ({ id }))
@@ -716,6 +723,7 @@ function deriveOrchState(
       phase: winner.phase,
       reason: isBlocked ? normalizeAssemblyBlockedReason(blockedReasonSource) : rawReason,
       diff: readStr(winner.payload, ['diff', 'summary', 'integrationDiff', 'integration_diff', 'treeHash', 'tree_hash']),
+      reviewRequestId: readStr(winner.payload, ['reviewRequestId', 'review_request_id']),
       outputRevisionId: readStr(winner.payload, ['outputRevisionId', 'output_revision_id']),
       conflictFiles: conflictFiles && conflictFiles.length > 0 ? conflictFiles : undefined,
       conflictBranch: readStr(winner.payload, ['conflictingBranch', 'conflicting_branch']),
@@ -4082,10 +4090,11 @@ export function CoordinatorRunPage() {
     getContent: (rid, path) => apiClient.getAssemblyFileContent(rid, path),
     approve: async (rid) => {
       const outputRevisionId = requireAssemblyReviewRevisionId(orch.outputRevisionId);
+      const reviewRequestId = requireAssemblyReviewRequestId(orch.reviewRequestId, rid);
       providerContext.setPhase('active');
       try {
         await apiClient.reviewAssembly(
-          rid, 'approve', outputRevisionId,
+          rid, 'approve', outputRevisionId, reviewRequestId,
           undefined, providerContext.providerKey,
         );
         providerContext.setPhase('completed');
@@ -4099,10 +4108,11 @@ export function CoordinatorRunPage() {
     approveAcceptedStatus: 'review_accepted',
     requestChanges: async (rid, comment) => {
       const outputRevisionId = requireAssemblyReviewRevisionId(orch.outputRevisionId);
+      const reviewRequestId = requireAssemblyReviewRequestId(orch.reviewRequestId, rid);
       providerContext.setPhase('active');
       try {
         await apiClient.reviewAssembly(
-          rid, 'request_changes', outputRevisionId,
+          rid, 'request_changes', outputRevisionId, reviewRequestId,
           comment, providerContext.providerKey,
         );
         providerContext.setPhase('completed');
@@ -4112,12 +4122,15 @@ export function CoordinatorRunPage() {
       }
     },
     decline: (rid) => apiClient.reviewAssembly(
-      rid, 'decline', requireAssemblyReviewRevisionId(orch.outputRevisionId),
+      rid,
+      'decline',
+      requireAssemblyReviewRevisionId(orch.outputRevisionId),
+      requireAssemblyReviewRequestId(orch.reviewRequestId, rid),
     ),
     aiExecutionContext: providerContext.context,
     aiExecutionLoading: providerContext.loading,
     aiExecutionAvailable: providerContext.available,
-  }), [orch.outputRevisionId, providerContext]);
+  }), [orch.outputRevisionId, orch.reviewRequestId, providerContext]);
 
   // Run-wide changes summary: the coordinator's collective integration diff (assembly files).
   // getAssemblyFiles returns [] before assembly runs, so this stays null until real changes exist.
@@ -4269,12 +4282,14 @@ export function CoordinatorRunPage() {
       setAutomationError('The reviewed output version is unavailable. Refresh before deciding.');
       return;
     }
+    const reviewRequestId = requireAssemblyReviewRequestId(orch.reviewRequestId, runId);
     if (decision === 'approve') providerContext.setPhase('active');
     try {
       await apiClient.reviewAssembly(
         runId,
         decision,
         orch.outputRevisionId,
+        reviewRequestId,
         undefined,
         decision === 'approve' ? providerContext.providerKey : undefined,
       );
@@ -4285,7 +4300,7 @@ export function CoordinatorRunPage() {
         ? 'The AI provider changed. Review the updated provider and approve again.'
         : `Assembly review failed: ${formatApiErrorMessage(err, 'Could not update assembly review.')}`);
     }
-  }, [orch.outputRevisionId, providerContext, reconnectStream, runId]);
+  }, [orch.outputRevisionId, orch.reviewRequestId, providerContext, reconnectStream, runId]);
 
   const handleAssemblyRequestChanges = useCallback(async (_stepId: string, comment: string) => {
     if (!runId) return;
@@ -4294,12 +4309,14 @@ export function CoordinatorRunPage() {
       setAutomationError('The reviewed output version is unavailable. Refresh before deciding.');
       return;
     }
+    const reviewRequestId = requireAssemblyReviewRequestId(orch.reviewRequestId, runId);
     providerContext.setPhase('active');
     try {
       await apiClient.reviewAssembly(
         runId,
         'request_changes',
         orch.outputRevisionId,
+        reviewRequestId,
         comment,
         providerContext.providerKey,
       );
@@ -4310,7 +4327,7 @@ export function CoordinatorRunPage() {
         ? 'The AI provider changed. Review the updated provider and request changes again.'
         : `Assembly review failed: ${formatApiErrorMessage(err, 'Could not update assembly review.')}`);
     }
-  }, [orch.outputRevisionId, providerContext, reconnectStream, runId]);
+  }, [orch.outputRevisionId, orch.reviewRequestId, providerContext, reconnectStream, runId]);
 
   // Nested agentic progress tree: coordinator/agents and their tasks with live status.
   const approvalSteps = useMemo<AgentStep[]>(() => reviewActionable

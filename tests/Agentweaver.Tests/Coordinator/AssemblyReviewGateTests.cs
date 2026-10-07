@@ -118,4 +118,31 @@ public sealed class AssemblyReviewGateTests
         gate.TrySubmit("run-retry", "alice", Approve() with { OutputRevisionId = "revision-2" })
             .Should().Be(AssemblyReviewSubmitResult.Accepted);
     }
+
+    [Fact]
+    public async Task TrySubmit_requires_the_current_request_revision_and_fence()
+    {
+        var gate = new AssemblyReviewGate();
+        var task = gate.ArmAsync(
+            "run-bound", "alice", CancellationToken.None, "revision-1", "request-1", 12);
+
+        gate.TrySubmit("run-bound", "alice", Approve() with
+        {
+            ReviewRequestId = "request-old",
+            AssemblyFencingToken = 12,
+        }).Should().Be(AssemblyReviewSubmitResult.StaleRevision);
+        gate.TrySubmit("run-bound", "alice", Approve() with
+        {
+            ReviewRequestId = "request-1",
+            AssemblyFencingToken = 11,
+        }).Should().Be(AssemblyReviewSubmitResult.StaleRevision);
+        task.IsCompleted.Should().BeFalse();
+
+        gate.TrySubmit("run-bound", "alice", Approve() with
+        {
+            ReviewRequestId = "request-1",
+            AssemblyFencingToken = 12,
+        }).Should().Be(AssemblyReviewSubmitResult.Accepted);
+        (await task.WaitAsync(TimeSpan.FromSeconds(5))).ReviewRequestId.Should().Be("request-1");
+    }
 }

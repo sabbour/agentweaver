@@ -270,6 +270,9 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("AggregateTreeHash")
                         .HasColumnType("text");
 
+                    b.Property<long?>("AssemblyFencingToken")
+                        .HasColumnType("bigint");
+
                     b.Property<DateTimeOffset?>("CoordinatorFailedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -296,6 +299,9 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("OwnerUser")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ReviewRequestId")
                         .HasColumnType("text");
 
                     b.Property<string>("Reviewer")
@@ -864,10 +870,6 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                         .HasColumnType("text")
                         .HasColumnName("captured_by_user_id");
 
-                    b.Property<string>("ReadyByUserId")
-                        .HasColumnType("text")
-                        .HasColumnName("ready_by_user_id");
-
                     b.Property<DateTimeOffset?>("ClaimedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("claimed_at");
@@ -919,6 +921,10 @@ namespace Agentweaver.Api.Migrations.Postgres.Migrations
                     b.Property<string>("PromotionReason")
                         .HasColumnType("text")
                         .HasColumnName("promotion_reason");
+
+                    b.Property<string>("ReadyByUserId")
+                        .HasColumnType("text")
+                        .HasColumnName("ready_by_user_id");
 
                     b.Property<string>("RunId")
                         .HasColumnType("text")

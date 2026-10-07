@@ -31,7 +31,7 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
     public async Task UpsertReviewRequest_ClearsPriorDecisionAndFailureStamp()
     {
         const string coordinatorRunId = "coord-review-reset";
-        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+        var reviewRequestId = await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/old", "old-tree", "revision-old", default);
         await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
             _scopeFactory,
@@ -42,7 +42,9 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
                 Feedback: "old approval",
                 TargetFiles: null,
                 Reviewer: "alice",
-                OutputRevisionId: "revision-old"),
+                OutputRevisionId: "revision-old",
+                ReviewRequestId: reviewRequestId,
+                AssemblyFencingToken: 0),
             default);
 
         using (var scope = _provider.CreateScope())
@@ -81,7 +83,7 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
             _scopeFactory, coordinatorRunId, "agent_turn_internal_error", default)).Should().BeTrue();
 
         (await CoordinatorAssemblyReviewPersistence.ReactivateOpenReviewAsync(
-            _scopeFactory, coordinatorRunId, revisionId, default)).Should().BeTrue();
+            _scopeFactory, coordinatorRunId, coordinatorRunId, revisionId, 0, default)).Should().BeTrue();
 
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
@@ -104,7 +106,7 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
             _scopeFactory, coordinatorRunId, "agent_turn_internal_error", default)).Should().BeTrue();
 
         (await CoordinatorAssemblyReviewPersistence.ReactivateOpenReviewAsync(
-            _scopeFactory, coordinatorRunId, "revision-stale", default)).Should().BeFalse();
+            _scopeFactory, coordinatorRunId, coordinatorRunId, "revision-stale", 0, default)).Should().BeFalse();
 
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
