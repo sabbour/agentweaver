@@ -165,6 +165,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             (request, response, token) => inspectOwnerResponse?.Invoke(request, response, token) ?? Task.CompletedTask));
         var currentOwner = new RuntimeRegistrationHttpClient(owners, new("https://orchestrator.test/"));
         await using var sdk = new ControlledCopilotRuntime();
+        using var runtimeHttp = new HttpClient(new RuntimeServiceRouter(routes, failures,
+            (request, response, token) => inspectRuntimeResponse?.Invoke(request, response, token) ?? Task.CompletedTask))
+        {
+            BaseAddress = broker.BaseAddress
+        };
         await using var receiver = new RuntimeBootstrapReceiver(
             registration, currentOwner, broker, broker.BaseAddress!, TimeProvider.System);
         using var host = await new HostBuilder().ConfigureWebHost(web =>
@@ -189,7 +194,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }).StartAsync();
         routes.Add("runtime.test", () => host.GetTestServer().CreateHandler());
         var bearer = new SecretCredential(runToken, registration.ExpiresAt);
-        try
+        var primaryFailure = await Record.ExceptionAsync(async () =>
         {
             failures.Enqueue($"Before delivery: {elapsed.Elapsed} lease remaining " +
                 $"{registration.ExpiresAt - DateTimeOffset.UtcNow}");
@@ -216,11 +221,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var factory = new RuntimeCopilotSessionFactory(
                 sdk.Connection, Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
                 new Dictionary<string, string> { [registration.Binding.ModelSelectionReference!] = sdk.ModelId });
-            using var runtimeHttp = new HttpClient(new RuntimeServiceRouter(routes, failures,
-                (request, response, token) => inspectRuntimeResponse?.Invoke(request, response, token) ?? Task.CompletedTask))
-            {
-                BaseAddress = broker.BaseAddress
-            };
             var runtimeBroker = new RuntimeBrokerCredentialClient(
                 runtimeHttp, broker.BaseAddress!, IdentityBrokerWebApplicationFactory.Issuer, actor, TimeProvider.System);
             var bootstrap = new RuntimeSessionBootstrap(currentOwner, runtimeBroker, factory, actor, TimeProvider.System);
@@ -409,17 +409,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             await VerifyNativeUsageAccountingAsync(
                 accepted, signingKey, runToken, projects, routes, failures, eventsSchema);
             output.WriteLine($"After actual Events priced ACK: {elapsed.Elapsed}");
-        }
-        catch (Exception exception)
-        {
-            Assert.Fail(exception.GetType().Name + ": " + exception.Message + "\n" +
-                string.Join('\n', failures));
-        }
-        finally
-        {
-            bearer.Invalidate();
-            await host.StopAsync();
-        }
+        });
+        var receiverCleanupFailure = await Record.ExceptionAsync(() => receiver.DisposeAsync().AsTask());
+        bearer.Invalidate();
+        var hostCleanupFailure = await Record.ExceptionAsync(() => host.StopAsync());
+        var lifecycleFailures = new[] { primaryFailure, receiverCleanupFailure, hostCleanupFailure }
+            .OfType<Exception>().ToArray();
+        if (lifecycleFailures.Length > 0)
+            Assert.Fail(new AggregateException("Native runtime proof and cleanup failed.", lifecycleFailures)
+                + "\n" + string.Join('\n', failures));
     }
 
     private async Task VerifyNativeUsageAccountingAsync(

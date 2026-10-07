@@ -95,6 +95,9 @@ Database checks reject mutation and truncation of source and accounting history.
 They check each table's statement trigger and attempt dependent, multi-table, and
 `CASCADE` truncation. Stored rows and pins remain identical, and receipt replay succeeds.
 
+The fixture disposes the receiver before its caller credential and HTTP transport.
+Failure output retains the exercise error and cleanup errors.
+
 The canonical Sandbox integration also covers public write versus internal run-read
 permission, three current-authority reads, and retained-lease protection against competing retirement.
 Neither placement route reads the accepted selection recursively or dispatches provider effects.
