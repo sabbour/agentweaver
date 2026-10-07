@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Storage volume provisioning, replacement cleanup, and attachment negotiation",
-  "alt": "Environment provisions an Environment-scoped Azure Files PVC, verifies its real claim and PV identities, and pins the actual Storage resource and Kubernetes target identity. A Replace atomically pins the new generation and queues cleanup for the exact old claim and PV using the original provider binding; the provider verifies claim and PV absence before returning Released. Release is blocked while bound or attached. Cleanup does not prove Azure data erasure. Attachment remains capability negotiation only and does not mount or dispatch the volume.",
+  "alt": "Environment provisions an Environment-scoped Azure Files PVC, verifies its real claim and PV identities, and pins the actual Storage resource and Kubernetes target identity. Replace pins the new generation and queues exact old-claim cleanup using the original provider binding. Release is blocked while bound or attached. The separate current Sandbox lease/profile lookup keeps lifecycle, lease revision, provider fences, and resource generations distinct; it does not prove attachment or configure delivery. Cleanup does not prove Azure data erasure. Attachment remains capability negotiation only.",
   "autonumber": true,
   "participants": [
     {

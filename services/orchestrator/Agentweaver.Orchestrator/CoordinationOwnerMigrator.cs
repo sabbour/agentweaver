@@ -48,12 +48,13 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is not (1 or 2 or 3 or 4)) ||
+        if (applied.Any(version => version is not (1 or 2 or 3 or 4 or 5)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
-            (applied.Contains(4) && !applied.Contains(3)))
+            (applied.Contains(4) && !applied.Contains(3)) ||
+            (applied.Contains(5) && !applied.Contains(4)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
-        foreach (var version in new[] { 1, 2, 3, 4 }.Where(version => !applied.Contains(version)))
+        foreach (var version in new[] { 1, 2, 3, 4, 5 }.Where(version => !applied.Contains(version)))
         {
             var migrationName = version switch
             {
@@ -61,10 +62,12 @@ public static class CoordinationOwnerMigrator
                 2 => "typed_decisions_and_checkpoints",
                 3 => "accepted_run_selection_context",
                 4 => "runtime_owner_context",
+                5 => "runtime_registration",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
+            var filename = version == 5 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
             await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
-                $"Agentweaver.Orchestrator.Migrations.{version:000}_{migrationName}.sql")
+                $"Agentweaver.Orchestrator.Migrations.{filename}")
                 ?? throw new InvalidOperationException("The coordination owner migration resource is missing.");
             using var text = new StreamReader(resource);
             var sql = (await text.ReadToEndAsync(cancellationToken))
@@ -94,7 +97,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 3),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -114,7 +117,10 @@ public static class CoordinationOwnerMigrator
                 to_regclass(@selectionContexts) IS NOT NULL,
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 4),
                 EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(@sessions)
-                    AND attname = 'work_plan_item_id' AND attnum > 0 AND NOT attisdropped)
+                    AND attname = 'work_plan_item_id' AND attnum > 0 AND NOT attisdropped),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 5),
+                to_regclass(@runtimeHeads) IS NOT NULL,
+                to_regclass(@runtimeRevisions) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
@@ -132,13 +138,16 @@ public static class CoordinationOwnerMigrator
         command.Parameters.AddWithValue("checkpoints", NpgsqlDbType.Text, $"{schema}.maf_workflow_checkpoints");
         command.Parameters.AddWithValue(
             "selectionContexts", NpgsqlDbType.Text, $"{schema}.coordinator_run_selection_contexts");
+        command.Parameters.AddWithValue("runtimeHeads", NpgsqlDbType.Text, $"{schema}.runtime_registration_heads");
+        command.Parameters.AddWithValue("runtimeRevisions", NpgsqlDbType.Text, $"{schema}.runtime_registration_revisions");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) ||
             reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
             reader.GetInt64(3) != 0 ||
             reader.GetInt64(4) != 1 || reader.GetInt64(5) != 1 || reader.GetInt64(6) != 0 ||
             Enumerable.Range(7, 14).Any(column => !reader.GetBoolean(column)) ||
-            reader.GetInt64(21) != 1 || !reader.GetBoolean(22))
+            reader.GetInt64(21) != 1 || !reader.GetBoolean(22) ||
+            reader.GetInt64(23) != 1 || !reader.GetBoolean(24) || !reader.GetBoolean(25))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

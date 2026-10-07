@@ -37,7 +37,8 @@ internal sealed class RuntimeRegistrationStore
     // Only the authenticated owner adapter may supply this server-derived binding.
     internal async Task<RuntimeRegistration> RegisterAsync(
         RuntimeBinding serverDerivedBinding, DateTimeOffset ownerBoundExpiresAt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         var expiresAt = new DateTimeOffset(
             ownerBoundExpiresAt.UtcTicks - ownerBoundExpiresAt.UtcTicks % 10, TimeSpan.Zero);
@@ -83,6 +84,9 @@ internal sealed class RuntimeRegistrationStore
         }
         if (registered.Binding != serverDerivedBinding || registered.ExpiresAt != expiresAt)
             throw new RuntimeAuthorizationException("runtime_registration_conflict");
+        RequireAvailable(registered);
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         RequireAvailable(registered);
         await transaction.CommitAsync(cancellationToken);
         return registered;

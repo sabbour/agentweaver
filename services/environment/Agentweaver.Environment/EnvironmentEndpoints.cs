@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Providers.Storage.AzureFiles;
 
 namespace Agentweaver.Environment;
@@ -125,6 +126,95 @@ public static class EnvironmentEndpoints
                 }
             })
             .RequireAuthorization();
+
+        endpoints.MapGet(
+            "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement",
+            async (
+                string projectId,
+                string runId,
+                string environmentId,
+                HttpContext context,
+                [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimePlacementReader reader,
+                CancellationToken cancellationToken) =>
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                if (!TryReadCaller(context, out var caller))
+                    return Results.Unauthorized();
+                try
+                {
+                    var placement = await reader.GetCurrentPlacementAsync(
+                        caller!, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+                    return placement is null ? Results.NotFound() : Results.Ok(placement);
+                }
+                catch (ProjectsConfigApiException exception)
+                {
+                    return ToProjectAuthorizationResult(exception);
+                }
+                catch (EnvironmentLifecycleException exception)
+                {
+                    return Results.Json(
+                        new { code = exception.Code, message = exception.Message },
+                        statusCode: exception.Code == "environment_unknown"
+                            ? StatusCodes.Status404NotFound
+                            : StatusCodes.Status409Conflict);
+                }
+                catch (HttpRequestException)
+                {
+                    return Results.Json(
+                        new { code = "runtime_placement_owner_unavailable" },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    return Results.Json(
+                        new { code = "runtime_placement_owner_timeout" },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            })
+            .RequireAuthorization();
+
+        endpoints.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/runtime-bootstrap/profiles/{profileId}",
+            async (
+                string projectId,
+                string runId,
+                string environmentId,
+                string profileId,
+                HttpContext context,
+                [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimePlacementReader reader,
+                [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeBootstrapProfileRegistry profiles,
+                CancellationToken cancellationToken) =>
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                if (!TryReadCaller(context, out var caller))
+                    return Results.Unauthorized();
+                try
+                {
+                    var bootstrap = await reader.GetBootstrapContextAsync(
+                        caller!, projectId, runId, environmentId, profileId, profiles, cancellationToken)
+                        .ConfigureAwait(false);
+                    return bootstrap is null ? Results.NotFound() : Results.Ok(bootstrap);
+                }
+                catch (ProjectsConfigApiException exception)
+                {
+                    return ToProjectAuthorizationResult(exception);
+                }
+                catch (RuntimeAuthorizationException exception)
+                {
+                    return Results.Conflict(new { code = exception.Code });
+                }
+                catch (EnvironmentLifecycleException exception)
+                {
+                    return Results.Json(new { code = exception.Code, message = exception.Message },
+                        statusCode: exception.Code == "environment_unknown"
+                            ? StatusCodes.Status404NotFound : StatusCodes.Status409Conflict);
+                }
+                catch (HttpRequestException)
+                {
+                    return Results.Json(new { code = "runtime_placement_owner_unavailable" },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            }).RequireAuthorization();
 
         var workspaceVolumes = endpoints.MapGroup(
                 "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes")

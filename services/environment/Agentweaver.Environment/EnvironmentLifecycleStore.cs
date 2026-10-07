@@ -2349,7 +2349,7 @@ public sealed class EnvironmentLifecycleStore(
             "The expected Environment lifecycle generation is stale.");
     }
 
-    private static async Task AcquireOwnerLockAsync(
+    internal static async Task AcquireOwnerLockAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         EnvironmentOwnerIdentity owner,

@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Sessions journal, accepted facts, and owner delivery",
-  "alt": "Projects & Config validates current permission and accepted run selection. Events & Sessions pins the journal, commits accepted facts, and serves ordered replay. After a fresh authority check and owner CAS, the Orchestrator commits the trusted accepted-run Sandbox binding with the winning plan decision, gate, grants, and outbox (its adapter only resolves existing resources), persists owner receipts and fenced message delivery. The runtime-owner-context GET derives the agent, accepted model reference, and deterministic turn from a current confirmed work item; it rechecks the root decision and Projects authority. Complete native SDK accounting remains pending. Generic PolicyEvaluation append remains denied until #1846's trusted consumer.",
+  "alt": "Projects & Config validates current permission and accepted run selection. Events & Sessions pins the journal, commits accepted facts, and serves ordered replay. After a fresh authority check and owner CAS, the Orchestrator commits the trusted accepted-run Sandbox binding with the winning plan decision, gate, grants, and outbox, then persists owner receipts and fenced message delivery. Runtime owner context derives the agent, accepted model, and deterministic turn from the current confirmed work item. The registration candidate also checks the actual Environment lease and exact registered profile; public write gates deny run-bound tokens pending the separate internal read-only lookup. Complete native SDK accounting remains pending.",
   "autonumber": true,
   "participants": [
     {
@@ -80,7 +80,7 @@
     {
       "type": "note",
       "over": ["api", "postgres"],
-      "label": "Schema v4 commits usage hashes, prices, and rate cards.\nAccounting receipts are not SDK source authorization."
+      "label": "Usage hashes, prices, rate cards: schema v4.\nRuntime owner + lease/profile pins are not accounting proof."
     },
     {
       "type": "message",

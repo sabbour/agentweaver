@@ -11,6 +11,14 @@ the [foundation overview](./overview.md#workspace-volume-lifecycle) summarizes t
 volume lifecycle, pinned release binding, and Replace cleanup guarantees.
 Neither candidate is deployed by this source change.
 
+The same owner schema now contains the current Sandbox lease source primitive.
+The placement read verifies its active lifecycle, full owner tuple, provider reference,
+lease revision, expiry, and separate provider/current fences. It rereads the lease
+after the final awaited authorization check. Profile lookup matches that exact
+provider reference against server configuration; it does not deliver a configure nonce.
+Public placement/profile reads keep the existing `WriteProjects` gate. The separate
+run-bound read-only lookup is integration work, not an egress mutation permission.
+
 ## Ownership and operation
 
 `EnvironmentEgressManager` is the operation entry point. Each apply, verify, revoke, or reconciliation reads the current caller from Projects & Config at

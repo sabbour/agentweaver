@@ -29,6 +29,12 @@ public sealed record RuntimeBinding(
     public long EnvironmentProviderFencingGeneration { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ModelSelectionReference { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PlacementProviderId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public long EnvironmentLifecycleGeneration { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public long EnvironmentLeaseRevision { get; init; }
 }
 
 public enum RuntimeRegistrationState { Active, Revoked }

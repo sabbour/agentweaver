@@ -122,11 +122,14 @@ Configuration:
 | `ProjectsConfig:ProviderCatalog` | Optional catalog-owner snapshot used to validate the accepted Sandbox candidate. With no snapshot or no registered Sandbox resource adapter, plans needing isolation fail closed with `503`. |
 | `ProjectsConfig:AuthorizationContext:OwnerBaseAddress` / `Audience` | Trusted HTTPS Projects & Config owner and required audience for current authority and selection. |
 | `EventsAndSessions:Authorization:OwnerBaseAddress` / `Audience` | Trusted HTTPS Events & Sessions owner and required audience for session registration and message delivery. |
+| `Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress` | Optional fixed HTTPS root for current Environment lease/profile lookup. Without this key, runtime registration routes are not mapped. |
 
 Runtime PostgreSQL access uses the PostgreSQL Entra token scope and TLS
 `VerifyFull`; the connection string must include the Entra role and omit a password.
 Ordinary startup verifies the service schema. Run the executable with only
 `--migrate` to apply migrations using the separate identity.
+Coordination schema version 5 also applies the immutable runtime registration tables.
+The runtime role does not apply this migration during ordinary startup.
 
 ## Events & Sessions journal
 
@@ -286,6 +289,29 @@ durable revocation for the exact verified nonce. An already-expired input is
 rejected before verification; that rejection does not prove durable cleanup.
 Storage and actual Broker HTTP tests isolate the owner and delivery boundaries.
 Full current-Core, placement, native SDK, and accounting acceptance is pending.
+
+The runtime registration candidate exposes these authenticated, no-store owner reads.
+They do not authorize configure delivery or usage ingestion.
+
+| Method and path | Source contract |
+| --- | --- |
+| `POST /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations` | Accepts only `EnvironmentId` and `ProfileId`. Derives model, agent, turn, selection, fence, lease, provider, and endpoint pins from current owners. |
+| `GET /internal/runtime/registrations/{runtimeInstanceId}` | Revalidates the active session/work item, accepted selection, current lease/profile, and registration revision. A raw storage read is not authorization. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Public Environment control read. Requires current `WriteProjects`; returns the exact active, unexpired, owner-fenced lease projection. |
+| `GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/runtime-bootstrap/profiles/{profileId}` | Matches a server-owned profile to the exact current Sandbox provider reference. The current source retains the public write gate pending separate run-bound read-only lookup integration. |
+
+`Environment:RuntimeBootstrap:Profiles` configures exact owner/profile/provider
+registrations. An absent or mismatched registration returns explicit denial.
+No caller supplies a configure URI or observation URI. Runtime bindings separately
+pin `PlacementProviderId`, `EnvironmentLifecycleGeneration`, and
+`EnvironmentLeaseRevision`; omitted legacy pins do not change stored binding JSON.
+Lease expiry bounds registration expiry and cannot be extended by enrollment replay.
+
+Current Projects policy deliberately withholds `WriteProjects` from run-bound tokens.
+The genuine combined test denies that token and persists zero registrations.
+The separate internal read-only lookup uses existing `ReadRunSelection` authority;
+its integration must preserve public write gates and exact current run/tenant binding.
+This denial evidence is not positive runtime enrollment or full accounting acceptance.
 
 The auth-first runtime library validates the configuration hash and exact configure
 audience before consuming a delivered nonce. The current registration supplies the

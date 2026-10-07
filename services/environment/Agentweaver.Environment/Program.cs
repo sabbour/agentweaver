@@ -80,6 +80,11 @@ builder.Services.AddDbContext<EnvironmentDbContext>((services, options) =>
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
+builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
+builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
+builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
+    builder.Configuration.GetSection("Environment:RuntimeBootstrap:Profiles")
+        .Get<EnvironmentRuntimeBootstrapProfileRegistration[]>() ?? []));
 builder.Services.AddSingleton(ciliumOptions);
 builder.Services.AddHttpClient<IProjectsConfigClient, ProjectsConfigHttpClient>(client =>
 {

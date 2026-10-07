@@ -62,6 +62,12 @@ before denial. An already-expired input is rejected without claiming a verified
 nonce or durable cleanup. Audit tables permit only `SELECT` and `INSERT`; grant
 heads also permit CAS updates.
 
+The auth-first SDK hook consumes a delivered configure nonce before session creation.
+It takes the model reference from the current registration and rechecks source and
+owner authority after SDK awaits. The registration candidate also pins the exact
+Environment provider, lifecycle generation, lease revision, and lease-bounded expiry.
+These pins do not give a run-bound token public project-write authority.
+
 Storage and Broker HTTP tests cover these boundaries. They do not prove the full
 current-Core, Environment placement, native SDK, and accounting path. See the
 [runtime credential source contract](../reference/contracts#runtime-credential-source-candidate).

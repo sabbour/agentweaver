@@ -2,11 +2,11 @@
   "version": 2,
   "source": {
     "file": "v1-identity-redemption.json",
-    "sha256": "9bf8220eb8ca4e1ecf298329020b760eb7cf8e1e042c92d91b82f60f613a0064"
+    "sha256": "ab0e8ed597cf0074d17195d8577af2095155eb55268d5030d3fdbf578ab16f7c"
   },
   "drawio": {
     "file": "v1-identity-redemption.drawio",
-    "sha256": "e687be6fd6c391828cfee24a31bc3274b485076409460bd14cb18801279762a9"
+    "sha256": "295192ab86e89ce80678450b0ce9fb13bb5f9b3366367d671e958251b839e52b"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-identity-redemption.png",
-    "sha256": "894152ce29aa12822b8d1e237bddd093a2b9e778f7c918eb6ca1832f18a5d78d"
+    "sha256": "6e6a0ca30428a6d6cd368db31b2f727d2e96c87d8a5fbb9e0b55e7cb8b708865"
   }
 }

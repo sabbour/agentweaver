@@ -33,6 +33,14 @@ public static class RuntimeContractValidation
             ValidateIdentifier(value);
         if (binding.ModelSelectionReference is { } modelSelectionReference)
             ValidateIdentifier(modelSelectionReference);
+        if (binding.PlacementProviderId is { } placementProviderId)
+        {
+            ValidateIdentifier(placementProviderId);
+            if (binding.EnvironmentLifecycleGeneration <= 0 || binding.EnvironmentLeaseRevision <= 0)
+                throw new RuntimeAuthorizationException("runtime_binding_invalid");
+        }
+        else if (binding.EnvironmentLifecycleGeneration != 0 || binding.EnvironmentLeaseRevision != 0)
+            throw new RuntimeAuthorizationException("runtime_binding_invalid");
         ValidateHash(binding.AcceptedSelectionHash);
     }
 

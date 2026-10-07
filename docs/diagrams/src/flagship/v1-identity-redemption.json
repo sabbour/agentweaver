@@ -8,7 +8,7 @@
     {
       "id": "identity-broker",
       "label": "Identity.Broker",
-      "subLabel": "Validated subject; runtime grants use a separate store",
+      "subLabel": "Validated subject; separate runtime nonce store",
       "icon": "server",
       "fluentIcon": "identity",
       "badge": {

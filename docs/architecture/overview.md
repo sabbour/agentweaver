@@ -22,6 +22,12 @@ negotiation or usage ingestion. Separate Cost source primitives provide immutabl
 bindings, Copilot AI-credit pricing, and append-only PostgreSQL usage storage.
 The source does not connect an authorized SDK producer to that storage.
 
+The runtime library now creates an auth-first native SDK session from a delivered
+configure nonce and a current registration. The registration source compares the
+confirmed work item and active turn with the current Environment lease and registered
+profile. Public Environment write gates still reject run-bound tokens; the separate
+read-only runtime lookup and complete delivery/accounting integration remain pending.
+
 ## Canonical component overview
 
 <figure class="aw-diagram" tabindex="0">
@@ -67,7 +73,8 @@ their external boundaries.
 | `Agentweaver.Abstractions` | Provider, journal, addressed-message, accepted-effect, secret, object-store, environment/network-policy, authorization-context, run-selection, and Memory contracts. | — |
 | `Agentweaver.Providers` | In-memory provider catalog and resolver. | `Agentweaver.Abstractions` |
 | `Agentweaver.Orchestrator.Core` | Workflow validation and the platform-singleton AGT YAML Policy adapter. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Microsoft.AgentGovernance` |
-| `Agentweaver.Identity` | Trusted actor and exact run-grant authorization for secret redemption. | `Agentweaver.Abstractions` |
+| `Agentweaver.Identity` | Trusted actor, exact secret grants, separate runtime nonce contracts, and fixed owner HTTP transport. | `Agentweaver.Abstractions` |
+| `Agentweaver.AgentRuntime` | Auth-first native SDK session and nullable usage callbacks; no deployed AgentHost or complete accounting pipeline. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `GitHub.Copilot.SDK` |
 | `Agentweaver.Secrets.AzureKeyVault` | Exact-version Azure Key Vault adapter. | `Agentweaver.Abstractions` |
 | `Agentweaver.Persistence.Postgres` | Service-schema outbox, consumer inbox, and relay library. | — |
 | `Agentweaver.ObjectStore.AzureBlob` | Opaque-object Azure Blob adapter. | `Agentweaver.Abstractions` |
@@ -76,8 +83,8 @@ their external boundaries.
 | `Agentweaver.Identity.Broker` | OAuth and secret-redemption host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault` |
 | `Agentweaver.EventsAndSessions` | Native PostgreSQL journal, addressed messages, Cost pricing, usage storage, and HTTP host candidate. No authorized SDK usage producer. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Knowledge` | Project-scoped Memory API, context compiler, and native PostgreSQL adapter candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
-| `Agentweaver.Environment` | Environment-owned egress and workspace-volume lifecycle service candidate; not deployed. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles` |
-| `Agentweaver.Orchestrator` | HTTP owner for root/child session state, message outbox, explicit turn-boundary operations, and parent notifications. It checks current Projects & Config authority and integrates with Events & Sessions. | `Agentweaver.Abstractions`, `Agentweaver.Persistence.Postgres` |
+| `Agentweaver.Environment` | Environment-owned egress, workspace volumes, current Sandbox lease, and exact registered-profile context; not deployed. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles` |
+| `Agentweaver.Orchestrator` | Current session/work-item/turn context and runtime registration source, message outbox, and parent notifications. Checks current Projects authority; complete runtime delivery/accounting remains pending. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Orchestrator.Core`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres` |
 | `Agentweaver.FoundationProbe` | Acceptance-only infrastructure probe executable. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.ObjectStore.AzureBlob`, `Agentweaver.Telemetry.AzureMonitor` |
 
 The Events & Sessions project owns the native PostgreSQL journal and addressed-message

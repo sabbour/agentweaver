@@ -1166,6 +1166,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 orchestrator, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]);
             await AssertStatusAsync(replayedOwner, HttpStatusCode.OK);
             Assert.Equal(runtimeOwner, await ReadJsonAsync<RuntimeOwnerContext>(replayedOwner));
+            await VerifyRunBoundRuntimeRegistrationIsDeniedByEnvironmentControlPolicyAsync(
+                ownerSchema, signingKey, projects, eventsFactory, runToken, runtimeOwner,
+                runnerMembership.MembershipId, sandboxProvider);
         }
         using (var unmappedOwner = await SendAsync(
                    orchestrator, HttpMethod.Get,
@@ -1653,7 +1656,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Func<HttpMessageHandler> projectsHandler,
         Func<HttpMessageHandler> eventsHandler,
         IObjectStore? objectStore = null,
-        ICoordinatorSandboxResourceProvider? sandboxProvider = null)
+        ICoordinatorSandboxResourceProvider? sandboxProvider = null,
+        Func<HttpMessageHandler>? environmentHandler = null)
         : WebApplicationFactory<OrchestratorHost::Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -1671,7 +1675,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["ProjectsConfig:AuthorizationContext:OwnerBaseAddress"] = "https://projects.test/",
                     ["ProjectsConfig:AuthorizationContext:Audience"] = "https://api.test",
                     ["EventsAndSessions:Authorization:OwnerBaseAddress"] = "https://events.test/",
-                    ["EventsAndSessions:Authorization:Audience"] = "https://api.test"
+                    ["EventsAndSessions:Authorization:Audience"] = "https://api.test",
+                    ["Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress"] =
+                        environmentHandler is null ? null : "https://environment.test/"
                 }));
             builder.ConfigureTestServices(services =>
             {
@@ -1684,6 +1690,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     .ConfigurePrimaryHttpMessageHandler(projectsHandler);
                 services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.EventsAddressedMessageClient>()
                     .ConfigurePrimaryHttpMessageHandler(eventsHandler);
+                if (environmentHandler is not null)
+                    services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.RuntimeEnvironmentContextClient>()
+                        .ConfigurePrimaryHttpMessageHandler(environmentHandler);
                 if (objectStore is not null)
                     services.AddSingleton<IObjectStore>(objectStore);
                 if (sandboxProvider is not null)

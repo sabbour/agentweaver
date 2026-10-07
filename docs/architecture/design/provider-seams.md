@@ -368,6 +368,13 @@ exec is optional. Command isolation inside AgentHost is an implementation detail
 The default agent-sandbox adapter operates Kubernetes resources on AKS. Other adapters can call OpenSandbox
 or a managed runtime. No provider may weaken the VM-level isolation requirement for a run that requires it.
 
+The current lease source stores the full Environment owner tuple, lifecycle generation,
+resource generation, provider/current fencing generations, lease revision, and expiry.
+Its placement getter rereads the actual lease after the final authorization await.
+The resource ID can be a planned claim identity; it is not relabeled as a physical
+Kubernetes UID. Registered runtime profiles match the complete provider reference.
+This source lookup does not prove configure delivery, SDK readiness, or usage accounting.
+
 ### Retention, reclaim, and startup
 
 A finished, failed, or superseded run retains its journal, artifacts, and volumes according to their

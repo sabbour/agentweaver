@@ -68,6 +68,19 @@ execution fence, session/work item, Environment lease, and fixed profile.
 Core execution fences, placement generations, and Environment provider/current
 fences remain distinct.
 
+The source registration adapter derives its binding from the current owner context
+and the Environment-owned lease/profile context. Callers submit only an Environment
+ID and registered profile ID. Provider identity, lease revision, lifecycle generation,
+expiry, model reference, and turn identity are not configure-body authority.
+The registration transaction repeats current authority after database waits.
+
+Public Environment placement/profile reads retain `WriteProjects`. Current Projects
+policy deliberately excludes that permission from run-bound tokens, including project
+owners. The genuine combined test therefore denies enrollment and leaves zero
+registrations. A separate read-only run-bound lookup, using existing
+`ReadRunSelection`, is the authorized integration path; it must not grant configure
+or delivery authority. Complete positive enrollment and accounting proof remain pending.
+
 Child registration can bind a confirmed WorkPlan item. The owner transaction
 checks its current decision version, selection hash, and fence before storing
 that association. Unmapped legacy children remain usable for existing operations

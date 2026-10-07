@@ -37,8 +37,41 @@ public sealed class RuntimeContractTests
         var binding = CreateRegistration().Binding;
         var serialized = JsonSerializer.Serialize(binding);
         Assert.DoesNotContain("ModelSelectionReference", serialized);
+        Assert.DoesNotContain("PlacementProviderId", serialized);
+        Assert.DoesNotContain("EnvironmentLifecycleGeneration", serialized);
+        Assert.DoesNotContain("EnvironmentLeaseRevision", serialized);
         var pinned = binding with { ModelSelectionReference = "accepted-model" };
         Assert.Contains("ModelSelectionReference", JsonSerializer.Serialize(pinned));
+    }
+
+    [Fact]
+    public void CurrentPlacementPinsAreCompleteAndChangeTheBindingHash()
+    {
+        var registration = CreateRegistration();
+        var pinned = registration with
+        {
+            Binding = registration.Binding with
+            {
+                PlacementProviderId = "sandbox-platform",
+                EnvironmentLifecycleGeneration = 7,
+                EnvironmentLeaseRevision = 3
+            }
+        };
+        RuntimeContractValidation.Validate(pinned);
+        Assert.NotEqual(RuntimeContractValidation.RegistrationHash(registration),
+            RuntimeContractValidation.RegistrationHash(pinned));
+        foreach (var changed in new[]
+        {
+            pinned with { Binding = pinned.Binding with { PlacementProviderId = "foreign-provider" } },
+            pinned with { Binding = pinned.Binding with { EnvironmentLifecycleGeneration = 8 } },
+            pinned with { Binding = pinned.Binding with { EnvironmentLeaseRevision = 4 } }
+        })
+            Assert.NotEqual(RuntimeContractValidation.RegistrationHash(pinned),
+                RuntimeContractValidation.RegistrationHash(changed));
+        Assert.Throws<RuntimeAuthorizationException>(() => RuntimeContractValidation.Validate(
+            pinned with { Binding = pinned.Binding with { EnvironmentLeaseRevision = 0 } }));
+        Assert.Throws<RuntimeAuthorizationException>(() => RuntimeContractValidation.Validate(
+            pinned with { Binding = pinned.Binding with { PlacementProviderId = null } }));
     }
 
     [Theory]
