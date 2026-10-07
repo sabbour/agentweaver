@@ -52,9 +52,12 @@ Orchestrator token with exact project/run bindings and `ReadRunSelection`, while
 the public placement route still rejects that token for lack of `WriteProjects`.
 The same integration checks unbound owners, viewers, missing roles, mismatched
 project/run/tenant, wrong Environment audience, and role revocation between
-fresh Core checks. Placement reads do not fetch run selection or cause provider
-effects. It runs the production Sandbox provider and Kubernetes client against
-a fake Kubernetes HTTP API; only the Workspace provider and Cilium
+fresh Core checks. It also revokes the role while the final current-lease read
+waits on the PostgreSQL owner advisory lock (verified with `pg_blocking_pids`)
+and requires a typed 403 without a placement projection or provider effect.
+Placement reads do not fetch run selection or cause provider effects. It runs
+the production Sandbox provider and Kubernetes client against a fake
+Kubernetes HTTP API; only the Workspace provider and Cilium
 policy-resource boundary are controlled. It is not a live Kubernetes or
 datapath test. Sandbox observations remain `Pending` without AgentHost configure
 evidence.

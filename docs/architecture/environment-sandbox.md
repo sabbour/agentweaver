@@ -74,10 +74,12 @@ same exact project/run binding after the first lease read. Both recheck the
 active lifecycle and read the locked current lease again. The two snapshots
 must match on operation, owner fence, resource generation, lease revision,
 provider/current fences, state, current flag, and expiry; this rejects a lease
-retired or replaced during the authorization wait. The projection returns
-the tenant/project/run/Environment tuple, lifecycle and provider fences, lease
-revision/expiry/current state, and the exact resource, endpoint, and opaque
-placement references recorded by the lease. It does not derive lease data from
+retired or replaced during the authorization wait. After the second locked
+current-lease read and snapshot comparison, each route checks fresh authority
+again before returning; revocation during the final owner-lock wait is rejected.
+The projection returns the tenant/project/run/Environment tuple, lifecycle and
+provider fences, lease revision/expiry/current state, and the exact resource,
+endpoint, and opaque placement references recorded by the lease. It does not derive lease data from
 `EnvironmentSandboxResult`, caller arguments, run selection, or runtime
 registration. The provider `ResourceId` is preserved as stored; it is not
 relabeled as a Kubernetes UID because a planned `aw-claim-*` identity and a

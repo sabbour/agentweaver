@@ -389,6 +389,12 @@ public sealed class EnvironmentSandboxManager(
             throw new EnvironmentLifecycleException(
                 "sandbox_lease_stale",
                 "The current Sandbox lease changed while its placement was being authorized.");
+        if (runBoundRead)
+            await egressManager.EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
+                caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
+        else
+            await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
+                caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
         return currentLease is null
             ? null
             : ProjectCurrentPlacement(

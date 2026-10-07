@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["environment", "projects"],
-      "label": "The owner already exists. Lease admission is per Environment, and run-bound placement reads require exact claims."
+      "label": "Owner exists first; one lease per Environment. Placement rechecks run claims after the final owner-lock wait."
     },
     {
       "type": "message",

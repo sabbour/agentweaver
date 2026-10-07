@@ -141,6 +141,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var sandboxRevocationAssignment = Assert.Single(
             sandboxRevocationOwner.Assignments,
             assignment => assignment.Role == ProjectAuthorityRole.Orchestrator);
+        var placementLockOwner = await AddProjectActorAsync(
+            "projects.admin projects.orchestrator",
+            "sandbox-placement-lock-owner",
+            project.ProjectId,
+            ProjectAuthorityRole.Owner,
+            ProjectAuthorityRole.Orchestrator);
+        var placementLockAssignment = Assert.Single(
+            placementLockOwner.Assignments,
+            assignment => assignment.Role == ProjectAuthorityRole.Orchestrator);
         var viewer = await AddProjectActorAsync(
             "api.read",
             "workspace-volume-viewer",
@@ -502,7 +511,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 await ReadJsonAsync<EnvironmentSandboxPlacementProjectionV1>(runBoundPlacement));
         }
         Assert.Equal(
-            authorizationReadsBeforeInternalPlacement + 2,
+            authorizationReadsBeforeInternalPlacement + 3,
             selectionObserver.AuthorizationContextReadCount);
         using (var publicRunBoundPlacement = await SendAsync(
             environment.Client, HttpMethod.Get, $"{sandboxPath}/v1/placement", runToken, [TenantId]))
@@ -570,6 +579,63 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(selectionReadsBeforeInternalPlacement, selectionObserver.SelectionReadCount);
         Assert.Equal(sandboxCreatesBeforeInternalPlacement, sandboxKubernetesHandler.CreateCount);
         Assert.Equal(sandboxDeletesBeforeInternalPlacement, sandboxKubernetesHandler.DeleteRequests.Count);
+
+        var authorizationReadsBeforeOwnerLockWait = selectionObserver.AuthorizationContextReadCount;
+        var selectionReadsBeforeOwnerLockWait = selectionObserver.SelectionReadCount;
+        var createsBeforeOwnerLockWait = sandboxKubernetesHandler.CreateCount;
+        var deletesBeforeOwnerLockWait = sandboxKubernetesHandler.DeleteRequests.Count;
+        var workspaceProvisionCallsBeforeOwnerLockWait = provider.ProvisionCalls;
+        var workspaceReleaseCallsBeforeOwnerLockWait = provider.ReleaseCalls;
+        var ownerLockKey = string.Concat(
+            environmentOwner.TenantId.Length, ":", environmentOwner.TenantId,
+            environmentOwner.ProjectId.Length, ":", environmentOwner.ProjectId,
+            environmentOwner.RunId.Length, ":", environmentOwner.RunId,
+            environmentOwner.EnvironmentId.Length, ":", environmentOwner.EnvironmentId);
+        await using var ownerLockConnection = await environment.OpenConnectionAsync();
+        await using var ownerLockTransaction = await ownerLockConnection.BeginTransactionAsync();
+        int ownerLockBackendPid;
+        await using (var backendPidCommand = new NpgsqlCommand(
+            "SELECT pg_backend_pid()", ownerLockConnection, ownerLockTransaction))
+            ownerLockBackendPid = Convert.ToInt32(await backendPidCommand.ExecuteScalarAsync());
+        var ownerLockAcquired = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        selectionObserver.AfterAuthorizationContextRead(
+            authorizationReadsBeforeOwnerLockWait + 2,
+            async () =>
+            {
+                await using var acquireOwnerLock = new NpgsqlCommand(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(@owner_lock, 0))",
+                    ownerLockConnection,
+                    ownerLockTransaction);
+                acquireOwnerLock.Parameters.AddWithValue("owner_lock", ownerLockKey);
+                await acquireOwnerLock.ExecuteNonQueryAsync();
+                ownerLockAcquired.TrySetResult(true);
+            });
+        var ownerLockWaitResponseTask = SendAsync(
+            environment.Client,
+            HttpMethod.Get,
+            $"{sandboxPath}/v1/placement",
+            placementLockOwner.Token,
+            [TenantId]);
+        await ownerLockAcquired.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await using (var lockWaitObserverConnection = await environment.OpenConnectionAsync())
+            await AssertOwnerLockWaitAsync(lockWaitObserverConnection, ownerLockBackendPid);
+        await RevokeRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            placementLockAssignment.AssignmentId,
+            placementLockAssignment.Revision);
+        await ownerLockTransaction.CommitAsync();
+        using (var lockWaitDenied = await ownerLockWaitResponseTask.WaitAsync(TimeSpan.FromSeconds(10)))
+            await AssertForbiddenAsync(lockWaitDenied, "authorization_changed");
+        Assert.Equal(
+            authorizationReadsBeforeOwnerLockWait + 3,
+            selectionObserver.AuthorizationContextReadCount);
+        Assert.Equal(selectionReadsBeforeOwnerLockWait, selectionObserver.SelectionReadCount);
+        Assert.Equal(createsBeforeOwnerLockWait, sandboxKubernetesHandler.CreateCount);
+        Assert.Equal(deletesBeforeOwnerLockWait, sandboxKubernetesHandler.DeleteRequests.Count);
+        Assert.Equal(workspaceProvisionCallsBeforeOwnerLockWait, provider.ProvisionCalls);
+        Assert.Equal(workspaceReleaseCallsBeforeOwnerLockWait, provider.ReleaseCalls);
+
         Assert.Equal(3, sandboxKubernetesHandler.CreateCount);
         sandboxKubernetesHandler.MarkSandboxReady();
         var attachedWorkspace = await lifecycleStore.GetWorkspaceVolumeAsync(
@@ -996,6 +1062,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal(code, body.RootElement.GetProperty("code").GetString());
+    }
+
+    private static async Task AssertOwnerLockWaitAsync(
+        NpgsqlConnection connection,
+        int blockingBackendPid)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            await using var command = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_stat_activity AS waiting
+                    WHERE @blocking_pid = ANY(pg_blocking_pids(waiting.pid))
+                      AND waiting.wait_event_type = 'Lock'
+                      AND waiting.query LIKE '%pg_advisory_xact_lock%'
+                )
+                """, connection);
+            command.Parameters.AddWithValue("blocking_pid", blockingBackendPid);
+            if (Convert.ToBoolean(await command.ExecuteScalarAsync()))
+                return;
+            await Task.Delay(TimeSpan.FromMilliseconds(25));
+        }
+
+        throw new TimeoutException(
+            "The current placement read did not wait on the Environment owner advisory lock.");
     }
 
     private static ProviderCatalog CreateSandboxProviderCatalog(
@@ -1436,6 +1528,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         private Func<Task>? _afterNextAuthorizationContextRead;
         private int _selectionReadCount;
         private int _authorizationContextReadCount;
+        private int _authorizationContextActionReadCount;
 
         public int SelectionReadCount => Volatile.Read(ref _selectionReadCount);
         public int AuthorizationContextReadCount => Volatile.Read(ref _authorizationContextReadCount);
@@ -1449,9 +1542,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         public void RevokeAfterNextAuthorizationContext(Func<Task> action)
         {
+            AfterAuthorizationContextRead(AuthorizationContextReadCount + 1, action);
+        }
+
+        public void AfterAuthorizationContextRead(int readCount, Func<Task> action)
+        {
             ArgumentNullException.ThrowIfNull(action);
+            if (readCount <= AuthorizationContextReadCount)
+                throw new ArgumentOutOfRangeException(nameof(readCount));
             if (Interlocked.CompareExchange(ref _afterNextAuthorizationContextRead, action, null) is not null)
                 throw new InvalidOperationException("An authorization-context revocation is already armed.");
+            Volatile.Write(ref _authorizationContextActionReadCount, readCount);
         }
 
         public async Task OnResponseAsync(
@@ -1463,10 +1564,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
             if (string.Equals(uri.AbsolutePath, "/api/authorization/context", StringComparison.Ordinal))
             {
-                Interlocked.Increment(ref _authorizationContextReadCount);
-                var authorizationAction = Interlocked.Exchange(ref _afterNextAuthorizationContextRead, null);
-                if (response.IsSuccessStatusCode && authorizationAction is not null)
-                    await authorizationAction().ConfigureAwait(false);
+                var readCount = Interlocked.Increment(ref _authorizationContextReadCount);
+                if (readCount == Volatile.Read(ref _authorizationContextActionReadCount))
+                {
+                    var authorizationAction =
+                        Interlocked.Exchange(ref _afterNextAuthorizationContextRead, null);
+                    if (response.IsSuccessStatusCode && authorizationAction is not null)
+                        await authorizationAction().ConfigureAwait(false);
+                }
                 return;
             }
             if (!uri.AbsolutePath.EndsWith("/selection", StringComparison.Ordinal))
@@ -1575,6 +1680,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         public ISandboxLeaseStore CreateSandboxStore() =>
             new EnvironmentSandboxLeaseStore(_dataSource, TimeProvider.System);
+
+        public ValueTask<NpgsqlConnection> OpenConnectionAsync(
+            CancellationToken cancellationToken = default) =>
+            _dataSource.OpenConnectionAsync(cancellationToken);
 
         public static async Task<WorkspaceVolumeApiTestServer> StartAsync(
             string connectionString,
