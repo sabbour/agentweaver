@@ -3,23 +3,6 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
-public sealed record EnvironmentSandboxPlacementProjectionV1(
-    int ContractVersion,
-    string TenantId,
-    string ProjectId,
-    string RunId,
-    string EnvironmentId,
-    long LifecycleGeneration,
-    long CurrentFencingGeneration,
-    long ProviderFencingGeneration,
-    long LeaseRevision,
-    DateTimeOffset LeaseExpiresAt,
-    bool IsCurrent,
-    SandboxLeaseState State,
-    ProviderResourceRef Resource,
-    SandboxEndpointReference Endpoint,
-    SandboxPlacementReference Placement);
-
 public sealed class EnvironmentRuntimePlacementReader(
     IEnvironmentLifecycleStore lifecycleStore,
     ISandboxLeaseStore leaseStore,

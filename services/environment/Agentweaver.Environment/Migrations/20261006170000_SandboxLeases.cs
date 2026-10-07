@@ -123,10 +123,89 @@ public sealed class SandboxLeases : Migration
             columns: new[] { "lease_state", "lease_expires_at" },
             filter: "\"lease_expires_at\" IS NOT NULL");
 
+        migrationBuilder.CreateTable(
+            name: "sandbox_late_resource_cleanups",
+            schema: EnvironmentDbContext.Schema,
+            columns: table => new
+            {
+                tenant_id = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
+                project_id = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
+                run_id = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
+                environment_id = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
+                resource_generation = table.Column<long>(type: "bigint", nullable: false),
+                provider_resource_fingerprint = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: false),
+                resource_json = table.Column<string>(type: "jsonb", nullable: false),
+                release_idempotency_key = table.Column<string>(type: "character varying(128)", maxLength: 128, nullable: false),
+                claim_token = table.Column<Guid>(type: "uuid", nullable: true),
+                claim_expires_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
+                release_receipt_json = table.Column<string>(type: "jsonb", nullable: true),
+                created_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
+                updated_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
+            },
+            constraints: table =>
+            {
+                table.PrimaryKey(
+                    "pk_environment_sandbox_late_resource_cleanups",
+                    row => new
+                    {
+                        row.tenant_id,
+                        row.project_id,
+                        row.run_id,
+                        row.environment_id,
+                        row.resource_generation,
+                        row.provider_resource_fingerprint
+                    });
+                table.CheckConstraint(
+                    "ck_environment_sandbox_late_resource_cleanups_json",
+                    "jsonb_typeof(resource_json) = 'object' AND (release_receipt_json IS NULL OR jsonb_typeof(release_receipt_json) = 'object')");
+                table.CheckConstraint(
+                    "ck_environment_sandbox_late_resource_cleanups_claim",
+                    "(claim_token IS NULL) = (claim_expires_at IS NULL) AND " +
+                    "(release_receipt_json IS NULL OR (claim_token IS NULL AND claim_expires_at IS NULL))");
+                table.ForeignKey(
+                    "fk_environment_sandbox_late_resource_cleanups_lease",
+                    row => new
+                    {
+                        row.tenant_id,
+                        row.project_id,
+                        row.run_id,
+                        row.environment_id,
+                        row.resource_generation
+                    },
+                    principalSchema: EnvironmentDbContext.Schema,
+                    principalTable: "sandbox_leases",
+                    principalColumns:
+                    [
+                        "tenant_id",
+                        "project_id",
+                        "run_id",
+                        "environment_id",
+                        "resource_generation"
+                    ],
+                    onDelete: ReferentialAction.Restrict);
+            });
+        migrationBuilder.CreateIndex(
+            name: "ix_environment_sandbox_late_resource_cleanups_pending",
+            schema: EnvironmentDbContext.Schema,
+            table: "sandbox_late_resource_cleanups",
+            columns: new[]
+            {
+                "tenant_id",
+                "project_id",
+                "run_id",
+                "environment_id",
+                "created_at"
+            },
+            filter: "\"release_receipt_json\" IS NULL");
     }
 
-    protected override void Down(MigrationBuilder migrationBuilder) =>
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropTable(
+            name: "sandbox_late_resource_cleanups",
+            schema: EnvironmentDbContext.Schema);
         migrationBuilder.DropTable(
             name: "sandbox_leases",
             schema: EnvironmentDbContext.Schema);
+    }
 }

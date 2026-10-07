@@ -1,8 +1,8 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Storage volume provisioning, replacement cleanup, and attachment negotiation",
-  "alt": "Environment provisions an Environment-scoped Azure Files PVC, verifies its real claim and PV identities, and pins the actual Storage resource and Kubernetes target identity. Replace pins the new generation and queues exact old-claim cleanup using the original provider binding. Release is blocked while bound or attached. The separate current Sandbox lease/profile lookup keeps lifecycle, lease revision, provider fences, and resource generations distinct; it does not prove attachment or configure delivery. Cleanup does not prove Azure data erasure. Attachment remains capability negotiation only.",
+  "title": "Storage volumes, replacement, and Sandbox attachment",
+  "alt": "Environment provisions a generation-pinned Azure Files claim, then negotiates a mount for the selected Sandbox. It reserves the exact Workspace generation as attached before Sandbox dispatch and detaches it only after placement retirement. Replace cleanup deletes only the pinned old claim and PV; it does not prove Azure data erasure.",
   "autonumber": true,
   "participants": [
     {
@@ -161,7 +161,7 @@
     {
       "type": "note",
       "over": ["azure-files", "storage-caller"],
-      "label": "Replace pins both generations; cleanup verifies exact claim/PV absence. Release requires Unbind and Detach; no mount or data-erasure proof."
+      "label": "Replace pins both generations; cleanup verifies exact claim/PV absence. Sandbox uses owner-CAS attach/detach; Release waits for detach. No Azure erasure proof."
     }
   ]
 }

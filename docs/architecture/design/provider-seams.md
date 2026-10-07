@@ -350,44 +350,71 @@ None of this is a cutover prerequisite ([R3](../decisions/0001-platform-architec
 
 ## Sandbox
 
-### AgentHost environment and lifecycle
+### Environment-owned Sandbox lifecycle
 
-**Owner:** Environment manager. **Cardinality:** exclusive. The Sandbox provider provisions an isolated
-environment that runs the version-pinned AgentHost image and attaches the workspace; it does not replace
-AgentHost or the Copilot SDK harness. The contract includes `Provision`, `Describe`, `ListOwned(owner)`,
-`Suspend(mode)`, `Release`, lifecycle events, an `EndpointDescriptor`, and durable operation handles. It
-delivers authenticated configure/refresh, readiness, A2A connectivity, and an ownership/fencing generation.
+**Owner:** Environment manager. **Cardinality:** exclusive. The current v1 source candidate adds
+`Provision`, `Describe`, `ListOwned(owner)`, and `Release` provider operations and Environment routes for
+provision, inspect, explicit abandon, and reconciliation. Each Environment has a stable owner tuple and
+lifecycle fence; each Sandbox lease persists its immutable selected provider/options, operation ID, resource
+generation, provider fence, current retirement fence, and resource binding. Admission allows one current
+Sandbox lease per Environment before provider dispatch. Provider IDs, resource references, endpoints, and
+placements remain distinct; the public endpoint and placement values are opaque references.
 
-An environment has a stable logical ID separate from placement. The endpoint descriptor carries a URI,
-transport hints, and opaque routing metadata. `RetainPlacement` and `ReleasePlacement` are negotiated
-suspend modes, not provider resource names. Provider-initiated suspended, resumed, moved, or crashed events
-are reconciled against the journal and fence; transparent moves cannot create duplicate active writers.
-Clients reconnect on placement changes. AgentHost-mediated A2A is the main execution path; provider-native
-exec is optional. Command isolation inside AgentHost is an implementation detail.
+The default `agent-sandbox` adapter writes a `SandboxTemplate`, zero-replica `SandboxWarmPool`, and
+`SandboxClaim` in Kubernetes. The claim uses the admitted v1beta1 `warmPoolRef` schema and
+`DeleteForeground` policy. The adapter validates the exact claim/template/pool owner labels, resource UIDs,
+RuntimeClass handler, PVC UID and owner-generation annotations, and actual Pod owner, mount, and egress
+selector. The immutable run selection must contain exactly one matching Sandbox candidate; provider ID,
+adapter version, schema, options revision, and capabilities must match the configured adapter. Missing or
+mismatched selection is denied without fallback.
 
-The default agent-sandbox adapter operates Kubernetes resources on AKS. Other adapters can call OpenSandbox
-or a managed runtime. No provider may weaken the VM-level isolation requirement for a run that requires it.
+This source slice does not yet implement suspend/resume, provider lifecycle events, authenticated AgentHost
+configuration, A2A connectivity, an endpoint URI, or a Core run provider pin. It does not start or dispatch
+a model run. Those remain wider platform contract work. No provider may weaken VM isolation when the
+selection requires it.
 
 The current lease source stores the full Environment owner tuple, lifecycle generation,
 resource generation, provider/current fencing generations, lease revision, and expiry.
-Its placement getter rereads the actual lease after the final authorization await.
+Its placement getter retains the lease lock during the final authorization callback.
 The resource ID can be a planned claim identity; it is not relabeled as a physical
 Kubernetes UID. Registered runtime profiles match the complete provider reference.
-This source lookup does not prove configure delivery, SDK readiness, or usage accounting.
+The profile callback returns the existing Orchestrator owner context under that lock.
+This lookup does not reserve authority after the HTTP response.
 
-### Retention, reclaim, and startup
+### Readiness, retirement, and retention
 
-A finished, failed, or superseded run retains its journal, artifacts, and volumes according to their
-policies, **not a live environment**. If a live app preview is runnable, the system captures a revision and
-moves it to the durable `preview` stage before releasing the sandbox. The reconciler uses `ListOwned(owner)`
-and fencing to release abandoned environments. Admission checks capacity before provisioning so stale leases
-cannot starve new runs; this addresses [#1688](https://github.com/sabbour/agentweaver/issues/1688).
+`ReadyForDispatch` requires an active exact Environment fence, current `WriteProjects` and separate
+`ReadRunSelection` authority, the exact owner-bound Workspace PVC generation, observed VM RuntimeClass
+and Pod isolation, the exact attached PVC, and a fresh readback of the requested verified Cilium policy
+generation before and after provider observation. Environment reserves the exact Workspace generation as
+attached before provider dispatch and detaches it only after exact Sandbox placement retirement; Workspace
+replace and release therefore cannot race a live mount. Kubernetes Sandbox and container Ready conditions
+do not imply Environment or AgentHost readiness. The adapter reports observed `scheduled`, `image ready`,
+and `started` phases; it does not report `configured` or dispatch `ready` because this slice has no AgentHost
+configure/ready handshake. Policy-object verification is not datapath proof.
 
-The provider emits timed startup phases: `scheduled`, `image ready`, `started`, `configured`, and `ready`.
-The AgentHost image has a size budget; phase telemetry identifies image pulls, placement, and configure
-delays instead of hiding them in one timeout. Warm pools and, later, snapshot restore are optional
-capabilities used to meet the startup budget. This makes the latency addressed by
-[#1257](https://github.com/sabbour/agentweaver/issues/1257) measurable without requiring one backend.
+An exact `Finished=True` Agent Sandbox condition with a supported reason and current observed generation can
+retire Sandbox placement only. An explicit abandon also requires fresh Projects authority and a durable
+owner CAS that fences the provider generation. A timeout, scheduling/image failure, stale credential,
+provider lookup error, or missing status is not proof of abandonment. No background orphan reaper or Core
+terminal/superseded run-status API is included; automatic run-status reclamation remains unavailable until
+its owning contract exists.
+
+Release uses the original provider binding, exact current lease/resource/fences, and UID-preconditioned
+foreground deletion, then verifies the claim and its Sandbox/Pod children are absent before removing its
+owner-specific pool and template. `KnownOwnedAbsent` means a successful exact lookup found no claim or
+children; transient or unauthorized lookup failures remain errors. Sandbox placement cleanup never releases
+or erases Workspace Storage. Storage reclaim/retention remains controlled by its own owner lifecycle.
+
+A differing valid provider result that arrives after terminal release is recorded in a separate,
+owner-scoped cleanup queue. The terminal lease's resource and partial-release evidence are preserved.
+Current-owner reconciliation claims at most one queued resource, uses the original lease fence and provider
+binding for release, and stores the validated receipt under a current-fence CAS. Expiring claim tokens avoid
+concurrent deletion and allow retry after a reconciler stops.
+
+The complete current behavior, configuration, API boundaries, and test limits are in the
+[Environment Sandbox lifecycle guide](../environment-sandbox.md) and
+[Sandbox testing guide](../../guide/environment-sandbox-testing.md).
 
 ### Managed-runtime contract check
 

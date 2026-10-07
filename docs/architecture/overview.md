@@ -3,8 +3,9 @@
 The v1 source builds independent .NET components, including unpublished Knowledge
 and Events & Sessions service candidates, Environment and Orchestrator candidates,
 and the Orchestrator Core AGT YAML Policy adapter. Environment owns lifecycle,
-egress intent, and workspace-volume orchestration; its Azure Files CSI adapter only
-provisions or releases generation-pinned Kubernetes claims. These are source
+egress intent, workspace-volume orchestration, and Sandbox leases; its Azure Files
+CSI adapter provisions or releases generation-pinned claims, while the selected
+Sandbox provider mounts the exact attached PVC. These are source
 candidates, not deployed services. The native journal includes typed, redacted
 PolicyEvaluation evidence but rejects generic writes without trusted Core-writer
 provenance. The event and policy adapter are not action grants. Orchestrator Core's action guard
@@ -44,10 +45,12 @@ read-only runtime lookup and complete delivery/accounting integration remain pen
 The figure is a structural component view, not runtime request order or deployment topology.
 `Agentweaver.EventsAndSessions` references the shared contracts, provider catalog/resolver,
 PostgreSQL outbox/inbox library, and telemetry helper. `Agentweaver.Environment` references the shared
-contracts, provider catalog/resolver, and Azure Files Storage provider; its egress flow and evidence boundary
-are described in [Environment egress](./environment-egress.md).
+contracts, provider catalog/resolver, Azure Files Storage provider, and Agent Sandbox provider; its egress flow and evidence boundary
+are described in [Environment egress](./environment-egress.md), and the Sandbox lease contract is described in
+[Environment Sandbox](./environment-sandbox.md).
 `AzureFilesCsiWorkspaceVolumeProvider` implements `IWorkspaceVolumeProvider` and calls the Kubernetes API;
-it does not mount the volume into a Sandbox or prove data erasure. `AzureBlobObjectStore` implements
+it does not itself mount the volume into a Sandbox or prove data erasure. Environment reserves and releases
+the exact Workspace generation around Sandbox provider use. `AzureBlobObjectStore` implements
 `IObjectStore` in the `Agentweaver.ObjectStore.AzureBlob` library.
 `AzureKeyVaultSecretRedemption` implements `ISecretRedemption` in the
 `Agentweaver.Secrets.AzureKeyVault` library. The table names the concrete types and
@@ -86,8 +89,8 @@ their external boundaries.
 | `Agentweaver.Identity.Broker` | OAuth and secret-redemption host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault` |
 | `Agentweaver.EventsAndSessions` | Native PostgreSQL journal, addressed messages, Cost pricing, usage storage, and HTTP host candidate. No authorized SDK usage producer. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Knowledge` | Project-scoped Memory API, context compiler, and native PostgreSQL adapter candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
-| `Agentweaver.Environment` | Environment-owned egress, workspace volumes, current Sandbox lease, and exact registered-profile context; not deployed. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles` |
-| `Agentweaver.Orchestrator` | Current session/work-item/turn context and runtime registration source, message outbox, and parent notifications. Checks current Projects authority; complete runtime delivery/accounting remains pending. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Orchestrator.Core`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres` |
+| `Agentweaver.Environment` | Environment-owned egress, workspace volumes, Sandbox leases, registered runtime profiles, and authenticated nonce delivery; not deployed. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles`, `Agentweaver.Providers.Sandbox.AgentSandbox` |
+| `Agentweaver.Orchestrator` | Current session/work-item/turn context, runtime registration, immutable SDK source receipts, message outbox, and parent notifications. It checks current Projects authority. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Orchestrator.Core`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres` |
 | `Agentweaver.FoundationProbe` | Acceptance-only infrastructure probe executable. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.ObjectStore.AzureBlob`, `Agentweaver.Telemetry.AzureMonitor` |
 
 The Events & Sessions project owns the native PostgreSQL journal and addressed-message

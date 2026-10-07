@@ -69,6 +69,29 @@ public enum SandboxLeaseState
     Failed
 }
 
+public enum SandboxOperationState
+{
+    Reserved,
+    Completed,
+    ReconciliationRequired,
+    Failed,
+    Stale
+}
+
+public enum SandboxProviderOperation
+{
+    Provision,
+    Release
+}
+
+public enum SandboxObservedState
+{
+    Pending,
+    Ready,
+    Failed,
+    Finished,
+    Absent
+}
 
 public enum SandboxStartupPhase
 {
@@ -102,6 +125,15 @@ public sealed record SandboxStartupPhaseObservation
     public DateTimeOffset ObservedAt { get; }
 }
 
+public sealed record SandboxOperationReference(Guid Value)
+{
+    public SandboxOperationReference Validate()
+    {
+        if (Value == Guid.Empty)
+            throw new ArgumentException("A non-empty opaque sandbox operation reference is required.", nameof(Value));
+        return this;
+    }
+}
 
 public sealed record SandboxEndpointReference(Guid Value)
 {
@@ -156,6 +188,124 @@ public sealed record SandboxProviderBindingSnapshot(
     }
 }
 
+public sealed record SandboxWorkspaceAttachment(
+    WorkspaceVolumeAttachmentNegotiation Negotiation,
+    JsonElement ProviderAttachmentDescriptor)
+{
+    public SandboxWorkspaceAttachment Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Negotiation);
+        Negotiation.Validate();
+        if (ProviderAttachmentDescriptor.ValueKind != JsonValueKind.Object ||
+            ProviderAttachmentDescriptor.GetRawText().Length > 8192)
+            throw new ArgumentException("A bounded provider-owned workspace attachment descriptor is required.",
+                nameof(ProviderAttachmentDescriptor));
+        return this with { ProviderAttachmentDescriptor = ProviderAttachmentDescriptor.Clone() };
+    }
+}
+
+public sealed record SandboxProvisionRequest(
+    EnvironmentGenerationFence Fence,
+    ProviderCandidate Candidate,
+    long ResourceGeneration,
+    long FencingGeneration,
+    Guid OperationId,
+    ImmutableDictionary<string, string> EgressSelectorLabels,
+    SandboxWorkspaceAttachment Workspace)
+{
+    public SandboxProvisionRequest Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Fence);
+        ArgumentNullException.ThrowIfNull(Candidate);
+        ArgumentNullException.ThrowIfNull(EgressSelectorLabels);
+        ArgumentNullException.ThrowIfNull(Workspace);
+        Workspace.Validate();
+        if (Candidate.Seam != ProviderSeam.Sandbox ||
+            ResourceGeneration < 1 ||
+            FencingGeneration < 1 ||
+            OperationId == Guid.Empty ||
+            EgressSelectorLabels.Count == 0 ||
+            EgressSelectorLabels.Any(pair =>
+                string.IsNullOrWhiteSpace(pair.Key) ||
+                string.IsNullOrWhiteSpace(pair.Value) ||
+                pair.Key.Length > 253 ||
+                pair.Value.Length > 63) ||
+            !string.Equals(Workspace.Negotiation.ProjectId, Fence.Owner.ProjectId, StringComparison.Ordinal) ||
+            !string.Equals(Workspace.Negotiation.RunId, Fence.Owner.RunId, StringComparison.Ordinal) ||
+            !string.Equals(Workspace.Negotiation.EnvironmentId, Fence.Owner.EnvironmentId, StringComparison.Ordinal) ||
+            Workspace.Negotiation.EnvironmentFence != Fence ||
+            Workspace.Negotiation.SandboxResource != SandboxResourceIdentity.CreatePlannedReference(
+                Candidate.ProviderId,
+                Candidate.OptionsRevision,
+                Fence,
+                ResourceGeneration,
+                FencingGeneration,
+                OperationId))
+            throw new ArgumentException("The sandbox provision request is invalid.");
+        return this with
+        {
+            EgressSelectorLabels = EgressSelectorLabels.ToImmutableDictionary(StringComparer.Ordinal)
+        };
+    }
+}
+
+public sealed record SandboxDescribeRequest(
+    EnvironmentGenerationFence Fence,
+    ProviderResourceRef Resource,
+    long FencingGeneration,
+    SandboxProviderBindingSnapshot ProviderBinding)
+{
+    public SandboxDescribeRequest Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Fence);
+        ArgumentNullException.ThrowIfNull(Resource);
+        ArgumentNullException.ThrowIfNull(ProviderBinding);
+        if (FencingGeneration < 1 || Resource.Seam != ProviderSeam.Sandbox ||
+            Resource.Generation < 1)
+            throw new ArgumentOutOfRangeException(nameof(FencingGeneration));
+        _ = ProviderBinding.ValidateFor(Resource);
+        return this;
+    }
+}
+
+public sealed record SandboxListOwnedRequest(
+    EnvironmentGenerationFence Fence,
+    long MinimumFencingGeneration,
+    SandboxLeaseProvisionIntent ProvisionIntent)
+{
+    public SandboxListOwnedRequest Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Fence);
+        ArgumentNullException.ThrowIfNull(ProvisionIntent);
+        _ = ProvisionIntent.Validate();
+        if (MinimumFencingGeneration < 1)
+            throw new ArgumentOutOfRangeException(nameof(MinimumFencingGeneration));
+        return this;
+    }
+}
+
+public sealed record SandboxReleaseRequest(
+    EnvironmentGenerationFence Fence,
+    ProviderResourceRef Resource,
+    long FencingGeneration,
+    SandboxProviderBindingSnapshot ProviderBinding,
+    string IdempotencyKey)
+{
+    public SandboxReleaseRequest Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Fence);
+        ArgumentNullException.ThrowIfNull(Resource);
+        ArgumentNullException.ThrowIfNull(ProviderBinding);
+        if (FencingGeneration < 1 || Resource.Seam != ProviderSeam.Sandbox ||
+            Resource.Generation < 1 ||
+            string.IsNullOrWhiteSpace(IdempotencyKey) ||
+            IdempotencyKey.Length > 128 ||
+            IdempotencyKey.Any(char.IsControl))
+            throw new ArgumentException("The sandbox release request is invalid.");
+        _ = ProviderBinding.ValidateFor(Resource);
+        return this;
+    }
+}
 
 public sealed record SandboxProvisionedResource(
     ProviderResourceRef Resource,
@@ -192,6 +342,60 @@ public sealed record SandboxProvisionedResource(
     }
 }
 
+public sealed record SandboxObservation(
+    ProviderResourceRef Resource,
+    SandboxObservedState State,
+    long FencingGeneration,
+    bool VmIsolationVerified,
+    bool WorkspaceAttachmentVerified,
+    long? VerifiedNetworkGeneration,
+    ImmutableArray<SandboxStartupPhaseObservation> StartupPhases,
+    SandboxTerminalEvidence? TerminalEvidence = null,
+    Guid? ProvisionOperationId = null,
+    SandboxProvisionedResource? ProvisionedResource = null)
+{
+    public SandboxObservation ValidateFor(SandboxDescribeRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.Validate();
+        if (Resource != request.Resource ||
+            !Enum.IsDefined(State) ||
+            FencingGeneration != request.FencingGeneration ||
+            StartupPhases.IsDefault ||
+            StartupPhases.Any(phase => phase is null || phase.ContractVersion != 1) ||
+            (VerifiedNetworkGeneration is < 1) ||
+            (State == SandboxObservedState.Finished) != (TerminalEvidence is not null) ||
+            TerminalEvidence is not null &&
+                (TerminalEvidence.ClaimUid != request.Resource.ResourceId ||
+                 TerminalEvidence.FencingGeneration != request.FencingGeneration) ||
+            ProvisionOperationId is { } operationId && operationId == Guid.Empty ||
+            ProvisionedResource is not null &&
+                (ProvisionedResource.Resource != request.Resource ||
+                 !SameProviderBinding(ProvisionedResource.ProviderBinding, request.ProviderBinding)) ||
+            State == SandboxObservedState.Ready &&
+                (!VmIsolationVerified ||
+                 !WorkspaceAttachmentVerified ||
+                 VerifiedNetworkGeneration is null ||
+                 !StartupPhases.Any(phase => phase.Phase == SandboxStartupPhase.Configured) ||
+                 !StartupPhases.Any(phase => phase.Phase == SandboxStartupPhase.Ready)))
+            throw new ArgumentException("The sandbox observation does not match its exact pinned request.");
+        return this with { StartupPhases = StartupPhases.ToImmutableArray() };
+    }
+
+    private static bool SameProviderBinding(
+        SandboxProviderBindingSnapshot left,
+        SandboxProviderBindingSnapshot right) =>
+        left.ProviderId == right.ProviderId &&
+        left.AdapterVersion == right.AdapterVersion &&
+        left.OptionsSchemaVersion == right.OptionsSchemaVersion &&
+        left.OptionsRevision == right.OptionsRevision &&
+        JsonNode.DeepEquals(
+            JsonNode.Parse(left.OptionsSnapshot.GetRawText()),
+            JsonNode.Parse(right.OptionsSnapshot.GetRawText())) &&
+        JsonNode.DeepEquals(
+            JsonNode.Parse(left.ReleaseDescriptor.GetRawText()),
+            JsonNode.Parse(right.ReleaseDescriptor.GetRawText()));
+}
 
 public enum SandboxTerminalReason
 {
@@ -228,6 +432,23 @@ public enum SandboxReleaseDisposition
     KnownOwnedAbsent
 }
 
+public sealed record SandboxReleaseReceipt(
+    ProviderResourceRef Resource,
+    string IdempotencyKey,
+    SandboxReleaseDisposition Disposition)
+{
+    public SandboxReleaseReceipt ValidateFor(SandboxReleaseRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.Validate();
+        if (Resource != request.Resource ||
+            !string.Equals(IdempotencyKey, request.IdempotencyKey, StringComparison.Ordinal) ||
+            !Enum.IsDefined(Disposition))
+            throw new ArgumentException(
+                "A sandbox release receipt must identify the exact resource, operation and outcome.");
+        return this;
+    }
+}
 
 public sealed record SandboxPartialReleaseRequest(
     EnvironmentGenerationFence Fence,
@@ -317,6 +538,28 @@ public sealed record SandboxPartialReleaseReceipt(
         !value.Any(char.IsControl);
 }
 
+public interface ISandboxProvider
+{
+    Task<SandboxProvisionedResource> ProvisionAsync(
+        SandboxProvisionRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<SandboxObservation> DescribeAsync(
+        SandboxDescribeRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<SandboxObservation>> ListOwnedAsync(
+        SandboxListOwnedRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<SandboxReleaseReceipt> ReleaseAsync(
+        SandboxReleaseRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<SandboxPartialReleaseReceipt> ReleasePartialAsync(
+        SandboxPartialReleaseRequest request,
+        CancellationToken cancellationToken = default);
+}
 
 public enum SandboxRetirementReason
 {
@@ -397,9 +640,52 @@ public sealed record SandboxLeaseSnapshot(
     }
 }
 
+public sealed record SandboxLateResourceCleanupClaim(
+    SandboxLeaseSnapshot Lease,
+    SandboxProvisionedResource ProvisionedResource,
+    string IdempotencyKey,
+    Guid ClaimToken,
+    DateTimeOffset ClaimExpiresAt)
+{
+    public SandboxLateResourceCleanupClaim Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Lease);
+        ArgumentNullException.ThrowIfNull(ProvisionedResource);
+        _ = Lease.Validate();
+        _ = ProvisionedResource.Validate();
+        if (Lease.IsCurrent ||
+            Lease.State is not (SandboxLeaseState.Released or SandboxLeaseState.Failed) ||
+            ProvisionedResource.Resource.Generation != Lease.ResourceGeneration ||
+            string.IsNullOrWhiteSpace(IdempotencyKey) ||
+            IdempotencyKey.Length > 128 ||
+            IdempotencyKey.Any(char.IsControl) ||
+            ClaimToken == Guid.Empty ||
+            ClaimExpiresAt <= DateTimeOffset.MinValue)
+            throw new ArgumentException("The late Sandbox resource cleanup claim is invalid.");
+        return this;
+    }
+}
+
+public sealed record SandboxPartialReleaseCompletionRequest(
+    EnvironmentGenerationFence Fence,
+    SandboxPartialReleaseReceipt Receipt);
 
 public sealed record SandboxLeaseReservation(SandboxLeaseSnapshot Lease, bool Replayed);
 
+public sealed record SandboxRetirementAuthorization(
+    string Issuer,
+    string ActorId,
+    long MembershipRevision)
+{
+    public SandboxRetirementAuthorization Validate()
+    {
+        if (string.IsNullOrWhiteSpace(Issuer) || Issuer.Length > 512 || Issuer.Any(char.IsControl) ||
+            string.IsNullOrWhiteSpace(ActorId) || ActorId.Length > 256 || ActorId.Any(char.IsControl) ||
+            MembershipRevision < 1)
+            throw new ArgumentException("Current Projects authorization evidence is invalid.");
+        return this;
+    }
+}
 
 public interface ISandboxLeaseStore
 {
@@ -422,10 +708,65 @@ public interface ISandboxLeaseStore
         Func<SandboxLeaseSnapshot?, CancellationToken, Task<TResult>> callback,
         CancellationToken cancellationToken);
 
+    Task<SandboxLeaseSnapshot?> GetAsync(
+        EnvironmentGenerationFence fence,
+        long resourceGeneration,
+        CancellationToken cancellationToken);
+
+    Task<SandboxLeaseSnapshot> SaveProviderRequestAsync(
+        Guid operationId,
+        EnvironmentGenerationFence fence,
+        JsonElement providerRequest,
+        CancellationToken cancellationToken);
+
     Task<SandboxLeaseSnapshot> CompleteProvisionAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
         SandboxProvisionedResource? provisionedResource,
         bool effectMayHaveApplied,
         CancellationToken cancellationToken);
+
+    Task<SandboxLeaseSnapshot> BeginRetirementAsync(
+        EnvironmentGenerationFence fence,
+        long resourceGeneration,
+        long providerFencingGeneration,
+        SandboxRetirementReason reason,
+        string idempotencyKey,
+        SandboxRetirementAuthorization? authorization,
+        SandboxTerminalEvidence? terminalEvidence,
+        CancellationToken cancellationToken);
+
+    Task<SandboxLeaseSnapshot> CompleteReleaseAsync(
+        Guid operationId,
+        EnvironmentGenerationFence fence,
+        long providerFencingGeneration,
+        SandboxReleaseReceipt receipt,
+        CancellationToken cancellationToken);
+
+    Task<SandboxLeaseSnapshot> CompletePartialReleaseAsync(
+        SandboxPartialReleaseCompletionRequest request,
+        CancellationToken cancellationToken);
+
+    Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
+        EnvironmentGenerationFence fence,
+        CancellationToken cancellationToken);
+
+    Task CompleteLateResourceCleanupAsync(
+        EnvironmentGenerationFence currentFence,
+        SandboxLateResourceCleanupClaim claim,
+        SandboxReleaseReceipt receipt,
+        CancellationToken cancellationToken);
+}
+
+public sealed class SandboxProviderException(
+    string code,
+    string message,
+    bool effectMayHaveApplied,
+    Exception? innerException = null) : Exception(message, innerException)
+{
+    public string Code { get; } = string.IsNullOrWhiteSpace(code)
+        ? throw new ArgumentException("A safe sandbox provider error code is required.", nameof(code))
+        : code;
+
+    public bool EffectMayHaveApplied { get; } = effectMayHaveApplied;
 }

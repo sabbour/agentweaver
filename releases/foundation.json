@@ -110,6 +110,12 @@
       "kind": "library",
       "version": "0.0.0",
       "project": "packages/Agentweaver.Providers.Storage.AzureFiles/Agentweaver.Providers.Storage.AzureFiles.csproj"
+    },
+    {
+      "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
+      "kind": "library",
+      "version": "0.0.0",
+      "project": "packages/Agentweaver.Providers.Sandbox.AgentSandbox/Agentweaver.Providers.Sandbox.AgentSandbox.csproj"
     }
   ],
   "compatibility": [
@@ -322,6 +328,16 @@
     {
       "consumer": "Agentweaver.Environment",
       "dependency": "Agentweaver.Providers.Storage.AzureFiles",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Providers.Sandbox.AgentSandbox",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Environment",
+      "dependency": "Agentweaver.Providers.Sandbox.AgentSandbox",
       "versions": ["0.0.0"]
     }
   ]
