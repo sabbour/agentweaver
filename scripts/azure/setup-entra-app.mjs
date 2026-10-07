@@ -18,6 +18,13 @@
 import { pathToFileURL } from "node:url";
 import * as execDefault from "./lib/exec.mjs";
 import * as logDefault from "./lib/log.mjs";
+import {
+  ACCESS_AS_USER_SCOPE_ID,
+  ACCESS_AS_USER_SCOPE_VALUE,
+  buildEntraAuthRegistrationPhases,
+  inspectEntraAuthRegistration,
+  inspectEntraAuthResourceRegistration,
+} from "./lib/entra-app-registration.mjs";
 
 export const DEFAULT_APP_NAME = "agentweaver-authn";
 // NOTE: these are registered under the app's *publicClient* platform (not `web`).
@@ -82,17 +89,29 @@ Flags:
   -h, --help                            Show this help.
 
 Notes:
-  - This command is optional. Run it when a deployment chooses Auth:Mode=Entra.
-    Agentweaver deployments use this Entra application for browser sign-in.
+  - Run before the first Entra installation or to reconcile an existing registration.
+    Installation and deploy commands validate the registration read-only and stop before
+    infrastructure or image mutations when required settings are missing.
   - The app is always enforced as single-tenant (${SIGN_IN_AUDIENCE}).
   - Redirect URIs are registered under the *publicClient* platform (not \`web\` or \`spa\`), and
     \`isFallbackPublicClient\` is enforced true, so the API can redeem authorization codes with
     PKCE only -- no client secret, and no browser/CORS restriction. If a URI is found under
     \`web\` it is moved to \`publicClient\`. Redirect URIs are merged idempotently; re-running
     adds missing URIs without removing unrelated existing ones.
+  - The app exposes a delegated \`${ACCESS_AS_USER_SCOPE_VALUE}\` API scope, requests that
+    scope from its own resource, preauthorizes its own public client for that scope, and
+    requests v2 access tokens. When the app has no identifier URI, it adds \`api://<client-id>\`.
+    Existing unrelated API scopes, permissions, and identifier URIs are preserved.
+    Reconciliation persists the API scope/resource first, re-reads and verifies it, then
+    preauthorizes the scope in a second Graph PATCH after its permission ID exists.
+    This self-client preauthorization suppresses the user-consent prompt for this scope;
+    it does not require a global admin-consent operation or grant an Agentweaver App Role.
+    This is distinct from App Roles: the delegated permission enables the sign-in token request;
+    an assigned platform App Role authorizes Agentweaver actions.
   - The App Roles are: PlatformAdmin, ProjectCreator, Contributor, Viewer. Creating the app
     does NOT grant anyone a role -- see the "Grant platform roles" output after this command
-    runs for how to assign a user or group.
+    runs for how to assign a user or group. PlatformAdmin is already platform-wide and does not
+    need project role assignments.
 `;
 
 export function parseArgs(argv = []) {
@@ -214,7 +233,7 @@ async function getAppById(appId, exec) {
 
 async function findExistingApp({ appId, appName, exec }) {
   if (appId) {
-    return captureJson(exec, ["ad", "app", "show", "--id", appId], { allowFailure: true });
+    return captureJson(exec, ["ad", "app", "show", "--id", appId]);
   }
 
   const apps = (await captureJson(exec, ["ad", "app", "list", "--display-name", appName])) ?? [];
@@ -328,6 +347,94 @@ async function ensureAppRoles(app, { exec, log }) {
   return true;
 }
 
+async function readEntraAppUntilValid(appId, { exec, inspect, description }) {
+  const retryDelaysMs = [250, 500, 1000, 2000];
+  let errors = [];
+
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
+      const app = await getAppById(appId, exec);
+      errors = inspect(app, appId);
+      if (errors.length === 0) return app;
+    } catch {
+      errors = ["the updated application could not be read"];
+    }
+
+    const retryDelayMs = retryDelaysMs[attempt];
+    if (retryDelayMs !== undefined) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+
+  throw new Error(
+    `Microsoft Graph did not confirm ${description} after bounded propagation retries. `
+      + `Missing or invalid: ${errors.join(", ")}. Rerun setup-entra-app after resolving the registration issue.`,
+  );
+}
+
+async function patchAppRegistration(appObjectId, patch, exec) {
+  await exec.run("az", [
+    "rest",
+    "--method",
+    "PATCH",
+    "--uri",
+    `https://graph.microsoft.com/v1.0/applications/${appObjectId}`,
+    "--headers",
+    "Content-Type=application/json",
+    "--body",
+    JSON.stringify(patch),
+  ]);
+}
+
+async function ensureAuthRegistration(app, { exec, log }) {
+  const phases = buildEntraAuthRegistrationPhases(app);
+  let changed = false;
+
+  if (phases.resourceChanged) {
+    log.section("Configuring Entra delegated sign-in resource");
+    if (app?.api?.oauth2PermissionScopes?.some(
+      (scope) => scope?.value === ACCESS_AS_USER_SCOPE_VALUE && scope.isEnabled === false,
+    )) {
+      log.info("Re-enabling the existing access_as_user delegated scope without changing its ID.");
+    }
+    await patchAppRegistration(app.id, phases.resourcePatch, exec);
+    changed = true;
+  }
+
+  const resourceApp = await readEntraAppUntilValid(app.appId, {
+    exec,
+    inspect: inspectEntraAuthResourceRegistration,
+    description: "the delegated API scope, v2 token version, identifier URI, and self-resource permission",
+  });
+  const currentPhases = buildEntraAuthRegistrationPhases(resourceApp);
+  if (currentPhases.preauthorizationChanged) {
+    log.section("Preauthorizing the Entra public client");
+    await patchAppRegistration(resourceApp.id, currentPhases.preauthorizationPatch, exec);
+    changed = true;
+  }
+
+  const verifiedApp = currentPhases.preauthorizationChanged
+    ? await readEntraAppUntilValid(resourceApp.appId, {
+      exec,
+      inspect: inspectEntraAuthRegistration,
+      description: `self-client preauthorization for ${ACCESS_AS_USER_SCOPE_VALUE}`,
+    })
+    : resourceApp;
+  const remainingErrors = inspectEntraAuthRegistration(verifiedApp, app.appId);
+  if (remainingErrors.length > 0) {
+    throw new Error(
+      `The Entra sign-in registration is incomplete: ${remainingErrors.join(", ")}. Rerun setup-entra-app after resolving the registration issue.`,
+    );
+  }
+
+  if (changed) {
+    log.ok(`Configured the delegated ${ACCESS_AS_USER_SCOPE_VALUE} API scope (${currentPhases.scopeId}) and verified self-client preauthorization.`);
+  } else {
+    log.skip("Entra delegated API scope, self-permission, preauthorization, and v2 tokens already configured.");
+  }
+  return changed;
+}
+
 async function ensureServicePrincipal(app, { exec, log }) {
   const existing = await captureJson(exec, ["ad", "sp", "show", "--id", app.appId], { allowFailure: true });
   if (existing) {
@@ -346,6 +453,10 @@ function buildResult({ app, servicePrincipal, tenantId, redirectUris }) {
     appId: app.appId,
     appName: app.displayName,
     appObjectId: app.id,
+    delegatedScopeId: app?.api?.oauth2PermissionScopes?.find(
+      (scope) => scope?.value === ACCESS_AS_USER_SCOPE_VALUE,
+    )?.id ?? ACCESS_AS_USER_SCOPE_ID,
+    identifierUris: Array.isArray(app?.identifierUris) ? app.identifierUris : [],
     redirectUris,
     servicePrincipalObjectId: servicePrincipal.id,
     signInAudience: app.signInAudience,
@@ -361,6 +472,7 @@ function printSummary(result, log) {
   log.field("Entra service principal object ID", result.servicePrincipalObjectId);
   log.field("Entra tenant ID", result.tenantId);
   log.field("Sign-in audience", result.signInAudience);
+  log.field("API identifier URI(s)", result.identifierUris.join(", "));
   log.field("Redirect URI(s) [publicClient]", result.redirectUris.join(", "));
 
   log.section("Agentweaver config handoff");
@@ -376,6 +488,7 @@ function printSummary(result, log) {
   log.field("Auth__Entra__ClientId", result.appId);
   log.field("Auth__Entra__TenantId", result.tenantId);
   log.field("Auth__Entra__RedirectUri", result.redirectUris[0] ?? "");
+  log.field("Entra delegated API scope", `${ACCESS_AS_USER_SCOPE_VALUE} (${result.delegatedScopeId})`);
   log.warn(
     "Auth__Entra__ClientSecret must stay unset. Redirect URIs on this app are registered under "
     + "the `publicClient` platform (not `web`), which is what lets the API redeem authorization "
@@ -387,11 +500,11 @@ function printSummary(result, log) {
     + "supplying a client secret (blocked by policy on tenants that disallow client-secret "
     + "credentials), not adding a secret to this publicClient registration.");
 
-  log.section("Grant platform roles (required before anyone can sign in)");
+  log.section("Grant platform roles (required before anyone can use Agentweaver)");
   log.warn(
-    "Creating this app registration does NOT grant anyone access. Every Auth:Mode=Entra sign-in "
-    + "is rejected with 'Access denied. A recognized Agentweaver platform role is required.' until "
-    + "a user or a group is assigned to one of the App Roles below.");
+    "The delegated access_as_user permission only enables the sign-in token request; it does not "
+    + "grant Agentweaver access. A recognized platform App Role is required for non-admin users. "
+    + "PlatformAdmin already has platform-wide project access and does not need a project membership.");
   log.info(`App Roles and their IDs (resourceId is the service principal object ID: ${result.servicePrincipalObjectId}):`);
   for (const role of DEFAULT_APP_ROLES) {
     log.field(role.value, role.id);
@@ -404,9 +517,9 @@ function printSummary(result, log) {
     + `    --headers "Content-Type=application/json" \\\n`
     + `    --body '{"principalId":"'"$GROUP_ID"'","resourceId":"${result.servicePrincipalObjectId}","appRoleId":"85fd3442-8291-4d52-a76f-ee962e711d7f"}'`,
   );
-  log.info("Assign a single USER to a role (e.g. alice@contoso.com as PlatformAdmin):");
+  log.info("Assign a single USER to a role (resolve the user's Entra object ID first):");
   log.info(
-    `  USER_ID=$(az ad user show --id "alice@contoso.com" --query id -o tsv)\n`
+    `  USER_ID=$(az ad user show --id "<user-principal-name>" --query id -o tsv)\n`
     + `  az rest --method POST \\\n`
     + `    --uri "https://graph.microsoft.com/v1.0/servicePrincipals/${result.servicePrincipalObjectId}/appRoleAssignedTo" \\\n`
     + `    --headers "Content-Type=application/json" \\\n`
@@ -429,6 +542,10 @@ export async function run({ argv = [], exec = execDefault, log = logDefault } = 
 
   const appName = String(flags.APP_NAME ?? DEFAULT_APP_NAME).trim();
   if (!appName) throw new Error("--app-name cannot be empty.");
+  const appId = flags.APP_ID === undefined ? undefined : String(flags.APP_ID).trim();
+  if (appId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(appId)) {
+    throw new Error("--app-id must be a valid Entra application (client) ID UUID.");
+  }
 
   const desiredRedirectUris = normalizeRedirectUris(
     flags.REDIRECT_URIS.length > 0 ? flags.REDIRECT_URIS : DEFAULT_REDIRECT_URIS,
@@ -438,13 +555,13 @@ export async function run({ argv = [], exec = execDefault, log = logDefault } = 
 
   log.banner(
     "Agentweaver Entra app bootstrap",
-    "Optional bootstrap for Auth:Mode=Entra.",
+    "Registration setup for Auth:Mode=Entra.",
     "Creates or reuses a single-tenant app registration, App Roles, and service principal.",
   );
 
   const tenantId = await getTenantId(exec);
 
-  let app = await findExistingApp({ appId: flags.APP_ID, appName, exec });
+  let app = await findExistingApp({ appId, appName, exec });
   if (app) {
     ensureSingleTenant(app);
     log.ok(`Using existing app '${app.displayName}' (${app.appId}).`);
@@ -462,6 +579,9 @@ export async function run({ argv = [], exec = execDefault, log = logDefault } = 
   await ensureRedirectUris(app, desiredRedirectUris, { exec, log });
   app = await getAppById(app.appId, exec);
   ensureSingleTenant(app);
+
+  await ensureAuthRegistration(app, { exec, log });
+  app = await getAppById(app.appId, exec);
 
   await ensureAppRoles(app, { exec, log });
   app = await getAppById(app.appId, exec);

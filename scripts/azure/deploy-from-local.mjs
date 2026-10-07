@@ -52,6 +52,7 @@ import * as buildStepDefault from "./steps/20-build-push-images.mjs";
 import * as provenanceStepDefault from "./steps/25-verify-image-provenance.mjs";
 import * as deployStepDefault from "./steps/30-deploy.mjs";
 import * as verifyStepDefault from "./steps/40-verify.mjs";
+import { validateEntraAppRegistration } from "./lib/entra-app-registration.mjs";
 import { imageDigestFromId } from "./steps/25-verify-image-provenance.mjs";
 import { validateImageTag } from "./variables.mjs";
 
@@ -329,6 +330,14 @@ export async function deployCommittedSha(cfg, opts = {}) {
     TARGET_GIT_REF: verifyGitRef,
     repoRoot: cwd,
   };
+
+  if (String(deploymentCfg.AUTH_MODE ?? "").toLowerCase() === "entra") {
+    await validateEntraAppRegistration({
+      appId: deploymentCfg.ENTRA_CLIENT_ID,
+      tenantId: deploymentCfg.ENTRA_TENANT_ID,
+      exec,
+    });
+  }
 
   log.info("");
   log.info("Step 1/5: Building + pushing images...");

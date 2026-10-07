@@ -16,6 +16,7 @@ namespace Agentweaver.Tests.Backlog;
 /// </summary>
 public sealed class BacklogEndpointsHttpTests : IClassFixture<EntraWebApplicationFactory>
 {
+    private const string BacklogTeammateOid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     private readonly EntraWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
@@ -112,10 +113,10 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<EntraWebApplicatio
             .GetProperty("task_id").GetString()!;
         var grant = await _client.PostAsJsonAsync(
             $"/api/projects/{projectId}/role-assignments",
-            new { principal_id = "backlog-teammate", role = "Contributor" });
+            new { principal_id = BacklogTeammateOid, role = "Contributor" });
         grant.EnsureSuccessStatusCode();
         using var teammate = _factory.CreateAuthenticatedClientForObjectId(
-            "backlog-teammate", PlatformRoles.Contributor);
+            BacklogTeammateOid, PlatformRoles.Contributor);
         var route = $"/api/projects/{projectId}/backlog/tasks/{taskId}";
         var ready = await teammate.PostAsync($"{route}/ready", null);
         ready.EnsureSuccessStatusCode();
@@ -123,7 +124,7 @@ public sealed class BacklogEndpointsHttpTests : IClassFixture<EntraWebApplicatio
 
         var store = _factory.Services.GetRequiredService<IBacklogTaskStore>();
         var accepted = (await store.GetAsync(ProjectId.Parse(projectId), BacklogTaskId.Parse(taskId)))!;
-        accepted.ReadyByUserId.Should().Be("backlog-teammate");
+        accepted.ReadyByUserId.Should().Be(BacklogTeammateOid);
         accepted.CapturedByUserId.Should().Be("backlog-owner");
         accepted.AiExecutionProviderKey.Should().NotBeNullOrEmpty();
 

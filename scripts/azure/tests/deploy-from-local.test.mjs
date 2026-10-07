@@ -17,6 +17,7 @@ import {
   verifyWarmPoolImage,
   DirtyWorkingTreeError,
   WARM_POOL_NAME,
+  deployCommittedSha,
 } from "../deploy-from-local.mjs";
 
 const POOL_SELECTOR = "agents.x-k8s.io/warm-pool-sandbox=62f98307";
@@ -513,4 +514,50 @@ test("run(): never issues a `kubectl delete pod` command during the warm-pool cy
     (c) => c.type === "run" && c.cmd === "kubectl" && c.args.includes("delete") && c.args.includes("pod"),
   );
   assert.equal(deletePodCalls.length, 0);
+});
+
+test("deployCommittedSha validates Entra before building or deploying", async () => {
+  const calls = [];
+  const exec = {
+    capture: async (command, args) => {
+      calls.push([command, ...args]);
+      if (args[0] === "account") {
+        return { code: 0, stdout: "22222222-2222-2222-2222-222222222222", stderr: "" };
+      }
+      if (args[0] === "ad" && args[1] === "app") {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            appId: "11111111-1111-1111-1111-111111111111",
+            signInAudience: "AzureADMyOrg",
+            isFallbackPublicClient: true,
+            api: { oauth2PermissionScopes: [], requestedAccessTokenVersion: 2 },
+            requiredResourceAccess: [],
+          }),
+          stderr: "",
+        };
+      }
+      return { code: 1, stdout: "", stderr: "" };
+    },
+  };
+  let buildOrDeployCalled = false;
+  const blockedStep = { run: async () => { buildOrDeployCalled = true; } };
+
+  await assert.rejects(
+    deployCommittedSha({
+      ...CFG,
+      AUTH_MODE: "Entra",
+      ENTRA_CLIENT_ID: "11111111-1111-1111-1111-111111111111",
+      ENTRA_TENANT_ID: "22222222-2222-2222-2222-222222222222",
+    }, {
+      imageTag: "abcdef0",
+      verifyGitRef: "abcdef0123456789",
+      exec,
+      buildStep: blockedStep,
+      deployStep: blockedStep,
+    }),
+    /Entra registration preflight failed/,
+  );
+
+  assert.equal(buildOrDeployCalled, false);
 });

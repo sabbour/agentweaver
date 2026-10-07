@@ -353,6 +353,7 @@ public static class AuthEndpoints
             EntraOAuthRedirectService entraOauthService,
             OAuthBrokerTransactionService brokerTransactions,
             WebSessionExchangeService webSessionExchange,
+            ILogger<EntraOAuthRedirectService> logger,
             CancellationToken ct) =>
         {
             EntraAuthorizationFlowConfiguration authorizationConfiguration;
@@ -385,13 +386,38 @@ public static class AuthEndpoints
                 return Results.Redirect($"{frontendUrl}/?auth=error&reason=state_mismatch");
             }
 
+            async Task<IResult> CallbackFailureAsync(string stage, string reason)
+            {
+                logger.LogWarning(
+                    "Entra callback failure stage={Stage} reason={Reason} request_id={RequestId}",
+                    stage,
+                    reason,
+                    httpContext.TraceIdentifier);
+                if (claim.ReturnHandle is not null)
+                {
+                    return await CompleteBrokerErrorAsync(
+                        brokerTransactions,
+                        claim.ReturnHandle,
+                        OpenIddict.Abstractions.OpenIddictConstants.Errors.ServerError,
+                        "The authorization server could not complete the sign-in callback.",
+                        ct).ConfigureAwait(false);
+                }
+                return Results.Redirect($"{frontendUrl}/?auth=error&reason=sign_in_failed");
+            }
+
             if (!string.IsNullOrWhiteSpace(error))
             {
+                var providerReason = string.Equals(error, "access_denied", StringComparison.Ordinal)
+                    ? "access_denied"
+                    : "provider_error";
+                logger.LogWarning(
+                    "Entra callback failure stage={Stage} reason={Reason} request_id={RequestId}",
+                    "provider_response",
+                    providerReason,
+                    httpContext.TraceIdentifier);
                 if (claim.ReturnHandle is null)
                 {
-                    var safeReason = string.Equals(error, "access_denied", StringComparison.Ordinal)
-                        ? "access_denied"
-                        : "sign_in_failed";
+                    var safeReason = providerReason == "access_denied" ? "access_denied" : "sign_in_failed";
                     return Results.Redirect($"{frontendUrl}/?auth=error&reason={safeReason}");
                 }
                 return await CompleteBrokerErrorAsync(
@@ -407,6 +433,11 @@ public static class AuthEndpoints
             }
             if (string.IsNullOrWhiteSpace(code))
             {
+                logger.LogWarning(
+                    "Entra callback failure stage={Stage} reason={Reason} request_id={RequestId}",
+                    "provider_response",
+                    "missing_code",
+                    httpContext.TraceIdentifier);
                 if (claim.ReturnHandle is null)
                     return Results.Redirect($"{frontendUrl}/?auth=error&reason=missing_params");
                 return await CompleteBrokerErrorAsync(
@@ -417,9 +448,18 @@ public static class AuthEndpoints
                     ct).ConfigureAwait(false);
             }
 
+            EntraCodeExchangeResult exchange;
             try
             {
-                var exchange = await entraOauthService.ExchangeClaimedCodeAsync(code, claim, ct).ConfigureAwait(false);
+                exchange = await entraOauthService.ExchangeClaimedCodeAsync(code, claim, ct).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                return await CallbackFailureAsync("token_exchange", "exchange_failed").ConfigureAwait(false);
+            }
+
+            try
+            {
                 var claims = exchange.Claims;
                 var accessToken = exchange.AccessToken;
                 if (exchange.ReturnHandle is not null)
@@ -439,16 +479,7 @@ public static class AuthEndpoints
             }
             catch (Exception)
             {
-                if (claim.ReturnHandle is not null)
-                {
-                    return await CompleteBrokerErrorAsync(
-                        brokerTransactions,
-                        claim.ReturnHandle,
-                        OpenIddict.Abstractions.OpenIddictConstants.Errors.ServerError,
-                        "The authorization server could not complete the upstream token exchange.",
-                        ct).ConfigureAwait(false);
-                }
-                return Results.Redirect($"{frontendUrl}/?auth=error&reason=sign_in_failed");
+                return await CallbackFailureAsync("session_completion", "session_issue_failed").ConfigureAwait(false);
             }
         }).ProtocolManaged();
 

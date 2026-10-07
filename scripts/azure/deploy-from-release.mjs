@@ -31,6 +31,7 @@ import {
   extractChangelogSection,
 } from "../changesets/shared.mjs";
 import { stageRepoAppPrivateKeyFile } from "./lib/repo-app-secret.mjs";
+import { validateEntraAppRegistration } from "./lib/entra-app-registration.mjs";
 import {
   checkpointKey,
   clearCheckpoint,
@@ -335,6 +336,13 @@ export async function run(opts = {}) {
         : {}),
       repoRoot,
     };
+    if (!dryRun && String(cfg.AUTH_MODE ?? "").toLowerCase() === "entra") {
+      await validateEntraAppRegistration({
+        appId: cfg.ENTRA_CLIENT_ID,
+        tenantId: cfg.ENTRA_TENANT_ID,
+        exec,
+      });
+    }
     const expectedDeployment = dryRun ? null : {
       version: release.version,
       deployedRevision: release.commit,

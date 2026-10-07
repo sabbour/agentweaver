@@ -42,6 +42,77 @@ and untrusted forwarded headers weaken the origin boundary.
 
 If no platform role exists, ask a Platform Admin to assign one in Microsoft Entra ID. Then reload Agentweaver.
 
+## Entra registration and access
+
+Before provisioning or deploying an Entra-enabled installation, reconcile the exact
+application registration and its deployed callback URI:
+
+```bash
+npm run azure:setup-entra-app -- \
+  --app-id "$ENTRA_CLIENT_ID" \
+  --redirect-uri "https://<public-host>/auth/entra/callback"
+```
+
+This idempotent setup enables the delegated `access_as_user` API scope on the
+Agentweaver app, requests v2 access tokens, adds the app's own resource as a
+delegated permission, and preauthorizes only the app's own public client for
+that scope. If the app has no API identifier URI, it also adds
+`api://<client-id>`; an existing identifier URI is preserved. The self-client
+preauthorization tells Entra that this client is already approved for this
+delegated scope, suppressing the user-consent prompt for it. No separate
+global-admin consent operation is required for this self-preauthorized scope.
+This does not preauthorize other clients or grant an Agentweaver App Role. It
+preserves unrelated scopes, permissions, preauthorized clients, roles,
+redirects, and settings. Re-run it when the registration or callback changes.
+Do not add a directory-wide Graph permission or grant broad consent to repair
+this sign-in flow.
+
+Setup writes and verifies the API scope/resource before sending a second Graph
+update for self-preauthorization. Microsoft Graph rejects a new preauthorization
+reference until its delegated scope ID exists in the app's permission set; the
+setup command allows bounded propagation time and verifies the persisted scope
+before continuing.
+
+The delegated permission and App Roles do different jobs: `access_as_user`
+allows the app to request a token for its own API; an assigned App Role such as
+`PlatformAdmin`, `ProjectCreator`, `Contributor`, or `Viewer` authorizes
+Agentweaver actions. A successful token request alone does not grant a role.
+Use the least-privileged platform role that meets the user's needs. `PlatformAdmin`
+already has access across all projects and does not need project memberships.
+
+For a fresh-user verification, assign the appropriate platform App Role to a
+test user who has not previously consented to the app, then sign in as that
+user. Verify that Entra completes sign-in without prompting that user for
+consent to `access_as_user`.
+If Entra reports `AADSTS650057` (invalid resource), verify the exact app has an
+enabled delegated `access_as_user` scope, its own client ID and scope ID appear
+in `requiredResourceAccess`, its public client is preauthorized for that scope,
+and `api.requestedAccessTokenVersion` is `2`. Reconcile with the command above,
+then retry the fresh-user check.
+
+Provisioning, local deployments, and non-dry-run release deployments perform a
+read-only preflight against the active Azure CLI tenant and exact app registration
+before making infrastructure or image changes. If the preflight reports that the
+registration is incomplete, reconcile it first. If it cannot read the tenant or app, run
+`az login --tenant "$ENTRA_TENANT_ID"` and ensure the operator can read the
+application registration, then rerun installation.
+
+Project membership uses the Entra **user Object ID** (a UUID), not an email,
+display name, application ID, or service-principal ID. Find it in the user's
+Entra profile or resolve it with
+`az ad user show --id "<user-principal-name>" --query id -o tsv`, then enter
+that UUID in **Project settings → Access**. Existing email-based assignments
+are invalid and must be removed and re-added with the user's Object ID; they
+are not automatically mapped or migrated. Only grant project roles where
+needed; do not add project memberships for a `PlatformAdmin`.
+
+### Carry-forward to 1.x
+
+Do not copy the 0.x self-resource `.default` registration fix into 1.x. The
+1.x installer registers `/signin-oidc`, and the Broker authorizes its local
+`sub` identity through the Projects membership model; see the
+[1.x follow-up](https://github.com/sabbour/agentweaver/issues/1872).
+
 ## Complete required setup
 
 A model provider is the required activation milestone. Agentweaver blocks AI work until this setup is ready.

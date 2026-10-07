@@ -388,6 +388,39 @@ test("standalone release deployment validates feature declaration before build o
   assert.deepEqual(calls, ["declaration"]);
 });
 
+test("release deployment stops before build when Entra registration preflight cannot read the exact app", async () => {
+  const sideEffects = [];
+  await assert.rejects(
+    run({
+      argv: ["v1.2.3", "--image-source", "acr-build"],
+      repoRoot: "/repo",
+      exec: fakeExec(),
+      log,
+      readFile,
+      validatedRelease: { tag: "v1.2.3", version: "1.2.3", commit: "abc" },
+      resolveVariables: async () => ({
+        AUTH_MODE: "Entra",
+        ENTRA_CLIENT_ID: "11111111-1111-1111-1111-111111111111",
+        ENTRA_TENANT_ID: "22222222-2222-2222-2222-222222222222",
+        ACR_NAME: "acr",
+        SUBSCRIPTION_ID: "sub",
+        RESOURCE_GROUP: "rg",
+        CLUSTER_NAME: "cluster",
+        NAMESPACE: "agentweaver",
+      }),
+      acceptance: {
+        runReleaseDeclarationGate: () => sideEffects.push("acceptance"),
+      },
+      steps: {
+        buildImages: { run: async () => sideEffects.push("build") },
+        deployStep: { run: async () => sideEffects.push("deploy") },
+      },
+    }),
+    /Entra registration preflight could not read the active tenant and exact app registration/,
+  );
+  assert.deepEqual(sideEffects, []);
+});
+
 test("deploy-from-release GHCR --dry-run does not pin an ambient AgentHost digest", async () => {
   let deployCfg;
   let resolvedEnv;
