@@ -16,6 +16,10 @@ const projectReferences = new Map([
   ['Agentweaver.Providers', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
   ['Agentweaver.Secrets.AzureKeyVault', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
   ['Agentweaver.Identity', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
+  ['Agentweaver.AgentRuntime', [
+    '..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
+  ]],
   ['Agentweaver.Telemetry.AzureMonitor', ['..\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj']],
   ['Agentweaver.ObjectStore.AzureBlob', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
   ['Agentweaver.Identity.Broker', [
@@ -27,6 +31,7 @@ const projectReferences = new Map([
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
   ]],
   ['Agentweaver.Orchestrator', [
+    '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
     '..\\Agentweaver.Orchestrator.Core\\Agentweaver.Orchestrator.Core.csproj',
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
@@ -35,6 +40,7 @@ const projectReferences = new Map([
   ['Agentweaver.EventsAndSessions', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
     '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
     '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
   ]],
@@ -44,6 +50,7 @@ const projectReferences = new Map([
   ]],
   ['Agentweaver.Environment', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers.Sandbox.AgentSandbox\\Agentweaver.Providers.Sandbox.AgentSandbox.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers.Storage.AzureFiles\\Agentweaver.Providers.Storage.AzureFiles.csproj',
@@ -103,6 +110,7 @@ test('the Orchestrator host is registered as a baseline service with all project
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
     .map(({ dependency, versions }) => [dependency, versions]), [
+    ['Agentweaver.Identity', ['0.0.0']],
     ['Agentweaver.Orchestrator.Core', ['0.0.0']],
     ['Agentweaver.Abstractions', ['0.0.0']],
     ['Agentweaver.Persistence.Postgres', ['0.0.0']],

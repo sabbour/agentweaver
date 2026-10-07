@@ -55,4 +55,16 @@ public sealed class PostgresContainerFixture : IAsyncLifetime
     }
 
     public string GetConnectionString() => _container.GetConnectionString();
+
+    public static async Task<long> CountConnectionsAsync(string connectionString)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false };
+        await using var observer = new NpgsqlConnection(builder.ConnectionString);
+        await observer.OpenAsync();
+        await using var count = new NpgsqlCommand("""
+            SELECT count(*) FROM pg_stat_activity
+            WHERE datname = current_database() AND pid <> pg_backend_pid()
+            """, observer);
+        return (long)(await count.ExecuteScalarAsync())!;
+    }
 }

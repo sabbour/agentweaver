@@ -99,6 +99,10 @@ The fixture disposes the receiver before its caller credential and HTTP transpor
 Failure output retains the exercise error and cleanup errors.
 Direct console stages identify pending owner requests, SQL waits, native SDK responses,
 and cleanup when a test aborts before Xunit reports a result.
+Broker hosts own their registered PostgreSQL pools.
+Native fixture SQL connections use a fixture-owned data source that closes during cleanup.
+Repeated-host and full-suite checks verify that owned connections return to zero after disposal.
+Broker coverage includes the Agent Runtime library through the existing test project and collector.
 
 The canonical Sandbox integration also covers public write versus internal run-read
 permission, three current-authority reads, and retained-lease protection against competing retirement.

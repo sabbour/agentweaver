@@ -562,8 +562,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     private async Task AssertNativeSourceCountsAsync(string schema, long sources, long observations)
     {
-        await using var connection = new NpgsqlConnection(_connectionString);
-        await connection.OpenAsync();
+        await using var connection = await _nativeDataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
             SELECT (SELECT count(*) FROM "{schema}".runtime_sdk_sources),
                    (SELECT count(*) FROM "{schema}".runtime_usage_observations)
@@ -576,8 +575,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     private async Task AssertNativeAccountingCountsAsync(string schema, long expected)
     {
-        await using var connection = new NpgsqlConnection(_connectionString);
-        await connection.OpenAsync();
+        await using var connection = await _nativeDataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
             SELECT (SELECT count(*) FROM "{schema}".usage_ledger),
                    (SELECT count(*) FROM "{schema}".usage_rate_cards),
@@ -599,8 +597,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     private async Task AssertNativeHistoryImmutabilityAsync(
         string schema, (string Table, string Identity)[] tables, string rejectionFunction)
     {
-        await using var connection = new NpgsqlConnection(_connectionString);
-        await connection.OpenAsync();
+        await using var connection = await _nativeDataSource.OpenConnectionAsync();
         async Task<string> SnapshotAsync(string table, string identity)
         {
             await using var snapshot = new NpgsqlCommand($"""
@@ -656,8 +653,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         TraceNativeStage(failures, $"Source {loss} registration begin.");
         await sourceClient.RegisterAsync(session, cancellationToken);
         TraceNativeStage(failures, $"Source {loss} registration completed.");
-        await using var lockConnection = new NpgsqlConnection(_connectionString);
-        await lockConnection.OpenAsync(cancellationToken);
+        await using var lockConnection = await _nativeDataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await lockConnection.BeginTransactionAsync(cancellationToken);
         await using (var acquire = new NpgsqlCommand(loss == "head"
             ? "SELECT pg_advisory_xact_lock(hashtext('agentweaver.runtime.usage'), hashtext(@runtime))"
@@ -675,8 +671,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         TraceNativeStage(failures, $"Source {loss} append started; waiting for actual PostgreSQL contention.");
         try
         {
-            await using var observer = new NpgsqlConnection(_connectionString);
-            await observer.OpenAsync(cancellationToken);
+            await using var observer = await _nativeDataSource.OpenConnectionAsync(cancellationToken);
             var waiting = false;
             while (!waiting)
             {
