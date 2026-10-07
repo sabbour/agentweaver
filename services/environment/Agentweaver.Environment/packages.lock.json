@@ -343,6 +343,12 @@
           "Agentweaver.Abstractions": "[0.0.0, )"
         }
       },
+      "agentweaver.providers.sandbox.agentsandbox": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )"
+        }
+      },
       "agentweaver.providers.storage.azurefiles": {
         "type": "Project",
         "dependencies": {

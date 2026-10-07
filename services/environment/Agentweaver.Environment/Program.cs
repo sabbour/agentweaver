@@ -6,6 +6,7 @@ using System.Security.Cryptography.X509Certificates;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Agentweaver.Providers.Storage.AzureFiles;
+using Agentweaver.Providers.Sandbox.AgentSandbox;
 using Azure.Core;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
@@ -62,6 +63,7 @@ var serviceAccountCa = builder.Configuration["Kubernetes:CertificateAuthorityFil
     "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
 var ciliumOptions = ReadCiliumOptions(builder.Configuration);
 var azureFilesOptions = ReadAzureFilesOptions(builder.Configuration);
+var sandboxOptions = ReadSandboxOptions(builder.Configuration);
 
 builder.Services.AddSingleton<TokenCredential>(_ =>
     EnvironmentPostgresDataSource.CreateCredential(runtime));
@@ -79,6 +81,7 @@ builder.Services.AddDbContext<EnvironmentDbContext>((services, options) =>
 });
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
+builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
 builder.Services.AddSingleton(ciliumOptions);
 builder.Services.AddHttpClient<IProjectsConfigClient, ProjectsConfigHttpClient>(client =>
@@ -96,6 +99,15 @@ builder.Services.AddScoped<ICiliumPolicyResourceStore>(services =>
     services.GetRequiredService<KubernetesCiliumPolicyResourceStore>());
 builder.Services.AddScoped<CiliumEgressPolicyAdapter>();
 builder.Services.AddScoped<EnvironmentEgressManager>();
+builder.Services.AddSingleton(sandboxOptions);
+builder.Services.AddHttpClient<KubernetesAgentSandboxClient>(client =>
+{
+    client.BaseAddress = kubernetesBaseAddress;
+    client.Timeout = TimeSpan.FromSeconds(sandboxOptions.ReconciliationTimeoutSeconds);
+}).ConfigurePrimaryHttpMessageHandler(() =>
+    KubernetesServiceAccountHandler.Create(serviceAccountToken, serviceAccountCa));
+builder.Services.AddScoped<ISandboxProvider, AgentSandboxProvider>();
+builder.Services.AddScoped<EnvironmentSandboxManager>();
 builder.Services.AddAgentweaverWorkspaceVolumeService(
     azureFilesOptions,
     kubernetesBaseAddress,
@@ -184,6 +196,23 @@ static AzureFilesCsiOptions ReadAzureFilesOptions(IConfiguration configuration)
         Required(section["StorageClassName"], "Environment:Storage:AzureFiles:StorageClassName"),
         section.GetValue("MaximumCapacityGiB", 0L),
         section.GetValue("ProvisioningTimeoutSeconds", 0),
+        section.GetValue("PollIntervalMilliseconds", 0)).Validate();
+}
+
+static AgentSandboxOptions ReadSandboxOptions(IConfiguration configuration)
+{
+    var section = configuration.GetSection("Environment:Sandbox:AgentSandbox");
+    return new AgentSandboxOptions(
+        section.GetValue("OptionsSchemaVersion", 0),
+        Required(section["OptionsRevision"], "Environment:Sandbox:AgentSandbox:OptionsRevision"),
+        Required(section["Namespace"], "Environment:Sandbox:AgentSandbox:Namespace"),
+        Required(section["WorkspaceStorageProviderId"], "Environment:Sandbox:AgentSandbox:WorkspaceStorageProviderId"),
+        Required(section["ContainerImage"], "Environment:Sandbox:AgentSandbox:ContainerImage"),
+        Required(section["RuntimeClassName"], "Environment:Sandbox:AgentSandbox:RuntimeClassName"),
+        Required(section["ExpectedRuntimeHandler"], "Environment:Sandbox:AgentSandbox:ExpectedRuntimeHandler"),
+        Required(section["CpuRequest"], "Environment:Sandbox:AgentSandbox:CpuRequest"),
+        Required(section["MemoryRequest"], "Environment:Sandbox:AgentSandbox:MemoryRequest"),
+        section.GetValue("ReconciliationTimeoutSeconds", 0),
         section.GetValue("PollIntervalMilliseconds", 0)).Validate();
 }
 

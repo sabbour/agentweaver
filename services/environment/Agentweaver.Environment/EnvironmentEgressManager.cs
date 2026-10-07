@@ -710,6 +710,129 @@ public sealed class EnvironmentEgressManager(
         return new AuthorizedSelection(authorization, selection);
     }
 
+    internal Task<AuthorizedSelection> GetAuthorizedRunSelectionAsync(
+        CurrentCallerRequest caller,
+        EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken) =>
+        GetAuthorizedSelectionAsync(caller, owner, cancellationToken);
+
+    internal async Task<(EnvironmentOwnerIdentity Owner, ProjectAuthorizationContextResponse Authorization)>
+        GetAuthorizedRunEnvironmentControlAsync(
+            CurrentCallerRequest caller,
+            string projectId,
+            string runId,
+            string environmentId,
+            CancellationToken cancellationToken)
+    {
+        var authorization = await ReadCurrentAuthorizationContextAsync(
+            caller, projectId, runId, tenantId: null, cancellationToken).ConfigureAwait(false);
+        RequirePermission(
+            authorization,
+            projectId,
+            ProjectAuthorizationPermission.WriteProjects,
+            "project_write_not_authorized",
+            "The current caller lacks fresh WriteProjects authority for this target project.");
+        return (
+            new EnvironmentOwnerIdentity(authorization.TenantId, projectId, runId, environmentId),
+            authorization);
+    }
+
+    internal Task EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
+        CurrentCallerRequest caller,
+        EnvironmentOwnerIdentity owner,
+        ProjectAuthorizationContextResponse authorization,
+        CancellationToken cancellationToken) =>
+        EnsureAuthorizationUnchangedAsync(
+            caller, owner, authorization, requireRunSelection: false, cancellationToken);
+
+    internal async Task<(EnvironmentOwnerIdentity Owner, ProjectAuthorizationContextResponse Authorization)>
+        GetAuthorizedRunEnvironmentPlacementReadAsync(
+            CurrentCallerRequest caller,
+            string projectId,
+            string runId,
+            string environmentId,
+            CancellationToken cancellationToken)
+    {
+        var authorization = await ReadCurrentAuthorizationContextAsync(
+            caller, projectId, runId, tenantId: null, cancellationToken).ConfigureAwait(false);
+        if (!HasRunBoundPlacementReadAuthority(authorization, projectId, runId))
+            throw new ProjectsConfigApiException(
+                "run_selection_not_authorized",
+                "The current caller must have ReadRunSelection authority bound to this exact project and run.");
+        return (
+            new EnvironmentOwnerIdentity(authorization.TenantId, projectId, runId, environmentId),
+            authorization);
+    }
+
+    internal async Task EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
+        CurrentCallerRequest caller,
+        EnvironmentOwnerIdentity owner,
+        ProjectAuthorizationContextResponse authorization,
+        CancellationToken cancellationToken)
+    {
+        var current = await ReadCurrentAuthorizationContextAsync(
+            caller, owner, cancellationToken).ConfigureAwait(false);
+        if (!SameAuthorizationContext(authorization, current) ||
+            !HasRunBoundPlacementReadAuthority(current, owner.ProjectId, owner.RunId))
+            throw new ProjectsConfigApiException(
+                "authorization_changed",
+                "The current caller's run-bound read authority changed during placement resolution.");
+    }
+
+    internal async Task<CiliumPolicyObservation> VerifyNetworkForSandboxAsync(
+        CurrentCallerRequest caller,
+        EnvironmentGenerationFence fence,
+        AuthorizedSelection selection,
+        long policyGeneration,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(fence);
+        ArgumentNullException.ThrowIfNull(selection);
+        if (policyGeneration < 1 ||
+            selection.Authorization.TenantId != fence.Owner.TenantId ||
+            selection.ProjectId != fence.Owner.ProjectId ||
+            selection.RunId != fence.Owner.RunId)
+            throw new ArgumentException("Sandbox Network verification scope is invalid.");
+
+        await lifecycleStore.RequireActiveAsync(fence, cancellationToken).ConfigureAwait(false);
+        CompiledEgressIntent intent;
+        try
+        {
+            intent = Compile(selection);
+        }
+        catch (EgressCompilationException exception)
+        {
+            throw new CiliumPolicyException(exception.Code, exception.Message);
+        }
+        _ = ResolveNetworkProvider(selection, providerOptions, cilium, intent);
+        var selector = EnvironmentEgressSelector.Create(
+            fence.Owner.EnvironmentId,
+            selection.TenantId,
+            fence.Owner.ProjectId,
+            fence.Owner.RunId,
+            providerOptions.Namespace);
+        await lifecycleStore.RequireVerifiedNetworkPolicyGenerationAsync(
+            fence,
+            $"{selector.Namespace}/{selector.PolicyName}",
+            policyGeneration,
+            cancellationToken).ConfigureAwait(false);
+        var observation = await cilium.VerifyAsync(
+            selector, intent, policyGeneration, cancellationToken).ConfigureAwait(false);
+        if (!observation.ObjectVerified)
+            throw new CiliumPolicyException(
+                "policy_generation_unverified",
+                "The exact Cilium policy generation is not present; Sandbox readiness is withheld.");
+        await lifecycleStore.RequireActiveAsync(fence, cancellationToken).ConfigureAwait(false);
+        await EnsureAuthorizationUnchangedAsync(
+            caller,
+            fence.Owner,
+            selection.Authorization,
+            requireRunSelection: true,
+            cancellationToken).ConfigureAwait(false);
+        return observation;
+    }
+
     private async Task<ProjectAuthorizationContextResponse> GetAuthorizedProjectContextAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
@@ -726,7 +849,7 @@ public sealed class EnvironmentEgressManager(
         return authorization;
     }
 
-    private async Task EnsureAuthorizationUnchangedAsync(
+    internal async Task EnsureAuthorizationUnchangedAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
         ProjectAuthorizationContextResponse original,
@@ -753,20 +876,35 @@ public sealed class EnvironmentEgressManager(
     private async Task<ProjectAuthorizationContextResponse> ReadCurrentAuthorizationContextAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken) =>
+        await ReadCurrentAuthorizationContextAsync(
+            caller,
+            owner.ProjectId,
+            owner.RunId,
+            owner.TenantId,
+            cancellationToken).ConfigureAwait(false);
+
+    private async Task<ProjectAuthorizationContextResponse> ReadCurrentAuthorizationContextAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string? tenantId,
         CancellationToken cancellationToken)
     {
         var authorization = await projects.GetAuthorizationContextAsync(caller, cancellationToken)
             .ConfigureAwait(false);
         var boundProjectMatches = authorization.BoundProjectId is null ||
-            string.Equals(authorization.BoundProjectId, owner.ProjectId, StringComparison.Ordinal);
+            string.Equals(authorization.BoundProjectId, projectId, StringComparison.Ordinal);
         var boundRunMatches = authorization.BoundRunId is null ||
-            string.Equals(authorization.BoundRunId, owner.RunId, StringComparison.Ordinal);
+            string.Equals(authorization.BoundRunId, runId, StringComparison.Ordinal);
         var bindingIsConsistent = authorization.BoundRunId is null ||
-            string.Equals(authorization.BoundProjectId, owner.ProjectId, StringComparison.Ordinal);
+            string.Equals(authorization.BoundProjectId, projectId, StringComparison.Ordinal);
         if (authorization.ContractVersion != ProjectAuthorizationContextContract.CurrentVersion ||
             string.IsNullOrWhiteSpace(authorization.Issuer) ||
             string.IsNullOrWhiteSpace(authorization.ActorId) ||
-            !string.Equals(authorization.TenantId, owner.TenantId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(authorization.TenantId) ||
+            (tenantId is not null &&
+                !string.Equals(authorization.TenantId, tenantId, StringComparison.Ordinal)) ||
             authorization.MembershipRevision < 1 ||
             authorization.EffectiveAuthority.IsDefault ||
             authorization.EffectiveAuthority.Any(resource =>
@@ -810,6 +948,17 @@ public sealed class EnvironmentEgressManager(
             resource.Permissions.Any(grant =>
                 grant.Permission == permission && grant.RoleRevision > 0));
 
+    private static bool HasRunBoundPlacementReadAuthority(
+        ProjectAuthorizationContextResponse authorization,
+        string projectId,
+        string runId) =>
+        string.Equals(authorization.BoundProjectId, projectId, StringComparison.Ordinal) &&
+        string.Equals(authorization.BoundRunId, runId, StringComparison.Ordinal) &&
+        HasPermission(
+            authorization,
+            projectId,
+            ProjectAuthorizationPermission.ReadRunSelection);
+
     private static string GetPostcheckFailureCode(ProjectsConfigApiException exception) =>
         exception.Code is "authorization_context_mismatch" or
             "authorization_context_denied" or
@@ -818,7 +967,7 @@ public sealed class EnvironmentEgressManager(
             ? "authorization_changed"
             : exception.Code;
 
-    private static bool SameAuthorizationContext(
+    internal static bool SameAuthorizationContext(
         ProjectAuthorizationContextResponse left,
         ProjectAuthorizationContextResponse right)
     {
@@ -1061,7 +1210,7 @@ public sealed class EnvironmentEgressManager(
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{kind}\0{requestIdempotencyKey}"))).ToLowerInvariant();
 
-    private sealed record AuthorizedSelection(
+    internal sealed record AuthorizedSelection(
         ProjectAuthorizationContextResponse Authorization,
         EffectiveNetworkPolicySelection RunSelection)
     {

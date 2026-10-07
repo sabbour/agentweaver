@@ -474,6 +474,7 @@
         "dependencies": {
           "Agentweaver.Abstractions": "[0.0.0, )",
           "Agentweaver.Providers": "[0.0.0, )",
+          "Agentweaver.Providers.Sandbox.AgentSandbox": "[0.1.0, )",
           "Agentweaver.Providers.Storage.AzureFiles": "[0.0.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
@@ -487,6 +488,12 @@
           "Agentweaver.Abstractions": "[0.0.0, )",
           "Microsoft.Extensions.Configuration.Abstractions": "[10.0.0, )",
           "Microsoft.Extensions.Configuration.Binder": "[10.0.0, )"
+        }
+      },
+      "agentweaver.providers.sandbox.agentsandbox": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )"
         }
       },
       "agentweaver.providers.storage.azurefiles": {
