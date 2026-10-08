@@ -70,7 +70,7 @@ their external boundaries.
 
 | Host or ID | Composition or registration | Meaning |
 | --- | --- | --- |
-| Identity Broker | Constructs `AzureKeyVaultSecretRedemption` as an `ISecretRedemption` backend and constructs `AuthorizedSecretRedemption` with the grant authority and backend. | The wrapper checks actor, project, run, purpose, and exact-version grants before backend redemption. The adapter does not authorize callers. |
+| Identity Broker | Constructs `AzureKeyVaultSecretRedemption` as an `ISecretRedemption` backend, `AuthorizedSecretRedemption` with the grant authority and backend, and the Identity-owned GitHub App connection and token-mint routes. | The wrapper checks actor, project, run, purpose, and exact-version grants before backend redemption. GitHub App private-key redemption and repository-token minting remain inside Identity. |
 | Foundation Probe | `ProbeProviderBindings.ResolveAndPin` records provider IDs in pin evidence. Separately, `AzureProbeOperations` constructs `AzureBlobObjectStore` and `AzureKeyVaultSecretRedemption`; `Program` registers telemetry composition. | ID-based pinning does not construct adapters; the probe is an acceptance executable, not an application service host. |
 | `azure-blob` | ObjectStore provider ID recorded in Foundation Probe binding evidence. | Registration ID, not the `AzureBlobObjectStore` class, library, or constructor. |
 | `azure-key-vault` | SecretRedemption provider ID recorded in Foundation Probe binding evidence. | Registration ID, not the `AzureKeyVaultSecretRedemption` class, library, or constructor. |
@@ -91,7 +91,7 @@ their external boundaries.
 | `Agentweaver.ObjectStore.AzureBlob` | Opaque-object Azure Blob adapter. | `Agentweaver.Abstractions` |
 | `Agentweaver.Telemetry` | In-process OpenTelemetry traces, metrics, and logs. | — |
 | `Agentweaver.Telemetry.AzureMonitor` | Opt-in Azure Monitor exporters. | `Agentweaver.Telemetry` |
-| `Agentweaver.Identity.Broker` | OAuth and secret-redemption host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault` |
+| `Agentweaver.Identity.Broker` | OAuth, secret-redemption, and Identity-owned GitHub App connection/token-mint host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.SourceControl` |
 | `Agentweaver.EventsAndSessions` | Native journal, addressed messages, reference-only SDK usage admission, immutable Cost pricing, and exact usage totals. Unpublished host candidate. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Knowledge` | Project-scoped Memory API, context compiler, native PostgreSQL default, and optional Cosmos adapter candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Environment` | Environment-owned egress, workspace volumes, Sandbox leases, registered runtime profiles, and authenticated nonce delivery; not deployed. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles`, `Agentweaver.Providers.Sandbox.AgentSandbox` |

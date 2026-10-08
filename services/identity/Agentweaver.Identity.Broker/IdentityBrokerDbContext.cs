@@ -32,6 +32,12 @@ public sealed class IdentityBrokerDbContext : DbContext
     public DbSet<RuntimeGrantOperationReceipt> RuntimeGrantOperationReceipts => Set<RuntimeGrantOperationReceipt>();
     public DbSet<CopilotConnectionRecord> CopilotConnections => Set<CopilotConnectionRecord>();
     public DbSet<CopilotConnectionRevision> CopilotConnectionRevisions => Set<CopilotConnectionRevision>();
+    public DbSet<RepoAppAuthorizationTransaction> RepoAppAuthorizationTransactions =>
+        Set<RepoAppAuthorizationTransaction>();
+    public DbSet<RepoAppConnectionRecord> RepoAppConnections => Set<RepoAppConnectionRecord>();
+    public DbSet<RepoAppInstallationRecord> RepoAppInstallations => Set<RepoAppInstallationRecord>();
+    public DbSet<RepoAppRepositorySelectionRecord> RepoAppRepositorySelections =>
+        Set<RepoAppRepositorySelectionRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -109,6 +115,148 @@ public sealed class IdentityBrokerDbContext : DbContext
             entity.Property(operation => operation.GrantId)
                 .HasColumnName("grant_id").HasMaxLength(256).IsRequired();
             entity.Property(operation => operation.Revision).HasColumnName("revision");
+        });
+
+        modelBuilder.Entity<RepoAppAuthorizationTransaction>(entity =>
+        {
+            entity.ToTable("repo_app_authorization_transactions", table =>
+                table.HasCheckConstraint("ck_repo_app_authorization_state", "state IN (0, 1, 2, 3)"));
+            entity.HasKey(transaction => transaction.StateHash);
+            entity.Property(transaction => transaction.StateHash)
+                .HasColumnName("state_hash").HasMaxLength(64).IsFixedLength().IsRequired();
+            entity.Property(transaction => transaction.TransactionId)
+                .HasColumnName("transaction_id").HasMaxLength(128).IsRequired();
+            entity.Property(transaction => transaction.OwnerId).HasColumnName("owner_id");
+            entity.Property(transaction => transaction.Purpose).HasColumnName("purpose").HasConversion<int>();
+            entity.Property(transaction => transaction.CallbackCookieHash)
+                .HasColumnName("callback_cookie_hash").HasMaxLength(64).IsFixedLength().IsRequired();
+            entity.Property(transaction => transaction.ProtectedCodeVerifier)
+                .HasColumnName("protected_code_verifier").HasMaxLength(2048).IsRequired();
+            entity.Property(transaction => transaction.ReturnRouteKey)
+                .HasColumnName("return_route_key").HasMaxLength(32).IsRequired();
+            entity.Property(transaction => transaction.CreatedAt).HasColumnName("created_at");
+            entity.Property(transaction => transaction.ExpiresAt).HasColumnName("expires_at");
+            entity.Property(transaction => transaction.State).HasColumnName("state").HasConversion<int>();
+            entity.Property(transaction => transaction.CompletedAt).HasColumnName("completed_at");
+            entity.Property(transaction => transaction.InstallationId).HasColumnName("installation_id");
+            entity.HasIndex(transaction => transaction.TransactionId).IsUnique();
+            entity.HasIndex(transaction => transaction.ExpiresAt);
+            entity.HasOne<BrokerUser>()
+                .WithMany()
+                .HasForeignKey(transaction => transaction.OwnerId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<RepoAppConnectionRecord>(entity =>
+        {
+            entity.ToTable("repo_app_connections", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_repo_app_connection_revisions",
+                    "connection_revision > 0 AND credential_revision > 0");
+                table.HasCheckConstraint(
+                    "ck_repo_app_connection_state",
+                    "state IN (0, 1, 2)");
+                table.HasCheckConstraint(
+                    "ck_repo_app_connection_refresh_lease",
+                    "(refresh_lease_id IS NULL) = (refresh_lease_expires_at IS NULL)");
+            });
+            entity.HasKey(connection => connection.ConnectionId);
+            entity.Property(connection => connection.ConnectionId)
+                .HasColumnName("connection_id").HasMaxLength(128);
+            entity.Property(connection => connection.OwnerId).HasColumnName("owner_id");
+            entity.Property(connection => connection.GitHubLogin)
+                .HasColumnName("github_login").HasMaxLength(256).IsRequired();
+            entity.Property(connection => connection.AccessTokenSecretId)
+                .HasColumnName("access_token_secret_id").HasMaxLength(256).IsRequired();
+            entity.Property(connection => connection.AccessTokenSecretVersion)
+                .HasColumnName("access_token_secret_version").HasMaxLength(256).IsRequired();
+            entity.Property(connection => connection.AccessTokenExpiresAt)
+                .HasColumnName("access_token_expires_at");
+            entity.Property(connection => connection.RefreshTokenSecretId)
+                .HasColumnName("refresh_token_secret_id").HasMaxLength(256).IsRequired();
+            entity.Property(connection => connection.RefreshTokenSecretVersion)
+                .HasColumnName("refresh_token_secret_version").HasMaxLength(256).IsRequired();
+            entity.Property(connection => connection.RefreshTokenExpiresAt)
+                .HasColumnName("refresh_token_expires_at");
+            entity.Property(connection => connection.ConnectionRevision).HasColumnName("connection_revision");
+            entity.Property(connection => connection.CredentialRevision).HasColumnName("credential_revision");
+            entity.Property(connection => connection.State).HasColumnName("state").HasConversion<int>();
+            entity.Property(connection => connection.RefreshLeaseId).HasColumnName("refresh_lease_id");
+            entity.Property(connection => connection.RefreshLeaseExpiresAt).HasColumnName("refresh_lease_expires_at");
+            entity.Property(connection => connection.CreatedAt).HasColumnName("created_at");
+            entity.Property(connection => connection.UpdatedAt).HasColumnName("updated_at");
+            entity.Property(connection => connection.ConnectionRevision).IsConcurrencyToken();
+            entity.HasIndex(connection => connection.OwnerId).IsUnique();
+            entity.HasOne<BrokerUser>()
+                .WithMany()
+                .HasForeignKey(connection => connection.OwnerId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<RepoAppInstallationRecord>(entity =>
+        {
+            entity.ToTable("repo_app_installations", table =>
+                table.HasCheckConstraint(
+                    "ck_repo_app_installation_identity",
+                    "installation_id > 0 AND connection_revision > 0"));
+            entity.HasKey(installation => new { installation.ConnectionId, installation.InstallationId });
+            entity.Property(installation => installation.ConnectionId)
+                .HasColumnName("connection_id").HasMaxLength(128);
+            entity.Property(installation => installation.InstallationId).HasColumnName("installation_id");
+            entity.Property(installation => installation.AccountLogin)
+                .HasColumnName("account_login").HasMaxLength(256).IsRequired();
+            entity.Property(installation => installation.AccountType)
+                .HasColumnName("account_type").HasMaxLength(128).IsRequired();
+            entity.Property(installation => installation.RepositorySelection)
+                .HasColumnName("repository_selection").HasMaxLength(32).IsRequired();
+            entity.Property(installation => installation.ConnectionRevision)
+                .HasColumnName("connection_revision");
+            entity.Property(installation => installation.AddedAt).HasColumnName("added_at");
+            entity.Property(installation => installation.RevokedAt).HasColumnName("revoked_at");
+            entity.HasOne<RepoAppConnectionRecord>()
+                .WithMany()
+                .HasForeignKey(installation => installation.ConnectionId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<RepoAppRepositorySelectionRecord>(entity =>
+        {
+            entity.ToTable("repo_app_repository_selections", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_repo_app_selection_binding",
+                    "connection_revision > 0 AND installation_id > 0 AND repository_id > 0 AND expires_at > created_at");
+                table.HasCheckConstraint(
+                    "ck_repo_app_selection_permission_digest",
+                    "permission_digest IS NULL OR permission_digest ~ '^[0-9a-f]{64}$'");
+            });
+            entity.HasKey(selection => selection.CodeHash);
+            entity.Property(selection => selection.CodeHash)
+                .HasColumnName("code_hash").HasMaxLength(64).IsFixedLength();
+            entity.Property(selection => selection.OwnerId).HasColumnName("owner_id");
+            entity.Property(selection => selection.ConnectionId).HasColumnName("connection_id").HasMaxLength(128);
+            entity.Property(selection => selection.ConnectionRevision).HasColumnName("connection_revision");
+            entity.Property(selection => selection.InstallationId).HasColumnName("installation_id");
+            entity.Property(selection => selection.RepositoryId).HasColumnName("repository_id");
+            entity.Property(selection => selection.RepositoryFullName)
+                .HasColumnName("repository_full_name").HasMaxLength(201).IsRequired();
+            entity.Property(selection => selection.CreatedAt).HasColumnName("created_at");
+            entity.Property(selection => selection.ExpiresAt).HasColumnName("expires_at");
+            entity.Property(selection => selection.ProjectId)
+                .HasColumnName("project_id").HasMaxLength(256);
+            entity.Property(selection => selection.PermissionDigest)
+                .HasColumnName("permission_digest").HasMaxLength(64).IsFixedLength();
+            entity.Property(selection => selection.ConsumedAt).HasColumnName("consumed_at");
+            entity.HasIndex(selection => selection.ExpiresAt);
+            entity.HasOne<BrokerUser>()
+                .WithMany()
+                .HasForeignKey(selection => selection.OwnerId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<RepoAppConnectionRecord>()
+                .WithMany()
+                .HasForeignKey(selection => selection.ConnectionId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         // Registers OpenIddict's application/authorization/scope/token entity types;

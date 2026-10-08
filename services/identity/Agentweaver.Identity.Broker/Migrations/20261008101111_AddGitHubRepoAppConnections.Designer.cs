@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Identity.Broker;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Identity.Broker.Migrations
 {
     [DbContext(typeof(IdentityBrokerDbContext))]
-    partial class IdentityBrokerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261008101111_AddGitHubRepoAppConnections")]
+    partial class AddGitHubRepoAppConnections
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -59,100 +62,6 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .IsUnique();
 
                     b.ToTable("broker_users", "identity_broker");
-                });
-
-            modelBuilder.Entity("Agentweaver.Identity.Broker.CopilotConnectionRecord", b =>
-                {
-                    b.Property<int>("CredentialKind")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("ConnectionId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("FreshUntil")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("GitHubUserId")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("OwnerActorId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<string>("OwnerIssuer")
-                        .IsRequired()
-                        .HasMaxLength(2048)
-                        .HasColumnType("character varying(2048)");
-
-                    b.Property<long>("Revision")
-                        .IsConcurrencyToken()
-                        .HasColumnType("bigint");
-
-                    b.Property<int>("Scope")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("ScopeId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<string>("SecretId")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<string>("SecretVersion")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<int>("State")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("StateHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.HasKey("ConnectionId");
-
-                    b.ToTable("copilot_connections", "identity_broker");
-                });
-
-            modelBuilder.Entity("Agentweaver.Identity.Broker.CopilotConnectionRevision", b =>
-                {
-                    b.Property<Guid>("ConnectionId")
-                        .HasColumnType("uuid");
-
-                    b.Property<long>("Revision")
-                        .HasColumnType("bigint");
-
-                    b.Property<DateTimeOffset>("FreshUntil")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("RecordedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("SecretId")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<string>("SecretVersion")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<int>("State")
-                        .HasColumnType("integer");
-
-                    b.HasKey("ConnectionId", "Revision");
-
-                    b.ToTable("copilot_connection_revisions", "identity_broker");
                 });
 
             modelBuilder.Entity("Agentweaver.Identity.Broker.PendingAuthorization", b =>
@@ -985,15 +894,6 @@ namespace Agentweaver.Identity.Broker.Migrations
                     b.HasIndex("ApplicationId", "Status", "Subject", "Type");
 
                     b.ToTable("OpenIddictTokens", "identity_broker");
-                });
-
-            modelBuilder.Entity("Agentweaver.Identity.Broker.CopilotConnectionRevision", b =>
-                {
-                    b.HasOne("Agentweaver.Identity.Broker.CopilotConnectionRecord", null)
-                        .WithMany()
-                        .HasForeignKey("ConnectionId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("Agentweaver.Identity.Broker.RepoAppAuthorizationTransaction", b =>

@@ -9,6 +9,7 @@ using Azure.Security.KeyVault.Secrets;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Identity.Broker;
+using Agentweaver.SourceControl;
 using Agentweaver.Secrets.AzureKeyVault;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -88,6 +89,24 @@ Validator.ValidateObject(identityOptions, new ValidationContext(identityOptions)
 Validator.ValidateObject(identityOptions.Signing, new ValidationContext(identityOptions.Signing), validateAllProperties: true);
 Validator.ValidateObject(identityOptions.ExternalProvider, new ValidationContext(identityOptions.ExternalProvider), validateAllProperties: true);
 Validator.ValidateObject(identityOptions.SecretRedemption, new ValidationContext(identityOptions.SecretRedemption), validateAllProperties: true);
+if (identityOptions.GitHubRepoApp is { } githubRepoAppOptions)
+{
+    Validator.ValidateObject(githubRepoAppOptions, new ValidationContext(githubRepoAppOptions), validateAllProperties: true);
+    if (!Uri.TryCreate(githubRepoAppOptions.CallbackUri, UriKind.Absolute, out var repoAppCallbackUri) ||
+        repoAppCallbackUri.Scheme != Uri.UriSchemeHttps ||
+        repoAppCallbackUri.AbsolutePath != "/auth/github/repo-app/callback" ||
+        !string.IsNullOrEmpty(repoAppCallbackUri.UserInfo) ||
+        !string.IsNullOrEmpty(repoAppCallbackUri.Query) ||
+        !string.IsNullOrEmpty(repoAppCallbackUri.Fragment) ||
+        string.IsNullOrWhiteSpace(githubRepoAppOptions.AppSlug) ||
+        githubRepoAppOptions.AppSlug.Length > 100 ||
+        githubRepoAppOptions.AppSlug.Any(character =>
+            !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
+        throw new InvalidOperationException("GitHub Repo App configuration is invalid.");
+    _ = new SecretRef(
+        githubRepoAppOptions.PrivateKeySecretId,
+        githubRepoAppOptions.PrivateKeySecretVersion);
+}
 foreach (var client in identityOptions.Clients)
     Validator.ValidateObject(client, new ValidationContext(client), validateAllProperties: true);
 foreach (var uri in new[] { identityOptions.Issuer, identityOptions.ExternalProvider.Authority })
@@ -175,7 +194,39 @@ builder.Services.AddSingleton<AzureKeyVaultSecretRedemption>(provider =>
         provider.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton<ISecretRedemption>(provider =>
     provider.GetRequiredService<AzureKeyVaultSecretRedemption>());
+builder.Services.AddSingleton<ISecretVersionWriter>(provider =>
+    new AzureKeyVaultSecretVersionWriter(
+        provider.GetRequiredService<AzureKeyVaultConfiguration>(),
+        provider.GetRequiredService<TokenCredential>(),
+        provider.GetRequiredService<SecretClientOptions>()));
 builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient("github-repo-app-oauth", client =>
+    client.BaseAddress = new Uri("https://github.com/"))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient("github-repo-app-api", client =>
+    client.BaseAddress = new Uri("https://api.github.com/"))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+if (identityOptions.GitHubRepoApp is { } repoAppOptions)
+{
+    builder.Services.AddSingleton(repoAppOptions);
+    builder.Services.AddScoped(provider => new GitHubRepoAppProviderClient(
+        provider.GetRequiredService<IHttpClientFactory>().CreateClient("github-repo-app-oauth"),
+        provider.GetRequiredService<IHttpClientFactory>().CreateClient("github-repo-app-api"),
+        new GitHubRepoAppProviderOptions(
+            repoAppOptions.OAuthClientId,
+            repoAppOptions.OAuthClientSecret,
+            new Uri(repoAppOptions.CallbackUri)),
+        provider.GetRequiredService<TimeProvider>()));
+    builder.Services.AddHttpClient("github-repo-app-installation-api", client =>
+        client.BaseAddress = new Uri("https://api.github.com/"))
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    builder.Services.AddScoped(provider => new GitHubAppInstallationTokenIssuer(
+        provider.GetRequiredService<IHttpClientFactory>()
+            .CreateClient("github-repo-app-installation-api"),
+        repoAppOptions.AppId,
+        provider.GetRequiredService<TimeProvider>()));
+    builder.Services.AddScoped<GitHubRepoAppConnectionService>();
+}
 builder.Services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
 var runtimeBootstrapOptions = builder.Configuration
     .GetSection("IdentityBroker:RuntimeBootstrap").Get<RuntimeBootstrapOptions>();
@@ -346,6 +397,11 @@ app.UseAuthorization();
 app.MapIdentityBrokerEndpoints();
 app.MapIdentitySecretRedemptionEndpoints();
 app.MapCopilotConnectionEndpoints();
+if (identityOptions.GitHubRepoApp is not null)
+{
+    app.MapGitHubRepoAppEndpoints();
+    app.MapGitHubRepoAppInstallationTokenEndpoints();
+}
 if (runtimeBootstrapOptions is not null)
     app.MapIdentityRuntimeCredentialEndpoints();
 

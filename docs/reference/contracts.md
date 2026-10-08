@@ -379,8 +379,18 @@ These routes belong to the unpublished Identity broker candidate. They are servi
 | `POST /secrets/redeem` | Validated bearer and exact secret ID, version, purpose, and run ID. |
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL connectivity. |
+| `GET /auth/github/repo-app/csrf` | Return a no-store antiforgery token for the local-cookie GitHub Repo App connection routes. |
+| `POST /auth/github/repo-app/connect` | Require the local Identity cookie and antiforgery token, create owner-bound PKCE state, set the callback cookie, and redirect to GitHub OAuth. |
+| `POST /auth/github/repo-app/install` | Require the local Identity cookie and antiforgery token, then start an owner-bound GitHub App installation callback. |
+| `GET /auth/github/repo-app/callback` | Complete the single-use user OAuth or installation callback using the local owner, state, and callback cookie; responses are no-store. |
+| `GET /auth/github/repo-app/repositories` | Discover installations and repositories available to the connected GitHub user; response is no-store. |
+| `POST /auth/github/repo-app/selection` | Require local-cookie owner and antiforgery validation; return a short-lived, one-time repository-selection code for the selected installation/repository. |
+| `POST /internal/source-control/github-app/installations/token` | Validate the run-bound Broker bearer and active grant, recheck current connection, installation, repository and permission binding, and return an ephemeral exact-repository token to Orchestrator. Response is no-store. |
 
 The service has no secret-grant administration HTTP endpoint. The browser consent UI is not implemented.
+The Repo App routes are mapped only when the optional `IdentityBroker:GitHubRepoApp`
+configuration is present. The local-cookie routes do not constitute a settings UI;
+the token-mint route is an internal source boundary, not a public GitHub endpoint.
 
 Broker access tokens contain the local broker `sub`, registered OAuth scopes, and resource audience. They do not forward upstream tenant or role claims and do not assign Projects roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Downstream resource services obtain current effective permissions through its versioned owner contract rather than maintain duplicate membership or role records or caches; OAuth scopes and signed project/run bindings constrain requests but do not create authority.
 
@@ -642,6 +652,10 @@ current event-delivery boundaries.
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTenantId` | Explicit Entra tenant ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityClientId` | Explicit Entra client ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTokenFilePath` | Absolute projected token-file path. |
+| `IdentityBroker:GitHubRepoApp:OAuthClientId` / `OAuthClientSecret` | Registered GitHub OAuth client used only for the Repo App user connection; the secret is deployment configuration, not a database value. |
+| `IdentityBroker:GitHubRepoApp:CallbackUri` | Absolute HTTPS `/auth/github/repo-app/callback` URI with no query, user info, or fragment. |
+| `IdentityBroker:GitHubRepoApp:AppId` / `AppSlug` | Exact configured GitHub App identity and install URL slug. |
+| `IdentityBroker:GitHubRepoApp:PrivateKeySecretId` / `PrivateKeySecretVersion` | Exact protected App key reference redeemed inside Identity for the active run; the key value is never returned or stored in Identity tables. |
 | `IdentityBroker:RuntimeBootstrap:OrchestratorOwnerAddress` / `EnvironmentOwnerAddress` | Optional composition; both fixed HTTPS root owner addresses are required when configured. |
 | `IdentityBroker:RuntimeBootstrap:BootstrapLifetime` / `SourceLifetime` | Explicit positive lifetimes bounded by the current registration and actor expiry. |
 

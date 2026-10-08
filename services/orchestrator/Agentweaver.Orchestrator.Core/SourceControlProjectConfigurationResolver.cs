@@ -75,6 +75,10 @@ public static class SourceControlProjectConfigurationResolver
         ArgumentNullException.ThrowIfNull(negotiation);
         ValidateSnapshotBinding(acceptedSelectionSnapshot, acceptedRun);
         var settings = Resolve(acceptedSelectionSnapshot);
+        if (settings.AuthMode == SourceControlAuthMode.GitHubApp ||
+            settings.ApiSecretReference is null)
+            throw Invalid(
+                "GitHub App repository pins require the Identity-owned installation binding path.");
         if (negotiation.Repository != settings.Repository)
             throw Invalid(
                 "The negotiated physical repository does not match the accepted ProjectConfiguration.");
@@ -97,6 +101,56 @@ public static class SourceControlProjectConfigurationResolver
                 : null,
             pinnedAt);
     }
+
+    public static SourceControlRepositoryPin PinNegotiatedGitHubAppRepository(
+        JsonElement acceptedSelectionSnapshot,
+        ProviderCatalog catalog,
+        ProviderResolver resolver,
+        SourceControlAcceptedRunBinding acceptedRun,
+        string pinId,
+        SourceControlRepositoryNegotiation negotiation,
+        SourceControlGitHubAppBinding githubAppBinding,
+        DateTimeOffset pinnedAt)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(resolver);
+        ArgumentNullException.ThrowIfNull(acceptedRun);
+        ArgumentNullException.ThrowIfNull(negotiation);
+        ArgumentNullException.ThrowIfNull(githubAppBinding);
+        ValidateSnapshotBinding(acceptedSelectionSnapshot, acceptedRun);
+        var settings = Resolve(acceptedSelectionSnapshot);
+        if (settings.AuthMode != SourceControlAuthMode.GitHubApp ||
+            !string.Equals(
+                settings.IdentityConnectionId,
+                githubAppBinding.IdentityConnectionId,
+                StringComparison.Ordinal) ||
+            !string.Equals(
+                HashRepositorySelectionCode(settings.IdentityRepositorySelectionCode!),
+                githubAppBinding.IdentityRepositorySelectionHash,
+                StringComparison.Ordinal))
+            throw Invalid(
+                "The GitHub App binding does not match the Identity connection in the accepted ProjectConfiguration.");
+        if (negotiation.Repository != settings.Repository)
+            throw Invalid(
+                "The negotiated physical repository does not match the accepted ProjectConfiguration.");
+
+        var selection = SourceControlProviderSelectionResolver.Resolve(
+            acceptedSelectionSnapshot, catalog, resolver);
+        return SourceControlProviderSelectionResolver.PinNegotiatedRepository(
+            resolver,
+            selection,
+            acceptedRun,
+            pinId,
+            negotiation,
+            githubAppBinding,
+            settings.WebhookSecretReference is { } webhook
+                ? new SourceControlCredentialReference(webhook, SourceControlSecretPurposes.Webhook)
+                : null,
+            pinnedAt);
+    }
+
+    private static string HashRepositorySelectionCode(string selectionCode) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.ASCII.GetBytes(selectionCode)));
 
     private static void ValidateSnapshotBinding(
         JsonElement snapshot,

@@ -566,7 +566,7 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             caller, project.ProjectId, runId, request, CancellationToken.None);
 
         Assert.Equal(originalSettings.Repository, selected.ProjectConfiguration.SourceControl!.Repository);
-        Assert.Equal("api-v1", selected.ProjectConfiguration.SourceControl.ApiSecretReference.Version);
+        Assert.Equal("api-v1", selected.ProjectConfiguration.SourceControl.ApiSecretReference!.Version);
         Assert.Equal("checkout-v1", selected.ProjectConfiguration.SourceControl.CheckoutSecretReference!.Version);
         Assert.Equal("webhook-v1", selected.ProjectConfiguration.SourceControl.WebhookSecretReference!.Version);
         Assert.Equal(SourceControlProviderIds.GitHub,
@@ -607,7 +607,7 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             caller, project.ProjectId, runId, CancellationToken.None);
         Assert.Equal(configuration.Revision, replayed.ProjectConfigurationRevision);
         Assert.Equal(originalSettings.Repository, replayed.ProjectConfiguration.SourceControl!.Repository);
-        Assert.Equal("api-v1", replayed.ProjectConfiguration.SourceControl.ApiSecretReference.Version);
+        Assert.Equal("api-v1", replayed.ProjectConfiguration.SourceControl.ApiSecretReference!.Version);
         Assert.Equal("checkout-v1", replayed.ProjectConfiguration.SourceControl.CheckoutSecretReference!.Version);
         Assert.Equal("webhook-v1", replayed.ProjectConfiguration.SourceControl.WebhookSecretReference!.Version);
         var persisted = await restartedContext.RunSelections.AsNoTracking().SingleAsync(

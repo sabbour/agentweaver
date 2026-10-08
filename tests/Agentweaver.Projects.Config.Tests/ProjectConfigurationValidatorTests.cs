@@ -209,7 +209,87 @@ public sealed class ProjectConfigurationValidatorTests
         Assert.Contains("\"apiSecretReference\":{\"id\":\"github-api\",\"version\":\"v3\"}", json, StringComparison.Ordinal);
         Assert.Contains("\"checkoutSecretReference\":{\"id\":\"github-checkout\",\"version\":\"v2\"}", json, StringComparison.Ordinal);
         Assert.Contains("\"webhookSecretReference\":{\"id\":\"github-webhook\",\"version\":\"v1\"}", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"authMode\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"identityConnectionId\"", json, StringComparison.Ordinal);
         Assert.DoesNotContain("tokenValue", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GitHubAppSettingsUseStableIdentityConnectionWithoutPersistedApiOrCheckoutSecrets()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var settings = new SourceControlProjectSettings(
+            new SourceControlRepositoryIdentity("octo", "repo"),
+            apiSecretReference: null,
+            authMode: SourceControlAuthMode.GitHubApp,
+            identityConnectionId: "app-conn_123",
+            identityRepositorySelectionCode: new string('a', 64));
+
+        var configuration = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            SourceControl = settings,
+        });
+        var json = JsonSerializer.Serialize(configuration, options);
+        var restored = JsonSerializer.Deserialize<ProjectConfiguration>(json, options)!.SourceControl!;
+
+        Assert.Equal(SourceControlAuthMode.GitHubApp, restored.AuthMode);
+        Assert.Equal("app-conn_123", restored.IdentityConnectionId);
+        Assert.Equal(new string('a', 64), restored.IdentityRepositorySelectionCode);
+        Assert.Null(restored.ApiSecretReference);
+        Assert.Null(restored.CheckoutSecretReference);
+        Assert.Contains("\"authMode\":\"githubApp\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"identityConnectionId\":\"app-conn_123\"", json, StringComparison.Ordinal);
+        Assert.Contains($"\"identityRepositorySelectionCode\":\"{new string('a', 64)}\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("apiSecretReference", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("checkoutSecretReference", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LegacySettingsRoundTripWithoutAddingAuthModeOrConnectionToAcceptedJson()
+    {
+        const string legacy = """
+            {"repository":{"owner":"octo","name":"repo"},
+             "apiSecretReference":{"id":"github-api","version":"v3"}}
+            """;
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var settings = JsonSerializer.Deserialize<SourceControlProjectSettings>(legacy, options)!;
+        var serialized = JsonSerializer.Serialize(settings, options);
+
+        Assert.Null(settings.AuthMode);
+        Assert.Null(settings.IdentityConnectionId);
+        Assert.Equal(
+            """{"repository":{"owner":"octo","name":"repo"},"apiSecretReference":{"id":"github-api","version":"v3"}}""",
+            serialized);
+    }
+
+    [Fact]
+    public void RejectsMismatchedOrUnknownSourceControlAuthBindings()
+    {
+        var repository = new SourceControlRepositoryIdentity("octo", "repo");
+        Assert.Throws<ArgumentException>(() => new SourceControlProjectSettings(
+            repository,
+            apiSecretReference: null,
+            authMode: SourceControlAuthMode.GitHubApp));
+        Assert.Throws<ArgumentException>(() => new SourceControlProjectSettings(
+            repository,
+            new SecretRef("github-api", "v3"),
+            authMode: SourceControlAuthMode.GitHubApp,
+            identityConnectionId: "app-conn"));
+        Assert.Throws<ArgumentException>(() => new SourceControlProjectSettings(
+            repository,
+            null,
+            checkoutSecretReference: new SecretRef("github-checkout", "v2"),
+            authMode: SourceControlAuthMode.GitHubApp,
+            identityConnectionId: "app-conn"));
+        Assert.Throws<ArgumentException>(() => new SourceControlProjectSettings(
+            repository,
+            new SecretRef("github-api", "v3"),
+            identityConnectionId: "app-conn"));
+        Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<SourceControlProjectSettings>(
+                """{"repository":{"owner":"octo","name":"repo"},"apiSecretReference":{"id":"api","version":"v1"},"authMode":"unexpected"}""",
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 
     [Fact]

@@ -84,38 +84,99 @@ internal static class SourceControlEndpoints
                     SourceControlFailureCode.CapabilityUnavailable,
                     "The selected SourceControl provider adapter is not registered.");
 
-            var pin = await redemption.WithCredentialAsync(
-                context,
-                acceptedRun,
-                new SourceControlCredentialReference(
-                    settings.ApiSecretReference,
-                    SourceControlSecretPurposes.Api),
-                async (credential, token) =>
-                {
-                    var negotiation = await adapter.NegotiateRepositoryAsync(
-                        providerSelection.Candidate,
-                        settings.Repository,
-                        credential,
-                        token).ConfigureAwait(false);
-                    if (!negotiation.Resource.Capabilities.Contains(SourceControlCapabilities.RepositoryRead))
-                        throw new SourceControlOperationException(
-                            SourceControlFailureCode.CapabilityUnavailable,
-                            "The selected SourceControl provider cannot read the configured repository.");
-                    var repositoryPin = SourceControlProjectConfigurationResolver.PinNegotiatedRepository(
-                        selection.Selection.Snapshot,
-                        catalog,
-                        resolver,
-                        acceptedRun,
-                        SourceControlOwnerStore.CreateRepositoryPinId(acceptedRun),
-                        negotiation,
-                        timeProvider.GetUtcNow());
-                    var operationContext = new SourceControlOperationContext(
-                        repositoryPin.ProviderBinding, settings.Repository, credential);
-                    await adapter.VerifyCurrentBindingAsync(
-                        operationContext, SourceControlCapabilities.RepositoryRead, token).ConfigureAwait(false);
-                    return repositoryPin;
-                },
-                cancellationToken).ConfigureAwait(false);
+            SourceControlRepositoryPin pin;
+            if (settings.AuthMode == SourceControlAuthMode.GitHubApp)
+            {
+                if (providerSelection.Candidate.ProviderId != SourceControlProviderIds.GitHub)
+                    throw new CoordinationException(
+                        "source_control_github_app_requires_github_provider", StatusCodes.Status409Conflict);
+
+                pin = await redemption.WithGitHubAppSelectionCredentialAsync(
+                    context,
+                    acceptedRun,
+                    settings.IdentityConnectionId!,
+                    settings.IdentityRepositorySelectionCode!,
+                    settings.Repository.FullName,
+                    async (credential, appBinding, token) =>
+                    {
+                        var negotiation = await adapter.NegotiateRepositoryAsync(
+                            providerSelection.Candidate,
+                            settings.Repository,
+                            credential,
+                            token).ConfigureAwait(false);
+                        if (!negotiation.Resource.Capabilities.Contains(SourceControlCapabilities.RepositoryRead))
+                            throw new SourceControlOperationException(
+                                SourceControlFailureCode.CapabilityUnavailable,
+                                "The selected SourceControl provider cannot read the configured repository.");
+                        if (negotiation.ProviderRepositoryId != appBinding.RepositoryId ||
+                            negotiation.IsPrivate != appBinding.IsPrivate ||
+                            !string.Equals(
+                                negotiation.Repository.FullName,
+                                appBinding.RepositoryFullName,
+                                StringComparison.OrdinalIgnoreCase))
+                            throw new SourceControlOperationException(
+                                SourceControlFailureCode.InvalidBinding,
+                                "The GitHub App repository selection no longer matches the negotiated repository.");
+
+                        var binding = new SourceControlGitHubAppBinding(
+                            appBinding.ConnectionId,
+                            appBinding.ConnectionRevision,
+                            appBinding.InstallationId,
+                            appBinding.PermissionDigest,
+                            appBinding.SelectionHash);
+                        var repositoryPin = SourceControlProjectConfigurationResolver.PinNegotiatedGitHubAppRepository(
+                            selection.Selection.Snapshot,
+                            catalog,
+                            resolver,
+                            acceptedRun,
+                            SourceControlOwnerStore.CreateRepositoryPinId(acceptedRun),
+                            negotiation,
+                            binding,
+                            timeProvider.GetUtcNow());
+                        var operationContext = new SourceControlOperationContext(
+                            repositoryPin.ProviderBinding, settings.Repository, credential);
+                        await adapter.VerifyCurrentBindingAsync(
+                            operationContext, SourceControlCapabilities.RepositoryRead, token)
+                            .ConfigureAwait(false);
+                        return repositoryPin;
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                pin = await redemption.WithCredentialAsync(
+                    context,
+                    acceptedRun,
+                    new SourceControlCredentialReference(
+                        RequireSecretApiReference(settings),
+                        SourceControlSecretPurposes.Api),
+                    async (credential, token) =>
+                    {
+                        var negotiation = await adapter.NegotiateRepositoryAsync(
+                            providerSelection.Candidate,
+                            settings.Repository,
+                            credential,
+                            token).ConfigureAwait(false);
+                        if (!negotiation.Resource.Capabilities.Contains(SourceControlCapabilities.RepositoryRead))
+                            throw new SourceControlOperationException(
+                                SourceControlFailureCode.CapabilityUnavailable,
+                                "The selected SourceControl provider cannot read the configured repository.");
+                        var repositoryPin = SourceControlProjectConfigurationResolver.PinNegotiatedRepository(
+                            selection.Selection.Snapshot,
+                            catalog,
+                            resolver,
+                            acceptedRun,
+                            SourceControlOwnerStore.CreateRepositoryPinId(acceptedRun),
+                            negotiation,
+                            timeProvider.GetUtcNow());
+                        var operationContext = new SourceControlOperationContext(
+                            repositoryPin.ProviderBinding, settings.Repository, credential);
+                        await adapter.VerifyCurrentBindingAsync(
+                            operationContext, SourceControlCapabilities.RepositoryRead, token).ConfigureAwait(false);
+                        return repositoryPin;
+                    },
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
@@ -159,11 +220,11 @@ internal static class SourceControlEndpoints
                 sourceControlOwner,
                 cancellationToken).ConfigureAwait(false);
             EnsureAdapterMatchesPin(adapter, run.Pin);
-            EnsureCredentialPurpose(run.Pin.ApiCredential, SourceControlSecretPurposes.Api);
+            EnsureApiCredential(run.Pin);
 
             var issue = await redemption.WithCredentialAsync(
                 context,
-                run.Pin.AcceptedRun,
+                run.Pin,
                 run.Pin.ApiCredential,
                 async (credential, token) =>
                 {
@@ -213,11 +274,11 @@ internal static class SourceControlEndpoints
                 sourceControlOwner,
                 cancellationToken).ConfigureAwait(false);
             EnsureAdapterMatchesPin(adapter, run.Pin);
-            EnsureCredentialPurpose(run.Pin.ApiCredential, SourceControlSecretPurposes.Api);
+            EnsureApiCredential(run.Pin);
 
             var pullRequest = await redemption.WithCredentialAsync(
                 context,
-                run.Pin.AcceptedRun,
+                run.Pin,
                 run.Pin.ApiCredential,
                 async (credential, token) =>
                 {
@@ -269,11 +330,11 @@ internal static class SourceControlEndpoints
                 sourceControlOwner,
                 cancellationToken).ConfigureAwait(false);
             EnsureAdapterMatchesPin(adapter, run.Pin);
-            EnsureCredentialPurpose(run.Pin.ApiCredential, SourceControlSecretPurposes.Api);
+            EnsureApiCredential(run.Pin);
 
             var reviews = await redemption.WithCredentialAsync(
                 context,
-                run.Pin.AcceptedRun,
+                run.Pin,
                 run.Pin.ApiCredential,
                 async (credential, token) =>
                 {
@@ -327,15 +388,19 @@ internal static class SourceControlEndpoints
                 sourceControlOwner,
                 cancellationToken).ConfigureAwait(false);
             EnsureAdapterMatchesPin(adapter, run.Pin);
-            var checkoutCredential = run.Pin.CheckoutCredential
-                ?? throw new CoordinationException(
-                    "source_control_checkout_not_configured", StatusCodes.Status409Conflict);
-            EnsureCredentialPurpose(checkoutCredential, SourceControlSecretPurposes.Checkout);
+            var checkoutCredential = run.Pin.CheckoutCredential;
+            if (run.Pin.GitHubAppBinding is null)
+            {
+                if (checkoutCredential is null)
+                    throw new CoordinationException(
+                        "source_control_checkout_not_configured", StatusCodes.Status409Conflict);
+                EnsureCredentialPurpose(checkoutCredential, SourceControlSecretPurposes.Checkout);
+            }
             EnsureCheckoutCapability(run.Pin);
 
             var workspace = await redemption.WithCredentialAsync(
                 context,
-                run.Pin.AcceptedRun,
+                run.Pin,
                 checkoutCredential,
                 async (credential, token) =>
                 {
@@ -396,15 +461,19 @@ internal static class SourceControlEndpoints
                 sourceControlOwner,
                 cancellationToken).ConfigureAwait(false);
             EnsureAdapterMatchesPin(adapter, run.Pin);
-            var checkoutCredential = run.Pin.CheckoutCredential
-                ?? throw new CoordinationException(
-                    "source_control_checkout_not_configured", StatusCodes.Status409Conflict);
-            EnsureCredentialPurpose(checkoutCredential, SourceControlSecretPurposes.Checkout);
+            var checkoutCredential = run.Pin.CheckoutCredential;
+            if (run.Pin.GitHubAppBinding is null)
+            {
+                if (checkoutCredential is null)
+                    throw new CoordinationException(
+                        "source_control_checkout_not_configured", StatusCodes.Status409Conflict);
+                EnsureCredentialPurpose(checkoutCredential, SourceControlSecretPurposes.Checkout);
+            }
             EnsureCheckoutCapability(run.Pin);
 
             var diff = await redemption.WithCredentialAsync(
                 context,
-                run.Pin.AcceptedRun,
+                run.Pin,
                 checkoutCredential,
                 async (credential, token) =>
                 {
@@ -512,10 +581,8 @@ internal static class SourceControlEndpoints
 
             var prepared = await redemption.WithCredentialAsync(
                 context,
-                acceptedRun,
-                new SourceControlCredentialReference(
-                    settings.ApiSecretReference,
-                    SourceControlSecretPurposes.Api),
+                repositoryPin,
+                repositoryPin.ApiCredential,
                 async (credential, token) =>
                 {
                     var operationContext = new SourceControlOperationContext(
@@ -848,14 +915,11 @@ internal static class SourceControlEndpoints
                     "source_control_intent_not_current", StatusCodes.Status409Conflict);
 
             var settings = SourceControlProjectConfigurationResolver.Resolve(selection.Selection.Snapshot);
-            if (settings.Repository != lockedIntent.Pin.Repository ||
-                !SameSecretReference(settings.ApiSecretReference, lockedIntent.Pin.ApiCredential.Secret))
-                throw new CoordinationException(
-                    "source_control_accepted_configuration_changed", StatusCodes.Status409Conflict);
+            EnsurePinnedConfiguration(lockedIntent.Pin, settings);
 
             var result = await redemption.WithCredentialAsync(
                 context,
-                lockedIntent.AcceptedRun,
+                lockedIntent.Pin,
                 lockedIntent.Pin.ApiCredential,
                 async (credential, token) =>
                 {
@@ -1501,6 +1565,22 @@ internal static class SourceControlEndpoints
                 "source_control_credential_purpose_invalid", StatusCodes.Status409Conflict);
     }
 
+    private static void EnsureApiCredential(SourceControlRepositoryPin pin)
+    {
+        if (pin.GitHubAppBinding is not null)
+        {
+            if (pin.ApiCredential is not null || pin.CheckoutCredential is not null)
+                throw new CoordinationException(
+                    "source_control_credential_binding_invalid", StatusCodes.Status409Conflict);
+            return;
+        }
+
+        var credential = pin.ApiCredential
+            ?? throw new CoordinationException(
+                "source_control_api_credential_missing", StatusCodes.Status409Conflict);
+        EnsureCredentialPurpose(credential, SourceControlSecretPurposes.Api);
+    }
+
     private static void EnsureCheckoutCapability(SourceControlRepositoryPin pin)
     {
         if (!pin.ProviderBinding.NegotiatedCapabilities.Contains(
@@ -1682,13 +1762,30 @@ internal static class SourceControlEndpoints
         SourceControlRepositoryPin pin,
         SourceControlProjectSettings settings)
     {
+        var appBindingMatches = pin.GitHubAppBinding is { } appBinding &&
+            settings.AuthMode == SourceControlAuthMode.GitHubApp &&
+            settings.IdentityConnectionId == appBinding.IdentityConnectionId &&
+            settings.IdentityRepositorySelectionCode is { } selectionCode &&
+            string.Equals(
+                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.ASCII.GetBytes(selectionCode))),
+                appBinding.IdentityRepositorySelectionHash,
+                StringComparison.Ordinal);
+        var secretBindingMatches = pin.GitHubAppBinding is null &&
+            settings.AuthMode != SourceControlAuthMode.GitHubApp &&
+            SameSecretReference(settings.ApiSecretReference, pin.ApiCredential?.Secret);
         if (settings.Repository != pin.Repository ||
-            !SameSecretReference(settings.ApiSecretReference, pin.ApiCredential.Secret) ||
+            !(appBindingMatches || secretBindingMatches) ||
             !SameSecretReference(settings.CheckoutSecretReference, pin.CheckoutCredential?.Secret) ||
             !SameSecretReference(settings.WebhookSecretReference, pin.WebhookCredential?.Secret))
             throw new CoordinationException(
                 "source_control_accepted_configuration_changed", StatusCodes.Status409Conflict);
     }
+
+    private static SecretRef RequireSecretApiReference(SourceControlProjectSettings settings) =>
+        settings.ApiSecretReference
+        ?? throw new CoordinationException(
+            "source_control_github_app_selection_required", StatusCodes.Status409Conflict);
 
     private static bool SameSecretReference(SecretRef? left, SecretRef? right) =>
         left is null

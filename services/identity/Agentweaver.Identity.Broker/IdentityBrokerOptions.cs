@@ -25,12 +25,38 @@ public sealed class IdentityBrokerOptions
     [Required]
     public required SecretRedemptionOptions SecretRedemption { get; set; }
 
+    public GitHubRepoAppOptions? GitHubRepoApp { get; set; }
+
     [Required]
     public required string DataProtectionKeyPath { get; set; }
 
     [Required]
     [MinLength(1)]
     public required IReadOnlyList<BrokerClientOptions> Clients { get; set; }
+}
+
+public sealed class GitHubRepoAppOptions
+{
+    [Required]
+    public required string OAuthClientId { get; set; }
+
+    [Required]
+    public required string OAuthClientSecret { get; set; }
+
+    [Required]
+    public required string CallbackUri { get; set; }
+
+    [Range(1, long.MaxValue)]
+    public required long AppId { get; set; }
+
+    [Required]
+    public required string AppSlug { get; set; }
+
+    [Required]
+    public required string PrivateKeySecretId { get; set; }
+
+    [Required]
+    public required string PrivateKeySecretVersion { get; set; }
 }
 
 /// <summary>

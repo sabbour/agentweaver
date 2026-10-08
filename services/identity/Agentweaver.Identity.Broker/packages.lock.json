@@ -655,6 +655,12 @@
           "Agentweaver.Abstractions": "[0.0.0, )"
         }
       },
+      "agentweaver.providers": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )"
+        }
+      },
       "agentweaver.secrets.azurekeyvault": {
         "type": "Project",
         "dependencies": {
@@ -662,6 +668,13 @@
           "Azure.Identity": "[1.17.1, )",
           "Azure.Security.KeyVault.Secrets": "[4.8.0, )",
           "Microsoft.Identity.Client": "[4.78.0, )"
+        }
+      },
+      "agentweaver.sourcecontrol": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Providers": "[0.0.0, )"
         }
       }
     }
