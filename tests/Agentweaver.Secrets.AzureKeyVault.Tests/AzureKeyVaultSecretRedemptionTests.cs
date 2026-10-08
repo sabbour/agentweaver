@@ -64,6 +64,128 @@ public sealed class AzureKeyVaultSecretRedemptionTests
     }
 
     [Fact]
+    public async Task CreatesProtectedNativeVersionWithoutPretendingTheProviderOffersOwnerCas()
+    {
+        var events = new ConcurrentQueue<string>();
+        using var diagnostics = new AzureEventSourceListener(
+            (_, message) => events.Enqueue(message), EventLevel.Verbose);
+        var handler = new VaultHandler(async (request, cancellationToken) =>
+        {
+            if (request.Method == HttpMethod.Put)
+            {
+                Assert.Equal("/secrets/opaque", request.RequestUri!.AbsolutePath);
+                Assert.Null(request.Headers.IfMatch.SingleOrDefault());
+                using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
+                Assert.Equal(SensitiveValue, body.RootElement.GetProperty("value").GetString());
+                Assert.Equal(Now.AddHours(1).ToUnixTimeSeconds(),
+                    body.RootElement.GetProperty("attributes").GetProperty("exp").GetInt64());
+            }
+            else
+            {
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.Equal("/secrets/opaque/new-version", request.RequestUri!.AbsolutePath);
+            }
+            return VaultSecret("opaque", "new-version", SensitiveValue, Now.AddHours(1));
+        });
+        var options = new SecretClientOptions
+        {
+            Transport = new HttpClientTransport(new HttpClient(handler)),
+            Retry = { MaxRetries = 0 }
+        };
+        ISecretVersionWriter writer = new AzureKeyVaultSecretVersionWriter(
+            new(VaultUri), new TestCredential(), options);
+        var protectedValue = new SecretCredential(SensitiveValue, Now.AddHours(1), _clock);
+        var reference = await writer.WriteVersionAsync("opaque", protectedValue, default);
+        Assert.Equal("opaque", reference.Id);
+        Assert.Equal("new-version", reference.Version);
+        Assert.Equal(2, handler.AuthenticatedCalls);
+        Assert.DoesNotContain(SensitiveValue, JsonSerializer.Serialize(reference));
+        Assert.DoesNotContain(SensitiveValue, string.Join(Environment.NewLine, events));
+        using var reader = Create(new VaultHandler((request, _) =>
+        {
+            Assert.Equal("/secrets/opaque/new-version", request.RequestUri!.AbsolutePath);
+            return Task.FromResult(VaultSecret("opaque", "new-version", SensitiveValue, Now.AddHours(1)));
+        }));
+        var redeemed = await reader.RedeemAsync(new(reference, "model-session", "run"), default);
+        Assert.Equal(SensitiveValue, redeemed.GetValue());
+    }
+
+    [Theory]
+    [InlineData("changed-value", "new-version", true)]
+    [InlineData(SensitiveValue, "other-version", true)]
+    [InlineData(SensitiveValue, "new-version", false)]
+    public async Task ProtectedVersionReadbackMustMatchTheExactWrittenValueAndVersion(
+        string returnedValue, string returnedVersion, bool enabled)
+    {
+        var handler = new VaultHandler((request, _) => Task.FromResult(
+            request.Method == HttpMethod.Put
+                ? VaultSecret("opaque", "new-version", SensitiveValue, Now.AddHours(1))
+                : VaultSecret("opaque", returnedVersion, returnedValue, Now.AddHours(1), enabled)));
+        var writer = new AzureKeyVaultSecretVersionWriter(new(VaultUri), new TestCredential(),
+            new SecretClientOptions
+            {
+                Transport = new HttpClientTransport(new HttpClient(handler)), Retry = { MaxRetries = 0 }
+            });
+        var failure = await Assert.ThrowsAsync<AzureKeyVaultSecretException>(() =>
+            writer.WriteVersionAsync("opaque", new(SensitiveValue, Now.AddHours(1), _clock), default));
+        Assert.Equal(AzureKeyVaultSecretFailure.InvalidValue, failure.Failure);
+        Assert.Equal(2, handler.AuthenticatedCalls);
+        Assert.DoesNotContain(SensitiveValue, failure.ToString());
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden, AzureKeyVaultSecretFailure.AccessDenied)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, AzureKeyVaultSecretFailure.ServiceFailure)]
+    public async Task ProtectedVersionFailureDoesNotRetryOrExposeProviderDiagnostics(
+        HttpStatusCode status, AzureKeyVaultSecretFailure expected)
+    {
+        var handler = new VaultHandler((_, _) => Task.FromResult(VaultError(status, "failure")));
+        var writer = new AzureKeyVaultSecretVersionWriter(new(VaultUri), new TestCredential(),
+            new SecretClientOptions
+            {
+                Transport = new HttpClientTransport(new HttpClient(handler)), Retry = { MaxRetries = 0 }
+            });
+        var failure = await Assert.ThrowsAsync<AzureKeyVaultSecretException>(() =>
+            writer.WriteVersionAsync("opaque", new(SensitiveValue, Now.AddHours(1), _clock), default));
+        Assert.Equal(expected, failure.Failure);
+        Assert.Equal(1, handler.AuthenticatedCalls);
+        Assert.DoesNotContain(SensitiveValue, failure.ToString());
+        var unsafeOptions = new SecretClientOptions();
+        Assert.Throws<ArgumentException>(() =>
+            new AzureKeyVaultSecretVersionWriter(new(VaultUri), new TestCredential(), unsafeOptions));
+        unsafeOptions.Retry.MaxRetries = 0;
+        unsafeOptions.Diagnostics.IsLoggingContentEnabled = true;
+        Assert.Throws<ArgumentException>(() =>
+            new AzureKeyVaultSecretVersionWriter(new(VaultUri), new TestCredential(), unsafeOptions));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProtectedVersionReadbackRejectsLifetimeNarrowingDuringEitherNativeAwait(
+        bool narrowDuringRead)
+    {
+        var credential = new SecretCredential(SensitiveValue, Now.AddHours(1), _clock);
+        var handler = new VaultHandler((request, _) =>
+        {
+            if ((request.Method == HttpMethod.Get) == narrowDuringRead)
+                credential.LimitLifetime(Now.AddMinutes(1));
+            return Task.FromResult(VaultSecret("opaque", "new-version", SensitiveValue, Now.AddHours(1)));
+        });
+        var writer = new AzureKeyVaultSecretVersionWriter(new(VaultUri), new TestCredential(),
+            new SecretClientOptions
+            {
+                Transport = new HttpClientTransport(new HttpClient(handler)), Retry = { MaxRetries = 0 }
+            });
+        var failure = await Assert.ThrowsAsync<AzureKeyVaultSecretException>(() =>
+            writer.WriteVersionAsync("opaque", credential, default));
+        Assert.Equal(AzureKeyVaultSecretFailure.InvalidValue, failure.Failure);
+        Assert.Equal(2, handler.AuthenticatedCalls);
+        Assert.True(credential.IsUsable());
+        Assert.Equal(Now.AddMinutes(1), credential.ExpiresAt);
+    }
+
+    [Fact]
     public async Task RetrievesExactVersionThroughAuthenticatedSdkTransportWithoutNetwork()
     {
         var events = new ConcurrentQueue<string>();
