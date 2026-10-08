@@ -25,6 +25,9 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
     [InlineData(9)]
     [InlineData(10)]
     [InlineData(11)]
+    [InlineData(12)]
+    [InlineData(13)]
+    [InlineData(14)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         string[] migrations =
@@ -41,7 +44,8 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             "runtime_registration.sql",
             "011_runtime_usage_source.sql",
             "012_source_control_owner.sql",
-            "013_source_control_github_app_pins.sql"
+            "013_source_control_github_app_pins.sql",
+            "014_source_control_output_captures.sql"
         ];
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         {
@@ -80,7 +84,7 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
         await using var verify = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".coordination_schema_migrations
             """, verifyConnection);
-        Assert.Equal(13L, await verify.ExecuteScalarAsync());
+        Assert.Equal(14L, await verify.ExecuteScalarAsync());
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version)

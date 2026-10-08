@@ -45,6 +45,12 @@ public interface ICoordinationOwnerClient
         SessionIdentity identity,
         Guid receiptId,
         CancellationToken cancellationToken = default);
+
+    Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        string captureId,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class CoordinationOwnerClientException(
@@ -185,6 +191,37 @@ public sealed class CoordinationOwnerClient(
         if (admission.ReceiptId != receiptId || admission.Identity != identity)
             throw new CoordinationOwnerClientException(
                 "coordination_owner_receipt_admission_invalid", StatusCodes.Status502BadGateway);
+    }
+
+    public async Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        string captureId,
+        CancellationToken cancellationToken = default)
+    {
+        var proof = await SendAsync<ProducedRunCaptureProof>(
+            context,
+            HttpMethod.Get,
+            $"/internal/projects/{Uri.EscapeDataString(identity.ProjectId)}/runs/{Uri.EscapeDataString(identity.RunId)}/source-control/sessions/{Uri.EscapeDataString(identity.SessionId)}/output-captures/{Uri.EscapeDataString(captureId)}/proof",
+            content: null,
+            cancellationToken).ConfigureAwait(false);
+        var tenant = ReadTenantSelector(context);
+        try
+        {
+            ProducedRunCaptureContractValidation.Validate(proof);
+            if (proof.Identity != identity ||
+                proof.CaptureId != captureId ||
+                tenant is not null && proof.TenantId != tenant)
+                throw new CoordinationOwnerClientException(
+                    "coordination_owner_capture_contract_invalid", StatusCodes.Status502BadGateway);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new CoordinationOwnerClientException(
+                "coordination_owner_capture_contract_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+
+        return proof;
     }
 
     private async Task<T> SendAsync<T>(

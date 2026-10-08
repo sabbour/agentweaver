@@ -181,6 +181,11 @@ caller cannot submit a resource pin or override the durable binding.
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/select_workflow` | Select a workflow from the authorized catalog or submit a generated definition for confirmation. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/propose_work_plan` | Validate a plan against the selected workflow, current role/model eligibility, and the accepted Sandbox binding before opening its confirmation gate. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/pin` | Legacy secret mode accepts the existing bodyless request and redeems its API SecretRef. GitHub App mode accepts only `{"selectionCode":"<64 lowercase hex>"}`; it consumes the code for the initial run-bound pin and persists only its hash, never the code in project/run configuration or the pin response. First pin returns `202` with `SourceControlRepositoryPinView`; an exact existing pin returns `200`. Both paths recheck fresh Projects/Core authority. |
+| `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/workspaces/{workspaceId}/output-captures` | Capture the existing bound workspace using its base-SHA/branch binding while the run is active, idle, or blocked. A new capture returns `201`; an exact idempotent replay returns `200`. The owner record stays pending until Events & Sessions acknowledges the exact typed journal entry. |
+| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures` | List admitted captures after current read-authority and accepted-selection checks. `limit` defaults to 50 and is bounded to 100. Continue with both `beforeCapturedAt` and `beforeCaptureId` from the preceding page; the pair must be supplied together. |
+| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}` | Return the admitted capture summary and canonical manifest. Pending or unadmitted records are not exposed. |
+| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/diff` | Return the verified captured patch for this admitted capture. |
+| `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/output-captures/{captureId}/files?path={relativePath}` | Return one manifest-listed file as `application/octet-stream` and its SHA-256 in `X-Source-Control-Output-Sha256`. The path is a safe relative workspace path, not a host path. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents` | Read current PR facts from the pinned provider, persist an immutable merge request, then open typed Approval for that exact intent and accepted Merge step. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}` | Read an owner-bound merge intent without exposing credential values or transferable authority. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}/execute` | Execute only through the current source-specific grant and existing action guard, under a repository-scoped lock and exact-head/check preflight. The expected base is a fresh preflight, not an atomic compare-and-swap. |
@@ -203,6 +208,18 @@ caller cannot submit a resource pin or override the durable binding.
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/notifications?limit={limit}` | Read unacknowledged parent notifications; the limit defaults to 50 and is bounded to 100. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/notifications/{notificationId}/acknowledge` | Acknowledge a notification belonging to this parent session. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/messages/{messageId}/acknowledge` | Acknowledge a delivered message using its claim fence; receipt is not gate approval or work completion. |
+
+Output capture is a bounded sealed-tree snapshot, not an atomic filesystem snapshot. Its canonical
+manifest binds safe relative paths, Git modes, per-file SHA-256 digests, and lengths; the package and
+diff have independent digests. Limits are 10,000 files, 16 MiB per file, 64 MiB total file content,
+32 MiB for the manifest, and 8 MiB for the diff. Source Control records the proof as pending before
+Events & Sessions stores the package bytes in Object Store and appends the typed journal event. Only
+the exact journal event ID and position acknowledged by Events can admit the immutable owner record.
+The event ID is derived by the owner; callers cannot provide provenance. Reads recheck current
+Projects authority and accepted selection, verify the journal-backed package and file digests, and
+do not fall back to the live workspace. Completed-run history remains available; failed or
+indeterminate runs and pending captures return not found. These owner-backed history routes can
+support a retained UI without making a UI part of this contract.
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/message-route` | Events-only owner callback. Confirms the full outbound message matches the durable owner outbox, then validates active session relationship, writer, request/reply correlation, and current execution fences. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/owner-binding` | Events-only current session binding for message claim, presentation, and acknowledgment. Returns `Cache-Control: no-store`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context` | Read-only mapped agent/model/turn context using the shared `RuntimeOwnerContext` contract in `Agentweaver.Abstractions`. Returns no-store metadata only if the child owner row and latest root decision still match, dispatch remains enabled for the confirmed item with no pending gate, and Projects authority/selection remain current; otherwise returns `409`. |

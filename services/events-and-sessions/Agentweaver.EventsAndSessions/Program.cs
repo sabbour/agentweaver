@@ -170,6 +170,7 @@ if (materialContainer is not null)
     builder.Services.AddSingleton<IObjectStore>(services => new AzureBlobObjectStore(
         new BlobContainerClient(containerUri, services.GetRequiredService<TokenCredential>())));
     builder.Services.AddSessionMaterialOwner();
+    builder.Services.AddProducedRunCaptureOwner();
 }
 builder.Services.AddSingleton<IReadOnlyDictionary<string, string>>(projectOverrides);
 builder.Services.AddSingleton<SessionsProviderBindingService>();
@@ -192,7 +193,10 @@ await EventsAndSessionsMigrator.VerifyAsync(dataSource, options.Schema);
 app.UseAuthentication();
 app.UseAuthorization();
 if (materialContainer is not null)
+{
     app.MapSessionMaterialEndpoints();
+    app.MapProducedRunCaptureEndpoints();
+}
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 app.MapGet("/health/ready", async (CancellationToken ct) =>
 {

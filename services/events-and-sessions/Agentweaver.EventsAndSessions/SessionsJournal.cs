@@ -184,9 +184,9 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         var scope = RequireScope(principal);
         var identity = scope.ForSession(sessionId);
         ValidateInput(input);
-        if (input.Payload is PolicyEvaluationSessionPayload)
+        if (input.Payload is PolicyEvaluationSessionPayload or ProducedRunCaptureSessionPayload)
             throw new SessionAccessDeniedException(
-                "Policy evaluation events require trusted Orchestrator Core writer provenance.");
+                "This event requires trusted owner writer provenance.");
         if (SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload).Any(
             reference => reference.Material is not null))
             throw new SessionAccessDeniedException("Session material requires its authenticated execution producer.");
@@ -218,6 +218,69 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         if (envelope is null || envelope.Identity != identity)
             throw new SessionNotFoundException("The recorded session material event does not exist.");
         return envelope;
+    }
+
+    internal async Task<ProducedRunCaptureAcknowledgment> AppendProducedRunCaptureAsync(
+        ClaimsPrincipal principal,
+        string sessionId,
+        ProducedRunCaptureSessionPayload payload,
+        Func<CancellationToken, Task> persistPackage,
+        Func<CancellationToken, Task> validateBeforeCommit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(persistPackage);
+        ArgumentNullException.ThrowIfNull(validateBeforeCommit);
+        ProducedRunCaptureContractValidation.Validate(payload);
+        var identity = RequireScope(principal).ForSession(sessionId);
+        var subjects = principal.FindAll("sub").Take(2).ToArray();
+        var issuers = principal.FindAll("iss").Take(2).ToArray();
+        if (payload.Capture.Identity != identity ||
+            payload.Capture.EventId == Guid.Empty ||
+            subjects.Length != 1 || subjects[0].Value != payload.Capture.ActorSubject ||
+            issuers.Length != 1 || issuers[0].Value != payload.Capture.ActorIssuer)
+            throw new SessionAccessDeniedException(
+                "The produced-run capture does not match the authenticated session caller.");
+
+        var input = new AppendSessionEvent(
+            payload.Capture.EventId,
+            SessionsContractVersions.CurrentSchemaVersion,
+            SessionsContractVersions.CurrentEventVersion,
+            payload);
+        ValidateInput(input);
+        var result = await AppendCoreAsync(
+            identity, input, cancellationToken, validateBeforeCommit, persistPackage).ConfigureAwait(false);
+        return new(
+            new ProducedRunCaptureJournalEntry(
+                payload.Capture, result.Event.Position),
+            result.IsDuplicate);
+    }
+
+    internal async Task<ProducedRunCaptureJournalEntry> ReadProducedRunCaptureEventAsync(
+        ClaimsPrincipal principal,
+        string sessionId,
+        Guid eventId,
+        CancellationToken cancellationToken)
+    {
+        var envelope = await ReadMaterialEventAsync(
+            principal, sessionId, eventId, cancellationToken).ConfigureAwait(false);
+        if (envelope.Payload is not ProducedRunCaptureSessionPayload payload)
+            throw new SessionNotFoundException("The event does not record a produced-run capture.");
+        try
+        {
+            ProducedRunCaptureContractValidation.Validate(payload);
+            if (payload.Capture.Identity != envelope.Identity ||
+                payload.Capture.EventId != envelope.EventId ||
+                envelope.ObjectReferences is not [{ Reference: var reference }] ||
+                reference != payload.Package)
+                throw new ArgumentException("The journaled produced-run capture binding is invalid.");
+        }
+        catch (ArgumentException exception)
+        {
+            throw new ProducedRunCaptureIntegrityException(
+                "source_control_output_capture_journal_corrupt", exception);
+        }
+        return new(payload.Capture, envelope.Position);
     }
 
     internal async Task<SessionAppendResult> AppendPolicyEvaluationAsync(

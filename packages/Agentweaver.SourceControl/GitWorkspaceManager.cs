@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,9 +9,15 @@ namespace Agentweaver.SourceControl;
 
 public sealed class GitWorkspaceManager
 {
-    private const int ManifestVersion = 1;
-    private const int MaximumDiffBytes = 8 * 1024 * 1024;
+    private const int ManifestVersion = 2;
+    private const int MaximumDiffBytes = ProducedRunCaptureLimits.MaximumDiffBytes;
     private const int MaximumCommandOutputBytes = 16 * 1024 * 1024;
+    private const int MaximumWorkspaceTreeBytes = 32 * 1024 * 1024;
+    private const int MaximumCapturedFileBytes = ProducedRunCaptureLimits.MaximumFileBytes;
+    private const int MaximumCapturedTotalBytes = ProducedRunCaptureLimits.MaximumTotalFileBytes;
+    private const int MaximumCapturedFiles = ProducedRunCaptureLimits.MaximumFiles;
+    private const int MaximumCapturedBatchBytes =
+        MaximumCapturedTotalBytes + MaximumCapturedFiles * 64;
     private const int MaximumGitDiagnosticBytes = 64 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -63,7 +70,7 @@ public sealed class GitWorkspaceManager
         {
             await ValidateOwnedRepositoryAsync(
                 repositoryPath, remoteUri, cancellationToken).ConfigureAwait(false);
-            return ToWorkspace(request, repositoryPath);
+            return ToWorkspace(request, repositoryPath, manifest);
         }
 
         if (Directory.Exists(repositoryPath))
@@ -115,7 +122,67 @@ public sealed class GitWorkspaceManager
             manifestPath,
             manifest with { State = "ready" },
             cancellationToken).ConfigureAwait(false);
-        return ToWorkspace(request, repositoryPath);
+        return ToWorkspace(request, repositoryPath, manifest with { State = "ready" });
+    }
+
+    public async Task<GitWorkspace> OpenExistingAsync(
+        GitWorkspaceRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateRequest(request);
+        return await OpenExistingAsync(
+            new GitWorkspaceCaptureRequest(
+                request.Context.Binding,
+                request.Context.Repository,
+                request.WorkspaceId,
+                request.BaseSha,
+                request.BranchName),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<GitWorkspace> OpenExistingAsync(
+        GitWorkspaceCaptureRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateCaptureRequest(request);
+        if (!Directory.Exists(_rootPath))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.WorkspaceUnavailable,
+                "The source-control workspace is no longer available.");
+        EnsureNotReparsePoint(_rootPath);
+        var expected = GetWorkspacePaths(request);
+        if (!Directory.Exists(expected.WorkspaceRoot) ||
+            !File.Exists(expected.ManifestPath) ||
+            !Directory.Exists(expected.RepositoryPath))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.WorkspaceUnavailable,
+                "The source-control workspace is no longer available.");
+        EnsureNotReparsePoint(expected.WorkspaceRoot);
+        EnsureNotReparsePoint(expected.ManifestPath);
+        EnsureNotReparsePoint(expected.RepositoryPath);
+
+        var manifest = await ReadManifestAsync(expected.ManifestPath, cancellationToken).ConfigureAwait(false);
+        ValidateManifestBinding(manifest, request);
+        if (manifest.State != "ready" ||
+            !Guid.TryParseExact(manifest.WorkspaceIncarnationId, "N", out var incarnationId))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace,
+                "The source-control workspace incarnation is invalid.");
+        var remoteUri = _remote.GetCloneUri(request.Repository);
+        ValidateRemoteUri(remoteUri);
+        await ValidateOwnedRepositoryAsync(
+            expected.RepositoryPath, remoteUri, cancellationToken).ConfigureAwait(false);
+        return new GitWorkspace(
+            request.WorkspaceId,
+            request.Binding.RunId,
+            request.Binding.Resource.ResourceId,
+            request.Binding.Resource.Generation,
+            request.BaseSha,
+            request.BranchName,
+            Path.GetFullPath(expected.RepositoryPath),
+            incarnationId);
     }
 
     public async Task<GitWorkspaceDiff> AssembleDiffAsync(
@@ -143,7 +210,9 @@ public sealed class GitWorkspaceManager
         EnsureNotReparsePoint(expected.ManifestPath);
         var manifest = await ReadManifestAsync(expected.ManifestPath, cancellationToken).ConfigureAwait(false);
         ValidateManifestBinding(manifest, request);
-        if (manifest.State != "ready")
+        if (manifest.State != "ready" ||
+            !Guid.TryParseExact(manifest.WorkspaceIncarnationId, "N", out var incarnationId) ||
+            workspace.WorkspaceIncarnationId != incarnationId)
             throw new GitWorkspaceException(
                 GitWorkspaceFailureCode.CorruptWorkspace,
                 "The source-control workspace is not ready.");
@@ -195,6 +264,297 @@ public sealed class GitWorkspaceManager
             DecodeGitOutput(patchBytes));
     }
 
+    public async Task<GitWorkspaceCapture> CaptureAsync(
+        GitWorkspaceRequest request,
+        GitWorkspace workspace,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(workspace);
+        ValidateRequest(request);
+        return await CaptureAsync(
+            new GitWorkspaceCaptureRequest(
+                request.Context.Binding,
+                request.Context.Repository,
+                request.WorkspaceId,
+                request.BaseSha,
+                request.BranchName),
+            workspace,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<GitWorkspaceCapture> CaptureAsync(
+        GitWorkspaceCaptureRequest request,
+        GitWorkspace workspace,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(workspace);
+        ValidateCaptureRequest(request);
+        var expected = GetWorkspacePaths(request);
+        if (!string.Equals(
+                Path.GetFullPath(workspace.Path), expected.RepositoryPath, PathComparison) ||
+            !string.Equals(workspace.RunId, request.Binding.RunId, StringComparison.Ordinal) ||
+            !string.Equals(workspace.WorkspaceId, request.WorkspaceId, StringComparison.Ordinal) ||
+            !string.Equals(workspace.RepositoryId, request.Binding.Resource.ResourceId, StringComparison.Ordinal) ||
+            workspace.ResourceGeneration != request.Binding.Resource.Generation ||
+            !string.Equals(workspace.BaseSha, request.BaseSha, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(workspace.BranchName, request.BranchName, StringComparison.Ordinal))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.PathConflict,
+                "The workspace reference does not match the requested run and pinned repository.");
+
+        EnsureNotReparsePoint(expected.WorkspaceRoot);
+        EnsureNotReparsePoint(expected.ManifestPath);
+        var manifest = await ReadManifestAsync(expected.ManifestPath, cancellationToken).ConfigureAwait(false);
+        ValidateManifestBinding(manifest, request);
+        if (manifest.State != "ready" ||
+            !Guid.TryParseExact(manifest.WorkspaceIncarnationId, "N", out var incarnationId) ||
+            workspace.WorkspaceIncarnationId != incarnationId)
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace,
+                "The source-control workspace incarnation is invalid.");
+        await ValidateOwnedRepositoryAsync(
+            expected.RepositoryPath,
+            _remote.GetCloneUri(request.Repository),
+            cancellationToken).ConfigureAwait(false);
+
+        var emptyGitConfig = Path.Combine(expected.WorkspaceRoot, "git-empty-config");
+        EnsureEmptyGitConfig(emptyGitConfig);
+        var privateIndex = Path.Combine(expected.WorkspaceRoot, $"capture-{Guid.NewGuid():N}.index");
+        try
+        {
+            await RunGitAsync(
+                expected.RepositoryPath,
+                ["read-tree", request.BaseSha],
+                MaximumCommandOutputBytes,
+                emptyGitConfig,
+                remoteUri: null,
+                credential: null,
+                cancellationToken,
+                gitIndexFile: privateIndex).ConfigureAwait(false);
+            await RunGitAsync(
+                expected.RepositoryPath,
+                ["add", "--all", "--", "."],
+                MaximumCommandOutputBytes,
+                emptyGitConfig,
+                remoteUri: null,
+                credential: null,
+                cancellationToken,
+                gitIndexFile: privateIndex).ConfigureAwait(false);
+            var treeBytes = await RunGitAsync(
+                expected.RepositoryPath,
+                ["write-tree"],
+                128,
+                emptyGitConfig,
+                remoteUri: null,
+                credential: null,
+                cancellationToken,
+                gitIndexFile: privateIndex).ConfigureAwait(false);
+            var treeSha = DecodeGitOutput(treeBytes).Trim();
+            if (!IsGitObjectId(treeSha))
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace,
+                    "Git returned an invalid captured output tree identity.");
+
+            var patchBytes = await RunGitAsync(
+                expected.RepositoryPath,
+                ["diff", "--binary", "--no-ext-diff", "--no-textconv", "--full-index",
+                    request.BaseSha, treeSha, "--"],
+                MaximumDiffBytes,
+                emptyGitConfig,
+                remoteUri: null,
+                credential: null,
+                cancellationToken).ConfigureAwait(false);
+            var files = await ReadCapturedFilesAsync(
+                expected.RepositoryPath, emptyGitConfig, treeSha, cancellationToken).ConfigureAwait(false);
+
+            return new GitWorkspaceCapture(
+                workspace.WorkspaceId,
+                workspace.RunId,
+                workspace.RepositoryId,
+                workspace.ResourceGeneration,
+                incarnationId,
+                request.BaseSha,
+                treeSha,
+                DecodeGitOutput(patchBytes),
+                files);
+        }
+        finally
+        {
+            if (File.Exists(privateIndex))
+                File.Delete(privateIndex);
+            var privateIndexLock = privateIndex + ".lock";
+            if (File.Exists(privateIndexLock))
+                File.Delete(privateIndexLock);
+        }
+    }
+
+    private async Task<ImmutableArray<GitWorkspaceCapturedFile>> ReadCapturedFilesAsync(
+        string repositoryPath,
+        string emptyGitConfig,
+        string treeSha,
+        CancellationToken cancellationToken)
+    {
+        var treeBytes = await RunGitAsync(
+            repositoryPath,
+            ["ls-tree", "--full-tree", "-r", "-z", treeSha],
+            MaximumWorkspaceTreeBytes,
+            emptyGitConfig,
+            remoteUri: null,
+            credential: null,
+            cancellationToken).ConfigureAwait(false);
+        var entries = ParseTreeEntries(treeBytes);
+        if (entries.Count > MaximumCapturedFiles)
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CaptureTooLarge,
+                "The captured workspace contains too many files.");
+        if (entries.Count == 0)
+            return ImmutableArray<GitWorkspaceCapturedFile>.Empty;
+
+        var input = Encoding.ASCII.GetBytes(string.Join('\n', entries.Select(entry => entry.ObjectId)) + "\n");
+        var output = await RunGitAsync(
+            repositoryPath,
+            ["cat-file", "--batch"],
+            MaximumCapturedBatchBytes,
+            emptyGitConfig,
+            remoteUri: null,
+            credential: null,
+            cancellationToken,
+            standardInput: input,
+            outputFailureCode: GitWorkspaceFailureCode.CaptureTooLarge).ConfigureAwait(false);
+        return ParseBlobBatch(entries, output);
+    }
+
+    private static List<GitTreeEntry> ParseTreeEntries(byte[] treeBytes)
+    {
+        var entries = new List<GitTreeEntry>();
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        var offset = 0;
+        while (offset < treeBytes.Length)
+        {
+            var end = Array.IndexOf(treeBytes, (byte)0, offset);
+            if (end < 0)
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace,
+                    "Git returned an unterminated captured tree entry.");
+            var separator = Array.IndexOf(treeBytes, (byte)'\t', offset, end - offset);
+            if (separator < 0)
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace,
+                    "Git returned an invalid captured tree entry.");
+
+            var header = Encoding.ASCII.GetString(treeBytes, offset, separator - offset);
+            var parts = header.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 3 ||
+                parts[1] != "blob" ||
+                parts[0] is not ("100644" or "100755" or "120000") ||
+                !IsGitObjectId(parts[2]))
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace,
+                    "The captured tree contains an unsupported entry.");
+
+            string path;
+            try
+            {
+                path = new UTF8Encoding(false, true).GetString(
+                    treeBytes, separator + 1, end - separator - 1);
+            }
+            catch (DecoderFallbackException exception)
+            {
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.PathConflict,
+                    "The captured tree contains a path that is not valid UTF-8.",
+                    innerException: exception);
+            }
+            ValidateCapturedPath(path);
+            if (!paths.Add(path))
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace,
+                    "The captured tree contains a duplicate path.");
+            entries.Add(new(parts[0], parts[2], path));
+            offset = end + 1;
+        }
+        return entries;
+    }
+
+    private static ImmutableArray<GitWorkspaceCapturedFile> ParseBlobBatch(
+        IReadOnlyList<GitTreeEntry> entries,
+        byte[] output)
+    {
+        var files = ImmutableArray.CreateBuilder<GitWorkspaceCapturedFile>(entries.Count);
+        var offset = 0;
+        long totalBytes = 0;
+        foreach (var entry in entries)
+        {
+            var headerEnd = Array.IndexOf(output, (byte)'\n', offset);
+            if (headerEnd < 0)
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace,
+                    "Git returned an incomplete captured file.");
+            var header = Encoding.ASCII.GetString(output, offset, headerEnd - offset)
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (header.Length != 3 || header[0] != entry.ObjectId || header[1] != "blob" ||
+                !long.TryParse(header[2], System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var length) || length < 0)
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace,
+                    "Git returned an invalid captured file header.");
+            if (length > MaximumCapturedFileBytes)
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CaptureTooLarge,
+                    "A captured file exceeded the configured size limit.");
+            totalBytes = checked(totalBytes + length);
+            if (totalBytes > MaximumCapturedTotalBytes)
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CaptureTooLarge,
+                    "The captured workspace exceeded the configured size limit.");
+
+            offset = headerEnd + 1;
+            if (length > output.Length - offset - 1)
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace,
+                    "Git returned a truncated captured file.");
+            var content = output.AsSpan(offset, checked((int)length)).ToArray();
+            offset += checked((int)length);
+            if (output[offset++] != (byte)'\n')
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace,
+                    "Git returned an invalid captured file terminator.");
+            files.Add(new(
+                entry.Path,
+                entry.Mode,
+                Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant(),
+                content.LongLength,
+                ImmutableArray.CreateRange(content)));
+        }
+
+        if (offset != output.Length)
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace,
+                "Git returned unexpected captured file data.");
+        return files.MoveToImmutable();
+    }
+
+    private static void ValidateCapturedPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) ||
+            path[0] == '/' ||
+            path.Contains('\\') ||
+            path.Contains(':') ||
+            Path.IsPathRooted(path) ||
+            path.Any(char.IsControl) ||
+            path.Split('/').Any(segment => segment is "" or "." or "..") ||
+            string.Equals(path, ".git", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith(".git/", StringComparison.OrdinalIgnoreCase))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.PathConflict,
+                "The captured tree contains an invalid relative path.");
+    }
+
+    private static bool IsGitObjectId(string value) =>
+        value.Length == 40 && value.All(Uri.IsHexDigit);
+
     private async Task<WorkspaceManifest> ReadOrCreateManifestAsync(
         string manifestPath,
         string workspaceRoot,
@@ -218,7 +578,7 @@ public sealed class GitWorkspaceManager
                 GitWorkspaceFailureCode.PathConflict,
                 "The target source-control workspace contains data without an ownership manifest.");
 
-        var manifest = CreateManifest(request, "preparing");
+        var manifest = CreateManifest(request, "preparing", Guid.NewGuid().ToString("N"));
         await WriteManifestAsync(manifestPath, manifest, cancellationToken).ConfigureAwait(false);
         return manifest;
     }
@@ -321,7 +681,10 @@ public sealed class GitWorkspaceManager
         string emptyGitConfig,
         Uri? remoteUri,
         SecretCredential? credential,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? gitIndexFile = null,
+        byte[]? standardInput = null,
+        GitWorkspaceFailureCode outputFailureCode = GitWorkspaceFailureCode.DiffTooLarge)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -330,6 +693,7 @@ public sealed class GitWorkspaceManager
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = standardInput is not null,
             CreateNoWindow = true,
             StandardOutputEncoding = new UTF8Encoding(false)
         };
@@ -342,6 +706,8 @@ public sealed class GitWorkspaceManager
         startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
         startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
         startInfo.Environment["GIT_CONFIG_GLOBAL"] = emptyGitConfig;
+        if (gitIndexFile is not null)
+            startInfo.Environment["GIT_INDEX_FILE"] = Path.GetFullPath(gitIndexFile);
         var sensitiveValues = new List<string>();
         if (credential is not null)
             sensitiveValues.Add(credential.GetValue());
@@ -378,9 +744,12 @@ public sealed class GitWorkspaceManager
         }
 
         var outputTask = ReadBoundedOutputAsync(
-            process.StandardOutput.BaseStream, maximumOutputBytes, GitWorkspaceFailureCode.DiffTooLarge);
+            process.StandardOutput.BaseStream, maximumOutputBytes, outputFailureCode);
         var errorTask = ReadBoundedOutputAsync(
             process.StandardError.BaseStream, MaximumGitDiagnosticBytes, GitWorkspaceFailureCode.GitFailed);
+        var inputTask = standardInput is null
+            ? Task.CompletedTask
+            : WriteStandardInputAsync(process, standardInput, cancellationToken);
         try
         {
             var waitTask = process.WaitForExitAsync(cancellationToken);
@@ -397,6 +766,7 @@ public sealed class GitWorkspaceManager
             }
 
             await waitTask.ConfigureAwait(false);
+            await inputTask.ConfigureAwait(false);
             var output = await outputTask.ConfigureAwait(false);
             var error = await errorTask.ConfigureAwait(false);
             if (process.ExitCode != 0)
@@ -411,6 +781,7 @@ public sealed class GitWorkspaceManager
                     process.ExitCode.ToString(System.Globalization.CultureInfo.InvariantCulture) + "." + detail,
                     process.ExitCode);
             }
+
             return output;
         }
         catch
@@ -419,6 +790,16 @@ public sealed class GitWorkspaceManager
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             throw;
         }
+    }
+
+    private static async Task WriteStandardInputAsync(
+        Process process,
+        byte[] input,
+        CancellationToken cancellationToken)
+    {
+        await process.StandardInput.BaseStream.WriteAsync(input.AsMemory(), cancellationToken).ConfigureAwait(false);
+        await process.StandardInput.BaseStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        process.StandardInput.Close();
     }
 
     private static async Task<byte[]> ReadBoundedOutputAsync(
@@ -493,6 +874,28 @@ public sealed class GitWorkspaceManager
                 "The source-control workspace request is not bound to a valid run, repository, revision, and branch.");
     }
 
+    private static void ValidateCaptureRequest(GitWorkspaceCaptureRequest request)
+    {
+        var binding = request.Binding;
+        if (binding is null ||
+            binding.Seam != ProviderSeam.SourceControl ||
+            binding.Resource.Seam != ProviderSeam.SourceControl ||
+            !string.Equals(binding.ProviderId, SourceControlProviderIds.GitHub, StringComparison.Ordinal) ||
+            !string.Equals(binding.Resource.ProviderId, SourceControlProviderIds.GitHub, StringComparison.Ordinal) ||
+            !binding.NegotiatedCapabilities.Contains(SourceControlCapabilities.RepositoryCheckout) ||
+            string.IsNullOrWhiteSpace(binding.RunId) ||
+            request.Repository is null ||
+            string.IsNullOrWhiteSpace(request.WorkspaceId) ||
+            request.WorkspaceId.Length > 128 ||
+            request.WorkspaceId.Any(character =>
+                !char.IsAsciiLetterOrDigit(character) && character is not ('-' or '_')) ||
+            !IsGitSha(request.BaseSha) ||
+            !IsValidBranchName(request.BranchName))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.InvalidRequest,
+                "The source-control workspace request is not bound to a valid run, repository, revision, and branch.");
+    }
+
     private static bool IsValidBranchName(string branch) =>
         !string.IsNullOrWhiteSpace(branch) &&
         branch.Length <= 255 &&
@@ -550,9 +953,18 @@ public sealed class GitWorkspaceManager
 
     private (string WorkspaceRoot, string RepositoryPath, string ManifestPath) GetWorkspacePaths(
         GitWorkspaceRequest request)
+        => GetWorkspacePaths(request.Context.Binding.RunId, request.WorkspaceId);
+
+    private (string WorkspaceRoot, string RepositoryPath, string ManifestPath) GetWorkspacePaths(
+        GitWorkspaceCaptureRequest request)
+        => GetWorkspacePaths(request.Binding.RunId, request.WorkspaceId);
+
+    private (string WorkspaceRoot, string RepositoryPath, string ManifestPath) GetWorkspacePaths(
+        string runId,
+        string workspaceId)
     {
         var workspaceRoot = Path.Combine(
-            _rootPath, Hash(request.Context.Binding.RunId + "\0" + request.WorkspaceId));
+            _rootPath, Hash(runId + "\0" + workspaceId));
         var fullRoot = Path.GetFullPath(workspaceRoot);
         var relative = Path.GetRelativePath(_rootPath, fullRoot);
         if (Path.IsPathRooted(relative) ||
@@ -567,7 +979,10 @@ public sealed class GitWorkspaceManager
             Path.Combine(fullRoot, "workspace.json"));
     }
 
-    private static WorkspaceManifest CreateManifest(GitWorkspaceRequest request, string state) =>
+    private static WorkspaceManifest CreateManifest(
+        GitWorkspaceRequest request,
+        string state,
+        string workspaceIncarnationId) =>
         new(
             ManifestVersion,
             request.Context.Binding.RunId,
@@ -579,11 +994,16 @@ public sealed class GitWorkspaceManager
             request.Context.Repository.Name,
             request.BaseSha,
             request.BranchName,
-            state);
+            state,
+            workspaceIncarnationId);
 
     private static void ValidateManifestBinding(WorkspaceManifest manifest, GitWorkspaceRequest request)
     {
-        var expected = CreateManifest(request, manifest.State);
+        if (!Guid.TryParseExact(manifest.WorkspaceIncarnationId, "N", out _))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace,
+                "The source-control workspace incarnation is invalid.");
+        var expected = CreateManifest(request, manifest.State, manifest.WorkspaceIncarnationId);
         if (manifest.Version != ManifestVersion ||
             !string.Equals(manifest.RunId, expected.RunId, StringComparison.Ordinal) ||
             !string.Equals(manifest.WorkspaceId, expected.WorkspaceId, StringComparison.Ordinal) ||
@@ -599,7 +1019,31 @@ public sealed class GitWorkspaceManager
                 "The source-control workspace belongs to a different run, repository, or pinned revision.");
     }
 
-    private static GitWorkspace ToWorkspace(GitWorkspaceRequest request, string repositoryPath) =>
+    private static void ValidateManifestBinding(WorkspaceManifest manifest, GitWorkspaceCaptureRequest request)
+    {
+        if (!Guid.TryParseExact(manifest.WorkspaceIncarnationId, "N", out _))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace,
+                "The source-control workspace incarnation is invalid.");
+        if (manifest.Version != ManifestVersion ||
+            !string.Equals(manifest.RunId, request.Binding.RunId, StringComparison.Ordinal) ||
+            !string.Equals(manifest.WorkspaceId, request.WorkspaceId, StringComparison.Ordinal) ||
+            !string.Equals(manifest.ProviderId, request.Binding.ProviderId, StringComparison.Ordinal) ||
+            !string.Equals(manifest.RepositoryId, request.Binding.Resource.ResourceId, StringComparison.Ordinal) ||
+            manifest.ResourceGeneration != request.Binding.Resource.Generation ||
+            !string.Equals(manifest.Owner, request.Repository.Owner, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(manifest.Repository, request.Repository.Name, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(manifest.BaseSha, request.BaseSha, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(manifest.BranchName, request.BranchName, StringComparison.Ordinal))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.PathConflict,
+                "The source-control workspace belongs to a different run, repository, or pinned revision.");
+    }
+
+    private static GitWorkspace ToWorkspace(
+        GitWorkspaceRequest request,
+        string repositoryPath,
+        WorkspaceManifest manifest) =>
         new(
             request.WorkspaceId,
             request.Context.Binding.RunId,
@@ -607,7 +1051,8 @@ public sealed class GitWorkspaceManager
             request.Context.Binding.Resource.Generation,
             request.BaseSha,
             request.BranchName,
-            Path.GetFullPath(repositoryPath));
+            Path.GetFullPath(repositoryPath),
+            Guid.ParseExact(manifest.WorkspaceIncarnationId, "N"));
 
     private static StringComparison PathComparison =>
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
@@ -623,7 +1068,10 @@ public sealed class GitWorkspaceManager
         string Repository,
         string BaseSha,
         string BranchName,
-        string State);
+        string State,
+        string WorkspaceIncarnationId);
+
+    private sealed record GitTreeEntry(string Mode, string ObjectId, string Path);
 
     private sealed class GitHubGitRepositoryRemote : IGitRepositoryRemote
     {

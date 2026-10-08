@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
+using Agentweaver.Identity;
 using Agentweaver.Providers;
 using Agentweaver.Telemetry;
 using Microsoft.AspNetCore.Builder;
@@ -77,6 +78,89 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{_schema}\" CASCADE", connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    [Fact]
+    public async Task ProducedRunCaptureUsesTypedJournalProvenanceAndIdempotentReplay()
+    {
+        var principal = CaptureOwnerPrincipal();
+        var payload = CapturePayload();
+        var persistCount = 0;
+        var validationCount = 0;
+        Task Persist(CancellationToken _) { persistCount++; return Task.CompletedTask; }
+        Task Validate(CancellationToken _) { validationCount++; return Task.CompletedTask; }
+
+        var first = await _journal.AppendProducedRunCaptureAsync(
+            principal, "session-1", payload, Persist, Validate, CancellationToken.None);
+        Assert.False(first.IsDuplicate);
+        Assert.Equal(1, first.Entry.Position);
+        Assert.Equal(1, persistCount);
+        Assert.Equal(1, validationCount);
+
+        var restartedJournal = new PostgresSessionsJournal(_fixture.DataSource, _options);
+        var replay = await restartedJournal.AppendProducedRunCaptureAsync(
+            principal, "session-1", payload, Persist, Validate, CancellationToken.None);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(first.Entry, replay.Entry);
+        Assert.Equal(2, persistCount);
+        Assert.Equal(2, validationCount);
+
+        var recorded = await restartedJournal.ReadProducedRunCaptureEventAsync(
+            principal, "session-1", payload.Capture.EventId, CancellationToken.None);
+        Assert.Equal(first.Entry, recorded);
+
+        await Assert.ThrowsAsync<SessionAccessDeniedException>(() =>
+            restartedJournal.AppendAsync(principal, "session-1",
+                new AppendSessionEvent(
+                    payload.Capture.EventId,
+                    SessionsContractVersions.CurrentSchemaVersion,
+                    SessionsContractVersions.CurrentEventVersion,
+                    payload),
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ProducedRunCaptureStoresCreateOnlyBytesAndRechecksReadAuthority()
+    {
+        var principal = CaptureOwnerPrincipal();
+        var context = new DefaultHttpContext { User = principal };
+        var payload = CapturePayload();
+        var packageBytes = CapturePackageBytes();
+        var projects = new CaptureProjectsAuthorizationContextClient(
+            CaptureReadAuthority("33333333-3333-3333-3333-333333333333"));
+        var owner = new CaptureCoordinationOwnerClient(payload.Capture);
+        var objects = new CaptureObjectStore();
+        var service = new ProducedRunCaptureApplicationService(projects, owner, _journal, objects);
+
+        var first = await service.WriteAsync(
+            context, "session-1", payload.Capture.CaptureId, packageBytes, CancellationToken.None);
+        Assert.False(first.IsDuplicate);
+        Assert.Equal(1, objects.Count);
+        Assert.DoesNotContain(typeof(SessionObjectReference), typeof(ProducedRunCaptureJournalEntry)
+            .GetProperties().Select(property => property.PropertyType));
+
+        var duplicate = await service.WriteAsync(
+            context, "session-1", payload.Capture.CaptureId, packageBytes, CancellationToken.None);
+        Assert.True(duplicate.IsDuplicate);
+        Assert.Equal(first.Entry, duplicate.Entry);
+        Assert.Equal(1, objects.Count);
+
+        var read = await service.ReadAsync(
+            context, "session-1", payload.Capture.EventId, CancellationToken.None);
+        Assert.Equal(first.Entry, read.Entry);
+        Assert.Equal(packageBytes, read.PackageBytes);
+
+        var revokedProjects = new CaptureProjectsAuthorizationContextClient(
+            CaptureReadAuthority("33333333-3333-3333-3333-333333333333"),
+            CaptureReadAuthority("33333333-3333-3333-3333-333333333333") with
+            {
+                EffectiveAuthority = []
+            });
+        var revokedService = new ProducedRunCaptureApplicationService(
+            revokedProjects, owner, _journal, objects);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            revokedService.ReadAsync(context, "session-1", payload.Capture.EventId, CancellationToken.None));
+        Assert.Equal(2, revokedProjects.CallCount);
     }
 
     [Fact]
@@ -1530,6 +1614,13 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            string captureId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
             HttpContext context,
             SessionIdentity source,
@@ -1568,6 +1659,71 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
                     "The test provider binding does not match the persisted binding."));
     }
 
+    private static ClaimsPrincipal CaptureOwnerPrincipal()
+    {
+        var principal = IdentityBrokerPrincipal("project-1", "run-1");
+        principal.Identities.Single().AddClaim(new Claim("iss", "https://identity.test"));
+        return principal;
+    }
+
+    private static ProducedRunCaptureSessionPayload CapturePayload()
+    {
+        var identity = new SessionIdentity("project-1", "run-1", "session-1");
+        var manifestBytes = new byte[] { 0x7B };
+        var packageBytes = CapturePackageBytes();
+        var acceptedSelectionHash = new string('a', 64);
+        var workspaceIncarnationId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var baseSha = new string('b', 40);
+        var treeSha = new string('c', 40);
+        var manifestSha = Convert.ToHexStringLower(SHA256.HashData(manifestBytes));
+        var captureIdentity = ProducedRunCaptureContractValidation.CreateIdentity(
+            identity, "source-pin-test", acceptedSelectionHash, "workspace-test",
+            workspaceIncarnationId, "repo-test", 1, baseSha, treeSha, manifestSha);
+        var proof = new ProducedRunCaptureProof(
+            ProducedRunCaptureLimits.ContractVersion,
+            identity,
+            captureIdentity.CaptureId,
+            captureIdentity.EventId,
+            "https://identity.test",
+            "33333333-3333-3333-3333-333333333333",
+            "tenant-test",
+            "source-pin-test",
+            acceptedSelectionHash,
+            "workspace-test",
+            workspaceIncarnationId,
+            "repo-test",
+            1,
+            baseSha,
+            treeSha,
+            manifestSha,
+            manifestBytes.Length,
+            Convert.ToHexStringLower(SHA256.HashData(Array.Empty<byte>())),
+            0,
+            Convert.ToHexStringLower(SHA256.HashData(packageBytes)),
+            packageBytes.Length,
+            DateTimeOffset.UnixEpoch);
+        return new(proof, ProducedRunCaptureContractValidation.CreatePackageReference(proof));
+    }
+
+    private static byte[] CapturePackageBytes()
+    {
+        var packageBytes = new byte[ProducedRunCaptureLimits.PackageHeaderBytes];
+        "AWSCAP01"u8.CopyTo(packageBytes);
+        return packageBytes;
+    }
+
+    private static ProjectsAuthorizationContextResponse CaptureReadAuthority(string actorId) =>
+        new(
+            1,
+            "https://identity.test",
+            actorId,
+            "tenant-test",
+            1,
+            "project-1",
+            "run-1",
+            [new ProjectsEffectiveAuthority(
+                "project", "project-1", [new ProjectsAuthorizationPermissionGrant("readRunSelection", 1)])]);
+
     private static SessionObjectReference Ref(string key) => new(new ObjectKey(key), "transcript", 128);
 
     private static ClaimsPrincipal Principal(string? projectId, string? runId, params string[] extraRunIds)
@@ -1585,6 +1741,112 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         principal.SetScopes(["openid"]);
         principal.SetResources(["agentweaver.events"]);
         return principal;
+    }
+
+    private sealed class CaptureProjectsAuthorizationContextClient(
+        params ProjectsAuthorizationContextResponse[] responses) : IProjectsAuthorizationContextClient
+    {
+        private int _callCount;
+
+        public int CallCount => _callCount;
+
+        public Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
+            HttpContext context,
+            CancellationToken cancellationToken = default)
+        {
+            var index = Interlocked.Increment(ref _callCount) - 1;
+            return Task.FromResult(responses[Math.Min(index, responses.Length - 1)]);
+        }
+    }
+
+    private sealed class CaptureCoordinationOwnerClient(ProducedRunCaptureProof proof) : ICoordinationOwnerClient
+    {
+        public Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            string captureId,
+            CancellationToken cancellationToken = default) =>
+            proof.Identity == identity && proof.CaptureId == captureId
+                ? Task.FromResult(proof)
+                : Task.FromException<ProducedRunCaptureProof>(
+                    new CoordinationOwnerClientException("capture_not_found", 404));
+
+        public Task<MessageRouteBinding> ValidateMessageRouteAsync(
+            HttpContext context,
+            string projectId,
+            string runId,
+            MessageRouteValidationRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<CoordinationSessionBinding> GetSessionBindingAsync(
+            HttpContext context,
+            string projectId,
+            string runId,
+            string sessionId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
+            HttpContext context,
+            SessionIdentity source,
+            SessionForkRequest request,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<PolicyEvaluationReceiptView> ReadPolicyEvaluationReceiptAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            Guid receiptId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task ValidatePolicyEvaluationReceiptAdmissionAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            Guid receiptId,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class CaptureObjectStore : IObjectStore
+    {
+        private readonly Dictionary<string, byte[]> _objects = new(StringComparer.Ordinal);
+
+        public int Count => _objects.Count;
+
+        public Task WriteAsync(
+            ObjectKey key,
+            Stream content,
+            CancellationToken cancellationToken = default)
+        {
+            if (_objects.ContainsKey(key.Value))
+                throw new InvalidOperationException("Object keys are create-only.");
+            return WriteCoreAsync(key, content, cancellationToken);
+        }
+
+        public Task<ObjectRead?> ReadAsync(
+            ObjectKey key,
+            CancellationToken cancellationToken = default)
+        {
+            if (!_objects.TryGetValue(key.Value, out var bytes))
+                return Task.FromResult<ObjectRead?>(null);
+            var stream = new MemoryStream(bytes.ToArray(), writable: false);
+            return Task.FromResult<ObjectRead?>(new ObjectRead(stream, bytes.Length, stream.Dispose));
+        }
+
+        public Task<bool> DeleteAsync(ObjectKey key, CancellationToken cancellationToken = default) =>
+            Task.FromResult(_objects.Remove(key.Value));
+
+        private async Task WriteCoreAsync(
+            ObjectKey key,
+            Stream content,
+            CancellationToken cancellationToken)
+        {
+            await using var copy = new MemoryStream();
+            await content.CopyToAsync(copy, cancellationToken);
+            _objects.Add(key.Value, copy.ToArray());
+        }
     }
 
     private sealed class UnusedCoordinationOwnerClient : ICoordinationOwnerClient
@@ -1616,6 +1878,13 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             HttpContext context,
             SessionIdentity identity,
             Guid receiptId,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("The legacy policy route must reject before owner admission.");
+
+        public Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            string captureId,
             CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("The legacy policy route must reject before owner admission.");
 

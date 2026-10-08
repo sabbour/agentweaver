@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
@@ -215,6 +216,185 @@ internal sealed class EventsAddressedMessageClient(
         }
     }
 
+    public async Task<ProducedRunCaptureAcknowledgment> WriteProducedRunCaptureAsync(
+        HttpContext context,
+        ProducedRunCaptureProof proof,
+        byte[] packageBytes,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(proof);
+        ArgumentNullException.ThrowIfNull(packageBytes);
+        try
+        {
+            ProducedRunCaptureContractValidation.Validate(proof);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new CoordinationException(
+                "events_output_capture_contract_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+        if (packageBytes.Length != proof.PackageByteLength ||
+            Hash(packageBytes) != proof.PackageSha256)
+            throw new CoordinationException(
+                "events_output_capture_package_invalid", StatusCodes.Status502BadGateway);
+
+        var owner = RequireEventsOwner(context, proof.Identity);
+        using var content = new ByteArrayContent(packageBytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            new Uri(owner,
+                $"/internal/sessions/{Uri.EscapeDataString(proof.Identity.SessionId)}/produced-run-captures/{Uri.EscapeDataString(proof.CaptureId)}"))
+        {
+            Content = content
+        };
+        request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new CoordinationException(
+                "events_output_capture_unavailable", StatusCodes.Status502BadGateway, exception);
+        }
+
+        using (response)
+        {
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                throw new CoordinationException(
+                    "events_output_capture_denied", StatusCodes.Status403Forbidden);
+            if (response.StatusCode == HttpStatusCode.Conflict)
+                throw new CoordinationException(
+                    "events_output_capture_conflict", StatusCodes.Status409Conflict);
+            var duplicate = response.StatusCode == HttpStatusCode.OK;
+            if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Created) ||
+                response.Headers.CacheControl?.NoStore != true)
+                throw new CoordinationException(
+                    "events_output_capture_unavailable", StatusCodes.Status502BadGateway);
+
+            ProducedRunCaptureAcknowledgment? acknowledgment;
+            try
+            {
+                acknowledgment = await response.Content.ReadFromJsonAsync<ProducedRunCaptureAcknowledgment>(
+                    JsonOptions, cancellationToken).ConfigureAwait(false);
+            }
+            catch (JsonException exception)
+            {
+                throw new CoordinationException(
+                    "events_output_capture_contract_invalid", StatusCodes.Status502BadGateway, exception);
+            }
+            if (acknowledgment is null ||
+                acknowledgment.Entry is null ||
+                acknowledgment.Entry.Capture != proof ||
+                acknowledgment.Entry.Position < 1 ||
+                acknowledgment.IsDuplicate != duplicate)
+                throw new CoordinationException(
+                    "events_output_capture_contract_invalid", StatusCodes.Status502BadGateway);
+            return acknowledgment;
+        }
+    }
+
+    public async Task<ProducedRunCaptureContentResult> ReadProducedRunCaptureAsync(
+        HttpContext context,
+        ProducedRunCaptureProof proof,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(proof);
+        try
+        {
+            ProducedRunCaptureContractValidation.Validate(proof);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new CoordinationException(
+                "events_output_capture_contract_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+
+        var owner = RequireEventsOwner(context, proof.Identity);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri(owner,
+                $"/internal/sessions/{Uri.EscapeDataString(proof.Identity.SessionId)}/produced-run-captures/events/{proof.EventId:D}"));
+        request.Headers.Authorization = CoordinationIdentity.RequireBearer(context);
+        var tenant = CoordinationIdentity.ReadTenantSelector(context);
+        if (tenant is not null)
+            request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenant);
+
+        HttpResponseMessage response;
+        try
+        {
+            response = await httpClient.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new CoordinationException(
+                "events_output_capture_unavailable", StatusCodes.Status502BadGateway, exception);
+        }
+
+        using (response)
+        {
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                throw new CoordinationException(
+                    "events_output_capture_denied", StatusCodes.Status403Forbidden);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                throw new CoordinationException(
+                    "events_output_capture_not_found", StatusCodes.Status404NotFound);
+            var positions = response.Headers.TryGetValues("X-Session-Event-Position", out var positionValues)
+                ? positionValues.ToArray()
+                : [];
+            if (response.StatusCode != HttpStatusCode.OK ||
+                response.Headers.CacheControl?.NoStore != true ||
+                response.Content.Headers.ContentType?.MediaType != "application/octet-stream" ||
+                response.Content.Headers.ContentLength is long contentLength &&
+                    contentLength != proof.PackageByteLength ||
+                positions.Length != 1 ||
+                !long.TryParse(positions.SingleOrDefault(),
+                    System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var position) ||
+                position < 1)
+                throw new CoordinationException(
+                    "events_output_capture_contract_invalid", StatusCodes.Status502BadGateway);
+
+            var bytes = new byte[checked((int)proof.PackageByteLength)];
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                await stream.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
+            }
+            catch (EndOfStreamException exception)
+            {
+                throw new CoordinationException(
+                    "events_output_capture_contract_invalid", StatusCodes.Status502BadGateway, exception);
+            }
+            if (await stream.ReadAsync(new byte[1], cancellationToken).ConfigureAwait(false) != 0 ||
+                Hash(bytes) != proof.PackageSha256)
+                throw new CoordinationException(
+                    "events_output_capture_package_invalid", StatusCodes.Status502BadGateway);
+
+            return new(new ProducedRunCaptureJournalEntry(proof, position), bytes);
+        }
+    }
+
     public async Task<MessageAdmissionReceipt> AdmitAsync(
         HttpContext context,
         OwnerOutboundMessage message,
@@ -411,4 +591,7 @@ internal sealed class EventsAddressedMessageClient(
                 "events_owner_configuration_or_binding_invalid", StatusCodes.Status503ServiceUnavailable);
         return owner;
     }
+
+    private static string Hash(ReadOnlySpan<byte> bytes) =>
+        Convert.ToHexStringLower(SHA256.HashData(bytes));
 }
