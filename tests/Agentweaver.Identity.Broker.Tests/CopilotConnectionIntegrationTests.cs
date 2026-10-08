@@ -16,6 +16,25 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
+    [Theory]
+    [InlineData("https://client.test/copilot-callback")]
+    [InlineData("http://client.test/auth/github/copilot-app/callback")]
+    [InlineData("https://client.test/auth/github/copilot-app/callback?next=other")]
+    public async Task CopilotConnectionConfigurationRequiresTheExactHttpsBrowserReturnPath(string callbackUri)
+    {
+        using var transport = new ControlledCopilotConnection();
+        await using var invalid = new IdentityBrokerWebApplicationFactory(
+            _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                transport.ConfigureSettings(settings);
+                settings["IdentityBroker__CopilotConnection__CallbackUri"] = callbackUri;
+            });
+        Assert.Throws<InvalidOperationException>(() => invalid.CreateClient());
+        Assert.Equal(0, transport.Exchanges);
+        Assert.Equal(0, transport.Writes);
+    }
+
     private async Task<CopilotConnectionReceipt> LinkRuntimeCopilotConnectionAsync(
         ProjectsConfigResourceServer projects, string ownerToken, ControlledCopilotConnection transport,
         ProjectAuthorityResourceType connectionScope = ProjectAuthorityResourceType.Platform, string scopeId = "default")
@@ -40,8 +59,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
         var start = await startResponse.Content.ReadFromJsonAsync<CopilotConnectionStart>(CoordinationJsonOptions);
         Assert.NotNull(start);
-        var state = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(
-            start.AuthorizationUri.Query)["state"].ToString();
+        var parameters = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(start.AuthorizationUri.Query);
+        Assert.Equal("https://client.test" + CopilotConnectionEndpoints.BrowserCallbackPath,
+            parameters["redirect_uri"].ToString());
+        var state = parameters["state"].ToString();
         var input = new CompleteCopilotConnectionRequest(state, "controlled-code");
         using var completed = await SendJsonAsync(
             broker, HttpMethod.Post, "/internal/connections/copilot-user/complete", ownerToken, input);

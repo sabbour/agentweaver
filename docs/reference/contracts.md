@@ -436,6 +436,12 @@ The committed credential version remains unchanged, and the same connection cann
 
 `IdentityBroker:CopilotConnection` requires explicit `ProjectsOwnerAddress`, GitHub `ClientId`,
 HTTPS `CallbackUri`, and exact `ClientSecretReference`.
+The callback URI must use the fixed browser return path `/auth/github/copilot-app/callback`.
+Its origin is explicit operator configuration, not a default host or evidence of live GitHub registration.
+The same URI is used for GitHub authorization and code exchange.
+The separate UI bridge uses a same-origin popup and the opener's existing in-memory authentication context.
+It validates the popup source, origin, and expected state before authenticated completion through Gateway with the actual nonce cookie.
+The return page has no anonymous credential or mutation authority and persists no browser tokens.
 The protected-store workload identity requires the separate writer's SET and exact-version GET permissions.
 This configuration does not change the read-only P0 Secrets principal or provision cloud permissions.
 

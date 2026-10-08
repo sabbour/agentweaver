@@ -56,7 +56,8 @@ internal sealed class ControlledCopilotConnection : IDisposable
     {
         settings["IdentityBroker__CopilotConnection__ProjectsOwnerAddress"] = "https://projects.test/";
         settings["IdentityBroker__CopilotConnection__ClientId"] = "controlled-github-oauth";
-        settings["IdentityBroker__CopilotConnection__CallbackUri"] = "https://client.test/copilot-callback";
+        settings["IdentityBroker__CopilotConnection__CallbackUri"] =
+            "https://client.test" + CopilotConnectionEndpoints.BrowserCallbackPath;
         settings["IdentityBroker__CopilotConnection__ClientSecretReference__Id"] = "copilot-oauth-client";
         settings["IdentityBroker__CopilotConnection__ClientSecretReference__Version"] = "v1";
     }
@@ -85,6 +86,9 @@ internal sealed class ControlledCopilotConnection : IDisposable
             Assert.True(body.Contains("code=controlled-code", StringComparison.Ordinal) &&
                 body.Contains("code_verifier=", StringComparison.Ordinal) ||
                 body.Contains($"refresh_token={RefreshToken}", StringComparison.Ordinal));
+            if (body.Contains("code=controlled-code", StringComparison.Ordinal))
+                Assert.Equal("https://client.test" + CopilotConnectionEndpoints.BrowserCallbackPath,
+                    Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(body)["redirect_uri"].ToString());
             Exchanges++;
             if (BeforeExchangeResponse is { } wait)
                 await wait(cancellationToken);
