@@ -280,6 +280,17 @@ explanation can inform a human; it cannot mutate workflow state.
 
 ## Source Control merge gate
 
+Accepted Source Control settings can use exact SecretRefs or an Identity GitHub App
+connection and repository-selection code. In App mode, Identity owns user
+authorization, installation callbacks, refresh, and run-bound token minting.
+Orchestrator consumes the selection code when it pins the negotiated repository, then
+requests a temporary token from Identity for each API or checkout operation. Each
+request is bound to the current actor, project, run, connection revision, installation,
+and exact repository; Identity rechecks current grants and provider permissions before
+minting. The App private key is redeemed and used for JWT signing only inside Identity,
+and neither it nor an installation token is persisted. Webhook credentials remain
+separate SecretRefs.
+
 The Orchestrator's unpublished Source Control owner path begins with a server-derived
 merge request, not model-supplied repository, branch, SHA, or grant data. It binds the
 request to the accepted `ProjectConfiguration`, exclusive Source Control provider pin,
