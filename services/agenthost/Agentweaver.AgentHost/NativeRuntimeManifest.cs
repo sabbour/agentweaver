@@ -16,7 +16,9 @@ public sealed record NativeRuntimeManifest(string SdkVersion, string RuntimeVers
             ["PATH"] = "/usr/local/bin:/usr/bin:/bin",
             ["HOME"] = privateStateDirectory,
             ["LANG"] = "C.UTF-8",
-            ["TMPDIR"] = "/tmp"
+            ["TMPDIR"] = "/tmp",
+            ["COPILOT_CLI_DIST_DIR"] = Path.GetDirectoryName(executable)
+                ?? throw new ArgumentException("The image-owned runtime requires an absolute executable path.", nameof(executable))
         };
         return connection;
     }
@@ -41,6 +43,12 @@ public sealed record NativeRuntimeManifest(string SdkVersion, string RuntimeVers
         var checksum = Path.Combine(directory, "native", "copilot.sha256");
         if (!File.Exists(executable) || !File.Exists(checksum))
             throw new InvalidOperationException("The verified native runtime is not part of this image.");
+        foreach (var relative in new[] { "index.js", "app.js", "prebuilds/linux-x64/runtime.node" })
+        {
+            var file = new FileInfo(Path.Combine(directory, "native", relative));
+            if (!file.Exists || file.Length == 0)
+                throw new InvalidOperationException("The pinned native distribution is incomplete.");
+        }
         using var content = File.OpenRead(executable);
         if (File.ReadAllText(checksum).Trim() != Convert.ToHexStringLower(SHA256.HashData(content)))
             throw new InvalidOperationException("The image-owned native runtime checksum does not match.");

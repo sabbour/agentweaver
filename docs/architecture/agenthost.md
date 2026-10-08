@@ -89,6 +89,12 @@ The Dockerfile pins the build and runtime base digests and verifies the native a
 The final image runs as UID/GID `1654:1654` on `linux/amd64`.
 It uses explicit HTTPS certificate configuration and a read-only root filesystem.
 Private state and temporary files are separate from the attached workspace.
+The pinned CLI loads its complete distribution from the image-owned `/app/native` directory.
+The host sets `COPILOT_CLI_DIST_DIR` to the verified executable's directory, never a caller-selected path.
+Startup rejects a missing distribution index, application module, or native runtime addon.
+The CLI does not extract executable packages into private session state.
+Private state and temporary mounts need no executable permission.
+Opaque SDK session caches remain private and use the existing authenticated recovery path.
 No registry credential or runtime model credential enters the image.
 
 The selected `agent-sandbox` options can include the typed trusted `AgentHost` launch profile.
@@ -118,7 +124,9 @@ It is not an uncompressed filesystem estimate or a hard image-size ceiling.
 
 CI then compares the loaded image config digest with the receipt.
 It runs `--verify-native-runtime` without network access, writes, credentials, or a model turn.
-The native SDK status must report runtime 1.0.79 and protocol 3.
+The native SDK status must report runtime 1.0.79, protocol 3, and the image-owned distribution path.
+Both image checks use explicit `noexec,nosuid,nodev` state and temporary mounts.
+They reject any extracted native package cache in private state.
 CI separately runs the same image as UID/GID 1000 with an owner-writable `0755` workspace and private `0700` mounts.
 It checks actual create, write, rename, read, and delete operations without network or a model call.
 Fixture configuration and TLS files use mode `0440`.

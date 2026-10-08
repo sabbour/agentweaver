@@ -38,8 +38,11 @@ public sealed class RuntimeCopilotSessionFactory
         if (approvedConnection is StdioRuntimeConnection process &&
             (!Path.IsPathFullyQualified(process.Path!) ||
                 process.Args is { Count: > 0 } && !process.Args.SequenceEqual(["--no-auto-update"]) ||
+                !process.Environment!.TryGetValue("COPILOT_CLI_DIST_DIR", out var distribution) ||
+                distribution != Path.GetDirectoryName(process.Path) ||
                 process.Environment!.Keys.Any(key =>
-                    key is not ("PATH" or "HOME" or "LANG" or "TMPDIR" or "SSL_CERT_FILE" or "SSL_CERT_DIR"))))
+                    key is not ("PATH" or "HOME" or "LANG" or "TMPDIR" or "SSL_CERT_FILE" or "SSL_CERT_DIR" or
+                        "COPILOT_CLI_DIST_DIR"))))
             throw new ArgumentException("The image-owned stdio runtime requires an absolute executable and credential-free environment.");
         foreach (var (reference, model) in approvedModelBindings)
         {

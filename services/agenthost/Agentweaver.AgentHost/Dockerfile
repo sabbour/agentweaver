@@ -19,6 +19,8 @@ RUN curl --fail --location --proto '=https' --tlsv1.2 \
     echo 'c33a2d65fbc7908b6eb5c88b14c5d94f693d4228a2e136bcb6c54308c43b08ff213f157dd45c89d727f7f8515249f3ef5ab7d833a04e022a88b97f8b8e046e8b  /tmp/copilot.tgz' | sha512sum --check --status && \
     mkdir /publish/native && tar --extract --gzip --file /tmp/copilot.tgz --strip-components=1 --directory /publish/native && \
     rm -rf /publish/native/clipboard /publish/native/foundry-local-sdk /publish/native/pvrecorder /publish/native/webview && \
+    test -s /publish/native/index.js && test -s /publish/native/app.js && \
+    test -s /publish/native/prebuilds/linux-x64/runtime.node && \
     rm /tmp/copilot.tgz && \
     sha256sum /publish/native/copilot | cut -d ' ' -f 1 > /publish/native/copilot.sha256 && \
     mkdir /private-state /workspace
