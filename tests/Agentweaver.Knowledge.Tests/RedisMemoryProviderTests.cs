@@ -100,6 +100,40 @@ public sealed class RedisMemoryProviderTests
     }
 
     [Fact]
+    public async Task ColdStoreDetectsExpiringHashFieldsFromCurrentServerVersion()
+    {
+        var (provider, client, options) = CreateProvider();
+        var key = ProjectKey(options, "project-a");
+        client.SeedHash(key, ("external", "value"));
+        client.SetFieldTtl(key, "external", 1_000);
+
+        await Assert.ThrowsAsync<KnowledgeStorageUnavailableException>(
+            () => provider.SearchAsync(new KnowledgeRecordQuery("project-a", "agent-a")));
+    }
+
+    [Fact]
+    public async Task OperationalReadDetectsHashFieldExpiryAfterRedisUpgrade()
+    {
+        var (provider, client, options) = CreateProvider();
+        client.Snapshot = client.Snapshot with
+        {
+            Server = client.Snapshot.Server.SetItem("redis_version", "7.0.0")
+        };
+        await provider.NegotiateAsync(Candidate(provider, options));
+
+        var key = ProjectKey(options, "project-a");
+        client.SeedHash(key, ("external", "value"));
+        client.SetFieldTtl(key, "external", 1_000);
+        client.Snapshot = client.Snapshot with
+        {
+            Server = client.Snapshot.Server.SetItem("redis_version", "7.4.0")
+        };
+
+        await Assert.ThrowsAsync<KnowledgeStorageUnavailableException>(
+            () => provider.SearchAsync(new KnowledgeRecordQuery("project-a", "agent-a")));
+    }
+
+    [Fact]
     public void OptionsRequireTlsAndPairedCredentialsAndRedactSecrets()
     {
         var options = Options() with { UserName = "memory-user", Password = "memory-password" };

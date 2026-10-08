@@ -134,7 +134,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
 
     private readonly IRedisMemoryCommandClient client;
     private readonly RedisMemoryOptions options;
-    private volatile bool _supportsHashFieldExpiration;
 
     public RedisMemoryDocumentStore(IRedisMemoryCommandClient client, RedisMemoryOptions options)
     {
@@ -152,14 +151,17 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
             var snapshot = await client.ReadServerSnapshotAsync(cancellationToken).ConfigureAwait(false);
             ValidateSnapshot(snapshot, negotiation: true);
             var serverVersion = ReadVersion(snapshot);
-            _supportsHashFieldExpiration = SupportsHashFieldExpiration(serverVersion);
             var keys = await client.ScanKeysAsync(ProjectKeyPattern, cancellationToken).ConfigureAwait(false);
             var uniqueKeys = keys.ToHashSet(StringComparer.Ordinal);
             if (uniqueKeys.Count > MaximumGlobalReceiptScanKeys)
                 throw new KnowledgeProviderUnavailableException(
                     "The configured Redis Memory namespace exceeds the supported retention audit limit.");
             foreach (var key in uniqueKeys)
-                await ReadPersistentHashAsync(key, negotiation: true, cancellationToken).ConfigureAwait(false);
+                await ReadPersistentHashAsync(
+                    key,
+                    SupportsHashFieldExpiration(serverVersion),
+                    negotiation: true,
+                    cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -187,11 +189,11 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         CancellationToken cancellationToken)
     {
         ValidateScope(projectId, documentId);
-        await EnsureOperationalAsync(cancellationToken).ConfigureAwait(false);
+        var supportsFieldExpiration = await EnsureOperationalAsync(cancellationToken).ConfigureAwait(false);
         var values = await client.ReadHashFieldsAsync(
             ProjectKey(projectId),
             [DocumentField(documentId), ETagField(documentId), LeaseField(documentId)],
-            _supportsHashFieldExpiration,
+            supportsFieldExpiration,
             cancellationToken).ConfigureAwait(false);
         if (values.Count == 0)
             throw new KnowledgeStorageUnavailableException();
@@ -230,7 +232,7 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
     {
         if (receiptId == Guid.Empty)
             throw new KnowledgeStorageUnavailableException();
-        await EnsureOperationalAsync(cancellationToken).ConfigureAwait(false);
+        var supportsFieldExpiration = await EnsureOperationalAsync(cancellationToken).ConfigureAwait(false);
         var keys = await client.ScanKeysAsync(ProjectKeyPattern, cancellationToken).ConfigureAwait(false);
         var uniqueKeys = keys.ToHashSet(StringComparer.Ordinal);
         if (uniqueKeys.Count > MaximumGlobalReceiptScanKeys)
@@ -238,7 +240,11 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         var matches = new List<KnowledgeMemoryDocument>(2);
         foreach (var key in uniqueKeys)
         {
-            var fields = await ReadPersistentHashAsync(key, cancellationToken).ConfigureAwait(false);
+            var fields = await ReadPersistentHashAsync(
+                key,
+                supportsFieldExpiration,
+                negotiation: false,
+                cancellationToken).ConfigureAwait(false);
             var seenFields = new HashSet<string>(StringComparer.Ordinal);
             foreach (var field in fields)
             {
@@ -401,10 +407,9 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
                 !string.Equals(operation.Document.ProjectId, projectId, StringComparison.Ordinal)))
             throw new ArgumentException("The Redis Memory batch is invalid.");
 
-        await EnsureOperationalAsync(cancellationToken).ConfigureAwait(false);
+        var supportsFieldExpiration = await EnsureOperationalAsync(cancellationToken).ConfigureAwait(false);
         var key = ProjectKey(projectId);
         await VerifyPersistentHashAsync(key, negotiation: false, cancellationToken).ConfigureAwait(false);
-        var supportsFieldExpiration = _supportsHashFieldExpiration;
         var arguments = new List<string>(MaximumRedisArgumentCount)
         {
             supportsFieldExpiration ? "1" : "0",
@@ -469,10 +474,11 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
 
     private static string LeaseField(string documentId) => $"lease:{documentId}";
 
-    private async Task EnsureOperationalAsync(CancellationToken cancellationToken)
+    private async Task<bool> EnsureOperationalAsync(CancellationToken cancellationToken)
     {
         var snapshot = await client.ReadServerSnapshotAsync(cancellationToken).ConfigureAwait(false);
         ValidateSnapshot(snapshot, negotiation: false);
+        return SupportsHashFieldExpiration(ReadVersion(snapshot));
     }
 
     private async Task VerifyPersistentHashAsync(
@@ -487,17 +493,13 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
 
     private async Task<IReadOnlyList<RedisMemoryHashField>> ReadPersistentHashAsync(
         string key,
-        CancellationToken cancellationToken) =>
-        await ReadPersistentHashAsync(key, negotiation: false, cancellationToken).ConfigureAwait(false);
-
-    private async Task<IReadOnlyList<RedisMemoryHashField>> ReadPersistentHashAsync(
-        string key,
+        bool supportsFieldExpiration,
         bool negotiation,
         CancellationToken cancellationToken)
     {
         await VerifyPersistentHashAsync(key, negotiation, cancellationToken).ConfigureAwait(false);
         var fields = await client.ScanHashAsync(key, cancellationToken).ConfigureAwait(false);
-        if (_supportsHashFieldExpiration)
+        if (supportsFieldExpiration)
         {
             foreach (var fieldBatch in fields.Chunk(128))
             {
@@ -541,8 +543,12 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         CancellationToken cancellationToken)
     {
         ValidateScope(projectId, "project");
-        await EnsureOperationalAsync(cancellationToken).ConfigureAwait(false);
-        var fields = await ReadPersistentHashAsync(ProjectKey(projectId), cancellationToken).ConfigureAwait(false);
+        var supportsFieldExpiration = await EnsureOperationalAsync(cancellationToken).ConfigureAwait(false);
+        var fields = await ReadPersistentHashAsync(
+            ProjectKey(projectId),
+            supportsFieldExpiration,
+            negotiation: false,
+            cancellationToken).ConfigureAwait(false);
         var documents = new Dictionary<string, KnowledgeMemoryDocument>(StringComparer.Ordinal);
         foreach (var field in fields)
         {
