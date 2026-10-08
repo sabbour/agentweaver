@@ -83,6 +83,7 @@ const projectReferences = new Map([
     '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
   ]],
   ['Agentweaver.Mcp', [
+    '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
   ]],
 ]);
