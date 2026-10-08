@@ -18,6 +18,7 @@
     <ProjectReference Include="..\..\..\packages\Agentweaver.Identity\Agentweaver.Identity.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
+    <ProjectReference Include="..\..\..\packages\Agentweaver.SourceControl\Agentweaver.SourceControl.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Migrations\001_coordination_owner.sql" />
@@ -31,5 +32,6 @@
     <EmbeddedResource Include="Migrations\009_runtime_owner_context.sql" />
     <EmbeddedResource Include="Migrations\runtime_registration.sql" />
     <EmbeddedResource Include="Migrations\011_runtime_usage_source.sql" />
+    <EmbeddedResource Include="Migrations\012_source_control_owner.sql" />
   </ItemGroup>
 </Project>

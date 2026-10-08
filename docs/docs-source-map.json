@@ -135,6 +135,34 @@
       ]
     },
     {
+      "name": "Source Control pin, webhook, and merge",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/SourceControlContracts.cs",
+        "packages/Agentweaver.SourceControl/",
+        "services/projects-config/Agentweaver.Projects.Config/ProjectConfiguration.cs",
+        "services/orchestrator/Agentweaver.Orchestrator.Core/SourceControl",
+        "services/orchestrator/Agentweaver.Orchestrator/SourceControl",
+        "services/orchestrator/Agentweaver.Orchestrator/CoordinatorDecisionOwnerStore.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/ExecutableActionGrantOwnerStore.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs",
+        "services/orchestrator/Agentweaver.Orchestrator/Migrations/004_source_control_owner.sql",
+        "tests/Agentweaver.SourceControl.Tests/",
+        "tests/Agentweaver.Orchestrator.Core.Tests/SourceControl",
+        "tests/Agentweaver.Identity.Broker.Tests/IdentitySecretRedemptionEndpointTests.cs",
+        "tests/Agentweaver.Identity.Broker.Tests/CoordinationMessageIntegrationTests.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectConfigurationValidatorTests.cs",
+        "tests/Agentweaver.Projects.Config.Tests/ProjectsConfigPostgresTests.cs"
+      ],
+      "required": [
+        "docs/architecture/design/provider-seams.md",
+        "docs/architecture/design/orchestration.md",
+        "docs/architecture/design/services-and-release.md",
+        "docs/architecture/projects-config.md",
+        "docs/guide/testing.md",
+        "docs/diagrams/src/flagship/v1-source-control-owner-flow.json"
+      ]
+    },
+    {
       "name": "Environment egress intent",
       "sourcePrefixes": [
         "packages/Agentweaver.Abstractions/NetworkPolicyContracts.cs",

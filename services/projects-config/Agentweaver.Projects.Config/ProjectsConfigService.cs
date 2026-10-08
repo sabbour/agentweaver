@@ -480,7 +480,6 @@ public sealed class ProjectsConfigService(
         ProjectAccess access,
         CancellationToken cancellationToken)
     {
-        caller.RequireResourceBinding(projectId);
         await EnsureCurrentMembershipAsync(caller, cancellationToken).ConfigureAwait(false);
         if (!Guid.TryParseExact(projectId, "N", out _))
             throw ProjectConfigException.NotFound();

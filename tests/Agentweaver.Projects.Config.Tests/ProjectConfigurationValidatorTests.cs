@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
 using Microsoft.AspNetCore.Http;
@@ -138,6 +139,33 @@ public sealed class ProjectConfigurationValidatorTests
                 DefaultWorkflowId = "not a stable identifier",
             }));
         Assert.Equal(StatusCodes.Status400BadRequest, error.StatusCode);
+    }
+
+    [Fact]
+    public void SourceControlSettingsAreOptionalAndPersistOnlyExactSecretReferences()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var legacy = ProjectConfigurationValidator.Validate(new ProjectConfiguration());
+        var legacyJson = JsonSerializer.Serialize(legacy, options);
+        Assert.DoesNotContain("\"sourceControl\"", legacyJson, StringComparison.Ordinal);
+
+        var settings = new SourceControlProjectSettings(
+            new SourceControlRepositoryIdentity("octo", "repo"),
+            new SecretRef("github-api", "v3"),
+            new SecretRef("github-checkout", "v2"),
+            new SecretRef("github-webhook", "v1"));
+        var configuration = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            SourceControl = settings,
+        });
+        var json = JsonSerializer.Serialize(configuration, options);
+
+        Assert.Equal(settings, configuration.SourceControl);
+        Assert.Contains("\"repository\":{\"owner\":\"octo\",\"name\":\"repo\"}", json, StringComparison.Ordinal);
+        Assert.Contains("\"apiSecretReference\":{\"id\":\"github-api\",\"version\":\"v3\"}", json, StringComparison.Ordinal);
+        Assert.Contains("\"checkoutSecretReference\":{\"id\":\"github-checkout\",\"version\":\"v2\"}", json, StringComparison.Ordinal);
+        Assert.Contains("\"webhookSecretReference\":{\"id\":\"github-webhook\",\"version\":\"v1\"}", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("tokenValue", json, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

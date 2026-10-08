@@ -70,6 +70,8 @@ internal sealed class ExecutableActionGrantOwnerStore(
         var snapshot = grantTask.Result;
         if (snapshot is null)
             return new ExecutableActionGrantLookupResult(ExecutableActionGrantLookupStatus.Unknown);
+        if (!snapshot.SourceIntentCurrent)
+            return new ExecutableActionGrantLookupResult(ExecutableActionGrantLookupStatus.Revoked);
 
         if (!snapshot.IsCurrent ||
             !string.Equals(snapshot.Revision, reference.Revision, StringComparison.Ordinal))
@@ -132,7 +134,36 @@ internal sealed class ExecutableActionGrantOwnerStore(
                    r.execution_fence, r.execution_state, r.accepted_selection_hash,
                    COALESCE(r.tenant_id, ''),
                    s.execution_fence, s.writer_issuer, s.writer_subject, s.lifecycle_state,
-                   g.source_state_version
+                   g.source_state_version,
+                   CASE
+                     WHEN g.action_ids @> '["source_control.merge"]'::jsonb THEN
+                       jsonb_array_length(g.action_ids) = 1
+                       AND g.purpose = 'source-control.merge'
+                       AND g.source_control_intent_id IS NOT NULL
+                       AND EXISTS (
+                           SELECT 1
+                           FROM {_schema}.source_control_merge_intents AS source_intent
+                           WHERE source_intent.project_id = g.project_id
+                             AND source_intent.run_id = g.run_id
+                             AND source_intent.intent_id = g.source_control_intent_id
+                             AND source_intent.session_id = g.session_id
+                             AND source_intent.intent_state IN ('approved', 'merge_started')
+                             AND source_intent.issuer = g.issuer
+                             AND source_intent.actor_id = g.actor_id
+                             AND source_intent.tenant_id = g.tenant_id
+                             AND source_intent.accepted_selection_hash = g.accepted_selection_hash
+                             AND source_intent.execution_fence = g.execution_fence
+                             AND source_intent.workflow_step_id = g.step_id
+                             AND source_intent.approval_request_decision_id IS NOT NULL
+                             AND source_intent.approval_request_state_version =
+                                 source_intent.source_state_version + 1
+                             AND source_intent.approval_state_version =
+                                 source_intent.approval_request_state_version + 1
+                             AND source_intent.approval_decision_id = g.source_decision_id
+                             AND source_intent.approval_state_version = g.source_state_version)
+                     ELSE g.source_control_intent_id IS NULL
+                       AND g.purpose <> 'source-control.merge'
+                   END
             FROM {_schema}.executable_action_grants AS g
             INNER JOIN {_schema}.accepted_runs AS r
               ON r.project_id = g.project_id AND r.run_id = g.run_id
@@ -222,6 +253,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
             reader.GetString(27),
             reader.GetString(28),
             reader.GetInt64(29),
+            reader.GetBoolean(30),
             reader.GetString(3),
             reader.GetString(4),
             reader.GetString(5));
@@ -933,6 +965,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
         string WriterSubject,
         string SessionLifecycle,
         long SourceStateVersion,
+        bool SourceIntentCurrent,
         string Issuer,
         string ActorId,
         string TenantId);

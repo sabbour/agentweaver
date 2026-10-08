@@ -14,6 +14,10 @@ const projectReferences = new Map([
     'Agentweaver.ObjectStore.AzureBlob', 'Agentweaver.Telemetry.AzureMonitor']
     .map(id => `..\\..\\packages\\${id}\\${id}.csproj`)],
   ['Agentweaver.Providers', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
+  ['Agentweaver.SourceControl', [
+    '..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
+    '..\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+  ]],
   ['Agentweaver.Secrets.AzureKeyVault', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
   ['Agentweaver.Identity', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
   ['Agentweaver.AgentRuntime', [
@@ -36,6 +40,7 @@ const projectReferences = new Map([
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+    '..\\..\\..\\packages\\Agentweaver.SourceControl\\Agentweaver.SourceControl.csproj',
   ]],
   ['Agentweaver.EventsAndSessions', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
@@ -115,6 +120,7 @@ test('the Orchestrator host is registered as a baseline service with all project
     ['Agentweaver.Abstractions', ['0.0.0']],
     ['Agentweaver.Persistence.Postgres', ['0.0.0']],
     ['Agentweaver.Providers', ['0.0.0']],
+    ['Agentweaver.SourceControl', ['0.0.0']],
   ]);
   assert.equal(check(fixture).stage, 'draft');
 });

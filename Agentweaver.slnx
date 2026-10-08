@@ -14,6 +14,7 @@
   <Project Path="tests\Agentweaver.Projects.Config.Tests\Agentweaver.Projects.Config.Tests.csproj" />
   <Project Path="packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
   <Project Path="packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
+  <Project Path="packages\Agentweaver.SourceControl\Agentweaver.SourceControl.csproj" />
   <Project Path="packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
   <Project Path="packages\Agentweaver.Secrets.AzureKeyVault\Agentweaver.Secrets.AzureKeyVault.csproj" />
   <Project Path="packages\Agentweaver.Telemetry\Agentweaver.Telemetry.csproj" />
@@ -22,6 +23,7 @@
   <Project Path="packages\Agentweaver.Identity\Agentweaver.Identity.csproj" />
   <Project Path="packages\Agentweaver.AgentRuntime\Agentweaver.AgentRuntime.csproj" />
   <Project Path="tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj" />
+  <Project Path="tests\Agentweaver.SourceControl.Tests\Agentweaver.SourceControl.Tests.csproj" />
   <Project Path="tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj" />
   <Project Path="tests\Agentweaver.Secrets.AzureKeyVault.Tests\Agentweaver.Secrets.AzureKeyVault.Tests.csproj" />
   <Project Path="tests\Agentweaver.Telemetry.Tests\Agentweaver.Telemetry.Tests.csproj" />

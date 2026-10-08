@@ -472,6 +472,149 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
     }
 
     [Fact]
+    public async Task PersistsSourceControlSecretReferencesInAcceptedSnapshotAcrossConfigChangesAndRestart()
+    {
+        var capabilities = ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            SourceControlCapabilities.RepositoryRead,
+            SourceControlCapabilities.RepositoryCheckout,
+            SourceControlCapabilities.IssueWrite,
+            SourceControlCapabilities.PullRequestRead,
+            SourceControlCapabilities.PullRequestWrite,
+            SourceControlCapabilities.ReviewRead,
+            SourceControlCapabilities.Merge);
+        var catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [
+                new ProviderRegistration(
+                    new ProviderDescriptor(
+                        ProviderSeam.SourceControl,
+                        SourceControlProviderIds.GitHub,
+                        new Version(1, 0, 0),
+                        1,
+                        ProviderHostingPattern.InProcess,
+                        capabilities),
+                    true,
+                    "github-options-v1",
+                    1)
+            ],
+            [new ProviderSelection(ProviderSeam.SourceControl, SourceControlProviderIds.GitHub)],
+            []).Value);
+
+        await using var context = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = new ProjectsConfigService(context, catalog, TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "tenant-source-control-" + suffix;
+        var admin = await SeedCallerAsync(
+            context, authorityStore, "source-control-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var owner = await SeedCallerAsync(
+            context, authorityStore, "source-control-owner-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var defaultsHead = await service.GetPlatformRuntimeDefaultsAsync(admin, CancellationToken.None);
+        var defaults = await service.UpdatePlatformRuntimeDefaultsAsync(
+            admin, defaultsHead.Revision, PlatformDefaults(), CancellationToken.None);
+        var project = await service.CreateProjectAsync(owner, "SourceControl selection", CancellationToken.None);
+        var originalSettings = new SourceControlProjectSettings(
+            new SourceControlRepositoryIdentity("octo", "repo"),
+            new SecretRef("github-api", "api-v1"),
+            new SecretRef("github-checkout", "checkout-v1"),
+            new SecretRef("github-webhook", "webhook-v1"));
+        var configuration = await service.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            ProjectSettings() with { SourceControl = originalSettings },
+            CancellationToken.None);
+        var membership = await SeedMembershipAsync(
+            authorityStore, "source-control-orchestrator-" + suffix, tenantId);
+        await authorityStore.AssignRoleAsync(
+            membership,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator,
+            "fixture");
+        var caller = await ResolveCallerAsync(
+            context, "source-control-orchestrator-" + suffix, tenantId,
+            ["api.read", "projects.orchestrator"]);
+        var sourceRequirement = new ProviderRequirement
+        {
+            Seam = ProviderSeam.SourceControl,
+            RequiredAdapterVersion = "1.0.0",
+            RequiredOptionsSchemaVersion = 1,
+            RequiredCapabilities = ImmutableHashSet.Create(
+                StringComparer.Ordinal, SourceControlCapabilities.RepositoryRead),
+        };
+        var request = new AcceptRunSelectionRequest
+        {
+            ExpectedProjectConfigRevision = configuration.Revision,
+            ExpectedPlatformRuntimeRevision = defaults.Revision,
+            Context = new RunSelectionContext
+            {
+                Revision = "source-control-context-v1",
+                AvailableModelSelectionReferences =
+                    ImmutableHashSet.Create(StringComparer.Ordinal, "project-model", "platform-model"),
+                ProviderRequirements = [sourceRequirement],
+            },
+        };
+        var runId = "source-control-run-" + suffix;
+        var selected = await service.AcceptRunSelectionAsync(
+            caller, project.ProjectId, runId, request, CancellationToken.None);
+
+        Assert.Equal(originalSettings.Repository, selected.ProjectConfiguration.SourceControl!.Repository);
+        Assert.Equal("api-v1", selected.ProjectConfiguration.SourceControl.ApiSecretReference.Version);
+        Assert.Equal("checkout-v1", selected.ProjectConfiguration.SourceControl.CheckoutSecretReference!.Version);
+        Assert.Equal("webhook-v1", selected.ProjectConfiguration.SourceControl.WebhookSecretReference!.Version);
+        Assert.Equal(SourceControlProviderIds.GitHub,
+            Assert.Single(Assert.Single(selected.Providers).Candidates).ProviderId);
+        var originalRecord = await context.RunSelections.AsNoTracking().SingleAsync(
+            item => item.ProjectId == project.ProjectId && item.RunId == runId);
+
+        var duplicateRequirement = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.AcceptRunSelectionAsync(
+                caller,
+                project.ProjectId,
+                "source-control-duplicate-" + suffix,
+                request with
+                {
+                    Context = request.Context with
+                    {
+                        ProviderRequirements = [sourceRequirement, sourceRequirement],
+                    },
+                },
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, duplicateRequirement.StatusCode);
+
+        var changedSettings = new SourceControlProjectSettings(
+            new SourceControlRepositoryIdentity("octo", "different"),
+            new SecretRef("github-api", "api-v2"),
+            new SecretRef("github-checkout", "checkout-v2"));
+        var changedConfiguration = await service.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            configuration.Revision,
+            configuration.Configuration with { SourceControl = changedSettings },
+            CancellationToken.None);
+        Assert.Equal(configuration.Revision + 1, changedConfiguration.Revision);
+
+        await using var restartedContext = CreateDbContext();
+        var restartedService = new ProjectsConfigService(restartedContext, catalog, TimeProvider.System);
+        var replayed = await restartedService.GetRunSelectionAsync(
+            caller, project.ProjectId, runId, CancellationToken.None);
+        Assert.Equal(configuration.Revision, replayed.ProjectConfigurationRevision);
+        Assert.Equal(originalSettings.Repository, replayed.ProjectConfiguration.SourceControl!.Repository);
+        Assert.Equal("api-v1", replayed.ProjectConfiguration.SourceControl.ApiSecretReference.Version);
+        Assert.Equal("checkout-v1", replayed.ProjectConfiguration.SourceControl.CheckoutSecretReference!.Version);
+        Assert.Equal("webhook-v1", replayed.ProjectConfiguration.SourceControl.WebhookSecretReference!.Version);
+        var persisted = await restartedContext.RunSelections.AsNoTracking().SingleAsync(
+            item => item.ProjectId == project.ProjectId && item.RunId == runId);
+        Assert.Equal(originalRecord.SnapshotJson, persisted.SnapshotJson);
+    }
+
+    [Fact]
     public async Task AuthorityRevocationUsesCasAuditAndPreservesTheLastProjectOwner()
     {
         await using var context = CreateDbContext();

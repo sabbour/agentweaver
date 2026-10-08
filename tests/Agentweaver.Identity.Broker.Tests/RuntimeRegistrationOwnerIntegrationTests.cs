@@ -225,11 +225,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             failures.Enqueue($"After delivery: {elapsed.Elapsed}");
             output.WriteLine(failures.Last());
             Assert.Equal(registration.RuntimeInstanceId, delivered.RuntimeInstanceId);
-            TraceNativeStage(failures, "Bootstrap replay begin.");
-            var replay = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
-                broker, broker.BaseAddress!, "/internal/runtime/bootstrap/request", actor, input, default);
-            TraceNativeStage(failures, "Bootstrap replay completed.");
-            Assert.Equal(delivered, replay);
+            if (!revokeSourceBeforeSdk)
+            {
+                TraceNativeStage(failures, "Bootstrap replay begin.");
+                var replay = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
+                    broker, broker.BaseAddress!, "/internal/runtime/bootstrap/request", actor, input, default);
+                TraceNativeStage(failures, "Bootstrap replay completed.");
+                Assert.Equal(delivered, replay);
+            }
             Assert.Equal(RuntimeBootstrapReceiverState.Pending, receiver.State);
             var factory = new RuntimeCopilotSessionFactory(
                 sdk.Connection, Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),

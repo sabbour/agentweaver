@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "source": {
+    "file": "v1-source-control-owner-flow.json",
+    "sha256": "d7118b2f4e3895e98b1450eb96c96efee75663de4aa01b7ba3d718c9e9a29c7f"
+  },
+  "drawio": {
+    "file": "v1-source-control-owner-flow.drawio",
+    "sha256": "fc6b03f4f305ea948a5974ecc6e5b2fac388a812cd7363a4702c16b105f1224b"
+  },
+  "renderer": {
+    "renderer": "draw.io Desktop",
+    "rendererVersion": "31.4.5",
+    "format": "png",
+    "border": 16,
+    "scale": 2
+  },
+  "png": {
+    "file": "v1-source-control-owner-flow.png",
+    "sha256": "280d78f492863b54a7f0983debe14f2d10e672243b05f7c1dc81e4e034805af5"
+  }
+}

@@ -278,6 +278,39 @@ Each accepted action and its validation result is journaled. Structured tool cal
 replace scanning free-text model replies for braces or reasoning blocks. A free-text
 explanation can inform a human; it cannot mutate workflow state.
 
+## Source Control merge gate
+
+The Orchestrator's unpublished Source Control owner path begins with a server-derived
+merge request, not model-supplied repository, branch, SHA, or grant data. It binds the
+request to the accepted `ProjectConfiguration`, exclusive Source Control provider pin,
+run selection hash and revisions, session, and execution fence, then persists those
+facts before it requests typed approval. The approval receipt must name that exact
+intent and the current accepted PLATFORM Merge step. Only the approved source intent
+can produce the narrow `source_control.merge` executable grant; a general assembly
+grant, check result, or text response cannot authorize a merge.
+
+Execution uses the existing action guard and current owner lookup. It rechecks
+Projects authority, accepted selection, actor, grant, intent, and fence around awaits,
+then retains a PostgreSQL advisory lock scoped to the repository. Under that lock it
+reads current PR state, effective branch rules, required check runs and commit
+statuses for the exact expected head, and the expected base as a fresh preflight.
+Unknown requirements and non-success states block the merge. The GitHub merge API
+receives the exact expected head SHA; base equality is not an atomic GitHub
+compare-and-swap. A successful response is persisted as merged, a proven rejection as
+conflict, and an ambiguous response or interrupted in-flight request as
+`outcome_uncertain`. If current authority, the source-specific grant, or secret
+redemption is revoked before the merge request is sent, the owner persists a terminal
+conflict and does not call the merge endpoint; the same applies when the post-marker
+authority check fails. Once GitHub accepts a merge, Orchestrator persists its merge
+SHA even if the following authority check detects revocation. A retry after restart
+reads that durable outcome and never repeats the merge request.
+
+The run-bound webhook relay is separate from the merge grant: it verifies exact
+GitHub raw bytes with the pinned webhook SecretRef and durably deduplicates deliveries
+after fresh Projects/Core checks. It does not approve a merge or trigger an
+unauthorized effect. Direct unauthenticated GitHub delivery is denied until a
+trusted relay identity is separately deployed.
+
 ## Rules in code
 
 The 0.x coordinator charter and runtime prompts mix enforceable procedure with

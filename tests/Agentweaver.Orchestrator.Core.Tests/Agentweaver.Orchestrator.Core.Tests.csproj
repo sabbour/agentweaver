@@ -16,5 +16,6 @@
     <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" />
     <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator.Core\Agentweaver.Orchestrator.Core.csproj" />
     <ProjectReference Include="..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
+    <ProjectReference Include="..\..\packages\Agentweaver.SourceControl\Agentweaver.SourceControl.csproj" />
   </ItemGroup>
 </Project>

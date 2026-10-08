@@ -808,6 +808,72 @@ source-control abstraction (`packages/Agentweaver.Domain`,
 `apps/Agentweaver.Api/Sandbox/RunRepositoryCredentialRegistry.cs`). The new seam is a contract redesign, not
 a claim that another forge already works.
 
+The unpublished v1 candidate implements the neutral contracts in `Agentweaver.Abstractions` and the
+`Agentweaver.SourceControl` package. Its GitHub adapter negotiates the configured physical repository,
+supports issue and pull-request operations, reads review and exact-commit merge-check evidence, and sends
+merge requests with the expected head SHA. Effective branch rules and required checks fail closed when
+unknown or unsupported. The expected base SHA is a fresh preflight under the retained PostgreSQL
+repository lock; GitHub's merge request does not provide an atomic expected-base comparison.
+Required checks combine repository rulesets and classic branch protection. Check-run responses are parsed
+from GitHub's wrapper and item schemas, and only evidence for the exact pinned head SHA is accepted.
+Issue-write capability is negotiated only when GitHub reports that issues are enabled for the repository.
+Open pull-request list entries may omit the `merged` field; reuse still requires one exact repository,
+head branch, and base match. Repository owner and name comparisons are case-insensitive, while the provider
+repository ID remains exact.
+Authority or grant revocation before the merge request becomes a persisted conflict with
+no merge write, including a failed recheck after `merge_started`. Once the provider
+accepts the merge, Orchestrator retains the true merged state and SHA even if authority
+changes afterward or the request caller disconnects; bounded owner-controlled settlement persists the
+merge result independently of request cancellation, and replay from another host reads the persisted
+result without issuing another merge request.
+
+If an approved intent's fence becomes stale while execution waits for the repository lock,
+the execution path rechecks current Projects authority, Core decision state, and the exact
+grant through the current-grant lookup. A scoped owner-store compare-and-swap records
+`source_control_run_binding_changed` only when the accepted selection and revisions are
+unchanged, the run and session fences agree at a newer value, the typed approval version is
+superseded, and the original grant is superseded and not current. This handling is limited
+to merge execution; ordinary intent reads do not expose stale intents, and no merge request
+is sent.
+
+Projects stores only a repository identity and versioned API, checkout, and webhook `SecretRef`s. After an
+authorized caller requests a run pin, Orchestrator resolves the exact provider from the accepted run
+selection, redeems the API reference through Identity.Broker, negotiates the repository, rechecks current
+Projects and Core authority, and persists the provider/resource generation and negotiated capabilities
+against the accepted selection hash and execution fence. Secret values are operation-scoped and invalidated;
+the default Orchestrator audience remains unchanged, while Broker redemption separately requires both
+audiences.
+
+The authenticated run-scoped Orchestrator API exposes issue creation, exact-head/base pull-request
+create-or-reuse, review reads, workspace preparation/diff, typed merge intents, and the relay endpoint.
+Each operation loads the persisted pin, checks the current accepted selection and run fence, redeems the
+specific API or checkout `SecretRef` purpose, and rechecks authority around provider calls. Workspace
+manifests bind run, repository, resource generation, base SHA, and branch; they contain no credentials.
+Short-lived checkout values are invalidated after each operation and redacted from Git diagnostics.
+Set `SourceControl:WorkspaceRoot` to an absolute path shared with the trusted run caller to enable
+workspace routes. If it is absent, those routes return unavailable rather than using an implicit host
+directory. Workspace diffs are bounded; absolute workspace paths are returned only to the authenticated
+run-scoped caller and are not persisted in owner records.
+
+The authenticated run-bound webhook relay accepts raw payloads up to 1 MiB plus GitHub delivery, event,
+and signature headers. It verifies HMAC over those exact bytes, matches the repository name and provider ID
+to the immutable pin, refreshes Projects/Core authority, and records a durable repository-scoped delivery
+identity. Identical delivery replays are idempotent; changed payload or foreign binding conflicts. This
+route-specific limit does not change the default 64 KiB limit on other routes. The relay records the
+delivery only; it does not start a workflow. The public GitHub POST path is denied
+because the base has no trusted relay identity; deployment and direct GitHub delivery remain unavailable
+until such a relay is separately approved and deployed.
+
+The pin, webhook, and merge owner flow is summarized below. It describes the unpublished source candidate,
+not a deployed service or public webhook endpoint.
+
+<p align="center">
+  <a href="../../diagrams/flagship/v1-source-control-owner-flow.png">
+    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration stores one repository and ID/version-only API, checkout, and webhook SecretRefs; Broker credentials are temporary. Issue-write requires GitHub issues to be enabled, repository names compare case-insensitively, and provider IDs remain exact. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay." />
+  </a>
+</p>
+<p align="center" class="aw-diagram-links"><a href="../../diagrams/flagship/v1-source-control-owner-flow.png">Open full-size PNG</a> · <a href="../../diagrams/drawio/generated/flagship/v1-source-control-owner-flow.drawio">Open editable draw.io source</a></p>
+
 ## Telemetry
 
 **Owner:** each instrumented service; Events & Sessions integrates exporters. **Cardinality:** ordered

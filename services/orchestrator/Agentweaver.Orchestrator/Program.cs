@@ -1,9 +1,11 @@
 extern alias AzureIdentity;
 
+using System.Collections.Immutable;
 using Agentweaver.Orchestrator;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
+using Agentweaver.SourceControl;
 using Azure.Core;
 using Npgsql;
 using OpenIddict.Validation.AspNetCore;
@@ -50,10 +52,23 @@ var options = new OrchestratorOptions(
     events["OwnerBaseAddress"] ?? string.Empty,
     events["Audience"] ?? string.Empty,
     schema);
+var secretRedemption = builder.Configuration.GetSection("Identity:SecretRedemption");
+var secretRedemptionOptions = new SourceControlSecretRedemptionOptions(
+    issuerUri.AbsoluteUri,
+    audience,
+    secretRedemption["Audience"],
+    secretRedemption["OwnerBaseAddress"]);
 const string providerCatalogSection = "ProjectsConfig:ProviderCatalog";
 var providerCatalog = builder.Configuration.GetSection(providerCatalogSection).Exists()
     ? ProviderCatalogConfiguration.Load(builder.Configuration, providerCatalogSection)
     : CreateEmptyProviderCatalog();
+var agentGovernancePolicyOptions = ReadAgentGovernancePolicyOptions(builder.Configuration);
+var sourceControlWorkspaceRoot = builder.Configuration["SourceControl:WorkspaceRoot"];
+if (sourceControlWorkspaceRoot is not null &&
+    (string.IsNullOrWhiteSpace(sourceControlWorkspaceRoot) ||
+     !Path.IsPathFullyQualified(sourceControlWorkspaceRoot)))
+    throw new InvalidOperationException(
+        "Source Control workspace root must be an absolute filesystem path.");
 
 builder.Services.AddSingleton<TokenCredential>(credential);
 builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
@@ -61,6 +76,9 @@ builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(providerCatalog);
 builder.Services.AddSingleton<ProviderResolver>();
+builder.Services.AddSingleton<AgtPolicyProvider>();
+if (agentGovernancePolicyOptions is not null)
+    builder.Services.AddSingleton(agentGovernancePolicyOptions);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(services => new CoordinationOwnerStore(
@@ -79,6 +97,11 @@ builder.Services.AddSingleton(services => new CoordinatorDecisionOwnerStore(
     options.Schema,
     services.GetRequiredService<CoordinatorRunSelectionContextStore>(),
     services.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(services => new SourceControlOwnerStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema,
+    services.GetRequiredService<ProviderCatalog>(),
+    services.GetRequiredService<ProviderResolver>()));
 builder.Services.AddSingleton<ExecutableActionGrantOwnerStore>();
 builder.Services.AddSingleton<IExecutableActionGrantOwnerLookup>(services =>
     services.GetRequiredService<ExecutableActionGrantOwnerStore>());
@@ -94,9 +117,29 @@ builder.Services.AddHttpClient<ProjectsRunSelectionClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient<EventsAddressedMessageClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
-var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
+builder.Services.AddSingleton(secretRedemptionOptions);
+builder.Services.AddHttpClient<SourceControlSecretRedemptionClient>()
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient<GitHubSourceControlAdapter>(client =>
+    {
+        client.BaseAddress = new Uri("https://api.github.com/");
+    })
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddTransient<ISourceControlAdapter>(services =>
+    services.GetRequiredService<GitHubSourceControlAdapter>());
+if (sourceControlWorkspaceRoot is not null)
+    builder.Services.AddSingleton(new GitWorkspaceManager(sourceControlWorkspaceRoot));
 builder.Services.AddTransient<IExecutableActionPolicyEvaluationJournal>(services =>
     services.GetRequiredService<EventsAddressedMessageClient>());
+builder.Services.AddScoped(services => new ExecutableActionGuard(
+    services.GetService<AgtPolicyProvider>(),
+    services.GetService<AgtPolicyProviderOptions>(),
+    services.GetService<IExecutableActionPolicyEvaluationJournal>(),
+    services.GetService<IExecutableActionGrantOwnerLookup>(),
+    services.GetRequiredService<TimeProvider>(),
+    services.GetService<IExecutableActionSourceReceiptWriter>(),
+    services.GetService<IExecutableActionPolicyEvaluationReceiptWriter>()));
+var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
 var runtimeUsageEnabled = builder.Services.AddRuntimeUsageSource(builder.Configuration);
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
@@ -139,6 +182,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
 });
 app.MapCoordinationEndpoints();
+app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)
     app.MapRuntimeRegistrationEndpoints();
 if (runtimeUsageEnabled)
@@ -153,5 +197,30 @@ static string Required(IConfiguration configuration, string key) =>
 static ProviderCatalog CreateEmptyProviderCatalog() =>
     ProviderCatalog.Create([], [], []).Value
     ?? throw new InvalidOperationException("An empty provider catalog could not be constructed.");
+
+static AgtPolicyProviderOptions? ReadAgentGovernancePolicyOptions(IConfiguration configuration)
+{
+    const string sectionName = "AgentGovernance:Policy";
+    var section = configuration.GetSection(sectionName);
+    if (!section.Exists())
+        return null;
+
+    if (!long.TryParse(section["ResourceGeneration"], out var generation))
+        throw new InvalidOperationException(
+            $"Missing or invalid configuration '{sectionName}:ResourceGeneration'.");
+    var documents = section.GetSection("PlatformPolicyDocuments")
+        .GetChildren()
+        .Select(item => item.Value)
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Select(value => value!)
+        .ToImmutableArray();
+    var options = new AgtPolicyProviderOptions(
+        Required(configuration, sectionName + ":ResourceId"),
+        generation,
+        Required(configuration, sectionName + ":OptionsRevision"),
+        documents);
+    options.Validate();
+    return options;
+}
 
 public partial class Program;

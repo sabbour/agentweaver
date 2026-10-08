@@ -64,6 +64,9 @@ public sealed record ProjectConfiguration
     public ImmutableArray<SkillCatalogSetting> Skills { get; init; } = [];
     public ImmutableArray<NetworkEgressRule>? EgressNarrowing { get; init; }
     public CopilotRunLimitOverrides RunLimits { get; init; } = new();
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SourceControlProjectSettings? SourceControl { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -205,8 +208,28 @@ public static class ProjectConfigurationValidator
             ? ValidateAndNormalizeRules(narrowing, "egressNarrowing")
             : (ImmutableArray<NetworkEgressRule>?)null;
         ValidateLimitOverrides(configuration.RunLimits);
+        ValidateSourceControl(configuration.SourceControl);
         return configuration with { EgressNarrowing = normalizedEgress };
     }
+
+    private static void ValidateSourceControl(SourceControlProjectSettings? sourceControl)
+    {
+        if (sourceControl is null)
+            return;
+        if (sourceControl.Repository is null ||
+            !IsExactSecretReference(sourceControl.ApiSecretReference) ||
+            sourceControl.CheckoutSecretReference is { } checkout &&
+                !IsExactSecretReference(checkout) ||
+            sourceControl.WebhookSecretReference is { } webhook &&
+                !IsExactSecretReference(webhook))
+            throw Invalid(
+                "SourceControl settings require one repository identity and exact API, checkout, or webhook secret references.");
+    }
+
+    private static bool IsExactSecretReference(SecretRef? secret) =>
+        secret is not null &&
+        !string.IsNullOrWhiteSpace(secret.Id) &&
+        !string.IsNullOrWhiteSpace(secret.Version);
 
     public static PlatformRuntimeDefaults Validate(PlatformRuntimeDefaults defaults)
     {
