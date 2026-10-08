@@ -36,8 +36,9 @@ The Orchestrator Core compatibility entries include both Abstractions and Provid
 matching its direct project references.
 The runtime library pins its native SDK dependency and references Abstractions
 and Identity. Environment now references Identity for its separate bootstrap
-profile contract. These source components do not create an AgentHost image,
-publish credentials, or prove end-to-end SDK accounting acceptance.
+profile contract. The separate AgentHost service entry describes the unpublished executable and pinned image definition.
+CI builds an exact-source amd64 image, measures its compressed OCI bytes, and checks native SDK startup without model execution.
+These components do not publish credentials or prove deployment or paid-model acceptance.
 
 Each product component change needs a fresh `.changeset` record. The record names the manifest component ID and semver intent. Documentation-only changes do not need a changeset.
 

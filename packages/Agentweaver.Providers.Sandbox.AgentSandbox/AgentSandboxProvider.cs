@@ -351,6 +351,7 @@ public sealed class AgentSandboxProvider : ISandboxProvider
         var isolationVerified = await VerifyPodIsolationAsync(
             pod,
             options,
+            descriptor.WorkspaceMountPath,
             cancellationToken).ConfigureAwait(false);
         var phases = await ReadStartupPhasesAsync(
             pod, descriptor.Namespace, options, cancellationToken).ConfigureAwait(false);
@@ -923,7 +924,7 @@ public sealed class AgentSandboxProvider : ISandboxProvider
         foreach (var label in resourceLabels)
             podLabels[label.Key] = label.Value;
 
-        return JsonSerializer.SerializeToElement(new
+        var template = JsonSerializer.SerializeToElement(new
         {
             apiVersion = "extensions.agents.x-k8s.io/v1beta1",
             kind = "SandboxTemplate",
@@ -1016,6 +1017,72 @@ public sealed class AgentSandboxProvider : ISandboxProvider
                 }
             }
         });
+        if (options.AgentHost is null)
+            return template;
+        var document = JsonNode.Parse(template.GetRawText())!;
+        ApplyAgentHostProfile(document["spec"]!["podTemplate"]!["spec"]!.AsObject(),
+            options, request.Workspace.Negotiation.MountPath);
+        return JsonSerializer.SerializeToElement(document);
+    }
+
+    private static void ApplyAgentHostProfile(JsonObject podSpec, AgentSandboxOptions options, string mountPath)
+    {
+        var host = options.AgentHost ?? throw new ArgumentException("An explicit AgentHost launch profile is required.");
+        var podSecurity = podSpec["securityContext"]!.AsObject();
+        podSecurity["runAsUser"] = 1000;
+        podSecurity["runAsGroup"] = 1000;
+        podSecurity["fsGroup"] = 1000;
+        podSecurity["fsGroupChangePolicy"] = "OnRootMismatch";
+        var container = podSpec["containers"]![0]!.AsObject();
+        container["securityContext"]!["runAsUser"] = 1000;
+        container["securityContext"]!["runAsGroup"] = 1000;
+        container["workingDir"] = "/app";
+        container["env"] = JsonSerializer.SerializeToNode(new[]
+        {
+            new { name = "AgentHost__PrivateStateDirectory", value = "/state" },
+            new { name = "AgentHost__WorkingDirectory", value = mountPath },
+            new { name = "ASPNETCORE_URLS", value = "https://+:8443" },
+            new { name = "ASPNETCORE_Kestrel__Certificates__Default__Path", value = "/run/agenthost-tls/tls.crt" },
+            new { name = "ASPNETCORE_Kestrel__Certificates__Default__KeyPath", value = "/run/agenthost-tls/tls.key" }
+        });
+        container["ports"] = JsonSerializer.SerializeToNode(new[] { new { name = "https", containerPort = 8443 } });
+        container["livenessProbe"] = JsonSerializer.SerializeToNode(new
+        {
+            httpGet = new { path = "/health/live", port = 8443, scheme = "HTTPS" },
+            periodSeconds = 10, timeoutSeconds = 5
+        });
+        container["readinessProbe"] = JsonSerializer.SerializeToNode(new
+        {
+            httpGet = new { path = "/health/ready", port = 8443, scheme = "HTTPS" },
+            periodSeconds = 5, timeoutSeconds = 20, failureThreshold = 1
+        });
+        container["startupProbe"] = JsonSerializer.SerializeToNode(new
+        {
+            httpGet = new { path = "/health/live", port = 8443, scheme = "HTTPS" },
+            periodSeconds = 5, timeoutSeconds = 5,
+            failureThreshold = (int)Math.Ceiling(options.StartupBudgets.TotalSeconds / 5d)
+        });
+        var volumes = podSpec["volumes"]!.AsArray();
+        volumes.Add(JsonSerializer.SerializeToNode(new { name = "agenthost-state", emptyDir = new { } }));
+        volumes.Add(JsonSerializer.SerializeToNode(new { name = "agenthost-tmp", emptyDir = new { } }));
+        volumes.Add(JsonSerializer.SerializeToNode(new
+        {
+            name = "agenthost-configuration",
+            configMap = new { name = host.ConfigurationMapName, defaultMode = 288,
+                items = new[] { new { key = "appsettings.json", path = "appsettings.json" } } }
+        }));
+        volumes.Add(JsonSerializer.SerializeToNode(new
+        {
+            name = "agenthost-tls", secret = new { secretName = host.TlsSecretName, defaultMode = 288 }
+        }));
+        var mounts = container["volumeMounts"]!.AsArray();
+        mounts.Add(JsonSerializer.SerializeToNode(new { name = "agenthost-state", mountPath = "/state", readOnly = false }));
+        mounts.Add(JsonSerializer.SerializeToNode(new { name = "agenthost-tmp", mountPath = "/tmp", readOnly = false }));
+        mounts.Add(JsonSerializer.SerializeToNode(new
+        {
+            name = "agenthost-configuration", mountPath = "/app/appsettings.json", subPath = "appsettings.json", readOnly = true
+        }));
+        mounts.Add(JsonSerializer.SerializeToNode(new { name = "agenthost-tls", mountPath = "/run/agenthost-tls", readOnly = true }));
     }
 
     private JsonElement BuildWarmPool(
@@ -1173,9 +1240,10 @@ public sealed class AgentSandboxProvider : ISandboxProvider
         if (ReadOptionalString(container, "name") != WorkspaceContainerName ||
             ReadOptionalString(container, "image") != options.ContainerImage)
             throw ProviderResourceMismatch("The owned AgentHost container differs from the pinned provider options.");
-        ValidatePodSecurityContext(RequiredObject(podSpec, "securityContext"), container);
+        ValidatePodSecurityContext(RequiredObject(podSpec, "securityContext"), container, 1000);
         ValidateContainerResources(container, options);
         ValidateWorkspacePodMount(podSpec, container, workspace, workspaceAttachment.Negotiation);
+        ValidateAgentHostProfile(podSpec, container, options, workspaceAttachment.Negotiation.MountPath);
         return uid;
     }
 
@@ -1248,14 +1316,14 @@ public sealed class AgentSandboxProvider : ISandboxProvider
         return RequiredString(metadata, "uid");
     }
 
-    private static void ValidatePodSecurityContext(JsonElement podSecurityContext, JsonElement container)
+    private static void ValidatePodSecurityContext(JsonElement podSecurityContext, JsonElement container, int user)
     {
         if (!TryGetBoolean(podSecurityContext, "runAsNonRoot", out var podNonRoot) ||
             !podNonRoot ||
             !TryGetInt64(podSecurityContext, "runAsUser", out var podUser) ||
-            podUser != 1000 ||
+            podUser != user ||
             !TryGetInt64(podSecurityContext, "runAsGroup", out var podGroup) ||
-            podGroup != 1000 ||
+            podGroup != user ||
             ReadOptionalString(podSecurityContext, "seccompProfile", "type") != "RuntimeDefault")
             throw ProviderResourceMismatch("The owned Pod security context is not restricted.");
 
@@ -1267,9 +1335,9 @@ public sealed class AgentSandboxProvider : ISandboxProvider
             !TryGetBoolean(security, "runAsNonRoot", out var containerNonRoot) ||
             !containerNonRoot ||
             !TryGetInt64(security, "runAsUser", out var containerUser) ||
-            containerUser != 1000 ||
+            containerUser != user ||
             !TryGetInt64(security, "runAsGroup", out var containerGroup) ||
-            containerGroup != 1000 ||
+            containerGroup != user ||
             !TryGetBoolean(security, "readOnlyRootFilesystem", out var readOnlyRoot) ||
             !readOnlyRoot ||
             ReadOptionalString(security, "seccompProfile", "type") != "RuntimeDefault" ||
@@ -1278,6 +1346,41 @@ public sealed class AgentSandboxProvider : ISandboxProvider
             dropped[0].GetString() != "ALL")
             throw ProviderResourceMismatch("The owned AgentHost container security context is not restricted.");
     }
+
+    private static void ValidateAgentHostProfile(
+        JsonElement podSpec, JsonElement container, AgentSandboxOptions options, string mountPath)
+    {
+        if (options.AgentHost is null)
+            return;
+        var actual = JsonNode.Parse(podSpec.GetRawText())!.AsObject();
+        var volumes = RequiredArray(podSpec, "volumes");
+        var mounts = RequiredArray(container, "volumeMounts");
+        var workspaceVolume = volumes.EnumerateArray().Single(volume => ReadOptionalString(volume, "name") == WorkspaceVolumeName);
+        var workspaceMount = mounts.EnumerateArray().Single(mount => ReadOptionalString(mount, "name") == WorkspaceVolumeName);
+        var expected = new JsonObject
+        {
+            ["securityContext"] = new JsonObject(),
+            ["volumes"] = new JsonArray(JsonNode.Parse(workspaceVolume.GetRawText())),
+            ["containers"] = new JsonArray(new JsonObject
+            {
+                ["securityContext"] = new JsonObject(),
+                ["volumeMounts"] = new JsonArray(JsonNode.Parse(workspaceMount.GetRawText()))
+            })
+        };
+        ApplyAgentHostProfile(expected, options, mountPath);
+        if (!ContainsLaunchConfiguration(actual, expected))
+            throw ProviderResourceMismatch("The owned AgentHost launch configuration differs from its pinned profile.");
+    }
+
+    private static bool ContainsLaunchConfiguration(JsonNode? actual, JsonNode? expected) => expected switch
+    {
+        JsonObject properties => actual is JsonObject candidate &&
+            properties.All(property => candidate.TryGetPropertyValue(property.Key, out var value) &&
+                ContainsLaunchConfiguration(value, property.Value)),
+        JsonArray values => actual is JsonArray candidate && candidate.Count == values.Count &&
+            values.Select((value, index) => ContainsLaunchConfiguration(candidate[index], value)).All(match => match),
+        _ => JsonNode.DeepEquals(actual, expected)
+    };
 
     private static void ValidateContainerResources(JsonElement container, AgentSandboxOptions options)
     {
@@ -1508,6 +1611,7 @@ public sealed class AgentSandboxProvider : ISandboxProvider
     private async Task<bool> VerifyPodIsolationAsync(
         JsonElement pod,
         AgentSandboxOptions options,
+        string workspaceMountPath,
         CancellationToken cancellationToken)
     {
         var podSpec = RequiredObject(pod, "spec");
@@ -1520,6 +1624,14 @@ public sealed class AgentSandboxProvider : ISandboxProvider
             !TryGetBoolean(podSpec, "hostNetwork", out var hostNetwork) ||
             hostNetwork)
             return false;
+        if (options.AgentHost is not null)
+        {
+            var containers = RequiredArray(podSpec, "containers");
+            if (containers.GetArrayLength() != 1)
+                return false;
+            ValidatePodSecurityContext(RequiredObject(podSpec, "securityContext"), containers[0], 1000);
+            ValidateAgentHostProfile(podSpec, containers[0], options, workspaceMountPath);
+        }
         try
         {
             await VerifyRuntimeClassAsync(options, cancellationToken).ConfigureAwait(false);
@@ -1706,59 +1818,15 @@ public sealed class AgentSandboxProvider : ISandboxProvider
         AgentSandboxStartupBudgets budgets,
         DateTimeOffset now)
     {
-        if (leaseCreatedAt > now)
-            throw new SandboxProviderException(
-                "sandbox_startup_evidence_invalid",
-                "The persisted Sandbox lease creation time is in the future.",
-                effectMayHaveApplied: false);
-
-        var observedPhases = phases.ToDictionary(phase => phase.Phase);
-        var failures = new List<SandboxStartupBudgetFailure>();
-        var previousAt = leaseCreatedAt;
-        foreach (var phase in Enum.GetValues<SandboxStartupPhase>())
+        try
         {
-            var deadline = previousAt.AddSeconds(budgets.For(phase));
-            if (!observedPhases.TryGetValue(phase, out var observed))
-            {
-                if (now > deadline)
-                    failures.Add(new(
-                        SandboxStartupBudgetFailureKind.PhaseExceeded,
-                        phase,
-                        budgets.For(phase),
-                        deadline,
-                        now));
-                break;
-            }
-            if (observed.ObservedAt < previousAt || observed.ObservedAt > now)
-                throw new SandboxProviderException(
-                    "sandbox_startup_evidence_invalid",
-                    "Sandbox startup phase timestamps are not chronological or are in the future.",
-                    effectMayHaveApplied: false);
-            if (observed.ObservedAt > deadline)
-                failures.Add(new(
-                    SandboxStartupBudgetFailureKind.PhaseExceeded,
-                    phase,
-                    budgets.For(phase),
-                    deadline,
-                    observed.ObservedAt));
-            previousAt = observed.ObservedAt;
+            return budgets.ToContract().Evaluate(leaseCreatedAt, phases, now);
         }
-
-        var totalDeadline = leaseCreatedAt.AddSeconds(budgets.TotalSeconds);
-        var totalObservedAt = observedPhases.TryGetValue(SandboxStartupPhase.Ready, out var ready)
-            ? ready.ObservedAt
-            : now;
-        if (totalObservedAt > totalDeadline)
-            failures.Add(new(
-                SandboxStartupBudgetFailureKind.TotalExceeded,
-                SandboxStartupPhase.Ready,
-                budgets.TotalSeconds,
-                totalDeadline,
-                totalObservedAt));
-
-        return failures
-            .OrderBy(failure => failure.Deadline)
-            .FirstOrDefault();
+        catch (ArgumentException exception)
+        {
+            throw new SandboxProviderException(
+                "sandbox_startup_evidence_invalid", exception.Message, effectMayHaveApplied: false);
+        }
     }
 
     private SandboxProvisionedResource BuildProvisionedResource(
@@ -2080,8 +2148,7 @@ public sealed class AgentSandboxProvider : ISandboxProvider
             if (ReadOptionalString(item, "reason") != "Pulled" ||
                 ReadOptionalString(item, "involvedObject", "uid") != podUid ||
                 (ReadOptionalString(item, "message") ?? ReadOptionalString(item, "note")) is not { } message ||
-                !message.Contains(options.ContainerImageDigest, StringComparison.Ordinal) ||
-                message.Contains("already present", StringComparison.OrdinalIgnoreCase))
+                !message.Contains(options.ContainerImageDigest, StringComparison.Ordinal))
                 continue;
             if (TryGetDateTime(item, "eventTime", out completedAt) ||
                 TryGetDateTime(item, "lastTimestamp", out completedAt) ||

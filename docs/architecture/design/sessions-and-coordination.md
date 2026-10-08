@@ -55,6 +55,16 @@ records, the full dispatch engine, and product UI/MCP integration remain outside
 slice. The Orchestrator also owns current grant and redacted PolicyEvaluation receipt
 production. Events & Sessions fetches those immutable owner receipts by ID and
 revalidates current admission before and within its native journal transaction.
+
+Events owns the bounded material interface for actual turn content and opaque SDK
+cache bytes through the existing Object Store provider.
+The interface accepts execution identities, not storage keys or URLs.
+Current Projects authority and the Orchestrator runtime binding authorize writes.
+An observe credential alone is insufficient.
+Events stores bytes before journal references and rechecks authority after waits.
+Historical reads require current project/run authority and recorded event identity.
+Digest and length checks precede disclosure.
+Cache restoration must also validate the current SDK and model bindings.
 Every outcome requires current Core write authority, accepted selection, and a
 matching actor/tenant; Allow receipts additionally require the exact active
 grant/fence. Deny/Error receipts need no active Allow grant but remain
@@ -121,11 +131,19 @@ the root decision and current Projects authority before returning.
 The `Agentweaver.AgentRuntime` library uses the pinned native Copilot SDK.
 Its model catalog, effective model ID, SDK session ID/version, nullable
 measurements, and already-weighted nano-AIU come from that SDK. Credential
-values remain in protected memory. The library is not an AgentHost executable,
-scheduler, or new provider resolver.
+values remain in protected memory. The [AgentHost executable](../agenthost.md)
+composes this library without a new scheduler or provider resolver.
+Its `SendTurnAsync` serializes native SDK sends and returns the complete assistant
+message only after `session.idle`.
+Built-in tools remain disabled; registered guarded tools require current AGT authorization and a committed Policy receipt before each effect.
+The host persists actual turn content and waits for committed usage accounting before acknowledging work.
 
 The auth-first library hook consumes the delivered configure nonce before binding.
 It reads the model reference from the current registration, not the configure body.
+The immutable platform or project selection also fixes the hosted Copilot or BYOK mode.
+BYOK uses explicit SDK provider configuration without Copilot authentication, refresh, or catalog lookup.
+Hosted envelope parsing alone does not prove connection ownership or entitlement.
+The Identity-owned typed connection lifecycle supplies current owner, revision, exact-version, kind, and freshness proof under #1906.
 It exchanges the consumed nonce for a source credential and checks current authority
 before and after native session creation. It returns one fully initialized immutable
 session; failures dispose the SDK session and revoke or invalidate the source credential.
@@ -136,12 +154,21 @@ Usage reads also check current registration and source authority.
 The runtime library registers actual SDK facts and commits callbacks to the Orchestrator.
 The source writer rechecks the observe grant and current registration after database waits.
 Its immutable source receipt preserves the nullable native measurements and weighted nano-AIU.
+BYOK receipts preserve token measurements without Copilot units.
+Without an admitted Cost provider, Events records explicit `Unpriced` accounting.
+Unknown cost cannot satisfy a hard cost bound.
 Events accepts only the receipt ID, fetches trusted owner evidence, and commits
 the immutable price, rate card, ledger, source hash, and inbox together.
 The combined local harness covers successful accounting and authority loss before
 and during SDK preparation, or during source transaction waits.
 It does not prove deployed dispatch or paid model execution.
 See the [runtime credential contract](../../reference/contracts#runtime-credential-source-candidate).
+
+AgentHost admits `immediate` work before pending `enqueue` work at the next native idle boundary.
+It never interrupts the active turn to change priority.
+Actual user/assistant content and opaque native cache references enter the durable journal.
+Compatible caches use the native SDK resume call.
+Missing, incompatible, or corrupt caches rebuild context from authenticated journal content without model-turn or external-effect replay.
 
 ## Today in 0.x
 

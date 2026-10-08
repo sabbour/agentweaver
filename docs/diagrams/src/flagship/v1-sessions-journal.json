@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Sessions journal, accepted facts, and owner delivery",
-  "alt": "Events & Sessions commits journal facts and serves ordered replay. Orchestrator rechecks current Projects authority, accepted decision, persisted selection context, work item, turn, and Environment placement after waits. Owner-admitted forks commit verified journal lineage before child registration, while old provider pins deny forks. Native SDK observations require a validated bearer and separate Identity observe credential. Events fetches the source receipt by ID and commits immutable Cost accounting before acknowledgment, without multiplying weighted nano-AIU again. These local source contracts do not prove deployment, paid model execution, or physical runtime recovery.",
+  "alt": "Events & Sessions commits journal facts and serves ordered replay. Orchestrator rechecks current Projects authority, accepted decision, persisted selection context, work item, turn, and Environment placement after waits. Typed TurnContent and SdkCache material uses the existing Object Store. Events stores bytes before journal references, rechecks authority after waits and retries, and checks digest and length before historical disclosure. Observe credentials alone do not authorize material writes. AgentHost guards actual native SDK turns and registered tools with committed Policy receipts, prioritizes immediate work at native idle boundaries, and waits for immutable Cost accounting before acknowledgment. Compatible opaque SDK caches resume through the native SDK; missing or incompatible caches rebuild authenticated journal context without effect replay. Environment supplies the first three startup timestamps under its retained lease, and AgentHost supplies actual configured and ready timestamps. These source contracts do not prove deployment or paid model execution.",
   "autonumber": true,
   "participants": [
     {
@@ -30,7 +30,7 @@
     {
       "id": "provider",
       "label": "Catalog + adapters",
-      "subLabel": "Sessions and keyed Cost",
+      "subLabel": "Sessions, keyed Cost, Object Store",
       "icon": "box",
       "fluentIcon": "package",
       "badge": {
@@ -62,7 +62,7 @@
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
-      "label": "OpenIddict validates issuer/audience; host requires GUID sub and one active project/run grant."
+      "label": "Issuer/audience, GUID sub, active project/run grant. Runtime uses workload identity; privileged --migrate is separate."
     },
     {
       "type": "message",
@@ -71,11 +71,6 @@
       "label": "Resolve default or permitted project override",
       "line": "solid",
       "arrow": "filled"
-    },
-    {
-      "type": "note",
-      "over": ["api", "postgres"],
-      "label": "Runtime uses password-free workload identity and verifies schema only; --migrate uses a separate privileged identity."
     },
     {
       "type": "message",
@@ -87,17 +82,9 @@
     },
     {
       "type": "message",
-      "from": "postgres",
-      "to": "provider",
-      "label": "Confirm database and resource generation",
-      "line": "dashed",
-      "arrow": "open"
-    },
-    {
-      "type": "message",
       "from": "provider",
       "to": "api",
-      "label": "Return exact provider, options revision, resource, and capabilities",
+      "label": "Confirmed provider, revision, resource generation, capabilities",
       "line": "dashed",
       "arrow": "open"
     },
@@ -111,17 +98,9 @@
     },
     {
       "type": "message",
-      "from": "postgres",
-      "to": "api",
-      "label": "Commit; return SessionRecord",
-      "line": "dashed",
-      "arrow": "open"
-    },
-    {
-      "type": "message",
       "from": "api",
       "to": "caller",
-      "label": "201 Created",
+      "label": "201 Created after commit: SessionRecord",
       "line": "dashed",
       "arrow": "open"
     },
@@ -134,7 +113,7 @@
       "type": "message",
       "from": "caller",
       "to": "api",
-      "label": "POST /internal/sessions/{sessionId}/events",
+      "label": "POST session events or typed material",
       "line": "solid",
       "arrow": "filled"
     },
@@ -152,7 +131,7 @@
       "type": "message",
       "from": "api",
       "to": "postgres",
-      "label": "Verify run pin; atomically write event, refs, sequence, and outbox",
+      "label": "Recheck authority; commit event, refs, sequence, and outbox",
       "line": "solid",
       "arrow": "filled"
     },
@@ -168,7 +147,7 @@
       "type": "message",
       "from": "api",
       "to": "caller",
-      "label": "201 new event; 200 identical retry",
+      "label": "Committed event/material ACK; identical retry returns original",
       "line": "dashed",
       "arrow": "open"
     },
@@ -190,17 +169,9 @@
     },
     {
       "type": "message",
-      "from": "postgres",
-      "to": "api",
-      "label": "Rows retain session identity",
-      "line": "dashed",
-      "arrow": "open"
-    },
-    {
-      "type": "message",
       "from": "api",
       "to": "caller",
-      "label": "Page or NDJSON: event + opaque nextCursor",
+      "label": "Page or NDJSON: session event + opaque nextCursor",
       "line": "dashed",
       "arrow": "open"
     },
@@ -217,7 +188,12 @@
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
-      "label": "Current owner context. Owner-admitted forks; old pins deny forks.\nSDK source -> receiptId -> atomic Cost. Schema v7; TRUNCATE denied."
+      "label": "Guarded turns/tools; native idle priority; actual content + compatible cache. Journal rebuild: no effect replay. Accounting ACK before turn ACK."
+    },
+    {
+      "type": "note",
+      "over": ["caller", "api", "postgres"],
+      "label": "Retained lease: scheduled/imageReady/started; host: configured/ready. Actual compressed OCI bytes; time ceilings, no size cap."
     }
   ]
 }

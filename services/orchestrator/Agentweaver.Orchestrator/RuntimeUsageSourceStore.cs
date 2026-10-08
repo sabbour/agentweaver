@@ -132,6 +132,20 @@ internal sealed class RuntimeUsageSourceStore(
         return receipt;
     }
 
+    internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        CancellationToken cancellationToken)
+    {
+        var stored = await ReadSourceAsync(connection, transaction, registration.RuntimeInstanceId, cancellationToken)
+            .ConfigureAwait(false) ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
+        RuntimeUsageSourceReceiptContract.ValidateSource(registration, stored.Receipt.Source);
+        if (stored.Receipt.RegistrationRevision != registration.Revision ||
+            stored.Receipt.CanonicalPayloadHash != RuntimeUsageSourceReceiptContract.HashSource(
+                registration, stored.Receipt.Source))
+            throw new RuntimeAuthorizationException("runtime_sdk_source_conflict");
+        return stored.Receipt;
+    }
+
     private async Task<StoredSource?> ReadSourceAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, Guid runtimeInstanceId,
         CancellationToken cancellationToken)

@@ -8,6 +8,23 @@ namespace Agentweaver.Identity.Tests;
 public sealed class RuntimeContractTests
 {
     [Fact]
+    public void NativeSessionIdentitySurvivesRuntimeReplacementButNotAChangeOfScope()
+    {
+        var registration = CreateRegistration();
+        var identity = RuntimeContractValidation.NativeSessionId(registration.Binding);
+        var replacement = registration with { RuntimeInstanceId = Guid.NewGuid(), Revision = 2 };
+        Assert.Equal(identity, RuntimeContractValidation.NativeSessionId(replacement.Binding));
+        foreach (var changed in new[]
+        {
+            registration.Binding with { TenantId = "other-tenant" },
+            registration.Binding with { ProjectId = "other-project" },
+            registration.Binding with { RunId = "other-run" },
+            registration.Binding with { SessionId = "other-session" }
+        })
+            Assert.NotEqual(identity, RuntimeContractValidation.NativeSessionId(changed));
+    }
+
+    [Fact]
     public void RegistrationPinsTheCompleteServerOwnedTuple()
     {
         var registration = CreateRegistration();
@@ -42,6 +59,7 @@ public sealed class RuntimeContractTests
         Assert.DoesNotContain("PlacementProviderId", serialized);
         Assert.DoesNotContain("EnvironmentLifecycleGeneration", serialized);
         Assert.DoesNotContain("EnvironmentLeaseRevision", serialized);
+        Assert.DoesNotContain("Image", serialized);
         var pinned = binding with { ModelSelectionReference = "accepted-model" };
         Assert.Contains("ModelSelectionReference", JsonSerializer.Serialize(pinned));
         var credentialPinned = pinned with
@@ -57,6 +75,35 @@ public sealed class RuntimeContractTests
                     ModelCredentialReference = new SecretRef("model-credential", "version-1")
                 }
             }));
+    }
+
+    [Fact]
+    public void ImageIdentityPinsEveryFieldWithoutAnImageSizeCeiling()
+    {
+        var registration = CreateRegistration();
+        var image = new SandboxImageIdentity("sha256:" + new string('a', 64), "linux/amd64", 10_000_000_000);
+        var pinned = registration with { Binding = registration.Binding with { Image = image } };
+        RuntimeContractValidation.Validate(pinned);
+        var hash = RuntimeContractValidation.RegistrationHash(pinned);
+        Assert.NotEqual(RuntimeContractValidation.RegistrationHash(registration), hash);
+        foreach (var changed in new[]
+        {
+            image with { Digest = "sha256:" + new string('b', 64) },
+            image with { Platform = "linux/arm64" },
+            image with { CompressedPullBytes = 10_000_000_001 }
+        })
+            Assert.NotEqual(hash, RuntimeContractValidation.RegistrationHash(
+                pinned with { Binding = pinned.Binding with { Image = changed } }));
+        foreach (var invalid in new[]
+        {
+            image with { Digest = "sha256:" + new string('A', 64) },
+            image with { Digest = "sha256:abc" },
+            image with { Platform = "linux/arm64" },
+            image with { CompressedPullBytes = 0 },
+            image with { CompressedPullBytes = -1 }
+        })
+            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeContractValidation.Validate(
+                pinned with { Binding = pinned.Binding with { Image = invalid } }));
     }
 
     [Fact]

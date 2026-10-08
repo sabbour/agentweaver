@@ -23,6 +23,7 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 | Telemetry tests | In-process OpenTelemetry setup and Azure Monitor exporter behavior through an injected transport. | Azure Monitor ingestion. |
 | Azure tooling tests | Target, source, digest, command, and acceptance guards through fake `az` and `git` executors. | A live Azure call or provisioned resource. |
 | Foundation Probe tests | Receipt and token checks, provider pins, exact-version Key Vault read, owned Blob cleanup, PostgreSQL effects, and trace evidence. | Azure resource access or Identity broker redemption. |
+| AgentHost tests | Actual native SDK transport, authenticated configure/refresh/A2A, exact replay, current owner/source rejection, guarded effects, turn content, idle-boundary priority, accounting acknowledgment, cache recovery, and exact startup-time ceilings. CI separately measures the compressed amd64 OCI image and starts its pinned runtime without network or a model call. | Automatic scheduling, deployed TLS/Sandbox placement, live OAuth/entitlement, paid model execution, or publication. |
 
 Source Control regressions cover GitHub's actual PR-list and check-runs response shapes,
 ruleset and classic branch-protection requirements, and repository issue availability.
@@ -103,6 +104,17 @@ for the real source credential to expire. Each proves zero `session.create` requ
 source records, and accounting entries.
 The positive scenario commits duplicate native callbacks to one immutable receipt,
 then verifies reference-only ingestion and exact `0.00123456725 AIC` accounting.
+It links a real Identity connection through controlled GitHub and native Key Vault SDK transports, then restarts the Broker.
+It rotates that connection after Core accepts the selection and verifies unchanged selection bytes and hash.
+The model-session response contains only the current access token and typed exact-version proof.
+Response, log, and SDK-wire checks exclude refresh tokens and OAuth client secrets.
+The native SDK session store and ambient configuration discovery remain disabled.
+The custom filesystem captures opaque native cache bytes and restores the same logical session through the actual SDK resume call.
+Missing, incompatible, or corrupt caches rebuild context from journal content without a model-turn replay.
+The guarded positive scenario records the actual user and assistant content, the Policy receipt, and the native cache reference.
+It rotates the genuine source grant before the protected turn and checks refresh replay.
+Native cancellation tests hold the actual abort idle event before they admit another turn.
+Failed aborts and missing idle events reject later turns and cache capture.
 The multiplier is not applied a second time.
 Database checks reject mutation and truncation of source and accounting history.
 They check each table's statement trigger and attempt dependent, multi-table, and
@@ -120,17 +132,29 @@ Broker coverage includes the Agent Runtime library through the existing test pro
 The canonical Sandbox integration also covers public write versus internal run-read
 permission, three current-authority reads, and retained-lease protection against competing retirement.
 Neither placement route reads the accepted selection recursively or dispatches provider effects.
+The readiness module test holds the actual PostgreSQL advisory lock during fresh Cilium and Sandbox observations.
+A competing retirement waits until both readiness observations finish.
+The test uses fixture-owned data sources and the retained selection snapshot without recursive selection reads.
 These local tests do not prove deployed hosts, live AKS placement, or paid model output.
+
+The [AgentHost source checks](../architecture/agenthost#focused-source-checks) give the exact focused command and image-evidence boundary.
 
 After the Release build, run the combined source scenarios with:
 
 ```powershell
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~GatewayDelegatesOwnerStatusesReplaysCursorsAndReauthorizesBeforeSseWrite
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~CopilotConnectionRotationPreservesAcceptedSelectionThroughNativeSdkAccounting --blame-hang-timeout 3m --blame-hang-dump-type none --logger "console;verbosity=normal" -- xUnit.ShowLiveOutput=true
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~AuthorityLossDuringSdkPreparationPreventsNativeSessionCreation
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerIssuedOwnerAndSeparateRunSelectionAuthorizeWorkspaceVolumeHttpEffects
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName~BrokerTokenTraversesMcpAndGatewayToKnowledgeWithoutMutation
 ```
+
+The combined case also exercises the existing coordination and Source Control regressions.
+Live Xunit output identifies current native requests and cleanup if the case reaches its inactivity limit.
+The focused Copilot lifecycle cases cover cookie/subject/state rejection before exchange, callback replay,
+concurrent refresh, transient recovery, permanent rejection, uncertain rotation, account change, and current Core revocation.
+These cases use disposable PostgreSQL and controlled external transports, not live OAuth or paid model calls.
 
 ## Validate the documentation site
 

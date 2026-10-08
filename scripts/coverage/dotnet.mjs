@@ -35,6 +35,7 @@ const expectedAssemblies = [
   'Agentweaver.Secrets.AzureKeyVault',
   'Agentweaver.Identity',
   'Agentweaver.AgentRuntime',
+  'Agentweaver.AgentHost',
   'Agentweaver.Identity.Broker',
   'Agentweaver.Projects.Config',
   'Agentweaver.Telemetry',

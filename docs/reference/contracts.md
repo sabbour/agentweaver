@@ -249,10 +249,13 @@ role claims are not required.
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL and current owned-schema readiness; returns `503` when the schema is absent or outdated. |
 | `POST /internal/sessions/{sessionId}` | Resolve and pin the run's native Sessions provider, then create the session. A run reuses its immutable provider binding; a different binding returns `409`. |
+| `GET /internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` | Returns the actual immutable `SessionProviderBinding`, not an accepted candidate. Requires existing current `ReadRunSelection` and exact signed project/run binding before and after verified retrieval. No option values or credentials. Returns no-store. |
 | `POST /internal/sessions/{sessionId}/events` | Append an ordinary versioned typed event to the project/run journal. Returns `403` for every generic `PolicyEvaluation` payload because actor equality does not establish trusted Core provenance. Ordinary appends return `201` for a new event, `200` for an identical run-scoped event-ID retry, and `409` if the ID is reused with different event content in that run. |
 | `POST /internal/sessions/{sessionId}/fork` | Accept `SessionForkRequest` (`targetSessionId`, `sourceEventId`, `sourceCursor`, `idempotencyKey`). Requires a matching Orchestrator owner admission before journal work and immediately before transaction commit, including identical journal retries; validate that the cursor and event identify the same committed source event, then persist the target and immutable lineage. Existing object-reference retention deadlines are unchanged. Returns `201` for a new fork, `200` for an identical retry, `409` for missing/stale admission or conflicting event/cursor/target/key use, or `503` when the pinned Sessions provider does not support explicit forks. |
 | `POST /internal/sessions/{sessionId}/policy-evaluations` | Append a PolicyEvaluation using a body containing only `receiptId`. Requires the pinned provider's `sessions.policy.evaluations` capability. Events fetches the immutable receipt from the fixed Orchestrator owner, validates current admission before writing, and repeats that check inside the native journal transaction before commit. Failed revalidation rolls back event, inbox, position, references, and outbox writes. Returns a no-store acknowledgment with receipt ID, session identity, event position, and duplicate status (`201` new, `200` identical retry). |
 | `POST /internal/sessions/{sessionId}/usage-receipts` | Optional native usage route. Accepts only `receiptId`, fetches immutable Orchestrator evidence, and commits source hash, price, rate card, ledger, and inbox atomically. Returns a no-store accounting acknowledgment. |
+| `POST /internal/sessions/{sessionId}/material` | Optional typed `SessionMaterialWriteRequest` route. Accepts actual `TurnContent` or `SdkCache` bytes, at most 1 MiB, with event ID, runtime ID, registration revision, and execution fence. Requires the original bearer, current Projects authority, recorded SDK source, and exact current runtime binding. Stores bytes before the journal reference. Rechecks authority after waits and on retries. Returns the original no-store acknowledgment for identical material, `409` for changed event reuse, or an explicit authority/storage error. |
+| `GET /internal/sessions/{sessionId}/material/{eventId}/{kind}` | Reads only committed material by session, event, and kind. `TurnContent` requires current `ReadRunSelection` or actually supplied `ReadProjects` entitlement, exact signed project/run binding, and recorded session membership. Project-summary access alone does not authorize opaque bytes. `SdkCache` retains Core `ReadRunSelection` authority. The route verifies the recorded Sessions provider, digest, length, kind, and version, then rechecks read authority after retrieval. Historical content does not require dispatchability, a live lease, or model credentials. Returns a no-store `SessionMaterialReadResult`. Arbitrary object keys, paths, and URLs are not accepted. |
 | `GET /internal/projects/{projectId}/runs/{runId}/usage` | Optional native usage totals route. Requires current `ReadRunSelection` for the exact signed project/run and returns exact run and agent totals. |
 | `GET /internal/sessions/{sessionId}/events?cursor={cursor}&limit={limit}` | Read an ordered page for one session after an optional opaque cursor. Positions are run-wide and may have gaps in a session-only page. |
 | `GET /internal/sessions/{sessionId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll durable journal state and stream NDJSON `SessionEventDelivery` records, each containing the event and a reconnectable `nextCursor`. |
@@ -342,6 +345,7 @@ Configuration:
 | `ConnectionStrings:EventsAndSessionsMigration` | Separate PostgreSQL connection using the migration Entra role; required only by `--migrate`. |
 | `EventsAndSessions:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Separate explicit workload identity used only by `--migrate`. |
 | `EventsAndSessions:RuntimeUsage:Enabled` | Default-off reference-only SDK usage consumer and totals routes. |
+| `EventsAndSessions:SessionMaterial:ContainerUri` | Optional explicit HTTPS Blob container for typed material. Enables the material routes with the existing workload identity. User information, query parameters, fragments, and nested container paths are rejected. |
 | `EventsAndSessions:OrchestratorOwner:OwnerBaseAddress` / `Audience` | Fixed HTTPS Orchestrator owner and existing required audience for immutable source receipts. |
 
 Both connection strings must omit passwords and name their Entra database role.
@@ -397,6 +401,73 @@ configuration hash, revision, expiry, and cryptographic verifier must match.
 | `POST /internal/runtime/source/verify` | Fresh current-registration and purpose-bound nonce verification. |
 | `POST /internal/runtime/source/rotate` | New source revision and transient credential. |
 | `POST /internal/runtime/source/revoke` | Immutable revocation receipt. |
+| `POST /internal/runtime/model-session/grant` | Current-registration model grant with source mode, credential kind, exact secret version, and hosted connection revision. |
+| `POST /internal/runtime/model-session/verify` | Revalidates the complete receipt against current Identity and runtime authority. |
+| `POST /internal/runtime/model-session/redeem` | Transient credential plus typed current receipt. Hosted responses contain only the user access token, never the refresh envelope or OAuth client secret. |
+
+### Copilot user connections
+
+The Identity-owned source candidate supports these authenticated, no-store routes.
+Begin, completion, refresh, and revocation require fresh, unbound Core authority for the exact project or platform scope.
+Status requires the same owner and current Core authority.
+
+Receipts contain `connectionId`, `revision`, `scope`, `scopeId`, `state`, and `freshUntil`.
+The `scope` values are `project` and `platform`.
+The `state` values are `pending`, `connected`, `refreshing`, `transientUnavailable`, `reconnectRequired`, `revoked`, and `refreshIndeterminate`.
+Begin returns `{ connection, authorizationUri }`; its callback cookie never appears in JSON.
+Unknown request members deny.
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /internal/connections/copilot-user/begin` | `{ scope, scopeId }`. Returns a pending connection receipt and PKCE authorization URI. Sets the secure browser nonce cookie. |
+| `POST /internal/connections/copilot-user/complete` | `{ state, code?, error? }` plus the same authenticated subject and browser nonce. Claims single-use state before the GitHub exchange. |
+| `GET /internal/connections/copilot-user/{connectionId}` | Returns connection identity, revision, scope, state, and freshness. Contains no credential values. |
+| `POST /internal/connections/copilot-user/refresh` | `{ connectionId, expectedRevision }`. Claims the current revision before upstream rotation and conditionally publishes an exact protected-store version. |
+| `POST /internal/connections/copilot-user/revoke` | `{ connectionId, expectedRevision }`. Retains the connection and immutable audit history while denying future runtime use. |
+
+The callback requires `__Host-agentweaver-copilot-link`.
+Identity sets `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, and a five-minute lifetime without a `Domain`.
+The frontend callback requires the current bearer and forwards only this nonce through its authenticated BFF completion request.
+There is no anonymous callback exchange, bearer in state, or credential persistence in PostgreSQL.
+Gateway routing and browser surfaces remain separate source slices.
+
+`IdentityBroker:CopilotConnection` requires explicit `ProjectsOwnerAddress`, GitHub `ClientId`,
+HTTPS `CallbackUri`, and exact `ClientSecretReference`.
+The protected-store workload identity requires the separate writer's SET and exact-version GET permissions.
+This configuration does not change the read-only P0 Secrets principal or provision cloud permissions.
+
+The routes remain mapped when this optional configuration is absent.
+They return `503` with `copilot_connection_writer_unavailable`, not a fabricated connection or a route-not-found response.
+Fresh owner denials return `403` with the exact `copilot_connection_*` error.
+Invalid input returns `400` with `copilot_connection_request_invalid`.
+Protected-store or upstream outages return explicit `503` errors.
+
+Known refresh rejection produces `ReconnectRequired`.
+A known transient response produces `TransientUnavailable` and permits explicit retry with its new revision.
+An uncertain upstream rotation, store write, or publication produces `RefreshIndeterminate` and prohibits blind replay.
+Failed publication retains the previously committed exact reference.
+GitHub installation tokens cannot become Copilot user credentials.
+
+### AgentHost runtime routes
+
+The unpublished [AgentHost executable](../architecture/agenthost.md) validates a Broker bearer and the exact HTTPS configure audience.
+It compares the current immutable registration, purpose-bound grant, image, lease, execution fence, and model proof after owner waits.
+All runtime responses are no-store.
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /runtime/v1/configure` | `RuntimeBootstrapDeliveryRequest`. Delivers the pending configure nonce without activating a model session. |
+| `POST /runtime/v1/configure/activate` | `RuntimeHostConfigureRequest`: version 1, exact registration, consume/exchange operation IDs, and delivered configuration. Exact replay returns the existing immutable session. |
+| `POST /runtime/v1/refresh` | `RuntimeHostRefreshRequest`: exact `RuntimeHostSessionProof` and operation ID. Current Identity and owner authority control rotation and replay. |
+| `POST /runtime/v1/a2a/message:send` | `RuntimeA2ASendRequest`: one user text message, GUID message ID, native context ID, exact runtime proof, and delivery mode. `immediate` precedes pending `enqueue` work only at the next native idle boundary. |
+| `GET /health/live` | Process liveness. It does not prove permission or readiness. |
+| `GET /health/ready` | Fresh registration/source/lease/isolation/workspace/egress evidence plus authenticated configuration and measured startup ceilings. Missing evidence returns `503`. |
+
+The A2A response contains `kind`, `messageId`, `contextId`, `role`, and actual assistant text `parts`.
+Completion follows committed turn content, Policy evidence, and usage accounting.
+The routes do not implement a scheduler, background relay, or gate approval from message receipt.
+
+### Runtime credential verification
 
 Identity captures a verifier while the protected credential is live, before
 database waits. Expiry during a grant-lock wait yields explicit denial and
@@ -417,7 +488,7 @@ Identity verifies the separate purpose-bound nonce for those operations.
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations` | Accepts only `EnvironmentId` and `ProfileId`. Derives model, optional exact model `SecretRef`, agent, turn, selection, fence, lease, provider, and endpoint pins from current owners. |
 | `GET /internal/runtime/registrations/{runtimeInstanceId}` | Revalidates the active session/work item, accepted selection, current lease/profile, and registration revision. A raw storage read is not authorization. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Public Environment control read. Requires current `WriteProjects`; returns the exact active, unexpired, owner-fenced lease projection. |
-| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Internal run-bound placement read. Uses existing current `ReadRunSelection` for the exact signed run. Does not grant public write permission. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Internal run-bound placement read. Uses existing current `ReadRunSelection` for the exact signed run. Its additive `providerPin` records the actual successful consumer's provider, adapter/options revisions, resource generation, and negotiated capabilities, without option values or recovery metadata. Does not grant public write permission. |
 | `GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}` | Uses the canonical manager's retained lease callback to read current Orchestrator context and match a registered profile to the exact placement. Requires current run-bound `ReadRunSelection`. |
 | `POST /internal/runtime/sources/{runtimeInstanceId}` | Registers actual immutable SDK facts under the validated bearer and separate observe credential. Rechecks current owner and grant authority after waits. |
 | `POST /internal/runtime/observations` | Commits a native SDK observation under the exact current registration/source grant. Identical SDK events return the original source receipt. Changed content conflicts. |
@@ -452,12 +523,25 @@ The ledger preserves explicit `Estimate`, `Reconciled`, and `Unpriced` dispositi
 `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context`
 requires the authenticated current run owner and returns `Cache-Control: no-store`.
 The response contains the active child turn, accepted revisions and hash, and
-agent/model reference from its confirmed WorkPlan item. When the accepted effective
-model selection carries a credential reference, the response also carries that exact
-`SecretRef` only if the WorkPlan model matches the selected model. It is a reference,
-not a grant or credential value. An unknown, unmapped,
+agent/model reference from its confirmed WorkPlan item.
+The accepted platform or project selection also supplies `ModelSourceMode`.
+Runtime registration and model-grant receipts retain that mode.
+Missing or incompatible modes deny SDK startup without a personal provider fallback.
+Hosted selections carry a stable connection ID and its accepted project or platform scope.
+Identity resolves the current connection revision and exact secret version for each model-session grant.
+BYOK selections carry an exact `SecretRef` only when the WorkPlan model matches the accepted model.
+Neither selection field is a grant or credential value. An unknown, unmapped,
 inactive, stale, or non-dispatchable child is unavailable. Caller configure JSON
 cannot set these fields.
+
+Identity extracts only the current user access token from its protected hosted envelope before the Host receives a response.
+BYOK sessions supply explicit SDK provider configuration and skip Copilot authentication and catalog lookup.
+Hosted receipts bind the current connection identity, revision, scope, credential kind, freshness, and exact secret version.
+Every asynchronous redemption and SDK preparation boundary revalidates that proof.
+Rotation changes the credential revision, not the immutable accepted selection.
+Controlled native transport evidence does not prove GitHub entitlement or deployed connection services.
+BYOK usage retains token measurements and rejects Copilot nano-AIU attribution.
+Without an admitted Cost provider, its accounting remains `Unpriced`, not zero-cost or hard-bound admission proof.
 
 ## Projects & Config authorization context
 

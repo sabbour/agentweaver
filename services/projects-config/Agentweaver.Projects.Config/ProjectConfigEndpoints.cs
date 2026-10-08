@@ -109,8 +109,7 @@ public static class ProjectConfigEndpoints
                     context.Request.Query["runId"].Count > 1)
                     throw ProjectConfigException.Forbidden();
                 var runId = context.Request.Query["runId"].FirstOrDefault();
-                if (runId is not null)
-                    context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers.CacheControl = "no-store";
                 return Results.Ok(await service.GetProjectAsync(
                     await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
                     projectId,

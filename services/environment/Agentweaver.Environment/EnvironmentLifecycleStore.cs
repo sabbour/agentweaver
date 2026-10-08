@@ -330,10 +330,27 @@ public sealed class EnvironmentLifecycleStore(
         return reservation;
     }
 
-    public async Task RequireVerifiedNetworkPolicyGenerationAsync(
+    public Task RequireVerifiedNetworkPolicyGenerationAsync(
         EnvironmentGenerationFence fence,
         string resourceId,
         long policyGeneration,
+        CancellationToken cancellationToken) =>
+        VerifyNetworkPolicyGenerationAsync(fence, resourceId, policyGeneration,
+            acquireOwnerLock: true, cancellationToken);
+
+    public Task ReadVerifiedNetworkPolicyGenerationAsync(
+        EnvironmentGenerationFence fence,
+        string resourceId,
+        long policyGeneration,
+        CancellationToken cancellationToken) =>
+        VerifyNetworkPolicyGenerationAsync(fence, resourceId, policyGeneration,
+            acquireOwnerLock: false, cancellationToken);
+
+    private async Task VerifyNetworkPolicyGenerationAsync(
+        EnvironmentGenerationFence fence,
+        string resourceId,
+        long policyGeneration,
+        bool acquireOwnerLock,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(fence);
@@ -341,7 +358,8 @@ public sealed class EnvironmentLifecycleStore(
             throw new ArgumentException("A policy resource and positive generation are required.");
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        await AcquireOwnerLockAsync(connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
+        if (acquireOwnerLock)
+            await AcquireOwnerLockAsync(connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
         await RequireActiveInTransactionAsync(connection, transaction, fence, cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand($"""
             SELECT COALESCE((

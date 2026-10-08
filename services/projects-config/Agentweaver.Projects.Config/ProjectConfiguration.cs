@@ -7,7 +7,10 @@ using Agentweaver.Abstractions;
 namespace Agentweaver.Projects.Config;
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record ModelSelectionSettings(string Reference, SecretRef? CredentialReference = null);
+public sealed record ModelSelectionSettings(
+    string Reference, SecretRef? CredentialReference = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ModelSourceMode? SourceMode = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ConnectionId = null);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProjectProviderOverride(ProviderSeam Seam, string ProviderId);
@@ -126,7 +129,10 @@ public static class ProjectConfigurationValidator
             throw Invalid("Configuration collections and run-limit settings must be present.");
 
         if (configuration.ModelSelection is { } model)
+        {
             ValidateIdentifier(model.Reference, "modelSelection.reference");
+            ValidateModelSourceMode(model);
+        }
         if (configuration.ModelSelection?.CredentialReference is { } secret &&
             (string.IsNullOrWhiteSpace(secret.Id) || string.IsNullOrWhiteSpace(secret.Version)))
             throw Invalid("Model credential references must contain an exact secret ID and version.");
@@ -231,13 +237,28 @@ public static class ProjectConfigurationValidator
         !string.IsNullOrWhiteSpace(secret.Id) &&
         !string.IsNullOrWhiteSpace(secret.Version);
 
+    private static void ValidateModelSourceMode(ModelSelectionSettings model)
+    {
+        if (model.SourceMode is { } mode && !Enum.IsDefined(mode))
+            throw Invalid("Model source mode must be hostedCopilot or byok.");
+        if (model.ConnectionId == Guid.Empty ||
+            model.ConnectionId is not null && model.SourceMode != ModelSourceMode.HostedCopilot ||
+            model.SourceMode == ModelSourceMode.HostedCopilot &&
+                (model.ConnectionId is null || model.CredentialReference is not null) ||
+            model.SourceMode == ModelSourceMode.Byok && model.CredentialReference is null)
+            throw Invalid("Hosted Copilot requires one connection ID; BYOK requires one exact credential reference.");
+    }
+
     public static PlatformRuntimeDefaults Validate(PlatformRuntimeDefaults defaults)
     {
         ArgumentNullException.ThrowIfNull(defaults);
         if (defaults.EgressBaseline.IsDefault || defaults.RunLimits is null)
             throw Invalid("Platform egress baseline and run limits must be present.");
         if (defaults.ModelSelection is { } model)
+        {
             ValidateIdentifier(model.Reference, "modelSelection.reference");
+            ValidateModelSourceMode(model);
+        }
         if (defaults.ModelSelection?.CredentialReference is { } secret &&
             (string.IsNullOrWhiteSpace(secret.Id) || string.IsNullOrWhiteSpace(secret.Version)))
             throw Invalid("Model credential references must contain an exact secret ID and version.");

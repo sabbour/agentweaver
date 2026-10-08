@@ -56,6 +56,7 @@ export default defineConfig({
             { text: 'Foundation overview', link: '/architecture/overview' },
             { text: 'Providers and models', link: '/architecture/providers-models' },
             { text: 'Identity and secrets', link: '/architecture/identity-secrets' },
+            { text: 'AgentHost', link: '/architecture/agenthost' },
             { text: 'PostgreSQL and Blob', link: '/architecture/persistence-objects' },
             { text: 'Telemetry', link: '/architecture/telemetry' },
             { text: 'Dedicated Azure environment', link: '/architecture/azure' },

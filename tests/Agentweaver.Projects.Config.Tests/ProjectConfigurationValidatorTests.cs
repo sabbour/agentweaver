@@ -29,6 +29,50 @@ public sealed class ProjectConfigurationValidatorTests
             host, port, EgressProtocol.Tcp);
 
     [Fact]
+    public void ExplicitModelModesBelongToProjectOrPlatformSettingsAndLegacyModeIsNotInferred()
+    {
+        var key = new SecretRef("selected-project-key", "version-1");
+        var project = new ProjectConfiguration
+        {
+            ModelSelection = new("project-byok", key, ModelSourceMode.Byok)
+        };
+        Assert.Equal(ModelSourceMode.Byok,
+            ProjectConfigurationValidator.Validate(project).ModelSelection!.SourceMode);
+        var platform = PlatformDefaults() with
+        {
+            ModelSelection = new("platform-copilot", null, ModelSourceMode.HostedCopilot, Guid.NewGuid())
+        };
+        Assert.Equal(ModelSourceMode.HostedCopilot,
+            ProjectConfigurationValidator.Validate(platform).ModelSelection!.SourceMode);
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(project with
+        {
+            ModelSelection = project.ModelSelection! with { SourceMode = (ModelSourceMode)123 }
+        }));
+        var legacy = new ModelSelectionSettings("legacy-model", key);
+        Assert.Null(legacy.SourceMode);
+        Assert.Null(legacy.ConnectionId);
+        Assert.DoesNotContain("sourceMode", JsonSerializer.Serialize(legacy, new JsonSerializerOptions(
+            JsonSerializerDefaults.Web)));
+        Assert.DoesNotContain("connectionId", JsonSerializer.Serialize(legacy, new JsonSerializerOptions(
+            JsonSerializerDefaults.Web)));
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(platform with
+        {
+            ModelSelection = platform.ModelSelection! with { CredentialReference = key }
+        }));
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(platform with
+        {
+            ModelSelection = platform.ModelSelection! with { ConnectionId = null }
+        }));
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(project with
+        {
+            ModelSelection = project.ModelSelection! with { ConnectionId = Guid.NewGuid() }
+        }));
+        Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<ProjectConfiguration>(
+                """{"personalModelSelection":{"reference":"personal-byok"}}"""));
+    }
+
+    [Fact]
     public void NormalizesEgressAndAllowsOnlySubsetWithRequiredDestinations()
     {
         var baseline = ProjectConfigurationValidator.Validate(PlatformDefaults()).EgressBaseline;

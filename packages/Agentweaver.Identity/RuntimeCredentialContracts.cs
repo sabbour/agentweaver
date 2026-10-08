@@ -25,6 +25,8 @@ public sealed record RuntimeBinding(
     Uri ConfigureEndpoint,
     Uri ObservationEndpoint)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkflowStepId { get; init; }
     public long EnvironmentCurrentFencingGeneration { get; init; }
     public long EnvironmentProviderFencingGeneration { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -32,11 +34,19 @@ public sealed record RuntimeBinding(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SecretRef? ModelCredentialReference { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModelSourceMode? ModelSourceMode { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? ModelConnectionId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProjectAuthorityResourceType? ModelConnectionScope { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PlacementProviderId { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public long EnvironmentLifecycleGeneration { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public long EnvironmentLeaseRevision { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxImageIdentity? Image { get; init; }
 }
 
 public enum RuntimeRegistrationState { Active, Revoked }

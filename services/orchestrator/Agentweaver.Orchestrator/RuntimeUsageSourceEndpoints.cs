@@ -24,6 +24,12 @@ public static class RuntimeUsageSourceEndpoints
 
     public static IEndpointRouteBuilder MapRuntimeUsageSourceEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapGet("/internal/runtime/sources/{runtimeInstanceId:guid}",
+            (Guid runtimeInstanceId, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.ReadCurrentSourceAsync(
+                    context, runtimeInstanceId, cancellationToken)))
+            .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/sources/{runtimeInstanceId:guid}",
             (Guid runtimeInstanceId, RuntimeSdkSourceRequest request, HttpContext context,
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>

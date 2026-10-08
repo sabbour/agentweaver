@@ -47,6 +47,66 @@ jobs:
           mkdir -p artifacts/images
           docker build --platform linux/amd64 --file services/identity/Agentweaver.Identity.Broker/Dockerfile --tag agentweaver-identity-broker:ci --label org.opencontainers.image.revision="$GITHUB_SHA" .
           docker image inspect agentweaver-identity-broker:ci > artifacts/images/identity-broker.json
+      - name: Build unpublished AgentHost amd64 image and verify its native SDK runtime
+        run: |
+          mkdir -p artifacts/images
+          SOURCE_TREE="$(git rev-parse HEAD^{tree})"
+          docker buildx create --name agenthost-image-ci --driver docker-container --use
+          trap 'docker buildx rm agenthost-image-ci' EXIT
+          docker buildx build --platform linux/amd64 \
+            --file services/agenthost/Agentweaver.AgentHost/Dockerfile \
+            --tag agentweaver-agenthost:ci --load \
+            --output type=oci,dest=artifacts/images/agenthost.oci.tar \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label io.agentweaver.source-tree="$SOURCE_TREE" .
+          node scripts/release/measure-agenthost-image.mjs artifacts/images/agenthost.oci.tar artifacts/images/agenthost.json
+          IMAGE_CONFIG="$(docker image inspect --format '{{.Id}}' agentweaver-agenthost:ci)"
+          node --input-type=module -e 'import fs from "node:fs"; const receipt = JSON.parse(fs.readFileSync("artifacts/images/agenthost.json")); if (receipt.image.configDigest !== process.argv[1]) throw Error("The loaded smoke image differs from the measured OCI image.");' "$IMAGE_CONFIG"
+          timeout 60s docker run --rm --platform linux/amd64 --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /state:uid=1654,gid=1654,mode=700 --tmpfs /tmp:mode=1777 \
+            agentweaver-agenthost:ci --verify-native-runtime > artifacts/images/agenthost-native-status.json
+          node --input-type=module -e 'import fs from "node:fs"; const status = JSON.parse(fs.readFileSync("artifacts/images/agenthost-native-status.json")); if (status.sdkVersion !== "1.0.11" || status.runtimeVersion !== "1.0.79" || status.ProtocolVersion !== 3) throw Error("The image does not run the pinned native SDK protocol.");'
+          timeout 60s docker run --rm --platform linux/amd64 --network none --read-only \
+            --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /workspace:uid=1000,gid=1000,mode=755 \
+            --tmpfs /state:uid=1000,gid=1000,mode=700 --tmpfs /tmp:uid=1000,gid=1000,mode=700 \
+            --tmpfs /configuration:uid=1000,gid=1000,mode=700 \
+            --tmpfs /run/agenthost-tls:uid=1000,gid=1000,mode=700 \
+            --entrypoint /bin/sh agentweaver-agenthost:ci -ec '
+              test "$(id -u):$(id -g)" = "1000:1000"
+              test "$(stat -c "%u:%g:%a" /workspace)" = "1000:1000:755"
+              umask 022
+              printf created > /workspace/.agenthost-profile-test
+              printf updated >> /workspace/.agenthost-profile-test
+              test "$(stat -c "%u:%g:%a" /workspace/.agenthost-profile-test)" = "1000:1000:644"
+              mv /workspace/.agenthost-profile-test /workspace/.agenthost-profile-renamed
+              test "$(cat /workspace/.agenthost-profile-renamed)" = createdupdated
+              rm /workspace/.agenthost-profile-renamed
+              test ! -e /workspace/.agenthost-profile-renamed
+              umask 077
+              for directory in /state /tmp; do
+                test "$(stat -c "%u:%g:%a" "$directory")" = "1000:1000:700"
+                printf private > "$directory/.agenthost-profile-test"
+                test "$(stat -c "%a" "$directory/.agenthost-profile-test")" = 600
+                test "$(cat "$directory/.agenthost-profile-test")" = private
+                rm "$directory/.agenthost-profile-test"
+              done
+              umask 337
+              printf "{}" > /configuration/appsettings.json
+              printf simulated-certificate > /run/agenthost-tls/tls.crt
+              printf simulated-key > /run/agenthost-tls/tls.key
+              for file in /configuration/appsettings.json /run/agenthost-tls/tls.crt /run/agenthost-tls/tls.key; do
+                test "$(stat -c "%a" "$file")" = 440
+                test -s "$file" && test -r "$file"
+                cat "$file" > /dev/null
+              done
+              umask 077
+              STATUS="$(dotnet /app/Agentweaver.AgentHost.dll --verify-native-runtime)"
+              printf "{\"uid\":1000,\"gid\":1000,\"workspaceDirectoryMode\":\"0755\",\"workspaceFileMode\":\"0644\",\"privateDirectoryMode\":\"0700\",\"configurationAndTlsMode\":\"0440\",\"native\":%s}\n" "$STATUS"
+            ' > artifacts/images/agenthost-profile-access.json
+          node --input-type=module -e 'import fs from "node:fs"; const result = JSON.parse(fs.readFileSync("artifacts/images/agenthost-profile-access.json")); if (result.uid !== 1000 || result.gid !== 1000 || result.native.sdkVersion !== "1.0.11" || result.native.runtimeVersion !== "1.0.79" || result.native.ProtocolVersion !== 3) throw Error("The exact AgentHost image cannot execute under its selected workspace owner.");'
+          rm artifacts/images/agenthost.oci.tar
       - name: Test release validator with coverage
         if: ${{ !cancelled() }}
         run: npm run coverage:node

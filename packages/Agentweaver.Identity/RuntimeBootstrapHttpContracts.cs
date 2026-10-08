@@ -49,7 +49,37 @@ public sealed record RuntimeModelCredentialGrantReceipt(
     string ModelSelectionReference,
     SecretRef CredentialReference,
     string Purpose,
-    DateTimeOffset ExpiresAt);
+    DateTimeOffset ExpiresAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModelSourceMode? SourceMode { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? ConnectionId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ConnectionRevision { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeModelCredentialKind? CredentialKind { get; init; }
+}
+
+public enum RuntimeModelCredentialKind { GitHubUserAccess, ByokKey }
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeModelCredentialProof(RuntimeModelCredentialGrantReceipt Receipt);
+
+public sealed record RuntimeModelCredentialResponse(
+    RuntimeModelCredentialGrantReceipt Receipt, DateTimeOffset ExpiresAt, string Value)
+{
+    public override string ToString() => nameof(RuntimeModelCredentialResponse) + " [REDACTED]";
+}
+
+public sealed class RuntimeModelCredential(
+    RuntimeModelCredentialGrantReceipt receipt, SecretCredential credential)
+{
+    public RuntimeModelCredentialGrantReceipt Receipt { get; } = receipt;
+    [JsonIgnore]
+    public SecretCredential Credential { get; } = credential;
+    public override string ToString() => nameof(RuntimeModelCredential) + " [REDACTED]";
+}
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeCredentialHttpRequest(

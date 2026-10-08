@@ -2,11 +2,11 @@
   "version": 2,
   "source": {
     "file": "v1-sessions-journal.json",
-    "sha256": "e212d71dfcb2d76c029c3001db02aab0da9020f4df48e90e3c14ec85219d8252"
+    "sha256": "d72a3bbd46604c533cd6f3f5fbc5acc02515d7292cf9acd87798e1461efe1d4c"
   },
   "drawio": {
     "file": "v1-sessions-journal.drawio",
-    "sha256": "21473b9695003d4f41e9c8feab4d271bd9a346a34eeffe48e1c6530028eec3b4"
+    "sha256": "359d70946cad063249ff3b7d39529aff4a1964e6bb343db77305b4d4d01e227c"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-sessions-journal.png",
-    "sha256": "f6d1d5bfaa02eab1c7e380227186c4f6b101c47d772d0edb46bba04f966ac828"
+    "sha256": "48dd48199aac335f394d72970ce9ce55ba674de0caf3e9495a1c0b7337bad0d4"
   }
 }

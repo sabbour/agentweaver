@@ -784,7 +784,8 @@ public sealed class EnvironmentEgressManager(
         EnvironmentGenerationFence fence,
         AuthorizedSelection selection,
         long policyGeneration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool runBoundRead = false)
     {
         ArgumentNullException.ThrowIfNull(caller);
         ArgumentNullException.ThrowIfNull(fence);
@@ -812,11 +813,15 @@ public sealed class EnvironmentEgressManager(
             fence.Owner.ProjectId,
             fence.Owner.RunId,
             providerOptions.Namespace);
-        await lifecycleStore.RequireVerifiedNetworkPolicyGenerationAsync(
-            fence,
-            $"{selector.Namespace}/{selector.PolicyName}",
-            policyGeneration,
-            cancellationToken).ConfigureAwait(false);
+        // Runtime reads already retain this owner's lease lock; taking it again would deadlock.
+        if (runBoundRead)
+            await lifecycleStore.ReadVerifiedNetworkPolicyGenerationAsync(
+                fence, $"{selector.Namespace}/{selector.PolicyName}", policyGeneration,
+                cancellationToken).ConfigureAwait(false);
+        else
+            await lifecycleStore.RequireVerifiedNetworkPolicyGenerationAsync(
+                fence, $"{selector.Namespace}/{selector.PolicyName}", policyGeneration,
+                cancellationToken).ConfigureAwait(false);
         var observation = await cilium.VerifyAsync(
             selector, intent, policyGeneration, cancellationToken).ConfigureAwait(false);
         if (!observation.ObjectVerified)
@@ -824,12 +829,13 @@ public sealed class EnvironmentEgressManager(
                 "policy_generation_unverified",
                 "The exact Cilium policy generation is not present; Sandbox readiness is withheld.");
         await lifecycleStore.RequireActiveAsync(fence, cancellationToken).ConfigureAwait(false);
-        await EnsureAuthorizationUnchangedAsync(
-            caller,
-            fence.Owner,
-            selection.Authorization,
-            requireRunSelection: true,
-            cancellationToken).ConfigureAwait(false);
+        if (runBoundRead)
+            await EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
+                caller, fence.Owner, selection.Authorization, cancellationToken).ConfigureAwait(false);
+        else
+            await EnsureAuthorizationUnchangedAsync(
+                caller, fence.Owner, selection.Authorization, requireRunSelection: true,
+                cancellationToken).ConfigureAwait(false);
         return observation;
     }
 

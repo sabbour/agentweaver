@@ -259,6 +259,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
             var schemas = openApiDocument.RootElement.GetProperty("components").GetProperty("schemas");
             Assert.False(schemas.TryGetProperty("OwnerJson", out _));
+            var modelSelectionSettings = schemas.GetProperty("ModelSelectionSettings");
+            Assert.DoesNotContain(
+                "credentialReference",
+                modelSelectionSettings.GetProperty("required").EnumerateArray()
+                    .Select(property => property.GetString()));
+            var credentialReference = modelSelectionSettings.GetProperty("properties")
+                .GetProperty("credentialReference");
+            var credentialReferenceVariants = credentialReference.GetProperty("anyOf").EnumerateArray().ToArray();
+            Assert.Contains(
+                credentialReferenceVariants,
+                variant => variant.TryGetProperty("type", out var type) && type.GetString() == "null");
+            Assert.Contains(
+                credentialReferenceVariants,
+                variant => variant.TryGetProperty("$ref", out var reference) &&
+                    reference.GetString() == "#/components/schemas/SecretRef");
+            var secretRef = schemas.GetProperty("SecretRef");
+            Assert.Contains("id", secretRef.GetProperty("required").EnumerateArray()
+                .Select(property => property.GetString()));
+            Assert.Contains("version", secretRef.GetProperty("required").EnumerateArray()
+                .Select(property => property.GetString()));
             AssertOpenApiReferencesResolve(openApiDocument.RootElement, schemas);
             var eventPage = await events.ReplayRunAsync(
                 project.ProjectId, runId, null, 10, CancellationToken.None);

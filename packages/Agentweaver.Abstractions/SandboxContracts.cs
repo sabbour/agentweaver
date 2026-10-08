@@ -103,6 +103,19 @@ public enum SandboxStartupPhase
     Ready
 }
 
+public sealed record SandboxImageIdentity(string Digest, string Platform, long CompressedPullBytes)
+{
+    public SandboxImageIdentity Validate()
+    {
+        if (Digest is not { Length: 71 } ||
+            !Digest.StartsWith("sha256:", StringComparison.Ordinal) ||
+            Digest[7..].Any(character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f')) ||
+            Platform != "linux/amd64" || CompressedPullBytes <= 0)
+            throw new ArgumentException("An exact platform image digest and measured compressed pull size are required.");
+        return this;
+    }
+}
+
 public sealed record SandboxStartupPhaseObservation
 {
     private static readonly Regex Sha256Digest = new(
@@ -446,6 +459,73 @@ public sealed record SandboxStartupBudgetFailure(
             throw new ArgumentException("The Sandbox startup budget failure is invalid.");
         return this;
     }
+}
+
+public sealed record SandboxStartupTimeBudgets(
+        int ScheduledSeconds,
+        int ImageReadySeconds,
+        int StartedSeconds,
+        int ConfiguredSeconds,
+        int ReadySeconds,
+        int TotalSeconds)
+    {
+        public SandboxStartupTimeBudgets Validate()
+        {
+            if (ScheduledSeconds <= 0 || ImageReadySeconds <= 0 || StartedSeconds <= 0 ||
+                ConfiguredSeconds <= 0 || ReadySeconds <= 0 || TotalSeconds <= 0)
+                throw new ArgumentOutOfRangeException(nameof(SandboxStartupTimeBudgets),
+                    "Every startup phase and total time budget must have a configured positive value.");
+            return this;
+        }
+
+        public int For(SandboxStartupPhase phase) => phase switch
+        {
+            SandboxStartupPhase.Scheduled => ScheduledSeconds,
+            SandboxStartupPhase.ImageReady => ImageReadySeconds,
+            SandboxStartupPhase.Started => StartedSeconds,
+            SandboxStartupPhase.Configured => ConfiguredSeconds,
+            SandboxStartupPhase.Ready => ReadySeconds,
+            _ => throw new ArgumentOutOfRangeException(nameof(phase))
+        };
+
+        public SandboxStartupBudgetFailure? Evaluate(
+            DateTimeOffset leaseCreatedAt,
+            ImmutableArray<SandboxStartupPhaseObservation> phases,
+            DateTimeOffset now)
+        {
+            Validate();
+            if (leaseCreatedAt <= DateTimeOffset.MinValue || leaseCreatedAt > now ||
+                phases.IsDefault || phases.Any(phase => phase is null) ||
+                phases.Select(phase => phase.Phase).Distinct().Count() != phases.Length)
+                throw new ArgumentException("Sandbox startup evidence is missing, duplicated, or in the future.");
+            var observedPhases = phases.ToDictionary(phase => phase.Phase);
+            var failures = new List<SandboxStartupBudgetFailure>();
+            var previousAt = leaseCreatedAt;
+            foreach (var phase in Enum.GetValues<SandboxStartupPhase>())
+            {
+                var deadline = previousAt.AddSeconds(For(phase));
+                if (!observedPhases.TryGetValue(phase, out var observed))
+                {
+                    if (now > deadline)
+                        failures.Add(new(SandboxStartupBudgetFailureKind.PhaseExceeded,
+                            phase, For(phase), deadline, now));
+                    break;
+                }
+                if (observed.ObservedAt < previousAt || observed.ObservedAt > now)
+                    throw new ArgumentException("Sandbox startup phase timestamps must be chronological and not in the future.");
+                if (observed.ObservedAt > deadline)
+                    failures.Add(new(SandboxStartupBudgetFailureKind.PhaseExceeded,
+                        phase, For(phase), deadline, observed.ObservedAt));
+                previousAt = observed.ObservedAt;
+            }
+            var totalDeadline = leaseCreatedAt.AddSeconds(TotalSeconds);
+            var totalObservedAt = observedPhases.TryGetValue(SandboxStartupPhase.Ready, out var ready)
+                ? ready.ObservedAt : now;
+            if (totalObservedAt > totalDeadline)
+                failures.Add(new(SandboxStartupBudgetFailureKind.TotalExceeded,
+                    SandboxStartupPhase.Ready, TotalSeconds, totalDeadline, totalObservedAt));
+            return failures.OrderBy(failure => failure.Deadline).FirstOrDefault();
+        }
 }
 
 public enum SandboxTerminalReason

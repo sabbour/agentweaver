@@ -53,7 +53,9 @@ public static class RuntimeUsageSourceReceiptContract
             attribution.AgentId != binding.AgentId || attribution.TurnId != binding.TurnId ||
             model.ModelReference != source.ModelSelectionReference || model.ModelId != source.ModelId ||
             model.MeterSource != source.MeterSource || model.SelectionRevision != binding.ContextRevision ||
-            measurement.RequestCount is not null || measurement.ProviderUnit != "nano_aiu" ||
+            measurement.RequestCount is not null ||
+            measurement.ProviderUnit != (source.SourceMode == "hosted-copilot" ? "nano_aiu" : "tokens") ||
+            source.SourceMode == "byok" && measurement.ProviderUnits is not null ||
             measurement.InputTokens < 0 || measurement.OutputTokens < 0 ||
             measurement.CachedTokens < 0 || measurement.CacheWriteTokens < 0 ||
             measurement.ReasoningTokens < 0 || measurement.ProviderUnits < 0 ||
@@ -76,10 +78,10 @@ public static class RuntimeUsageSourceReceiptContract
             binding.EnvironmentLeaseRevision < 1 ||
             source.RuntimeInstanceId != registration.RuntimeInstanceId ||
             source.RegistrationRevision != registration.Revision ||
-            source.SdkSessionId != $"agentweaver-runtime-{registration.RuntimeInstanceId:D}" ||
+            source.SdkSessionId != RuntimeContractValidation.NativeSessionId(binding) ||
             source.ModelSelectionReference != binding.ModelSelectionReference ||
             source.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
-            source.SourceMode != "hosted-copilot" || source.MeterSource != SdkMeterSources.CopilotNanoAiu ||
+            !MatchesSourceMode(binding.ModelSourceMode, source) ||
             source.ModelMultiplier < 0)
             throw new RuntimeAuthorizationException("runtime_usage_binding_invalid");
         RuntimeContractValidation.ValidateHash(source.CatalogHash);
@@ -87,6 +89,16 @@ public static class RuntimeUsageSourceReceiptContract
         RequireText(source.RuntimeVersion);
         RequireText(source.ModelId);
     }
+
+    private static bool MatchesSourceMode(ModelSourceMode? mode, SdkSessionFacts source) => mode switch
+    {
+        ModelSourceMode.HostedCopilot =>
+            source.SourceMode == "hosted-copilot" && source.MeterSource == SdkMeterSources.CopilotNanoAiu,
+        ModelSourceMode.Byok =>
+            source.SourceMode == "byok" && source.MeterSource == SdkMeterSources.ByokTokens &&
+            source.ModelMultiplier is null,
+        _ => false
+    };
 
     public static string Hash(RuntimeRegistration registration, UsageSubmission usage) =>
         RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
@@ -112,7 +124,8 @@ public static class RuntimeUsageSourceReceiptContract
             },
             new(source.ModelSelectionReference, source.ModelId, source.MeterSource, binding.ContextRevision),
             new(observation.InputTokens, observation.OutputTokens, observation.CacheReadTokens,
-                observation.ReasoningTokens, null, observation.TotalNanoAiu, "nano_aiu",
+                observation.ReasoningTokens, null, observation.TotalNanoAiu,
+                source.SourceMode == "hosted-copilot" ? "nano_aiu" : "tokens",
                 observation.DurationMilliseconds)
             {
                 CacheWriteTokens = observation.CacheWriteTokens

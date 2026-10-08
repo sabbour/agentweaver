@@ -112,6 +112,17 @@ var workloadIdentityOptions = new WorkloadIdentityCredentialOptions
 var secretClientOptions = new SecretClientOptions();
 
 builder.Services.AddSingleton(identityOptions);
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.Converters.Add(
+        new System.Text.Json.Serialization.JsonStringEnumConverter<ModelSourceMode>(System.Text.Json.JsonNamingPolicy.CamelCase));
+    options.SerializerOptions.Converters.Add(
+        new System.Text.Json.Serialization.JsonStringEnumConverter<RuntimeModelCredentialKind>(System.Text.Json.JsonNamingPolicy.CamelCase));
+    options.SerializerOptions.Converters.Add(
+        new System.Text.Json.Serialization.JsonStringEnumConverter<ProjectAuthorityResourceType>(System.Text.Json.JsonNamingPolicy.CamelCase));
+    options.SerializerOptions.Converters.Add(
+        new System.Text.Json.Serialization.JsonStringEnumConverter<CopilotConnectionState>(System.Text.Json.JsonNamingPolicy.CamelCase));
+});
 
 // OpenIddict's own server dispatcher logs the full extracted token/authorization request
 // at Information level (ID6075/ID6064/etc.), including the PKCE code_verifier (it
@@ -170,6 +181,29 @@ var runtimeBootstrapOptions = builder.Configuration
     .GetSection("IdentityBroker:RuntimeBootstrap").Get<RuntimeBootstrapOptions>();
 if (runtimeBootstrapOptions is not null)
     builder.Services.AddIdentityRuntimeCredentials(runtimeBootstrapOptions, identityOptions.Issuer);
+var copilotConnectionOptions = builder.Configuration
+    .GetSection("IdentityBroker:CopilotConnection").Get<CopilotConnectionOptions>();
+if (copilotConnectionOptions is not null)
+{
+    RuntimeOwnerHttpTransport.RequireOwnerAddress(copilotConnectionOptions.ProjectsOwnerAddress);
+    if (string.IsNullOrWhiteSpace(copilotConnectionOptions.ClientId) ||
+        !RuntimeContractValidation.IsHttpsEndpoint(copilotConnectionOptions.CallbackUri) ||
+        copilotConnectionOptions.ClientSecretReference is null)
+        throw new InvalidOperationException("Copilot connections require explicit OAuth and protected-store configuration.");
+    builder.Services.AddSingleton(copilotConnectionOptions);
+    builder.Services.AddHttpClient("CopilotConnectionProjects")
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    builder.Services.AddHttpClient("CopilotConnectionGitHub")
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    builder.Services.AddSingleton<ISecretVersionWriter>(provider => new AzureKeyVaultSecretVersionWriter(
+        vaultConfiguration, provider.GetRequiredService<TokenCredential>()));
+    builder.Services.AddScoped(provider => new CopilotConnectionAuthority(
+        provider.GetRequiredService<IdentityBrokerDbContext>(), copilotConnectionOptions,
+        provider.GetRequiredService<IHttpClientFactory>().CreateClient("CopilotConnectionProjects"),
+        provider.GetRequiredService<IHttpClientFactory>().CreateClient("CopilotConnectionGitHub"),
+        provider.GetRequiredService<ISecretRedemption>(), provider.GetRequiredService<ISecretVersionWriter>(),
+        provider.GetRequiredService<IDataProtectionProvider>(), provider.GetRequiredService<TimeProvider>()));
+}
 
 // The broker's own signing/encryption credential. Production composition mounts a real
 // PFX; there is no "development certificate" escape hatch in this host.
@@ -309,6 +343,7 @@ app.UseAuthorization();
 
 app.MapIdentityBrokerEndpoints();
 app.MapIdentitySecretRedemptionEndpoints();
+app.MapCopilotConnectionEndpoints();
 if (runtimeBootstrapOptions is not null)
     app.MapIdentityRuntimeCredentialEndpoints();
 

@@ -371,10 +371,10 @@ selector. The immutable run selection must contain exactly one matching Sandbox 
 adapter version, schema, options revision, and capabilities must match the configured adapter. Missing or
 mismatched selection is denied without fallback.
 
-This source slice does not yet implement suspend/resume, provider lifecycle events, authenticated AgentHost
-configuration, A2A connectivity, an endpoint URI, or a Core run provider pin. It does not start or dispatch
-a model run. Those remain wider platform contract work. No provider may weaken VM isolation when the
-selection requires it.
+The adapter does not implement suspend/resume, provider lifecycle events, or automatic model dispatch.
+The separate [AgentHost candidate](../agenthost.md) implements authenticated configuration and A2A source routes.
+Environment owns registered endpoint/profile and placement evidence; Orchestrator owns runtime registration and accepted run bindings.
+No provider can weaken VM isolation when the selection requires it.
 
 The current lease source stores the full Environment owner tuple, lifecycle generation,
 resource generation, provider/current fencing generations, lease revision, and expiry.
@@ -393,8 +393,9 @@ generation before and after provider observation. Environment reserves the exact
 attached before provider dispatch and detaches it only after exact Sandbox placement retirement; Workspace
 replace and release therefore cannot race a live mount. Kubernetes Sandbox and container Ready conditions
 do not imply Environment or AgentHost readiness. The adapter reports observed `scheduled`, `image ready`,
-and `started` phases; it does not report `configured` or dispatch `ready` because this slice has no AgentHost
-configure/ready handshake. Policy-object verification is not datapath proof.
+and `started` phases. AgentHost adds actual `configured` and `ready` timestamps after authenticated current-owner checks.
+Its readiness owner lookup retains the lease while it observes Sandbox and egress state from the pinned selection.
+Policy-object verification is not datapath proof.
 
 An exact `Finished=True` Agent Sandbox condition with a supported reason and current observed generation can
 retire Sandbox placement only. An explicit abandon also requires fresh Projects authority and a durable

@@ -70,8 +70,12 @@ evidence.
 The separate native SDK harness reuses the canonical placement manager.
 Its profile callback reads actual Orchestrator work-item context under the retained lease.
 The module tests retire a lease before lifecycle advancement, as the admitted lifecycle guard requires.
+The readiness module test retains the actual PostgreSQL advisory lock during Cilium and Sandbox observations.
+It observes a competing retirement through `pg_locks` and releases it only after readiness completes.
+The retained snapshot supplies selection data without a recursive Projects selection request.
 The combined source scenarios then exercise actual Broker delivery, SDK callbacks,
 immutable Orchestrator receipts, and reference-only Events accounting.
+The [AgentHost tests](../architecture/agenthost#focused-source-checks) separately cover authenticated configuration and current readiness.
 See the [native accounting scenarios](./testing#cost-bindings-pricing-and-usage-storage)
 for their exact command and local evidence boundary.
 

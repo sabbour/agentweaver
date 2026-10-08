@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Agentweaver.Abstractions;
 
@@ -21,6 +22,9 @@ public sealed record AgentSandboxOptions(
     AgentSandboxStartupBudgets StartupBudgets)
 {
     public const int CurrentOptionsSchemaVersion = 2;
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AgentSandboxAgentHostProfile? AgentHost { get; init; }
 
     private static readonly Regex CpuQuantity = new(
         "^(?:[1-9][0-9]*m|[1-9][0-9]*(?:\\.[0-9]+)?)$",
@@ -66,8 +70,15 @@ public sealed record AgentSandboxOptions(
             throw new ArgumentOutOfRangeException(nameof(PollIntervalMilliseconds));
         ArgumentNullException.ThrowIfNull(StartupBudgets);
         _ = StartupBudgets.Validate();
+        if (AgentHost is { } host)
+        {
+            ValidateDnsSubdomain(host.ConfigurationMapName, nameof(host.ConfigurationMapName));
+            ValidateDnsSubdomain(host.TlsSecretName, nameof(host.TlsSecretName));
+        }
         return this;
     }
+
+    public sealed record AgentSandboxAgentHostProfile(string ConfigurationMapName, string TlsSecretName);
 
     public string ContainerImageDigest => ContainerImage[(ContainerImage.LastIndexOf("@sha256:", StringComparison.Ordinal) + 1)..];
 
@@ -127,6 +138,9 @@ public sealed record AgentSandboxStartupBudgets(
         SandboxStartupPhase.Ready => ReadySeconds,
         _ => throw new ArgumentOutOfRangeException(nameof(phase))
     };
+
+    public SandboxStartupTimeBudgets ToContract() => new(
+        ScheduledSeconds, ImageReadySeconds, StartedSeconds, ConfiguredSeconds, ReadySeconds, TotalSeconds);
 }
 
 public static class AgentSandboxProviderMetadata

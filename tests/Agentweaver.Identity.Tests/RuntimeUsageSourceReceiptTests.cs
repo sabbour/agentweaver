@@ -21,6 +21,7 @@ public sealed class RuntimeUsageSourceReceiptTests
             receipt.Usage with { SdkSource = receipt.Usage.SdkSource! with { SourceMode = "byok" } },
             receipt.Usage with { SdkSource = receipt.Usage.SdkSource! with { AcceptedSelectionHash = new string('b', 64) } },
             receipt.Usage with { SdkSource = receipt.Usage.SdkSource! with { RegistrationRevision = 2 } },
+            receipt.Usage with { SdkSource = receipt.Usage.SdkSource! with { SdkSessionId = "foreign-session" } },
             receipt.Usage with { Measurement = receipt.Usage.Measurement with { RequestCount = 1 } }
         })
             Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.ValidateUsage(
@@ -67,6 +68,7 @@ public sealed class RuntimeUsageSourceReceiptTests
                 new("https://orchestrator.test/internal/runtime/observations"))
             {
                 ModelSelectionReference = "accepted-model",
+                ModelSourceMode = ModelSourceMode.HostedCopilot,
                 PlacementProviderId = "sandbox-platform",
                 EnvironmentLifecycleGeneration = 1,
                 EnvironmentLeaseRevision = 2,
@@ -75,7 +77,7 @@ public sealed class RuntimeUsageSourceReceiptTests
             },
             RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(1));
         var source = new SdkSessionFacts(
-            registration.RuntimeInstanceId, $"agentweaver-runtime-{registration.RuntimeInstanceId:D}",
+            registration.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(registration.Binding),
             "1.0.11+source", "runtime-v1", "accepted-model", "native-model", new string('b', 64),
             2.5m, "hosted-copilot", SdkMeterSources.CopilotNanoAiu, registration.Binding.AcceptedSelectionHash, 1);
         var eventId = Guid.NewGuid().ToString("D");
@@ -86,5 +88,37 @@ public sealed class RuntimeUsageSourceReceiptTests
         var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
         return new(1, Guid.NewGuid(), registration, usage,
             RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public void ByokTokenObservationsCannotAcquireCopilotUnitsOrHostedSourceFacts()
+    {
+        var hosted = Receipt();
+        var registration = hosted.Registration with
+        {
+            Binding = hosted.Registration.Binding with { ModelSourceMode = ModelSourceMode.Byok }
+        };
+        var source = hosted.Usage.SdkSource! with
+        {
+            SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null
+        };
+        var eventId = Guid.NewGuid().ToString("D");
+        var observation = new SdkUsageObservation(
+            SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, eventId),
+            eventId, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
+            17, 11, 7, 5, 3, null, 12.5m);
+        var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
+        Assert.Equal("tokens", usage.Measurement.ProviderUnit);
+        Assert.Null(usage.Measurement.ProviderUnits);
+        Assert.Equal(17, usage.Measurement.InputTokens);
+        foreach (var invalid in new[]
+        {
+            usage with { Measurement = usage.Measurement with { ProviderUnits = 0 } },
+            usage with { Measurement = usage.Measurement with { ProviderUnit = "nano_aiu" } },
+            usage with { SdkSource = source with { SourceMode = "hosted-copilot" } },
+            usage with { SdkSource = source with { ModelMultiplier = 0 } }
+        })
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeUsageSourceReceiptContract.ValidateUsage(registration, invalid));
     }
 }

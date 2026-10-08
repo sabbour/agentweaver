@@ -187,7 +187,37 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         if (input.Payload is PolicyEvaluationSessionPayload)
             throw new SessionAccessDeniedException(
                 "Policy evaluation events require trusted Orchestrator Core writer provenance.");
+        if (SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload).Any(
+            reference => reference.Material is not null))
+            throw new SessionAccessDeniedException("Session material requires its authenticated execution producer.");
         return await AppendCoreAsync(identity, input, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal Task<SessionAppendResult> AppendMaterialAsync(
+        ClaimsPrincipal principal, string sessionId, AppendSessionEvent input,
+        Func<CancellationToken, Task> persistMaterial,
+        Func<CancellationToken, Task> validateBeforeCommit,
+        CancellationToken cancellationToken)
+    {
+        ValidateInput(input);
+        if (input.Payload is not (TurnSessionPayload or CacheReferenceSessionPayload) ||
+            SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload) is not
+                [{ Material: not null }])
+            throw new ArgumentException("Only typed execution turn content or SDK cache material is accepted.");
+        return AppendCoreAsync(RequireScope(principal).ForSession(sessionId), input,
+            cancellationToken, validateBeforeCommit, persistMaterial);
+    }
+
+    internal async Task<SessionEventEnvelope> ReadMaterialEventAsync(
+        ClaimsPrincipal principal, string sessionId, Guid eventId, CancellationToken cancellationToken)
+    {
+        var identity = RequireScope(principal).ForSession(sessionId);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var envelope = await ReadEventByIdAsync(connection, null, identity.ProjectId, identity.RunId,
+            eventId, cancellationToken).ConfigureAwait(false);
+        if (envelope is null || envelope.Identity != identity)
+            throw new SessionNotFoundException("The recorded session material event does not exist.");
+        return envelope;
     }
 
     internal async Task<SessionAppendResult> AppendPolicyEvaluationAsync(
@@ -225,7 +255,8 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         SessionIdentity identity,
         AppendSessionEvent input,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? validateBeforeCommit = null)
+        Func<CancellationToken, Task>? validateBeforeCommit = null,
+        Func<CancellationToken, Task>? persistMaterial = null)
     {
         var canonicalInput = CreateCanonicalInput(identity, input);
         var payload = JsonSerializer.SerializeToElement<SessionEventPayload>(input.Payload, JsonOptions);
@@ -259,12 +290,16 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             if (await compare.ExecuteScalarAsync(cancellationToken) is not true)
                 throw new SessionEventConflictException(
                     "The event identity was already used for a different immutable event.");
+            if (persistMaterial is not null)
+                await persistMaterial(cancellationToken).ConfigureAwait(false);
             if (validateBeforeCommit is not null)
                 await validateBeforeCommit(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken);
             return new SessionAppendResult(duplicate, IsDuplicate: true);
         }
 
+        if (persistMaterial is not null)
+            await persistMaterial(cancellationToken).ConfigureAwait(false);
         var position = await AdvanceRunPositionAsync(
             connection, transaction, identity.ProjectId, identity.RunId, cancellationToken);
         var utcNow = _timeProvider.GetUtcNow().ToUniversalTime();
@@ -862,7 +897,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
 
     private async Task<SessionEventEnvelope?> ReadEventByIdAsync(
         NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
+        NpgsqlTransaction? transaction,
         string projectId,
         string runId,
         Guid eventId,

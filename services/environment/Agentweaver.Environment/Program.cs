@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentityCredential;
+using static Program;
 
 var runMigrations = args.Length == 1 && args[0] == "--migrate";
 if (args.Contains("--migrate", StringComparer.Ordinal) && !runMigrations)
@@ -225,37 +226,6 @@ static AzureFilesCsiOptions ReadAzureFilesOptions(IConfiguration configuration)
         section.GetValue("PollIntervalMilliseconds", 0)).Validate();
 }
 
-static AgentSandboxOptions ReadSandboxOptions(IConfiguration configuration)
-{
-    var section = configuration.GetSection("Environment:Sandbox:AgentSandbox");
-    return new AgentSandboxOptions(
-        section.GetValue("OptionsSchemaVersion", 0),
-        Required(section["OptionsRevision"], "Environment:Sandbox:AgentSandbox:OptionsRevision"),
-        Required(section["Namespace"], "Environment:Sandbox:AgentSandbox:Namespace"),
-        Required(section["WorkspaceStorageProviderId"], "Environment:Sandbox:AgentSandbox:WorkspaceStorageProviderId"),
-        Required(section["ContainerImage"], "Environment:Sandbox:AgentSandbox:ContainerImage"),
-        Required(section["ContainerImagePlatform"], "Environment:Sandbox:AgentSandbox:ContainerImagePlatform"),
-        section.GetValue("ContainerImageCompressedPullBytes", 0L),
-        Required(section["RuntimeClassName"], "Environment:Sandbox:AgentSandbox:RuntimeClassName"),
-        Required(section["ExpectedRuntimeHandler"], "Environment:Sandbox:AgentSandbox:ExpectedRuntimeHandler"),
-        Required(section["CpuRequest"], "Environment:Sandbox:AgentSandbox:CpuRequest"),
-        Required(section["MemoryRequest"], "Environment:Sandbox:AgentSandbox:MemoryRequest"),
-        section.GetValue("ReconciliationTimeoutSeconds", 0),
-        section.GetValue("PollIntervalMilliseconds", 0),
-        new AgentSandboxStartupBudgets(
-            section.GetValue("StartupBudgets:ScheduledSeconds", 0),
-            section.GetValue("StartupBudgets:ImageReadySeconds", 0),
-            section.GetValue("StartupBudgets:StartedSeconds", 0),
-            section.GetValue("StartupBudgets:ConfiguredSeconds", 0),
-            section.GetValue("StartupBudgets:ReadySeconds", 0),
-            section.GetValue("StartupBudgets:TotalSeconds", 0))).Validate();
-}
-
-static string Required(string? value, string name) =>
-    !string.IsNullOrWhiteSpace(value)
-        ? value
-        : throw new InvalidOperationException($"Missing required configuration '{name}'.");
-
 internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
 {
     private readonly string _tokenFile;
@@ -322,4 +292,40 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
     }
 }
 
-public partial class Program;
+public partial class Program
+{
+    public static AgentSandboxOptions ReadSandboxOptions(IConfiguration configuration)
+    {
+        var section = configuration.GetSection("Environment:Sandbox:AgentSandbox");
+        return new AgentSandboxOptions(
+            section.GetValue("OptionsSchemaVersion", 0),
+            Required(section["OptionsRevision"], "Environment:Sandbox:AgentSandbox:OptionsRevision"),
+            Required(section["Namespace"], "Environment:Sandbox:AgentSandbox:Namespace"),
+            Required(section["WorkspaceStorageProviderId"], "Environment:Sandbox:AgentSandbox:WorkspaceStorageProviderId"),
+            Required(section["ContainerImage"], "Environment:Sandbox:AgentSandbox:ContainerImage"),
+            Required(section["ContainerImagePlatform"], "Environment:Sandbox:AgentSandbox:ContainerImagePlatform"),
+            section.GetValue("ContainerImageCompressedPullBytes", 0L),
+            Required(section["RuntimeClassName"], "Environment:Sandbox:AgentSandbox:RuntimeClassName"),
+            Required(section["ExpectedRuntimeHandler"], "Environment:Sandbox:AgentSandbox:ExpectedRuntimeHandler"),
+            Required(section["CpuRequest"], "Environment:Sandbox:AgentSandbox:CpuRequest"),
+            Required(section["MemoryRequest"], "Environment:Sandbox:AgentSandbox:MemoryRequest"),
+            section.GetValue("ReconciliationTimeoutSeconds", 0),
+            section.GetValue("PollIntervalMilliseconds", 0),
+            new AgentSandboxStartupBudgets(
+                section.GetValue("StartupBudgets:ScheduledSeconds", 0),
+                section.GetValue("StartupBudgets:ImageReadySeconds", 0),
+                section.GetValue("StartupBudgets:StartedSeconds", 0),
+                section.GetValue("StartupBudgets:ConfiguredSeconds", 0),
+                section.GetValue("StartupBudgets:ReadySeconds", 0),
+                section.GetValue("StartupBudgets:TotalSeconds", 0)))
+        {
+            AgentHost = section.GetSection("AgentHost")
+                .Get<AgentSandboxOptions.AgentSandboxAgentHostProfile>()
+        }.Validate();
+    }
+
+    internal static string Required(string? value, string name) =>
+        !string.IsNullOrWhiteSpace(value)
+            ? value
+            : throw new InvalidOperationException($"Missing required configuration '{name}'.");
+}

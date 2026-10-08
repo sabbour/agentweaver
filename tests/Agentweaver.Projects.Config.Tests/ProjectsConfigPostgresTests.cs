@@ -344,6 +344,7 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         var selection = await service.AcceptRunSelectionAsync(
             orchestrator, project.ProjectId, "run-immutable-1", request, CancellationToken.None);
         Assert.Equal("project-model", selection.ModelSelection.Reference);
+        Assert.Equal(ModelSourceMode.Byok, selection.ModelSelection.SourceMode);
         var sandboxSelection = Assert.Single(selection.Providers.Where(provider =>
             provider.Seam == ProviderSeam.Sandbox));
         Assert.Equal("sandbox-project", Assert.Single(sandboxSelection.Candidates).ProviderId);
@@ -958,7 +959,8 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
 
     private static PlatformRuntimeDefaults PlatformDefaults() => new()
     {
-        ModelSelection = new ModelSelectionSettings("platform-model"),
+        ModelSelection = new ModelSelectionSettings("platform-model", SourceMode: ModelSourceMode.HostedCopilot,
+            ConnectionId: Guid.Parse("8b92ad7d-dbd3-4a80-877c-6999fdc3d3bc")),
         EgressBaseline =
         [
             Fqdn(NetworkEgressPurpose.ModelEndpoint, "api.example.com"),
@@ -977,7 +979,8 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
 
     private static ProjectConfiguration ProjectSettings() => new()
     {
-        ModelSelection = new ModelSelectionSettings("project-model"),
+        ModelSelection = new ModelSelectionSettings("project-model",
+            new SecretRef("project-model-key", "v1"), ModelSourceMode.Byok),
         ProviderOverrides = [new ProjectProviderOverride(ProviderSeam.Sandbox, "sandbox-project")],
         EgressNarrowing = [Fqdn(NetworkEgressPurpose.ModelEndpoint, "api.example.com")],
         RunLimits = new CopilotRunLimitOverrides

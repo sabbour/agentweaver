@@ -35,6 +35,58 @@ public sealed class EnvironmentSandboxManagerTests
         Assert.Equal("aw-claim-original-id", projection.Resource.ResourceId);
         Assert.Equal(lease.ProvisionedResource.Endpoint, projection.Endpoint);
         Assert.Equal(lease.ProvisionedResource.Placement, projection.Placement);
+        Assert.Null(projection.Image);
+        Assert.DoesNotContain("\"image\"", JsonSerializer.Serialize(projection,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    }
+
+    [Fact]
+    public void PlacementImageComesFromProvisionedBindingRatherThanCurrentConfiguration()
+    {
+        var now = DateTimeOffset.Parse("2026-10-06T12:00:00Z");
+        var owner = new EnvironmentOwnerIdentity("tenant-a", "project-a", "run-a", "environment-a");
+        var fence = new EnvironmentGenerationFence(owner, 4);
+        var lease = CreateCurrentLease(fence, now, "sandbox-uid");
+        var options = new AgentSandboxOptions(
+            2, "image-options-1", "agentweaver", "azure-files-csi",
+            "ghcr.io/agentweaver/agenthost@sha256:" + new string('b', 64),
+            "linux/amd64", 10_000_000_000, "kata-vm", "kata-qemu",
+            "500m", "512Mi", 1, 1, new(30, 30, 30, 30, 30, 120));
+        var binding = lease.ProvisionedResource!.ProviderBinding with
+        {
+            OptionsSchemaVersion = 2,
+            OptionsRevision = options.OptionsRevision,
+            OptionsSnapshot = JsonSerializer.SerializeToElement(options,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))
+        };
+        var pinned = lease with
+        {
+            ProvisionedResource = lease.ProvisionedResource with { ProviderBinding = binding }
+        };
+        var projection = EnvironmentSandboxManager.ProjectCurrentPlacement(owner, fence, pinned, now);
+        Assert.Equal(new SandboxImageIdentity("sha256:" + new string('b', 64), "linux/amd64", 10_000_000_000),
+            projection.Image);
+        Assert.Throws<EnvironmentLifecycleException>(() => EnvironmentSandboxManager.ProjectCurrentPlacement(
+            owner, fence, pinned with
+            {
+                ProvisionedResource = pinned.ProvisionedResource! with
+                {
+                    ProviderBinding = binding with { OptionsRevision = "different-options" }
+                }
+            }, now));
+        Assert.Throws<ArgumentOutOfRangeException>(() => EnvironmentSandboxManager.ProjectCurrentPlacement(
+            owner, fence, pinned with
+            {
+                ProvisionedResource = pinned.ProvisionedResource! with
+                {
+                    ProviderBinding = binding with
+                    {
+                        OptionsSnapshot = JsonSerializer.SerializeToElement(
+                            options with { ContainerImageCompressedPullBytes = 0 },
+                            new JsonSerializerOptions(JsonSerializerDefaults.Web))
+                    }
+                }
+            }, now));
     }
 
     [Fact]

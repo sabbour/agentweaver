@@ -13,7 +13,8 @@ public sealed class RuntimeGrantAuthority(
     IRuntimeBootstrapDelivery delivery,
     RuntimeCredentialPolicy policy,
     RuntimeActorAuthorization actor,
-    TimeProvider timeProvider) : IRuntimePendingBootstrapVerifier
+    TimeProvider timeProvider,
+    CopilotConnectionAuthority? connections = null) : IRuntimePendingBootstrapVerifier
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -29,8 +30,25 @@ public sealed class RuntimeGrantAuthority(
         var binding = registration.Binding;
         var modelReference = binding.ModelSelectionReference;
         var credentialReference = binding.ModelCredentialReference;
+        CopilotConnectionRecord? connection = null;
+        if (binding.ModelSourceMode == ModelSourceMode.HostedCopilot)
+        {
+            connection = await (connections ??
+                throw Denied("runtime_copilot_connection_writer_unavailable"))
+                .RequireCurrentAsync(binding, cancellationToken);
+            credentialReference = new SecretRef(connection.SecretId!, connection.SecretVersion!);
+        }
+        else if (binding.ModelSourceMode != ModelSourceMode.Byok || binding.ModelConnectionId is not null)
+        {
+            throw Denied("runtime_model_source_mode_unavailable");
+        }
         if (string.IsNullOrWhiteSpace(modelReference) || credentialReference is null)
             throw Denied("runtime_model_credential_unavailable");
+        var expiresAt = connection is null || registration.ExpiresAt <= connection.FreshUntil
+            ? registration.ExpiresAt : connection.FreshUntil;
+        if (actor.Bearer.ExpiresAt < expiresAt)
+            expiresAt = actor.Bearer.ExpiresAt;
+        expiresAt = new DateTimeOffset(expiresAt.UtcTicks - expiresAt.UtcTicks % 10, TimeSpan.Zero);
 
         var grantId = $"runtime-model-session:{runtimeInstanceId:N}";
         var idempotencyKey = $"runtime-model-session:{operationId:N}";
@@ -78,7 +96,7 @@ public sealed class RuntimeGrantAuthority(
         var grant = new SecretRedemptionGrant(
             grantId, binding.ActorId, binding.ProjectId, binding.RunId,
             RuntimeSecretPurposes.ModelSession, credentialReference,
-            GrantState.Active, registration.ExpiresAt, timeProvider);
+            GrantState.Active, expiresAt, timeProvider);
         GrantMutationResult mutation;
         try
         {
@@ -95,9 +113,135 @@ public sealed class RuntimeGrantAuthority(
         }
 
         await RequireSameCurrentAsync(registration, cancellationToken);
+        if (connection is not null)
+        {
+            var currentConnection = await connections!.RequireCurrentAsync(binding, cancellationToken);
+            RequireSameConnection(connection, currentConnection);
+        }
         return new RuntimeModelCredentialGrantReceipt(
             grantId, mutation.Revision, registration.RuntimeInstanceId, registration.Revision,
-            modelReference, credentialReference, RuntimeSecretPurposes.ModelSession, grant.ExpiresAt);
+            modelReference, credentialReference, RuntimeSecretPurposes.ModelSession, grant.ExpiresAt)
+        {
+            SourceMode = binding.ModelSourceMode,
+            ConnectionId = connection?.ConnectionId,
+            ConnectionRevision = connection?.Revision,
+            CredentialKind = connection is null
+                ? RuntimeModelCredentialKind.ByokKey : RuntimeModelCredentialKind.GitHubUserAccess
+        };
+    }
+
+    public async Task<RuntimeModelCredentialGrantReceipt> VerifyModelCredentialAsync(
+        RuntimeModelCredentialGrantReceipt receipt, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        var registration = await RequireCurrentAsync(receipt.RuntimeInstanceId, cancellationToken);
+        var binding = registration.Binding;
+        if (receipt.RegistrationRevision != registration.Revision ||
+            receipt.ModelSelectionReference != binding.ModelSelectionReference ||
+            receipt.SourceMode != binding.ModelSourceMode || receipt.Purpose != RuntimeSecretPurposes.ModelSession ||
+            receipt.GrantId != $"runtime-model-session:{receipt.RuntimeInstanceId:N}" ||
+            receipt.ExpiresAt <= Now() || receipt.ExpiresAt > registration.ExpiresAt ||
+            receipt.CredentialReference is null)
+            throw Denied("runtime_model_grant_receipt_invalid");
+        if (binding.ModelSourceMode == ModelSourceMode.HostedCopilot)
+        {
+            var connection = await (connections ??
+                throw Denied("runtime_copilot_connection_writer_unavailable"))
+                .RequireCurrentAsync(binding, cancellationToken);
+            if (receipt.ConnectionId != connection.ConnectionId ||
+                receipt.ConnectionRevision != connection.Revision ||
+                receipt.CredentialKind != RuntimeModelCredentialKind.GitHubUserAccess ||
+                receipt.CredentialReference != new SecretRef(connection.SecretId!, connection.SecretVersion!) ||
+                receipt.ExpiresAt > connection.FreshUntil)
+                throw Denied("runtime_copilot_connection_stale");
+        }
+        else if (binding.ModelSourceMode != ModelSourceMode.Byok ||
+            receipt.ConnectionId is not null || receipt.ConnectionRevision is not null ||
+            receipt.CredentialKind != RuntimeModelCredentialKind.ByokKey ||
+            receipt.CredentialReference != binding.ModelCredentialReference)
+        {
+            throw Denied("runtime_model_grant_receipt_invalid");
+        }
+        var grant = await (
+            from head in db.SecretGrantHeads.AsNoTracking()
+            join revision in db.SecretGrantRevisions.AsNoTracking()
+                on new { head.GrantId, Revision = head.CurrentRevision }
+                equals new { revision.GrantId, revision.Revision }
+            where head.GrantId == receipt.GrantId
+            select revision).SingleOrDefaultAsync(cancellationToken);
+        if (grant is null || grant.Revision != receipt.Revision || grant.State != GrantState.Active ||
+            grant.ActorId != binding.ActorId || grant.ProjectId != binding.ProjectId ||
+            grant.RunId != binding.RunId || grant.Purpose != receipt.Purpose ||
+            grant.SecretId != receipt.CredentialReference.Id ||
+            grant.SecretVersion != receipt.CredentialReference.Version || grant.ExpiresAt != receipt.ExpiresAt)
+            throw Denied("runtime_model_grant_stale");
+        await RequireSameCurrentAsync(registration, cancellationToken);
+        if (receipt.ConnectionId is not null)
+        {
+            var final = await connections!.RequireCurrentAsync(binding, cancellationToken);
+            if (final.ConnectionId != receipt.ConnectionId || final.Revision != receipt.ConnectionRevision)
+                throw Denied("runtime_copilot_connection_stale");
+        }
+        var currentHead = await db.SecretGrantHeads.AsNoTracking()
+            .SingleOrDefaultAsync(head => head.GrantId == receipt.GrantId, cancellationToken);
+        if (currentHead?.CurrentRevision != receipt.Revision || receipt.ExpiresAt <= Now())
+            throw Denied("runtime_model_grant_stale");
+        return receipt;
+    }
+
+    public async Task<RuntimeModelCredential> RedeemModelCredentialAsync(
+        RuntimeModelCredentialGrantReceipt receipt, ISecretRedemption backend,
+        CancellationToken cancellationToken)
+    {
+        await VerifyModelCredentialAsync(receipt, cancellationToken);
+        var registration = await RequireCurrentAsync(receipt.RuntimeInstanceId, cancellationToken);
+        var binding = registration.Binding;
+        var redemption = new AuthorizedSecretRedemption(
+            new TrustedActorContext(binding.ActorId, binding.ProjectId, binding.RunId),
+            new IdentityGrantAuthority(db, timeProvider), backend, timeProvider);
+        var credential = await redemption.RedeemAsync(new SecretRedemptionRequest(
+            receipt.CredentialReference, RuntimeSecretPurposes.ModelSession, binding.RunId), cancellationToken);
+        try
+        {
+            await VerifyModelCredentialAsync(receipt, cancellationToken);
+            credential.LimitLifetime(receipt.ExpiresAt);
+            if (receipt.SourceMode == ModelSourceMode.HostedCopilot)
+            {
+                using var envelope = JsonDocument.Parse(credential.GetValue());
+                var root = envelope.RootElement;
+                if (root.ValueKind != JsonValueKind.Object ||
+                    root.EnumerateObject().Select(property => property.Name)
+                        .Distinct(StringComparer.OrdinalIgnoreCase).Count() != root.EnumerateObject().Count())
+                    throw Denied("runtime_copilot_credential_envelope_invalid");
+                var stored = root.Deserialize<CopilotUserCredential>(new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                if (stored?.Status != "signed-in" || string.IsNullOrWhiteSpace(stored.AccessToken) ||
+                    !stored.AccessToken.StartsWith("ghu_", StringComparison.Ordinal) ||
+                    stored.AccessToken.Any(char.IsWhiteSpace) || stored.ExpiresAt <= Now())
+                    throw Denied("runtime_copilot_credential_envelope_invalid");
+                credential.LimitLifetime(stored.ExpiresAt);
+                var access = new SecretCredential(stored.AccessToken, credential.ExpiresAt, timeProvider);
+                credential.Invalidate();
+                return new(receipt, access);
+            }
+            return new(receipt, credential);
+        }
+        catch (JsonException)
+        {
+            credential.Invalidate();
+            throw Denied("runtime_copilot_credential_envelope_invalid");
+        }
+        catch
+        {
+            credential.Invalidate();
+            throw;
+        }
+    }
+
+    private static void RequireSameConnection(CopilotConnectionRecord expected, CopilotConnectionRecord current)
+    {
+        if (expected.ConnectionId != current.ConnectionId || expected.Revision != current.Revision ||
+            expected.SecretId != current.SecretId || expected.SecretVersion != current.SecretVersion)
+            throw Denied("runtime_copilot_connection_stale");
     }
 
     public async Task<RuntimeBootstrapDeliveryReceipt> DeliverBootstrapAsync(

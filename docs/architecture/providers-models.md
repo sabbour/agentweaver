@@ -40,6 +40,11 @@ of falling back to a new default. The service emits bounded pin evidence through
 existing telemetry helper without recording option values, credentials, or raw resource
 IDs. See the [journal service reference](events-sessions.md).
 
+The authenticated Events run-binding route returns this actual consumer pin under existing exact-run read authority.
+Environment's current placement also exposes its successful consumer pin without option values or recovery metadata.
+Neither response converts accepted candidates into provisioned resources.
+The native SDK supplies its effective `modelId` separately from the immutable accepted `modelSelectionReference` and `acceptedSelectionHash`.
+
 Explicit-event forks require the pinned provider's `sessions.events.fork` capability
 and a committed source event matched to its session-bound cursor. Events rechecks the
 Orchestrator's admission receipt inside the fork transaction, then atomically persists
@@ -127,8 +132,8 @@ cross-service messaging endpoint.
 
 The Foundation Probe registers `azure-key-vault`, `azure-blob`, and `azure-monitor` descriptors for its checks. These registrations do not form a product provider catalog.
 
-Model is not a provider seam. The v1 source contains no AgentHost executable or
-general model resolver. The runtime library maps accepted references to actual SDK
+Model is not a provider seam. The unpublished [AgentHost executable](agenthost.md)
+uses the runtime library, not a new general model resolver. The library maps accepted references to actual SDK
 models through a registered connection and SDK catalog.
 This source does not declare deployed model-vendor support.
 
@@ -138,11 +143,11 @@ Copilot requires its supported GitHub credential path; BYOK requires an explicit
 SDK `Provider` configuration. A provider key, credential envelope, or GitHub App
 installation token must not be passed as an interchangeable Copilot `GitHubToken`.
 
-The approved source repair adds an explicit `SourceMode` to platform/project model
+The source repair adds an explicit `SourceMode` to platform/project model
 settings. Hosted mode selects a stable Identity-owned `ConnectionId`; BYOK selects
 an exact `CredentialReference`. Empty or unknown modes, invalid connection references,
-and mixed hosted/BYOK settings fail with standard errors. These contracts are planned
-source work, not an implemented or deployed connection lifecycle.
+and mixed hosted/BYOK settings fail with standard errors.
+The Identity-owned connection lifecycle implements these contracts in source, not in a deployed service.
 
 The accepted hosted selection and its hash remain immutable during normal token
 rotation. Each ModelSession receipt pins the current connection revision, exact secret
@@ -158,9 +163,9 @@ a compatibility default or automatic migration. It returns an explicit migration
 or unavailable result until a new selection is authorized. BYOK retains its exact secret
 reference and SDK Provider configuration, without hosted fallback.
 
-The AgentHost mode repair remains in
-[#1856](https://github.com/sabbour/agentweaver/issues/1856). The missing Copilot connection
-and refresh lifecycle is tracked in [#1906](https://github.com/sabbour/agentweaver/issues/1906);
+The AgentHost mode repair belongs to
+[#1856](https://github.com/sabbour/agentweaver/issues/1856).
+The source Copilot connection and refresh lifecycle belongs to [#1906](https://github.com/sabbour/agentweaver/issues/1906);
 repository App credentials are separate [#1907](https://github.com/sabbour/agentweaver/issues/1907).
 Platform/project model selection remains the documented scope. GitHub-user account linking
 can authenticate a deliberately selected Copilot binding; it does not add personal BYOK

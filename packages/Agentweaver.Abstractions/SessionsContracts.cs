@@ -73,7 +73,11 @@ public readonly record struct SessionIdentity
 public sealed record SessionObjectReference(
     [property: JsonConverter(typeof(SessionObjectKeyJsonConverter))] ObjectKey Key,
     string Purpose,
-    long? ByteLength = null);
+    long? ByteLength = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SessionMaterialBinding? Material { get; init; }
+}
 
 public sealed class SessionObjectKeyJsonConverter : JsonConverter<ObjectKey>
 {
@@ -172,6 +176,7 @@ public sealed record AppendSessionEvent(
 
 public sealed class SessionEventEnvelope
 {
+    [JsonConstructor]
     internal SessionEventEnvelope(
         int schemaVersion,
         int eventVersion,
@@ -521,6 +526,8 @@ public static class SessionEventPayloadValidation
             reference.ByteLength is < 0)
             throw new ArgumentException("An opaque object reference is invalid.", nameof(reference));
         _ = new ObjectKey(reference.Key.Value);
+        if (reference.Material is not null)
+            SessionMaterialValidation.Validate(reference);
         return reference;
     }
 

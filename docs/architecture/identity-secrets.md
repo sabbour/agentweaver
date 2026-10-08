@@ -56,7 +56,7 @@ credential. A GitHub App installation token cannot authenticate the Copilot SDK.
 | Integration | Current source boundary | Missing work |
 | --- | --- | --- |
 | Core sign-in | Broker OIDC, OAuth, consent, refresh, and purpose-bound secret redemption exist. | These contracts do not supply either GitHub connection lifecycle. |
-| GitHub Copilot | The SDK consumer and selected-secret bridge exist, but mode-specific wiring is incomplete. | Compatible account linking, owner-bound callbacks, credential-envelope handling, refresh rotation, and current binding checks: [#1906](https://github.com/sabbour/agentweaver/issues/1906). |
+| GitHub Copilot | Identity implements owner-bound account linking, PKCE/cookie callbacks, exact-version writes, refresh rotation, and current binding checks in source. The SDK consumes only the current user access token. | Deployed OAuth, writer permissions, and live entitlement remain outside [#1906](https://github.com/sabbour/agentweaver/issues/1906) source evidence. |
 | GitHub App | Source Control consumes temporary repository credentials. | Installation connection, repository selection, and exact-repository token production: [#1907](https://github.com/sabbour/agentweaver/issues/1907). |
 | Web and MCP | Existing core routes and tools are implemented. | Reachable retained settings and real GitHub connection/repository routes: [#1859](https://github.com/sabbour/agentweaver/issues/1859) and [#1908](https://github.com/sabbour/agentweaver/issues/1908). |
 
@@ -70,8 +70,9 @@ checks the exact installation and repository permissions, and requests a token f
 one repository with bounded permissions. GitHub supplies its expiry. An existing
 Vault secret and a consumer-side expiry limit do not prove this producer exists.
 
-These are tracked integration gaps, not completed flows or new login, App installation,
-permission, or paid-execution authority. Accepted narrow source contracts remain accepted.
+The Copilot source flow is not deployed login, writer permission, or paid-execution authority.
+The separate GitHub App and browser integrations retain their own delivery and acceptance boundaries.
+Accepted narrow source contracts remain accepted.
 Automatic webhook delivery and workflow triggers also need a separate service-identity
 scope decision; the current human-authenticated relay does not prove that parity.
 

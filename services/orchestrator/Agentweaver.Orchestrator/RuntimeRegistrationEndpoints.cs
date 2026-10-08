@@ -19,6 +19,7 @@ public static class RuntimeRegistrationEndpoints
         services.AddHttpClient<RuntimeEnvironmentContextClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
             .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
         services.AddScoped<RuntimeRegistrationOwner>();
+        services.AddScoped<RuntimeActionOwner>();
         return true;
     }
 
@@ -39,6 +40,7 @@ public static class RuntimeRegistrationEndpoints
                 await ExecuteAsync(context, () => owner.ReadCurrentAsync(
                     context, runtimeInstanceId, cancellationToken)).ConfigureAwait(false))
             .RequireAuthorization();
+        endpoints.MapRuntimeActionEndpoints();
         return endpoints;
     }
 

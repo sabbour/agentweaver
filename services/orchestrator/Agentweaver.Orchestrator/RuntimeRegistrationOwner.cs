@@ -121,13 +121,18 @@ internal sealed class RuntimeRegistrationOwner(
                 placement.Resource.Generation, placement.ProfileId,
                 placement.ConfigureEndpoint, placement.ObservationEndpoint)
             {
+                WorkflowStepId = owner.WorkflowStepId,
                 ModelSelectionReference = owner.ModelSelectionReference,
                 ModelCredentialReference = owner.ModelCredentialReference,
+                ModelSourceMode = owner.ModelSourceMode,
+                ModelConnectionId = owner.ModelConnectionId,
+                ModelConnectionScope = owner.ModelConnectionScope,
                 PlacementProviderId = placement.Resource.ProviderId,
                 EnvironmentLifecycleGeneration = placement.LifecycleGeneration,
                 EnvironmentLeaseRevision = placement.LeaseRevision,
                 EnvironmentCurrentFencingGeneration = placement.CurrentFencingGeneration,
-                EnvironmentProviderFencingGeneration = placement.ProviderFencingGeneration
+                EnvironmentProviderFencingGeneration = placement.ProviderFencingGeneration,
+                Image = placement.Image
             };
             var expiry = new DateTimeOffset(
                 placement.LeaseExpiresAt.UtcTicks - placement.LeaseExpiresAt.UtcTicks % 10, TimeSpan.Zero);

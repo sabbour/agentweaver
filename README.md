@@ -27,6 +27,7 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
 | [Applications and surfaces](docs/architecture/design/applications-and-surfaces.md) | One application model (`live` → `preview` → `published`), Application Hosting, the surface panel |
 | [Services and release](docs/architecture/design/services-and-release.md) | Service decomposition, data plane, per-service versioning and release |
 | [Projects & Config service](docs/architecture/projects-config.md) | Implemented candidate API, revisioned records, and immutable run-selection semantics |
+| [AgentHost source candidate](docs/architecture/agenthost.md) | Authenticated native SDK execution, guarded effects, durable turns, startup evidence, and pinned image |
 
 ## What 1.0 changes
 
@@ -52,7 +53,8 @@ Sandbox resource adapter; without one, the host fails closed with `503`. This so
 does not include a production Sandbox provisioner or the full dispatch engine, and
 the positive Events receipt consumer remains separate work. These services can be
 built and tested, but are not deployed or published; the source does not provision
-Azure resources or include the AgentHost, product API, web UI, or product MCP server.
+Azure resources. The unpublished [AgentHost candidate](docs/architecture/agenthost.md)
+adds authenticated runtime execution, not automatic scheduling or a deployed platform.
 
 See the [Events & Sessions journal](docs/architecture/events-sessions.md) for its
 implemented contract, PostgreSQL ownership, provider pin, and current limits.
@@ -62,7 +64,7 @@ Telemetry sets, layered Network Policy (required L3/L4, optional L7), and meter-
 Cost selection. The source also connects authenticated native SDK observations
 to immutable Orchestrator receipts and reference-only Events accounting.
 The local harness covers current owner authority and exact Copilot AI-credit pricing.
-It does not prove deployment, paid model execution, or an AgentHost scheduler.
+It does not prove deployment, paid model execution, or automatic AgentHost scheduling.
 Application Hosting per-app selection remains subsequent work; callers
 receive an explicit error for unsupported single-provider resolution rather than a
 fallback. Resolving a descriptor produces a candidate, not a provisioned resource.
