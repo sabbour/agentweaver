@@ -46,10 +46,11 @@ The v1 comparison uses the admitted Sandbox, Storage, and Network source at
 See the [Environment Sandbox guide](../environment-sandbox.md),
 [Storage design](provider-seams.md#storage), and
 [egress guide](../environment-egress.md).
-AgentHost requirements also use the reviewed source candidate in
+AgentHost requirements also use the admitted source at
+[`61820d0`](https://github.com/sabbour/agentweaver/tree/61820d03caf6d5b412178795a1139538afe39eaa), merged through
 [#1933](https://github.com/sabbour/agentweaver/pull/1933), tracked by
 [#1856](https://github.com/sabbour/agentweaver/issues/1856).
-That candidate is not evidence of a merged release or deployed AgentHost.
+Source admission is not evidence of a released or deployed AgentHost.
 
 ## Compatibility matrix
 
