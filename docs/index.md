@@ -53,6 +53,11 @@ MCP Apps protocol integration, and bundle declarations.
 [#1878](https://github.com/sabbour/agentweaver/issues/1878) tracks the B1-B5/C1-C5 criteria in `v1.0.0` P2.
 Documentation admission does not implement those criteria.
 
+The [Container Apps Sandboxes P3 evaluation](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/container-apps-sandboxes-evaluation.md)
+compares the managed microVM service with Sandbox, Storage, Network, and AgentHost requirements.
+It rejects current enablement and incompatible PVC/Cilium pairings.
+No adapter, cloud trial, or P1/P2 dependency is included.
+
 ## Version boundary
 
 Agentweaver 0.x remains an active product line on `dev`. Read the [0.x documentation](https://sabbour.github.io/agentweaver/) for that product.

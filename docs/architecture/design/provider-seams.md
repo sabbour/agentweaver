@@ -448,6 +448,10 @@ the selected isolation, authenticated AgentHost configure/refresh and A2A channe
 compatible workspace attachment, egress enforcement, leases, fencing, and release.
 Unsupported capabilities fail explicitly. This plan does not claim that the service
 already meets those requirements or authorize provisioning it.
+The [P3 compatibility evaluation](container-apps-sandboxes-evaluation.md) compares
+the actual microVM service, not Dynamic Sessions, with the current v1 and compatible
+0.x contracts. It records a no-go for current enablement, rejected PVC/Cilium
+pairings, and the evidence needed for any separately approved implementation.
 
 ## Storage
 
