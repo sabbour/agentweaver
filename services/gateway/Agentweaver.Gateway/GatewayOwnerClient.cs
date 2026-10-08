@@ -205,6 +205,14 @@ public sealed class GatewayOwnerClient(
                 await WriteProblemAsync(context, "invalid_cursor", StatusCodes.Status400BadRequest)
                     .ConfigureAwait(false);
         }
+        catch (IOException)
+        {
+            if (context.Response.HasStarted)
+                context.Abort();
+            else
+                await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+        }
     }
 
     private async Task EnsureCurrentProjectReadAsync(

@@ -7,11 +7,11 @@ environment.
 
 ## Discovery and routing
 
-The versioned API is rooted at `/api/v1`. `GET /openapi/v1.json` is the live route
-catalog; it identifies each owner, route parameters, bearer security, response
-semantics, and the Events SSE media type. The Gateway maps a finite set of Projects &
-Config, Orchestrator, Knowledge, and Events routes. It is not an arbitrary upstream
-proxy and callers cannot choose owner URLs or owner identity headers.
+The versioned API is rooted at `/api/v1`. `GET /openapi/v1.json` describes every
+finite route, including its JSON request and response schemas, owner, parameters,
+bearer security, response semantics, and the Events SSE media type. The Gateway maps
+Projects & Config, Orchestrator, Knowledge, and Events routes. It is not an arbitrary
+upstream proxy and callers cannot choose owner URLs or owner identity headers.
 
 The Gateway validates the Identity Broker issuer, token signature, lifetime, and
 configured audience before forwarding the original bearer token to the owning API.
@@ -49,6 +49,12 @@ The current run-bound Projects probe is
 token's exact project and run bindings, no token purpose, and fresh current
 `ReadProjects` authority. Only one `runId` query parameter is accepted, and the
 response is `Cache-Control: no-store`. This adds no role or write permission.
+
+The OpenAPI document uses concrete component schemas for the delegated owner
+contracts. It preserves owner-defined response status codes and bodies; it does not
+replace owner validation or error handling. An Events transport failure before the
+SSE response starts returns a structured `502` problem. If the response has started,
+the Gateway aborts the stream instead of appending a JSON problem to event data.
 
 ## Configuration and local checks
 
