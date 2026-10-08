@@ -268,8 +268,10 @@ public sealed class CopilotConnectionAuthority(
             if (ReadString(root, "token_type") != "bearer" ||
                 !access.StartsWith("ghu_", StringComparison.Ordinal) ||
                 !root.TryGetProperty("expires_in", out var lifetime) ||
+                lifetime.ValueKind != JsonValueKind.Number ||
                 !lifetime.TryGetInt32(out var seconds) || seconds <= 0 || seconds > 86400 ||
                 !root.TryGetProperty("refresh_token_expires_in", out var refreshLifetime) ||
+                refreshLifetime.ValueKind != JsonValueKind.Number ||
                 !refreshLifetime.TryGetInt32(out var refreshSeconds) || refreshSeconds <= seconds ||
                 refreshSeconds > 366 * 86400)
                 throw Denied("copilot_connection_user_credential_invalid");
@@ -282,6 +284,7 @@ public sealed class CopilotConnectionAuthority(
                 throw Denied("copilot_connection_user_verification_failed");
             using var userBody = await ReadJsonAsync(userResponse, cancellationToken);
             if (!userBody.RootElement.TryGetProperty("id", out var userIdValue) ||
+                userIdValue.ValueKind != JsonValueKind.Number ||
                 !userIdValue.TryGetInt64(out var userId) || userId <= 0 ||
                 ReadString(userBody.RootElement, "type") != "User")
                 throw Denied("copilot_connection_user_verification_failed");
@@ -445,7 +448,13 @@ public sealed class CopilotConnectionAuthority(
         await response.Content.LoadIntoBufferAsync(64 * 1024, cancellationToken);
         try
         {
-            return JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
+            var document = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(cancellationToken));
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                document.Dispose();
+                throw Denied("copilot_connection_upstream_contract_invalid");
+            }
+            return document;
         }
         catch (JsonException)
         {

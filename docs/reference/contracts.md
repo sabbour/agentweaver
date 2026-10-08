@@ -431,6 +431,9 @@ The frontend callback requires the current bearer and forwards only this nonce t
 There is no anonymous callback exchange, bearer in state, or credential persistence in PostgreSQL.
 Gateway routing and browser surfaces remain separate source slices.
 
+Malformed successful OAuth or user responses return an explicit contract error and leave the connection in `refreshIndeterminate`.
+The committed credential version remains unchanged, and the same connection cannot repeat the uncertain exchange.
+
 `IdentityBroker:CopilotConnection` requires explicit `ProjectsOwnerAddress`, GitHub `ClientId`,
 HTTPS `CallbackUri`, and exact `ClientSecretReference`.
 The protected-store workload identity requires the separate writer's SET and exact-version GET permissions.

@@ -21,10 +21,13 @@ internal sealed class ControlledCopilotConnection : IDisposable
     private readonly AzureKeyVaultSecretVersionWriter _writer;
     private int _version;
     public int Exchanges { get; private set; }
+    public int UserReads { get; private set; }
     public int Writes { get; private set; }
     public bool InstallationToken { get; set; }
     public HttpStatusCode ExchangeStatus { get; set; } = HttpStatusCode.OK;
     public string? ExchangeError { get; set; }
+    public string? ExchangeJson { get; set; }
+    public string? UserJson { get; set; }
     public bool LoseExchangeResponse { get; set; }
     public long GitHubUserId { get; set; } = 42;
     public string AccessToken { get; private set; } = UserAccessToken;
@@ -94,6 +97,8 @@ internal sealed class ControlledCopilotConnection : IDisposable
                 };
             AccessToken = Exchanges == 1 ? UserAccessToken : $"{UserAccessToken}-{Exchanges}";
             RefreshToken = Exchanges == 1 ? UserRefreshToken : $"{UserRefreshToken}-{Exchanges}";
+            if (ExchangeJson is not null)
+                return Json(JsonSerializer.Deserialize<JsonElement>(ExchangeJson), request);
             return Json(new
             {
                 access_token = InstallationToken ? "ghs_controlled-installation" : AccessToken,
@@ -104,6 +109,9 @@ internal sealed class ControlledCopilotConnection : IDisposable
         Assert.Equal("api.github.com", request.RequestUri.Host);
         Assert.Equal("/user", request.RequestUri.AbsolutePath);
         Assert.Equal(AccessToken, request.Headers.Authorization?.Parameter);
+        UserReads++;
+        if (UserJson is not null)
+            return Json(JsonSerializer.Deserialize<JsonElement>(UserJson), request);
         return Json(new { id = GitHubUserId, type = "User" }, request);
     }
 
