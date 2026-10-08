@@ -23,7 +23,7 @@ local HEAD SHA
 arbitrary branch / PR tip / commit
   └─ azure:deploy-from-commit -- <sha-or-ref>
        └─ detached exact-commit worktree → image:<short-SHA> → running environment
-            └─ representative integration + feature-specific API/UI E2E acceptance
+            └─ accepted regression and release-relevant integration evidence
                  └─ only if passing: prepare and promote release
 
 prepared exact main SHA
@@ -84,17 +84,19 @@ from its exact matching section; do not run another changelog generator.
    npm run azure:verify
    ```
 
-   Run intermediate end-to-end tests **against this exact-SHA deployment**:
-   representative integration coverage and feature-specific API/UI acceptance
-   for everything shipping. Include the staging identity smoke
+   Review the existing release-relevant evidence for this exact-SHA deployment,
+   including regression CI and any accepted integration or feature checks. Ordinary
+   shipping does not require a new Harness scenario, catalog fixture, or diagnostic
+   bundle. Include the staging identity smoke
    (`node scripts/api-harness/run-persona.mjs` against the deployed staging URL
    with the default recorder-session auth provider) when identity or repository
    authorization is affected. Record the candidate SHA, deployment identity,
-   selected tests, and passing results as release evidence. Failures block
+   evidence used, and results. Failures block
    preparation, promotion, publication, and release deployment; fix the
    candidate, commit, redeploy its new SHA, and rerun acceptance.
 
-3. Only after exact-SHA candidate acceptance passes, on the clean release branch run:
+3. After the exact-SHA candidate deployment and its existing release evidence are
+   verified, on the clean release branch run:
 
    ```bash
    npm run release:prepare -- --expected X.Y.Z
@@ -165,9 +167,10 @@ From a clean checkout at the exact resulting `origin/main` SHA (including no
 untracked or unexpected git-ignored files). Publication uses the same ignored-file
 policy as preparation: normal dependency, build, test, and harness outputs are
 allowed, while stray ignored files outside those recognized locations still block
-the release. **Do not publish until the exact-SHA candidate deployment and its
-representative integration and feature-specific API/UI acceptance have passed**
-as described above:
+the release. **Do not publish until the exact-SHA candidate deployment is healthy
+and its accepted release-relevant evidence is recorded** as described above.
+Existing evidence for the exact candidate may be reused; ordinary shipping does not
+require a new Harness scenario, catalog fixture, or diagnostic bundle:
 
 ```bash
 # Repository identity only: tag + GHCR images + GitHub Release
