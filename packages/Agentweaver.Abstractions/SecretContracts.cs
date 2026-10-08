@@ -35,6 +35,14 @@ public interface ISecretRedemption
         SecretRedemptionRequest request, CancellationToken cancellationToken);
 }
 
+// Only a trusted credential lifecycle owner may publish a new protected version.
+// The store does not compare-and-swap owner state or authorize a connection.
+public interface ISecretVersionWriter
+{
+    Task<SecretRef> WriteVersionAsync(
+        string secretId, SecretCredential credential, CancellationToken cancellationToken);
+}
+
 public sealed class SecretCredential
 {
     private string? _value;

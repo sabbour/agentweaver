@@ -59,6 +59,33 @@ files or snapshots, or enable Azure SDK content logging for secrets. This
 library does not implement Identity, OAuth, a credential-delivery service, or
 cloud deployment.
 
+## Protected version writes
+
+`ISecretVersionWriter` creates one protected credential version for a trusted lifecycle owner.
+`AzureKeyVaultSecretVersionWriter` implements this contract with the native Azure SDK.
+Its constructor requires explicit vault configuration and a host-owned `TokenCredential`.
+It rejects content logging and automatic retries.
+
+The writer calls `SetSecretAsync` once, then reads the exact returned version with `GetSecretAsync`.
+It compares the secret name, version, enabled state, expiry, and value before returning a `SecretRef`.
+It rejects a stored expiry that exceeds a credential lifetime shortened during either native call.
+The value comparison uses SHA-256 hashes and a constant-time comparison.
+The writer returns no credential value.
+The existing redemption adapter reads this reference without a latest-version fallback.
+
+Key Vault version creation does not compare-and-swap the connection record.
+The lifecycle owner must claim its PostgreSQL revision before an upstream token rotation.
+The owner must revalidate authority after the write, then conditionally publish the exact reference.
+An uncertain write or a failed read does not establish a connected state.
+The writer never deletes an attempt version.
+Cleanup requires separate authorization.
+
+The deployed principal requires secret SET and exact-version GET rights at the configured vault scope.
+The existing P0 Key Vault Secrets User role remains read-only.
+This library change grants no Azure permission and changes no P0 role assignment.
+There is no default Secrets Officer role or assumed secret-name prefix scope.
+A host must handle unavailable writer configuration or denied permission before SDK session creation.
+
 Run its no-account transport tests with
 `dotnet test tests\Agentweaver.Secrets.AzureKeyVault.Tests\Agentweaver.Secrets.AzureKeyVault.Tests.csproj --no-build --no-restore --configuration Release`
 after the root README's locked restore and Release build. They use the actual
