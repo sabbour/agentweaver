@@ -75,6 +75,10 @@ options-schema version and revision, resource identity and generation, negotiate
 capabilities, project revision, configuration revision, and context revision. On
 later operations, a changed run selection or provider binding fails closed; there is
 no provider fallback.
+An original six-capability run selection remains valid against the current catalog's
+additive accepted-effect-delivery capability. Knowledge verifies the persisted pin
+against that immutable selection snapshot without rewriting it; a missing pin for an
+existing run still returns 503.
 
 ### Cosmos Memory source candidate
 
@@ -116,6 +120,15 @@ Cosmos writes the scoped documents in one project-partition batch. The receipt c
 effect and record IDs, record version, and accepted time. It contains no proposal
 content or credentials.
 
+Cosmos transactional batches must stay within one logical partition and are limited
+to 100 operations, 2 MB per batch, and five seconds per execution. A logical
+partition is limited to 20 GB and 10,000 RU/s
+([transactional batch limits](https://learn.microsoft.com/azure/cosmos-db/transactional-batch),
+[service quotas](https://learn.microsoft.com/azure/cosmos-db/concepts-limits)).
+The adapter fails closed when Cosmos reports a timeout, oversized batch, or
+throttling response. Tests inject those statuses; they do not validate live
+throughput, capacity, or RU consumption.
+
 `GET /internal/accepted-effects/{receiptId}` returns that receipt with
 `Cache-Control: no-store`. Knowledge requires the original issuer and subject, matching resource
 bindings, no purpose-bound token, and a fresh current `WriteProjects` authorization.
@@ -129,8 +142,8 @@ binding.
 A partial scope is invalid, and a failed scoped read never falls back to the legacy
 unscoped route.
 
-After the commit, a caller-driven relay sends only the receipt ID and contract
-versions to the fixed HTTPS Events endpoint. It forwards the existing Knowledge
+After the commit, a caller-driven relay sends the receipt ID, contract versions,
+and paired project/run scope to the fixed HTTPS Events endpoint. It forwards the existing Knowledge
 bearer when one token covers both owners. If separate tokens are already available,
 the request may provide the same caller's Events-audience bearer in
 `X-Agentweaver-Events-Authorization`; both tokens stay in request memory and are

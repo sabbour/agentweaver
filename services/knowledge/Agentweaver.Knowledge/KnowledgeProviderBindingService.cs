@@ -27,6 +27,15 @@ public sealed class KnowledgeProviderBindingService(
     IReadOnlyDictionary<string, IMemoryProvider> providers)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly ImmutableHashSet<string> OriginalSixMemoryCapabilities =
+        ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            "memory.records.read",
+            "memory.records.write",
+            "memory.records.search",
+            "memory.records.revisions",
+            "memory.proposals.promote",
+            "memory.context.compose");
 
     public async Task<KnowledgeProviderContext> ResolveAndVerifyAsync(
         ProjectAuthorizationContextResponse authority,
@@ -76,6 +85,14 @@ public sealed class KnowledgeProviderBindingService(
             throw new KnowledgeProviderUnavailableException(
                 "The selected Memory provider metadata is invalid.");
 
+        var selectedCapabilities = selected.AdvertisedCapabilities
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        var selectedRequiredCapabilities = selected.RequiredCapabilities
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        var originalSixSelection =
+            selectedCapabilities.SetEquals(OriginalSixMemoryCapabilities) &&
+            selectedRequiredCapabilities.SetEquals(OriginalSixMemoryCapabilities);
+
         if (!catalog.TryGetProvider(selected.ProviderId, out var registration) ||
             registration is null ||
             registration.Descriptor.Seam != ProviderSeam.Memory ||
@@ -83,8 +100,9 @@ public sealed class KnowledgeProviderBindingService(
             registration.OptionsSchemaVersion != selected.OptionsSchemaVersion ||
             !string.Equals(registration.OptionsRevision, selected.OptionsRevision, StringComparison.Ordinal) ||
             registration.Descriptor.Hosting != selected.Hosting ||
-            !registration.Descriptor.AdvertisedCapabilities.SetEquals(
-                selected.AdvertisedCapabilities.ToImmutableHashSet(StringComparer.Ordinal)))
+            (!registration.Descriptor.AdvertisedCapabilities.SetEquals(selectedCapabilities) &&
+             !(originalSixSelection &&
+               OriginalSixMemoryCapabilities.IsSubsetOf(registration.Descriptor.AdvertisedCapabilities))))
             throw new KnowledgeProviderUnavailableException(
                 "The selected Memory provider no longer matches the catalog snapshot supplied to Knowledge.");
 
@@ -92,10 +110,16 @@ public sealed class KnowledgeProviderBindingService(
             throw new KnowledgeProviderUnavailableException(
                 $"The selected Memory provider '{selected.ProviderId}' has no available adapter.");
 
-        var requiredCapabilities = MemoryProviderCapabilities.All
-            .Union(selected.RequiredCapabilities, StringComparer.Ordinal)
+        if (!selectedRequiredCapabilities.IsSubsetOf(selectedCapabilities))
+            throw new KnowledgeProviderUnavailableException(
+                "The selected Memory provider requires a capability that its selection does not advertise.");
+
+        var requiredCapabilities = (originalSixSelection
+                ? OriginalSixMemoryCapabilities
+                : MemoryProviderCapabilities.All)
+            .Union(selectedRequiredCapabilities, StringComparer.Ordinal)
             .ToImmutableHashSet(StringComparer.Ordinal);
-        var advertised = selected.AdvertisedCapabilities.ToImmutableHashSet(StringComparer.Ordinal);
+        var advertised = selectedCapabilities;
         if (!requiredCapabilities.IsSubsetOf(advertised))
             throw new KnowledgeProviderUnavailableException(
                 "The selected Memory provider does not advertise every capability required for this operation.");
@@ -117,7 +141,14 @@ public sealed class KnowledgeProviderBindingService(
 
         var negotiation = await provider.NegotiateAsync(candidate, cancellationToken)
             .ConfigureAwait(false);
-        var pinned = resolver.Pin(runId, candidate, negotiation.Resource.ResourceId, negotiation);
+        var snapshotNegotiation = negotiation with
+        {
+            Capabilities = negotiation.Capabilities
+                .Where(advertised.Contains)
+                .ToImmutableHashSet(StringComparer.Ordinal)
+        };
+        var pinned = resolver.Pin(
+            runId, candidate, snapshotNegotiation.Resource.ResourceId, snapshotNegotiation);
         if (!pinned.IsSuccess || pinned.Value is null)
             throw new KnowledgeProviderUnavailableException(
                 pinned.Error?.Message ?? "The selected Memory provider resource could not be pinned.");
