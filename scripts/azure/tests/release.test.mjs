@@ -5,6 +5,13 @@ import { parseArgs, run } from "../release.mjs";
 const log = { info() {} };
 
 test("release accepts dry-run, resume, and acceptance manifest options", () => {
+  assert.deepEqual(parseArgs([]), {
+    resumeTag: undefined,
+    dryRun: false,
+    help: false,
+    featureManifestPath: undefined,
+    acceptanceBundlePath: undefined,
+  });
   assert.deepEqual(parseArgs(["--dry-run"]), {
     resumeTag: undefined,
     dryRun: true,
@@ -23,6 +30,18 @@ test("release accepts dry-run, resume, and acceptance manifest options", () => {
     featureManifestPath: "feature.json",
     acceptanceBundlePath: "bundle.json",
   });
+  assert.throws(
+    () => parseArgs(["--acceptance-bundle", "bundle.json"]),
+    /--acceptance-bundle requires --feature-manifest/,
+  );
+  assert.throws(
+    () => parseArgs(["--feature-manifest", "   "]),
+    /Missing or empty path after --feature-manifest/,
+  );
+  assert.throws(
+    () => parseArgs(["--acceptance-bundle", ""]),
+    /Missing or empty path after --acceptance-bundle/,
+  );
   assert.throws(() => parseArgs(["patch"]), /Unknown argument/);
 });
 
@@ -90,16 +109,64 @@ test("release composes publication followed by deployment", async () => {
   ]);
 });
 
-test("release requires the pre-deploy feature declaration before publication", async () => {
+test("release completes ordinary shipping without catalog diagnostics", async () => {
+  const calls = [];
+  const result = await run({
+    argv: [],
+    log,
+    publish: {
+      validatePreparedRelease: async () => {
+        calls.push("prepared-release");
+        return { tag: "v1.2.3", version: "1.2.3", commit: "abc", changelog: "notes" };
+      },
+      run: async ({ argv }) => {
+        calls.push("publish");
+        assert.deepEqual(argv, []);
+        return { tag: "v1.2.3", version: "1.2.3", commit: "abc" };
+      },
+    },
+    deployFromRelease: {
+      run: async ({ argv }) => {
+        calls.push("deploy");
+        assert.deepEqual(argv, ["v1.2.3"]);
+        return {
+          ok: true,
+          tag: "v1.2.3",
+          releaseAcceptance: { ok: false, status: "NOT_RUN" },
+        };
+      },
+    },
+    resolveVariables: async () => ({
+      SUBSCRIPTION_ID: "sub",
+      RESOURCE_GROUP: "rg",
+      CLUSTER_NAME: "cluster",
+      NAMESPACE: "namespace",
+    }),
+    acceptance: {
+      runReleaseDeclarationGate: () => assert.fail("must not run without a feature manifest"),
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, ["prepared-release", "publish", "deploy"]);
+  assert.deepEqual(result.acceptance, { ok: false, status: "NOT_RUN" });
+});
+
+test("release rejects a bundle without a feature manifest before publication", async () => {
+  const calls = [];
   await assert.rejects(
     run({
-      argv: [],
+      argv: ["--acceptance-bundle", "bundle.json"],
       log,
-      publish: { run: async () => assert.fail("must not publish without declaration") },
-      deployFromRelease: { run: async () => assert.fail("must not deploy without declaration") },
+      publish: {
+        validatePreparedRelease: async () => { calls.push("prepare"); },
+        run: async () => { calls.push("publish"); },
+      },
+      deployFromRelease: { run: async () => { calls.push("deploy"); } },
     }),
-    /requires --feature-manifest/,
+    /--acceptance-bundle requires --feature-manifest/,
   );
+  assert.deepEqual(calls, []);
 });
 
 test("release validates the feature declaration before publication", async () => {

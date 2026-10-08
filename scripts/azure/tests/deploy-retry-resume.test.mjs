@@ -247,9 +247,23 @@ function fakeExec() {
   };
 }
 
-function deployOpts({ dir, argv, order, failVerify = false, buildResult }) {
+function deployOpts({
+  dir,
+  argv,
+  order,
+  failVerify = false,
+  buildResult,
+  diagnostics = true,
+  acceptance = {
+    runReleaseDeclarationGate: () => ({ ok: true }),
+    runCanonicalReleaseAcceptanceGate: () => ({ ok: true }),
+  },
+}) {
   return {
-    argv: [...argv, "--feature-manifest", "feature.json", "--acceptance-bundle", "bundle.json"],
+    argv: [
+      ...argv,
+      ...(diagnostics ? ["--feature-manifest", "feature.json", "--acceptance-bundle", "bundle.json"] : []),
+    ],
     repoRoot: "/repo",
     exec: fakeExec(),
     log,
@@ -267,10 +281,7 @@ function deployOpts({ dir, argv, order, failVerify = false, buildResult }) {
     resolveGitHubRepository: async () => ({ owner: "sabbour", repo: "agentweaver" }),
     checkpointIo: { dir },
     env: {},
-    acceptance: {
-      runReleaseDeclarationGate: () => ({ ok: true }),
-      runCanonicalReleaseAcceptanceGate: () => ({ ok: true }),
-    },
+    acceptance,
     steps: {
       buildImages: {
         run: async () => {
@@ -322,21 +333,73 @@ test("a failed deployment checkpoints its completed stages and --resume skips th
   }
 });
 
-test("a successful deployment clears its checkpoint so the next run is complete", async () => {
+test("an ordinary deployment reports NOT_RUN and clears its checkpoint for a full next run", async () => {
   const dir = scratchDir("deploy-resume-clear-");
   try {
     const firstOrder = [];
-    const first = await run(deployOpts({ dir, argv: ["v1.2.3", "--image-source", "ghcr"], order: firstOrder }));
+    const first = await run(deployOpts({
+      dir,
+      argv: ["v1.2.3", "--image-source", "ghcr"],
+      order: firstOrder,
+      diagnostics: false,
+    }));
     assert.equal(first.ok, true);
-    assert.deepEqual(fs.readdirSync(dir), [], "a verified deployment must leave no checkpoint behind");
+    assert.deepEqual(first.releaseAcceptance, { ok: false, status: "NOT_RUN" });
+    assert.deepEqual(fs.readdirSync(dir), [], "a verified ordinary deployment must leave no checkpoint behind");
 
     const secondOrder = [];
-    await run(deployOpts({ dir, argv: ["v1.2.3", "--image-source", "ghcr", "--resume"], order: secondOrder }));
+    await run(deployOpts({
+      dir,
+      argv: ["v1.2.3", "--image-source", "ghcr", "--resume"],
+      order: secondOrder,
+      diagnostics: false,
+    }));
     assert.deepEqual(
       secondOrder,
       ["build", "deploy", "provenance", "health"],
       "--resume without a checkpoint must run every stage",
     );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("canonical diagnostic failure keeps the checkpoint for a verified resume retry", async () => {
+  const dir = scratchDir("deploy-acceptance-retry-");
+  let acceptanceAttempts = 0;
+  const acceptance = {
+    runReleaseDeclarationGate: () => ({ ok: true }),
+    runCanonicalReleaseAcceptanceGate: () => {
+      acceptanceAttempts += 1;
+      if (acceptanceAttempts === 1) throw new Error("canonical acceptance bundle is invalid");
+      return { ok: true };
+    },
+  };
+  try {
+    const firstOrder = [];
+    await assert.rejects(
+      run(deployOpts({
+        dir,
+        argv: ["v1.2.3", "--image-source", "ghcr"],
+        order: firstOrder,
+        acceptance,
+      })),
+      /canonical acceptance bundle is invalid/,
+    );
+    assert.deepEqual(firstOrder, ["build", "deploy", "provenance", "health"]);
+    assert.ok(fs.readdirSync(dir).length > 0, "failed diagnostics must retain the deployment checkpoint");
+
+    const resumedOrder = [];
+    const result = await run(deployOpts({
+      dir,
+      argv: ["v1.2.3", "--image-source", "ghcr", "--resume"],
+      order: resumedOrder,
+      acceptance,
+    }));
+    assert.equal(result.ok, true);
+    assert.deepEqual(resumedOrder, ["provenance", "health"]);
+    assert.equal(acceptanceAttempts, 2);
+    assert.deepEqual(fs.readdirSync(dir), [], "successful diagnostic closure clears the checkpoint");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

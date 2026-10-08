@@ -33,14 +33,14 @@ export function parseArgs(argv = []) {
       index += 1;
     } else if (arg === "--feature-manifest") {
       featureManifestPath = argv[index + 1];
-      if (!featureManifestPath || featureManifestPath.startsWith("-")) {
-        throw new Error("Missing path after --feature-manifest.");
+      if (!featureManifestPath?.trim() || featureManifestPath.startsWith("-")) {
+        throw new Error("Missing or empty path after --feature-manifest.");
       }
       index += 1;
     } else if (arg === "--acceptance-bundle") {
       acceptanceBundlePath = argv[index + 1];
-      if (!acceptanceBundlePath || acceptanceBundlePath.startsWith("-")) {
-        throw new Error("Missing path after --acceptance-bundle.");
+      if (!acceptanceBundlePath?.trim() || acceptanceBundlePath.startsWith("-")) {
+        throw new Error("Missing or empty path after --acceptance-bundle.");
       }
       index += 1;
     } else {
@@ -51,22 +51,28 @@ export function parseArgs(argv = []) {
     }
   }
 
+  if (!help && acceptanceBundlePath && !featureManifestPath) {
+    throw new Error("--acceptance-bundle requires --feature-manifest.");
+  }
+
   return { resumeTag, dryRun, help, featureManifestPath, acceptanceBundlePath };
 }
 
 export const HELP_TEXT = `release -- publish and deploy a prepared Agentweaver release
 
 Usage:
-  node scripts/azure/cli.mjs release --feature-manifest <path>
   node scripts/azure/cli.mjs release [--dry-run]
+  node scripts/azure/cli.mjs release [--resume vX.Y.Z]
+  node scripts/azure/cli.mjs release --feature-manifest <path> [--acceptance-bundle <path>]
   node scripts/azure/cli.mjs release --resume vX.Y.Z \
     --feature-manifest <path> --acceptance-bundle <path>
 
 Composes publish-release followed by deploy-from-release. Publication creates
 the annotated tag and GitHub Release; deployment builds or retags that exact
-release, deploys it, and verifies the running environment. A non-dry-run release
-only completes after the post-deployment acceptance manifests pass the fail-closed
-release acceptance gate.
+release, deploys it, and verifies the running environment. The feature manifest
+and canonical acceptance bundle are optional diagnostics. A supplied manifest is
+validated before publication; a supplied bundle requires the manifest and is
+validated after deployment. Without them, release acceptance is reported as NOT_RUN.
 `;
 
 export async function run(opts = {}) {
@@ -88,11 +94,6 @@ export async function run(opts = {}) {
     log.info(HELP_TEXT);
     return { ok: true, help: true };
   }
-  if (!dryRun && !featureManifestPath) {
-    throw new Error(
-      "Release deployment requires --feature-manifest <path> before publication and deployment.",
-    );
-  }
   if (!dryRun) {
     const prepared = await publish.validatePreparedRelease({
       repoRoot,
@@ -101,14 +102,16 @@ export async function run(opts = {}) {
       resumeTag,
     });
     const cfg = await resolveVariablesFn({ env, repoRoot });
-    acceptance.runReleaseDeclarationGate({
-      featureManifestPath,
-      expectedDeployment: {
-        version: prepared.version,
-        deployedRevision: prepared.commit,
-        deploymentIdentity: releaseDeploymentIdentity(cfg),
-      },
-    });
+    if (featureManifestPath) {
+      acceptance.runReleaseDeclarationGate({
+        featureManifestPath,
+        expectedDeployment: {
+          version: prepared.version,
+          deployedRevision: prepared.commit,
+          deploymentIdentity: releaseDeploymentIdentity(cfg),
+        },
+      });
+    }
   }
   const publishArgs = [];
   if (resumeTag) publishArgs.push("--resume", resumeTag);
