@@ -24,6 +24,8 @@ const sourceControlTestProject = readFileSync(resolve(
   root, 'tests', 'Agentweaver.SourceControl.Tests', 'Agentweaver.SourceControl.Tests.csproj'), 'utf8');
 const brokerTestProject = readFileSync(resolve(
   root, 'tests', 'Agentweaver.Identity.Broker.Tests', 'Agentweaver.Identity.Broker.Tests.csproj'), 'utf8');
+const mcpTestProject = readFileSync(resolve(
+  root, 'tests', 'Agentweaver.Mcp.Tests', 'Agentweaver.Mcp.Tests.csproj'), 'utf8');
 
 test('the explicit .NET coverage runner covers Agent Runtime through the Broker suite', () => {
   assert.match(runner, /\['identity-broker', 'Agentweaver\.Identity\.Broker\.Tests'\]/);
@@ -42,6 +44,15 @@ test('the explicit .NET coverage runner covers Gateway through the Broker suite'
   assert.match(solution, /services\\gateway\\Agentweaver\.Gateway\\Agentweaver\.Gateway\.csproj/);
   assert.match(solution, /tests\\Agentweaver\.Identity\.Broker\.Tests\\Agentweaver\.Identity\.Broker\.Tests\.csproj/);
   assert.match(brokerTestProject, /services\\gateway\\Agentweaver\.Gateway\\Agentweaver\.Gateway\.csproj/);
+});
+
+test('the explicit .NET coverage runner registers the MCP suite and assembly', () => {
+  assert.match(runner, /\['mcp', 'Agentweaver\.Mcp\.Tests'\]/);
+  assert.match(runner, /'Agentweaver\.Mcp',/);
+  assert.match(runsettings, /\[Agentweaver\.Mcp\]\*/);
+  assert.match(solution, /services\\mcp\\Agentweaver\.Mcp\\Agentweaver\.Mcp\.csproj/);
+  assert.match(solution, /tests\\Agentweaver\.Mcp\.Tests\\Agentweaver\.Mcp\.Tests\.csproj/);
+  assert.match(mcpTestProject, /coverlet\.collector/);
 });
 
 test('the explicit .NET coverage runner registers the Events & Sessions suite and assembly', () => {

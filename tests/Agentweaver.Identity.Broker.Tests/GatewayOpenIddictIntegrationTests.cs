@@ -180,9 +180,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     private async Task<string> IssueTokenForAudienceBrokerAsync(
         string audience,
         string subject,
-        TimeSpan? accessTokenLifetime = null)
+        TimeSpan? accessTokenLifetime = null,
+        string? additionalScopes = null,
+        IReadOnlyList<string>? roles = null)
     {
         var database = await postgres.CreateMigratedDatabaseAsync();
+        var extraScopes = (additionalScopes ?? string.Empty)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
         await using var brokerFactory = new IdentityBrokerWebApplicationFactory(
             database,
             _fakeIdp,
@@ -191,6 +195,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             {
                 settings["IdentityBroker__Clients__0__Resources__0"] = audience;
                 settings["IdentityBroker__SecretRedemption__Audience"] = audience;
+                for (var i = 0; i < extraScopes.Length; i++)
+                    settings[$"IdentityBroker__Clients__0__Scopes__{i + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
+                        extraScopes[i];
             },
             configureServices: accessTokenLifetime is { } lifetime
                 ? services => services.PostConfigure<OpenIddictServerOptions>(
@@ -199,19 +206,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         _fakeIdp.Subject = subject;
         _fakeIdp.TenantIds = [TenantId];
-        _fakeIdp.Roles = ["orchestrator"];
+        _fakeIdp.Roles = roles?.ToArray() ?? ["orchestrator"];
         using var broker = brokerFactory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
             BaseAddress = new Uri("https://broker.test.local"),
         });
         var (verifier, challenge) = Pkce.Create();
+        var scope = "openid profile email api.read offline_access";
+        if (extraScopes.Length > 0)
+            scope += " " + string.Join(' ', extraScopes);
         var code = await BrokerFlowDriver.AuthorizeWithConsentAsync(
             broker,
             _fakeIdpClient,
             IdentityBrokerWebApplicationFactory.TestClientId,
             IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
-            "openid profile email api.read offline_access",
+            scope,
             challenge);
         var tokens = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
             broker,

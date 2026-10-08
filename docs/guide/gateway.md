@@ -19,12 +19,55 @@ configured audience before forwarding the original bearer token to the owning AP
 validation; it is not an identity or role claim. The owner remains authoritative for
 current project membership, role, binding, and operation-specific checks.
 
+The `createKnowledgeRecord`, `updateKnowledgeRecord`, `promoteKnowledgeProposal`, and
+`rejectKnowledgeProposal` operations require exactly one `Idempotency-Key` string
+header. Its value must be 1–128 ASCII letters or digits, or `.`, `_`, `-`, or `:`.
+Reuse the same key when retrying the same write. The key is only for idempotency; it
+does not establish identity or approve an operation. Knowledge rejects missing,
+duplicate, blank, and invalid values. Reads and other Gateway operations do not
+require this header.
+
 Responses preserve the owner's status and body. In particular, `202 Accepted` means
 only that the owner accepted work; it is not proof that an asynchronous effect
 completed. A missing, invalid, or expired Gateway token returns `401`. Owner status
 and structured error bodies pass through; an unavailable or redirected owner, invalid
 owner contract, or bounded-response violation returns `502`, and a finite owner
 request timeout returns `504`.
+
+## First-party MCP client
+
+`Agentweaver.Mcp` exposes native Streamable HTTP at `POST /mcp`. Its `tools/list`
+catalog is built from the live Gateway `GET /openapi/v1.json` document; `tools/call`
+only invokes those finite routes and their declared schemas. SSE routes and
+unsupported request shapes are not exposed as tools.
+
+The MCP host validates the Identity Broker issuer, signature, lifetime, and its
+configured audience using OpenIddict. It publishes RFC 9728 protected-resource
+metadata with `resource` set to `Identity:Audience` and
+`authorization_servers` set to `Identity:Issuer`. For an audience such as
+`https://api.example/mcp`, the metadata URL is
+`https://api.example/.well-known/oauth-protected-resource/mcp`; unauthenticated
+requests to `/mcp` receive a Bearer challenge pointing to that URL. The metadata
+endpoint is public so clients can discover the authorization server.
+
+After validation, the MCP host forwards the original bearer token to the Gateway.
+Gateway validates it again for its own configured audience and the owner remains
+responsible for current membership, roles, purpose bindings, and operation
+authorization. MCP arguments cannot supply an actor or grant permission. Owner
+statuses and response bodies remain visible in tool results; an owner rejection,
+HTTP error, or unavailable Gateway/owner is an MCP tool error, and acceptance does
+not claim asynchronous completion.
+
+Before dispatch, MCP validates arguments against the resolved OpenAPI schema
+advertised by `tools/list`, including required properties, types, enums, unions,
+array items, and declared string constraints. Catalog retrieval and each tool call
+have a 10-second deadline that covers response-body reads after HTTP headers arrive.
+Caller cancellation is propagated; deadline expiry and Gateway unavailability are
+reported as explicit MCP errors.
+
+The MCP host requires the same HTTPS `Identity:Issuer` and `Identity:Audience`
+settings as other resource APIs plus `Gateway:BaseAddress` as an HTTPS service
+root. The Gateway URL is not selected by MCP tool arguments.
 
 ## Run event stream
 

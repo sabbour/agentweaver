@@ -76,6 +76,9 @@ const projectReferences = new Map([
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
   ]],
+  ['Agentweaver.Mcp', [
+    '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
+  ]],
 ]);
 const projects = new Map(fixture.components.map((component) => {
   const references = projectReferences.get(component.id) ?? [];

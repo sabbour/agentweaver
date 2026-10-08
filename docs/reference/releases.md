@@ -17,6 +17,7 @@
 | `Agentweaver.Identity.Broker` | Service | `0.0.0` |
 | `Agentweaver.EventsAndSessions` | Service | `0.0.0` |
 | `Agentweaver.Gateway` | Service | `0.1.0` |
+| `Agentweaver.Mcp` | Service | `0.1.0` |
 | `Agentweaver.Environment` | Library | `0.0.0` |
 | `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `0.0.0` |
 | `Agentweaver.Knowledge` | Service | `0.0.0` |
@@ -28,6 +29,9 @@ initial release notes come from the archived P0 changesets referenced by the pri
 release receipt.
 The Gateway is a source-only service candidate at `0.1.0`; its manifest entry and
 documentation do not claim deployment or live acceptance.
+The first-party MCP host is a source-only service candidate at `0.1.0`; it validates
+Broker access tokens and delegates to the Gateway, without claiming deployment or
+live acceptance.
 The Orchestrator Core compatibility entries include both Abstractions and Providers,
 matching its direct project references.
 The runtime library pins its native SDK dependency and references Abstractions

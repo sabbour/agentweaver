@@ -48,7 +48,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         string connectionString,
         SecurityKey signingKey,
         string audience = "https://api.test",
-        ProviderCatalog? providerCatalog = null)
+        ProviderCatalog? providerCatalog = null,
+        IReadOnlyList<string>? additionalAudiences = null)
     {
         var privilegedDataSource = NpgsqlDataSource.Create(connectionString);
         var privilegedDbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
@@ -123,7 +124,9 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                             ValidateIssuer = true,
                             ValidIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
                             ValidateAudience = true,
-                            ValidAudience = audience,
+                            ValidAudiences = new[] { audience }
+                                .Concat(additionalAudiences ?? Array.Empty<string>())
+                                .ToArray(),
                             ValidateIssuerSigningKey = true,
                             IssuerSigningKey = signingKey,
                             ValidateLifetime = true,

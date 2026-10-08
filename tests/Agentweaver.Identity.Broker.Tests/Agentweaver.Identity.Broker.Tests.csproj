@@ -24,6 +24,7 @@
     <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" Aliases="OrchestratorHost" />
     <ProjectReference Include="..\..\services\events-and-sessions\Agentweaver.EventsAndSessions\Agentweaver.EventsAndSessions.csproj" Aliases="EventsHost" />
     <ProjectReference Include="..\..\services\gateway\Agentweaver.Gateway\Agentweaver.Gateway.csproj" Aliases="GatewayHost" />
+    <ProjectReference Include="..\..\services\mcp\Agentweaver.Mcp\Agentweaver.Mcp.csproj" Aliases="McpHost" />
     <ProjectReference Include="..\..\packages\Agentweaver.AgentRuntime\Agentweaver.AgentRuntime.csproj" />
   </ItemGroup>
   <ItemGroup>

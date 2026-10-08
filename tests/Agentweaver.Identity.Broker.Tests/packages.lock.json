@@ -850,6 +850,32 @@
           "Newtonsoft.Json": "13.0.3"
         }
       },
+      "ModelContextProtocol": {
+        "type": "Transitive",
+        "resolved": "0.3.0-preview.2",
+        "contentHash": "tC4pwKzNPFXFqyqhAcq40QnkSF+md29UKGsaDkF9Pw8oinWqFoC3Nr9AF+YbpIWo8Jc6Nz9S7+LuJwqpZWfLOw==",
+        "dependencies": {
+          "Microsoft.Extensions.Hosting.Abstractions": "9.0.5",
+          "ModelContextProtocol.Core": "0.3.0-preview.2"
+        }
+      },
+      "ModelContextProtocol.AspNetCore": {
+        "type": "Transitive",
+        "resolved": "0.3.0-preview.2",
+        "contentHash": "YJPTc8UbPOfscs+2xyhwKgw80It17ymxNzupjv4FvM4fPTGQtaKszbgNdzyt3LMUrwX3MUhxWTJtoSHnqji3zA==",
+        "dependencies": {
+          "ModelContextProtocol": "0.3.0-preview.2"
+        }
+      },
+      "ModelContextProtocol.Core": {
+        "type": "Transitive",
+        "resolved": "0.3.0-preview.2",
+        "contentHash": "pM25u8vx2RximQMIU9/b0Nwg201SI4B87wNgaxO3FhAksWFbL7ApRcNdYnyj8qfwEdAY+wIksdYoIBcyb5Aipw==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "9.6.0",
+          "Microsoft.Extensions.Logging.Abstractions": "9.0.5"
+        }
+      },
       "Newtonsoft.Json": {
         "type": "Transitive",
         "resolved": "13.0.3",
@@ -1347,6 +1373,15 @@
           "Agentweaver.Telemetry": "[0.0.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )"
+        }
+      },
+      "agentweaver.mcp": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Telemetry": "[0.0.0, )",
+          "ModelContextProtocol.AspNetCore": "[0.3.0-preview.2, )",
+          "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
+          "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
         }
       },
       "agentweaver.orchestrator": {

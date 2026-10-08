@@ -62,6 +62,36 @@ root addresses for `Gateway:Owners:Projects`, `Gateway:Owners:Orchestrator`,
 `Gateway:Owners:Knowledge`, and `Gateway:Owners:Events`. The optional finite
 `Gateway:OwnerRequestTimeoutSeconds` is 1–120 seconds and defaults to 15.
 
+## First-party MCP client
+
+`Agentweaver.Mcp` provides a native MCP Streamable HTTP endpoint at `POST /mcp`.
+`tools/list` reflects only compatible operations and schemas from the served
+Gateway OpenAPI catalog; `tools/call` maps to those fixed `/api/v1` Gateway routes.
+It does not accept an owner URL, identity, role, or authorization decision from
+tool arguments.
+
+| Route | Contract |
+| --- | --- |
+| `POST /mcp` | Native MCP initialize, tool discovery, and tool calls. Requires an OpenIddict-validated Broker bearer for the MCP audience. |
+| `GET /.well-known/oauth-protected-resource[/{audiencePath}]` | Public RFC 9728 metadata derived from the configured resource audience; identifies that resource and the Broker issuer. |
+
+An unauthenticated MCP request returns `401` with a Bearer
+`resource_metadata` challenge. The MCP host validates issuer, signature, expiry,
+and audience before forwarding the unchanged bearer to Gateway. Gateway performs
+its own audience validation and dispatches the fixed route to the current owner;
+owner statuses and response bodies are preserved. HTTP failures and owner
+`accepted: false` results become MCP tool errors, with the owner response retained.
+An owner `202 Accepted` is not completion evidence.
+
+Tool arguments are checked against the same resolved OpenAPI schemas returned by
+`tools/list` before the Gateway is called. Catalog retrieval and tool calls have a
+10-second deadline covering response bodies as well as headers; caller cancellation
+is propagated, and timeout or Gateway unavailability is surfaced as an MCP error.
+
+The MCP host requires HTTPS `Identity:Issuer`, `Identity:Audience`, and
+`Gateway:BaseAddress` service-root settings. Its tool catalog is fetched from the
+configured Gateway; callers cannot override this address.
+
 `UsageSubmission` contains an event ID, occurrence time, attribution, model
 metadata, and nullable measurements. `IUsageLedger.AppendAsync` validates and
 commits the immutable entry and rate card before returning. It returns the original

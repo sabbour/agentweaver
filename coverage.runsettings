@@ -5,7 +5,7 @@
       <DataCollector friendlyName="XPlat Code Coverage">
         <Configuration>
           <Format>cobertura</Format>
-          <Include>[Agentweaver.Abstractions]*,[Agentweaver.Orchestrator]*,[Agentweaver.Orchestrator.Core]*,[Agentweaver.SourceControl]*,[Agentweaver.Providers]*,[Agentweaver.Persistence.Postgres]*,[Agentweaver.Secrets.AzureKeyVault]*,[Agentweaver.Identity]*,[Agentweaver.AgentRuntime]*,[Agentweaver.Identity.Broker]*,[Agentweaver.Projects.Config]*,[Agentweaver.Telemetry]*,[Agentweaver.Telemetry.AzureMonitor]*,[Agentweaver.ObjectStore.AzureBlob]*,[Agentweaver.FoundationProbe]*,[Agentweaver.EventsAndSessions]*,[Agentweaver.Gateway]*,[Agentweaver.Environment]*,[Agentweaver.Knowledge]*,[Agentweaver.Providers.Storage.AzureFiles]*</Include>
+          <Include>[Agentweaver.Abstractions]*,[Agentweaver.Orchestrator]*,[Agentweaver.Orchestrator.Core]*,[Agentweaver.SourceControl]*,[Agentweaver.Providers]*,[Agentweaver.Persistence.Postgres]*,[Agentweaver.Secrets.AzureKeyVault]*,[Agentweaver.Identity]*,[Agentweaver.AgentRuntime]*,[Agentweaver.Identity.Broker]*,[Agentweaver.Projects.Config]*,[Agentweaver.Telemetry]*,[Agentweaver.Telemetry.AzureMonitor]*,[Agentweaver.ObjectStore.AzureBlob]*,[Agentweaver.FoundationProbe]*,[Agentweaver.EventsAndSessions]*,[Agentweaver.Gateway]*,[Agentweaver.Mcp]*,[Agentweaver.Environment]*,[Agentweaver.Knowledge]*,[Agentweaver.Providers.Storage.AzureFiles]*</Include>
           <Exclude>[*.Tests]*</Exclude>
         </Configuration>
       </DataCollector>

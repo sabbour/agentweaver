@@ -150,6 +150,21 @@
       ]
     },
     {
+      "name": "First-party MCP client",
+      "sourcePrefixes": [
+        "services/mcp/",
+        "tests/Agentweaver.Mcp.Tests/",
+        "tests/Agentweaver.Identity.Broker.Tests/McpBrokerIntegrationTests.cs",
+        "tests/Agentweaver.Identity.Broker.Tests/GatewayProductionResourceServer.cs"
+      ],
+      "required": [
+        "docs/architecture/design/services-and-release.md",
+        "docs/reference/contracts.md",
+        "docs/guide/gateway.md",
+        "docs/guide/testing.md"
+      ]
+    },
+    {
       "name": "Source Control pin, webhook, and merge",
       "sourcePrefixes": [
         "packages/Agentweaver.Abstractions/SourceControlContracts.cs",
