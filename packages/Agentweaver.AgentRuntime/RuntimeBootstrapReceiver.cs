@@ -95,7 +95,6 @@ public sealed class RuntimeBootstrapReceiver(
         ReadOnlyMemory<byte> configuration,
         Guid consumeOperationId,
         Guid exchangeOperationId,
-        SecretCredential sdkCredential,
         CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -110,7 +109,7 @@ public sealed class RuntimeBootstrapReceiver(
             {
                 _session = await bootstrap.ConfigureAsync(
                     configuration, pending.Proof, consumeOperationId, exchangeOperationId,
-                    sdkCredential, cancellationToken).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false);
                 Volatile.Write(ref _state, (int)RuntimeBootstrapReceiverState.Ready);
                 return _session;
             }

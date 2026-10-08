@@ -21,6 +21,85 @@ public sealed class RuntimeGrantAuthority(
         MaxDepth = 16
     };
 
+    public async Task<RuntimeModelCredentialGrantReceipt> IssueModelCredentialGrantAsync(
+        Guid runtimeInstanceId, Guid operationId, CancellationToken cancellationToken = default)
+    {
+        ValidateOperation(operationId);
+        var registration = await RequireCurrentAsync(runtimeInstanceId, cancellationToken);
+        var binding = registration.Binding;
+        var modelReference = binding.ModelSelectionReference;
+        var credentialReference = binding.ModelCredentialReference;
+        if (string.IsNullOrWhiteSpace(modelReference) || credentialReference is null)
+            throw Denied("runtime_model_credential_unavailable");
+
+        var grantId = $"runtime-model-session:{runtimeInstanceId:N}";
+        var idempotencyKey = $"runtime-model-session:{operationId:N}";
+        var priorOperation = await db.SecretGrantOperations.AsNoTracking().SingleOrDefaultAsync(
+            row => row.IdempotencyKey == idempotencyKey, cancellationToken);
+        long expectedRevision;
+        if (priorOperation is not null)
+        {
+            if (priorOperation.GrantId != grantId || priorOperation.Revision <= 0)
+                throw Denied("runtime_model_grant_operation_conflict");
+            expectedRevision = priorOperation.Revision - 1;
+        }
+        else
+        {
+            var current = await (
+                from head in db.SecretGrantHeads.AsNoTracking()
+                join revision in db.SecretGrantRevisions.AsNoTracking()
+                    on new { head.GrantId, Revision = head.CurrentRevision }
+                    equals new { revision.GrantId, revision.Revision }
+                where head.GrantId == grantId
+                select new
+                {
+                    head.CurrentRevision,
+                    revision.ActorId,
+                    revision.ProjectId,
+                    revision.RunId,
+                    revision.Purpose
+                }).SingleOrDefaultAsync(cancellationToken);
+            if (current is null)
+            {
+                expectedRevision = 0;
+            }
+            else
+            {
+                if (current.CurrentRevision <= 0 ||
+                    current.ActorId != binding.ActorId ||
+                    current.ProjectId != binding.ProjectId ||
+                    current.RunId != binding.RunId ||
+                    current.Purpose != RuntimeSecretPurposes.ModelSession)
+                    throw Denied("runtime_model_grant_binding_invalid");
+                expectedRevision = current.CurrentRevision;
+            }
+        }
+
+        var grant = new SecretRedemptionGrant(
+            grantId, binding.ActorId, binding.ProjectId, binding.RunId,
+            RuntimeSecretPurposes.ModelSession, credentialReference,
+            GrantState.Active, registration.ExpiresAt, timeProvider);
+        GrantMutationResult mutation;
+        try
+        {
+            mutation = await new IdentityGrantAuthority(db, timeProvider).ReplaceAsync(
+                grant, expectedRevision, idempotencyKey, cancellationToken);
+        }
+        catch (GrantConcurrencyException)
+        {
+            throw Denied("runtime_model_grant_stale");
+        }
+        catch (GrantIdempotencyConflictException)
+        {
+            throw Denied("runtime_model_grant_operation_conflict");
+        }
+
+        await RequireSameCurrentAsync(registration, cancellationToken);
+        return new RuntimeModelCredentialGrantReceipt(
+            grantId, mutation.Revision, registration.RuntimeInstanceId, registration.Revision,
+            modelReference, credentialReference, RuntimeSecretPurposes.ModelSession, grant.ExpiresAt);
+    }
+
     public async Task<RuntimeBootstrapDeliveryReceipt> DeliverBootstrapAsync(
         Guid runtimeInstanceId, string configurationHash, Guid operationId,
         CancellationToken cancellationToken = default)

@@ -29,6 +29,7 @@ public static class SecretRedemptionEndpoints
         TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
+        context.Response.Headers.CacheControl = "no-store";
         var actorId = SingleClaim(context.User, Claims.Subject);
         var projectId = SingleClaim(context.User, ProjectIdClaim);
         var runId = SingleClaim(context.User, RunIdClaim);

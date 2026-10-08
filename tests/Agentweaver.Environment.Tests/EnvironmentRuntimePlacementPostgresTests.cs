@@ -26,10 +26,12 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
     {
         var (owner, lifecycle, store) = await CreateOwnerAsync();
         var first = await store.ReserveProvisionAsync(lifecycle.Fence, "provision", Intent(), default);
+        Assert.NotNull(first.Lease.CreatedAt);
         var replay = await store.ReserveProvisionAsync(lifecycle.Fence, "provision", Intent(), default);
         Assert.True(replay.Replayed);
         Assert.Equal(first.Lease.OperationId, replay.Lease.OperationId);
         Assert.Equal(first.Lease.LeaseExpiresAt, replay.Lease.LeaseExpiresAt);
+        Assert.Equal(first.Lease.CreatedAt, replay.Lease.CreatedAt);
         var resource = Resource(first.Lease);
         var completed = await store.CompleteProvisionAsync(
             first.Lease.OperationId, lifecycle.Fence, resource, true, default);
@@ -38,6 +40,7 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
         var current = await restarted.GetCurrentAsync(lifecycle.Fence, default);
         Assert.Equal(completed.LeaseRevision, current!.LeaseRevision);
+        Assert.Equal(first.Lease.CreatedAt, current.CreatedAt);
         Assert.Equal(resource.Resource, current.ProvisionedResource!.Resource);
         var completeReplay = await restarted.CompleteProvisionAsync(
             first.Lease.OperationId, lifecycle.Fence, resource, true, default);
@@ -235,8 +238,10 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         var egress = new EnvironmentEgressManager(
             projects, new CiliumEgressPolicyAdapter(new UnusedNetworkTransport(), options), options, lifecycle);
         var sandboxOptions = new AgentSandboxOptions(
-            1, "unused-sandbox-options", "agentweaver", "azure-files-csi",
-            "runtime-test:local", "kata-test", "kata-test", "100m", "128Mi", 20, 100);
+            AgentSandboxOptions.CurrentOptionsSchemaVersion, "unused-sandbox-options", "agentweaver", "azure-files-csi",
+            "runtime-test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "linux/amd64", 1, "kata-test", "kata-test", "100m", "128Mi", 20, 100,
+            new(30, 30, 30, 30, 30, 120));
         var client = new KubernetesAgentSandboxClient(_kubernetes);
         return new(projects, lifecycle, store, new AgentSandboxProvider(sandboxOptions, client),
             sandboxOptions, client, options, egress);

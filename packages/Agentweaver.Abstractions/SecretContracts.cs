@@ -1,7 +1,7 @@
 namespace Agentweaver.Abstractions;
 
 // References are identifiers, not credentials. They can be persisted; their values cannot.
-public sealed class SecretRef
+public sealed record SecretRef
 {
     public SecretRef(string id, string version)
     {

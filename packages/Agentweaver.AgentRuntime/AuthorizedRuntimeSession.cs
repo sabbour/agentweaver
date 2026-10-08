@@ -8,6 +8,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
 {
     private readonly RuntimeCopilotSession _session;
     private readonly SecretCredential _sourceCredential;
+    private readonly SecretCredential _modelCredential;
     private readonly IRuntimeRegistrationOwner _owner;
     private readonly RuntimeBrokerCredentialClient _broker;
     private readonly RuntimeActorAuthorization _actor;
@@ -16,13 +17,14 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
 
     internal AuthorizedRuntimeSession(
         RuntimeRegistration registration, RuntimeGrantReceipt sourceGrant, SecretCredential sourceCredential,
-        RuntimeCopilotSession session, IRuntimeRegistrationOwner owner, RuntimeBrokerCredentialClient broker,
-        RuntimeActorAuthorization actor, TimeProvider timeProvider)
+        RuntimeCopilotSession session, SecretCredential modelCredential, IRuntimeRegistrationOwner owner,
+        RuntimeBrokerCredentialClient broker, RuntimeActorAuthorization actor, TimeProvider timeProvider)
     {
         Registration = registration;
         SourceGrant = sourceGrant;
         _sourceCredential = sourceCredential;
         _session = session;
+        _modelCredential = modelCredential;
         _owner = owner;
         _broker = broker;
         _actor = actor;
@@ -43,7 +45,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             var current = await _owner.ReadCurrentAsync(
                 Registration.RuntimeInstanceId, _actor, cancellationToken);
             RuntimeSessionBootstrap.RequireCurrent(current, _actor, _timeProvider);
-            if (current != Registration || !_sourceCredential.IsUsable() ||
+            if (current != Registration || !_sourceCredential.IsUsable() || !_modelCredential.IsUsable() ||
                 Volatile.Read(ref _disposed) != 0)
                 throw new RuntimeAuthorizationException("runtime_registration_stale");
             yield return observation;
@@ -65,7 +67,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             RuntimeSessionBootstrap.RequireCurrent(Registration, _actor, _timeProvider);
-            if (!_sourceCredential.IsUsable())
+            if (!_sourceCredential.IsUsable() || !_modelCredential.IsUsable())
                 throw new RuntimeAuthorizationException("runtime_credential_unavailable");
             yield return await source.AppendAsync(this, observation, cancellationToken).ConfigureAwait(false);
         }
@@ -83,6 +85,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         finally
         {
             _sourceCredential.Invalidate();
+            _modelCredential.Invalidate();
             await _session.DisposeAsync();
         }
     }

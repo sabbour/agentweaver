@@ -109,6 +109,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(owner.ActorId, registration.Binding.ActorId);
         Assert.Equal(owner.TurnId, registration.Binding.TurnId);
         Assert.Equal(owner.ModelSelectionReference, registration.Binding.ModelSelectionReference);
+        Assert.Equal(owner.ModelCredentialReference, registration.Binding.ModelCredentialReference);
         Assert.Equal(owner.AcceptedSelectionHash, registration.Binding.AcceptedSelectionHash);
         Assert.Equal(environment.Lease.LeaseRevision, registration.Binding.EnvironmentLeaseRevision);
         Assert.Equal(environment.Lease.ProvisionedResource!.Resource.ProviderId,
@@ -241,8 +242,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 runtimeHttp, broker.BaseAddress!, IdentityBrokerWebApplicationFactory.Issuer, actor, TimeProvider.System);
             var bootstrap = new RuntimeSessionBootstrap(currentOwner, runtimeBroker, factory, actor, TimeProvider.System);
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.ConfigureAsync(
-                bootstrap, "forged"u8.ToArray(), Guid.NewGuid(), Guid.NewGuid(),
-                RuntimeCopilotSessionTests.SdkCredential(), default));
+                bootstrap, "forged"u8.ToArray(), Guid.NewGuid(), Guid.NewGuid(), default));
             Assert.Equal(RuntimeBootstrapReceiverState.Pending, receiver.State);
             Assert.Empty(sdk.Requests);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -292,7 +292,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     };
                 }
                 var configure = receiver.ConfigureAsync(bootstrap, configuration, Guid.NewGuid(), Guid.NewGuid(),
-                    RuntimeCopilotSessionTests.SdkCredential(), timeout.Token);
+                    timeout.Token);
                 try
                 {
                     await Task.WhenAny(configure, held.Task).WaitAsync(timeout.Token);
@@ -376,8 +376,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
             TraceNativeStage(failures, "Native configure begin.");
             var session = await receiver.ConfigureAsync(
-                bootstrap, configuration, Guid.NewGuid(), Guid.NewGuid(),
-                RuntimeCopilotSessionTests.SdkCredential(), timeout.Token);
+                bootstrap, configuration, Guid.NewGuid(), Guid.NewGuid(), timeout.Token);
             TraceNativeStage(failures, "Native configure completed.");
             Assert.Equal(RuntimeBootstrapReceiverState.Ready, receiver.State);
             failures.Enqueue($"After SDK configure: {elapsed.Elapsed}");
@@ -813,8 +812,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         services.AddScoped<EnvironmentRuntimePlacementReader>();
                         services.AddScoped<EnvironmentSandboxManager>();
                         services.AddSingleton(new AgentSandboxOptions(
-                            1, "unused-sandbox-options", "agentweaver", "azure-files-csi",
-                            "runtime-test:local", "kata-test", "kata-test", "100m", "128Mi", 20, 100));
+                            AgentSandboxOptions.CurrentOptionsSchemaVersion, "unused-sandbox-options",
+                            "agentweaver", "azure-files-csi",
+                            "runtime-test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                            "linux/amd64", 1, "kata-test", "kata-test", "100m", "128Mi", 20, 100,
+                            new(30, 30, 30, 30, 30, 120)));
                         services.AddHttpClient<KubernetesAgentSandboxClient>(client =>
                             client.BaseAddress = new Uri("https://kubernetes.test/"))
                             .ConfigurePrimaryHttpMessageHandler(() => new UnusedRuntimePlacementTransport());

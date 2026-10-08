@@ -23,6 +23,7 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
         await using var idp = await FakeIdentityProvider.StartAsync();
         var owner = new EndpointStorageOwner();
         var delivery = new EndpointStorageDelivery();
+        var secrets = new EndpointStorageSecretRedemption();
         await using var factory = new IdentityBrokerWebApplicationFactory(
             await postgres.CreateMigratedDatabaseAsync(), idp,
             configure: settings =>
@@ -36,8 +37,10 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             {
                 services.RemoveAll<IRuntimeRegistrationOwner>();
                 services.RemoveAll<IRuntimeBootstrapDelivery>();
+                services.RemoveAll<ISecretRedemption>();
                 services.AddSingleton<IRuntimeRegistrationOwner>(owner);
                 services.AddSingleton<IRuntimeBootstrapDelivery>(delivery);
+                services.AddSingleton<ISecretRedemption>(secrets);
             });
         using var broker = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
@@ -158,8 +161,92 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
 
         owner.Registration = owner.Registration with
         {
-            Binding = owner.Registration.Binding with { ModelSelectionReference = "accepted-model-reference" }
+            Binding = owner.Registration.Binding with
+            {
+                ModelSelectionReference = "accepted-model-reference",
+                ModelCredentialReference = new SecretRef("model-api", "model-v1")
+            }
         };
+        var modelGrantInput = new RuntimeModelCredentialGrantRequest(
+            owner.Registration.RuntimeInstanceId, Guid.NewGuid());
+        using (var issueRequest = new HttpRequestMessage(HttpMethod.Post, "/internal/runtime/model-session/grant")
+        {
+            Content = JsonContent.Create(modelGrantInput)
+        })
+        {
+            issueRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            issueRequest.Headers.Add("X-Agentweaver-Tenant", "tenant");
+            using var response = await broker.SendAsync(issueRequest);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            var receipt = await response.Content.ReadFromJsonAsync<RuntimeModelCredentialGrantReceipt>();
+            Assert.NotNull(receipt);
+            Assert.Equal("model-session", receipt.Purpose);
+            Assert.Equal(owner.Registration.Binding.ModelSelectionReference, receipt.ModelSelectionReference);
+            Assert.Equal(owner.Registration.Binding.ModelCredentialReference, receipt.CredentialReference);
+            Assert.Equal(owner.Registration.Revision, receipt.RegistrationRevision);
+            Assert.Equal(owner.Registration.ExpiresAt, receipt.ExpiresAt);
+
+            using var replayRequest = new HttpRequestMessage(HttpMethod.Post, "/internal/runtime/model-session/grant")
+            {
+                Content = JsonContent.Create(modelGrantInput)
+            };
+            replayRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            replayRequest.Headers.Add("X-Agentweaver-Tenant", "tenant");
+            using var replayResponse = await broker.SendAsync(replayRequest);
+            Assert.Equal(HttpStatusCode.OK, replayResponse.StatusCode);
+            Assert.Equal(receipt, await replayResponse.Content.ReadFromJsonAsync<RuntimeModelCredentialGrantReceipt>());
+
+            var nextInput = modelGrantInput with { OperationId = Guid.NewGuid() };
+            using var replaceRequest = new HttpRequestMessage(HttpMethod.Post, "/internal/runtime/model-session/grant")
+            {
+                Content = JsonContent.Create(nextInput)
+            };
+            replaceRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            replaceRequest.Headers.Add("X-Agentweaver-Tenant", "tenant");
+            using var replaceResponse = await broker.SendAsync(replaceRequest);
+            Assert.Equal(HttpStatusCode.OK, replaceResponse.StatusCode);
+            var replacement = await replaceResponse.Content.ReadFromJsonAsync<RuntimeModelCredentialGrantReceipt>();
+            Assert.NotNull(replacement);
+            Assert.Equal(receipt.GrantId, replacement.GrantId);
+            Assert.Equal(2, replacement.Revision);
+
+            using var scope = factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+            var revisions = await db.SecretGrantRevisions.AsNoTracking()
+                .Where(row => row.GrantId == receipt.GrantId)
+                .OrderBy(row => row.Revision)
+                .ToArrayAsync();
+            Assert.Equal(new long[] { 1, 2 }, revisions.Select(row => row.Revision));
+            Assert.All(revisions, row =>
+            {
+                Assert.Equal("model-session", row.Purpose);
+                Assert.Equal(owner.Registration.Binding.ActorId, row.ActorId);
+                Assert.Equal(owner.Registration.Binding.ProjectId, row.ProjectId);
+                Assert.Equal(owner.Registration.Binding.RunId, row.RunId);
+            });
+            Assert.Equal("model-api", revisions[1].SecretId);
+            Assert.Equal("model-v1", revisions[1].SecretVersion);
+        }
+
+        var selectedRegistration = owner.Registration;
+        owner.Registration = selectedRegistration with
+        {
+            Binding = selectedRegistration.Binding with { ModelCredentialReference = null }
+        };
+        using (var missingCredentialRequest = new HttpRequestMessage(
+            HttpMethod.Post, "/internal/runtime/model-session/grant")
+        {
+            Content = JsonContent.Create(modelGrantInput with { OperationId = Guid.NewGuid() })
+        })
+        {
+            missingCredentialRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            missingCredentialRequest.Headers.Add("X-Agentweaver-Tenant", "tenant");
+            using var rejected = await broker.SendAsync(missingCredentialRequest);
+            Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
+        }
+        owner.Registration = selectedRegistration;
+
         var configuration = "{}"u8.ToArray();
         var configurationHash = RuntimeContractValidation.Hash(configuration);
         var nextDelivery = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
@@ -169,18 +256,20 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
         var nextBootstrap = new RuntimeCredentialProof(nextDelivery.GrantId, nextDelivery.RuntimeInstanceId, 1,
             RuntimeCredentialPurpose.Configure, owner.Registration.Binding.ConfigureEndpoint, configurationHash,
             delivery.Credential!);
-        await using var sdk = new ControlledCopilotRuntime();
+        await using var sdk = new ControlledCopilotRuntime
+        {
+            SdkCredential = EndpointStorageSecretRedemption.CredentialValue
+        };
         var initialize = new RuntimeSessionBootstrap(
             owner, runtime, RuntimeCopilotSessionTests.Factory(sdk), actor, TimeProvider.System);
         var readsBeforeInvalid = owner.Reads;
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => initialize.ConfigureAsync(
-            "tampered"u8.ToArray(), nextBootstrap, Guid.NewGuid(), Guid.NewGuid(),
-            RuntimeCopilotSessionTests.SdkCredential(), default));
+            "tampered"u8.ToArray(), nextBootstrap, Guid.NewGuid(), Guid.NewGuid(), default));
         Assert.Equal(readsBeforeInvalid, owner.Reads);
         Assert.Empty(sdk.Requests);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var ready = await initialize.ConfigureAsync(configuration, nextBootstrap, Guid.NewGuid(), Guid.NewGuid(),
-            RuntimeCopilotSessionTests.SdkCredential(), timeout.Token);
+            timeout.Token);
         Assert.Equal(owner.Registration, ready.Registration);
         Assert.Equal("accepted-model-reference", ready.Facts.ModelSelectionReference);
         Assert.Equal("controlled-model", ready.Facts.ModelId);
@@ -201,12 +290,16 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
         var failedBootstrap = new RuntimeCredentialProof(failedDelivery.GrantId, failedDelivery.RuntimeInstanceId, 1,
             RuntimeCredentialPurpose.Configure, owner.Registration.Binding.ConfigureEndpoint, configurationHash,
             delivery.Credential!);
-        await using var mismatchedSdk = new ControlledCopilotRuntime { EffectiveModelId = "other-model" };
+        await using var mismatchedSdk = new ControlledCopilotRuntime
+        {
+            EffectiveModelId = "other-model",
+            SdkCredential = EndpointStorageSecretRedemption.CredentialValue
+        };
         var failedInitialize = new RuntimeSessionBootstrap(
             owner, runtime, RuntimeCopilotSessionTests.Factory(mismatchedSdk), actor, TimeProvider.System);
         var modelFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             failedInitialize.ConfigureAsync(configuration, failedBootstrap, Guid.NewGuid(), Guid.NewGuid(),
-                RuntimeCopilotSessionTests.SdkCredential(), timeout.Token));
+                timeout.Token));
         Assert.Equal("runtime_sdk_effective_model_mismatch", modelFailure.Code);
         Assert.Contains(mismatchedSdk.Requests, item => item.Method == "session.destroy");
 
@@ -220,6 +313,7 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             configurationHash, delivery.Credential!);
         await using var interruptedSdk = new ControlledCopilotRuntime
         {
+            SdkCredential = EndpointStorageSecretRedemption.CredentialValue,
             BeforeEffectiveModelResponse = () => owner.Registration =
                 owner.Registration with { State = RuntimeRegistrationState.Revoked }
         };
@@ -227,7 +321,7 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             owner, runtime, RuntimeCopilotSessionTests.Factory(interruptedSdk), actor, TimeProvider.System);
         var authorityLoss = await Assert.ThrowsAsync<AggregateException>(() =>
             interruptedInitialize.ConfigureAsync(configuration, interruptedBootstrap, Guid.NewGuid(), Guid.NewGuid(),
-                RuntimeCopilotSessionTests.SdkCredential(), timeout.Token));
+                timeout.Token));
         Assert.All(authorityLoss.InnerExceptions, error => Assert.IsType<RuntimeAuthorizationException>(error));
         Assert.Contains(interruptedSdk.Requests, item => item.Method == "session.destroy");
         using (var scope = factory.Services.CreateScope())
@@ -240,6 +334,27 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
                 .ToArrayAsync();
             Assert.Equal(4, sourceHeads.Length);
             Assert.All(sourceHeads, head => Assert.Equal(RuntimeCredentialState.Revoked, head.State));
+        }
+        Assert.True(secrets.RedeemCount >= 2);
+        Assert.DoesNotContain(EndpointStorageSecretRedemption.CredentialValue,
+            string.Join('\n', factory.LogMessages));
+    }
+
+    private sealed class EndpointStorageSecretRedemption : ISecretRedemption
+    {
+        public const string CredentialValue = "sdk-model-token";
+        public int RedeemCount { get; private set; }
+
+        public Task<SecretCredential> RedeemAsync(
+            SecretRedemptionRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.Secret != new SecretRef("model-api", "model-v1") ||
+                request.Purpose != RuntimeSecretPurposes.ModelSession || request.RunId != "run")
+                throw new InvalidOperationException("The test backend received an unexpected model secret request.");
+            RedeemCount++;
+            return Task.FromResult(new SecretCredential(
+                CredentialValue, DateTimeOffset.UtcNow.AddMinutes(2)));
         }
     }
 

@@ -109,17 +109,20 @@ public sealed class EnvironmentSandboxManagerTests
         var projects = new FakeProjectsConfigClient();
         var provider = new RecordingSandboxProvider();
         var options = new AgentSandboxOptions(
-            1,
+            AgentSandboxOptions.CurrentOptionsSchemaVersion,
             "sandbox-options-1",
             "agentweaver",
             "azure-files-csi",
-            "ghcr.io/agentweaver/agenthost:1",
+            "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "linux/amd64",
+            1,
             "kata-vm",
             "kata-qemu",
             "500m",
             "512Mi",
             1,
-            1);
+            1,
+            new(30, 30, 30, 30, 30, 120));
         var egressManager = new EnvironmentEgressManager(
             projects,
             cilium: null!,
@@ -202,7 +205,8 @@ public sealed class EnvironmentSandboxManagerTests
             now)
         {
             LeaseRevision = 1,
-            LeaseExpiresAt = now.AddMinutes(1)
+            LeaseExpiresAt = now.AddMinutes(1),
+            CreatedAt = now.AddMinutes(-1)
         };
     }
 

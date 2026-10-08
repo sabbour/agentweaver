@@ -17,17 +17,20 @@ public sealed class AgentSandboxProviderTests
     public async Task ListOwnedUsesPinnedOptionsNamespaceInsteadOfCurrentDefaults()
     {
         var currentOptions = new AgentSandboxOptions(
-            1,
+            AgentSandboxOptions.CurrentOptionsSchemaVersion,
             "current-options",
             "current-namespace",
             "azure-files-csi",
-            "ghcr.io/agentweaver/agenthost:1",
+            "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "linux/amd64",
+            1,
             "kata-vm",
             "kata-qemu",
             "500m",
             "512Mi",
             1,
-            1);
+            1,
+            new(30, 30, 30, 30, 30, 120));
         var pinnedOptions = currentOptions with
         {
             OptionsRevision = "pinned-options",
@@ -52,7 +55,11 @@ public sealed class AgentSandboxProviderTests
             Json("{\"contractVersion\":1}"));
 
         var observations = await provider.ListOwnedAsync(
-            new SandboxListOwnedRequest(new EnvironmentGenerationFence(owner, 1), 1, intent));
+            new SandboxListOwnedRequest(
+                new EnvironmentGenerationFence(owner, 1),
+                1,
+                intent,
+                DateTimeOffset.Parse("2026-10-06T11:58:50Z")));
 
         Assert.Empty(observations);
         Assert.Equal("agentweaver", handler.LastSandboxClaimsNamespace);
@@ -62,17 +69,20 @@ public sealed class AgentSandboxProviderTests
     public async Task ProvisionIsIdempotentDescribeWithholdsReadyWithoutNetworkGenerationAndReleaseUsesUidPreconditions()
     {
         var options = new AgentSandboxOptions(
-            1,
+            AgentSandboxOptions.CurrentOptionsSchemaVersion,
             "sandbox-options-1",
             "agentweaver",
             "azure-files-csi",
-            "ghcr.io/agentweaver/agenthost:1",
+            "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "linux/amd64",
+            1,
             "kata-vm",
             "kata-qemu",
             "500m",
             "512Mi",
             1,
-            1);
+            1,
+            new(30, 90, 30, 30, 30, 180));
         var registration = AgentSandboxProviderMetadata.CreateRegistration(options);
         var catalog = ProviderCatalog.Create(
             [registration],
@@ -197,7 +207,11 @@ public sealed class AgentSandboxProviderTests
             BaseAddress = new Uri("https://kubernetes.example/")
         };
         var kubernetesClient = new KubernetesAgentSandboxClient(httpClient);
-        var provider = new AgentSandboxProvider(options, kubernetesClient);
+        var leaseCreatedAt = DateTimeOffset.Parse("2026-10-06T11:58:50Z");
+        var provider = new AgentSandboxProvider(
+            options,
+            kubernetesClient,
+            new FixedTimeProvider(DateTimeOffset.Parse("2026-10-06T12:00:10Z")));
 
         var provisioned = await provider.ProvisionAsync(request);
         var duplicate = await provider.ProvisionAsync(request);
@@ -221,15 +235,51 @@ public sealed class AgentSandboxProviderTests
             fence,
             provisioned.Resource,
             1,
-            provisioned.ProviderBinding));
+            provisioned.ProviderBinding,
+            leaseCreatedAt));
 
         Assert.Equal(SandboxObservedState.Pending, observation.State);
         Assert.True(observation.VmIsolationVerified);
         Assert.True(observation.WorkspaceAttachmentVerified);
         Assert.Null(observation.VerifiedNetworkGeneration);
+        var imageReady = Assert.Single(observation.StartupPhases,
+            phase => phase.Phase == SandboxStartupPhase.ImageReady);
+        Assert.Equal("sha256:" + new string('a', 64), imageReady.ImageDigest);
+        Assert.Equal(1, imageReady.CompressedPullBytes);
+        Assert.Equal(DateTimeOffset.Parse("2026-10-06T12:00:00Z"), imageReady.ObservedAt);
         Assert.DoesNotContain(
             observation.StartupPhases,
             phase => phase.Phase is SandboxStartupPhase.Configured or SandboxStartupPhase.Ready);
+        Assert.Null(observation.StartupFailure);
+
+        handler.SetPodImageId(
+            "ghcr.io/agentweaver/agenthost@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        var mismatchedImage = await provider.DescribeAsync(new SandboxDescribeRequest(
+            fence,
+            provisioned.Resource,
+            1,
+            provisioned.ProviderBinding,
+            leaseCreatedAt));
+        Assert.DoesNotContain(
+            mismatchedImage.StartupPhases,
+            phase => phase.Phase is SandboxStartupPhase.ImageReady or SandboxStartupPhase.Started);
+        handler.SetPodImageId(
+            "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+        var lateProvider = new AgentSandboxProvider(
+            options,
+            kubernetesClient,
+            new FixedTimeProvider(DateTimeOffset.Parse("2026-10-06T12:00:31Z")));
+        var timedOut = await lateProvider.DescribeAsync(new SandboxDescribeRequest(
+            fence,
+            provisioned.Resource,
+            1,
+            provisioned.ProviderBinding,
+            leaseCreatedAt));
+        Assert.Equal(SandboxObservedState.Failed, timedOut.State);
+        Assert.Equal(SandboxStartupBudgetFailureKind.PhaseExceeded, timedOut.StartupFailure!.Kind);
+        Assert.Equal(SandboxStartupPhase.Configured, timedOut.StartupFailure.Phase);
+        Assert.Equal(30, timedOut.StartupFailure.BudgetSeconds);
 
         var receipt = await provider.ReleaseAsync(new SandboxReleaseRequest(
             fence,
@@ -332,6 +382,11 @@ public sealed class AgentSandboxProviderTests
     {
         using var document = JsonDocument.Parse(value);
         return document.RootElement.Clone();
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 
     private sealed class FakeKubernetesHandler : HttpMessageHandler
@@ -439,6 +494,7 @@ public sealed class AgentSandboxProviderTests
                                 new
                                 {
                                     name = "agenthost",
+                                    image = "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                                     volumeMounts = new[]
                                     {
                                         new
@@ -454,13 +510,21 @@ public sealed class AgentSandboxProviderTests
                         status = new
                         {
                             phase = "Running",
-                            conditions = new[] { new { type = "PodScheduled", status = "True" } },
+                            conditions = new[]
+                            {
+                                new
+                                {
+                                    type = "PodScheduled",
+                                    status = "True",
+                                    lastTransitionTime = "2026-10-06T11:59:00Z"
+                                }
+                            },
                             containerStatuses = new[]
                             {
                                 new
                                 {
                                     name = "agenthost",
-                                    imageID = "ghcr.io/agentweaver/agenthost@sha256:deadbeef",
+                                    imageID = "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                                     ready = true,
                                     state = new
                                     {
@@ -472,6 +536,13 @@ public sealed class AgentSandboxProviderTests
                     }
                 }
             });
+        }
+
+        public void SetPodImageId(string imageId)
+        {
+            var items = _podList?["items"]?.AsArray()
+                ?? throw new InvalidOperationException("The test pod list has not been created.");
+            items[0]!["status"]!["containerStatuses"]![0]!["imageID"] = imageId;
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -492,6 +563,20 @@ public sealed class AgentSandboxProviderTests
                 }
                 if (path == "apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes")
                     return JsonResponse(HttpStatusCode.OK, new JsonObject { ["items"] = new JsonArray() });
+                if (path == "api/v1/namespaces/agentweaver/events")
+                    return JsonResponse(HttpStatusCode.OK, new JsonObject
+                    {
+                        ["items"] = new JsonArray
+                        {
+                            new JsonObject
+                            {
+                                ["reason"] = "Pulled",
+                                ["message"] = "Successfully pulled image ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                ["eventTime"] = "2026-10-06T12:00:00Z",
+                                ["involvedObject"] = new JsonObject { ["uid"] = "pod-uid" }
+                            }
+                        }
+                    });
                 return _resources.TryGetValue(path, out var resource)
                     ? JsonResponse(HttpStatusCode.OK, resource)
                     : new HttpResponseMessage(HttpStatusCode.NotFound);

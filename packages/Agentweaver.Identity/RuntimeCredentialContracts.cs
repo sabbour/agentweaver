@@ -30,6 +30,8 @@ public sealed record RuntimeBinding(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ModelSelectionReference { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SecretRef? ModelCredentialReference { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PlacementProviderId { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public long EnvironmentLifecycleGeneration { get; init; }
@@ -100,6 +102,11 @@ public interface IRuntimePendingBootstrapVerifier
 
 public enum RuntimeCredentialPurpose { Configure, Observe }
 public enum RuntimeCredentialState { Active, Consumed, Revoked }
+
+public static class RuntimeSecretPurposes
+{
+    public const string ModelSession = "model-session";
+}
 
 public sealed record RuntimeGrantReceipt(
     Guid GrantId,

@@ -26,6 +26,8 @@ public sealed class RuntimeContractTests
             registration with { Binding = registration.Binding with { PlacementUid = "other-placement" } },
             registration with { Binding = registration.Binding with { ProjectRevision = 2 } },
             registration with { Binding = registration.Binding with { ModelSelectionReference = "accepted-model" } },
+            registration with { Binding = registration.Binding with
+                { ModelCredentialReference = new SecretRef("model-credential", "version-2") } },
             registration with { Binding = registration.Binding with { AcceptedSelectionHash = new string('b', 64) } }
         })
             Assert.NotEqual(original, RuntimeContractValidation.RegistrationHash(changed));
@@ -42,6 +44,19 @@ public sealed class RuntimeContractTests
         Assert.DoesNotContain("EnvironmentLeaseRevision", serialized);
         var pinned = binding with { ModelSelectionReference = "accepted-model" };
         Assert.Contains("ModelSelectionReference", JsonSerializer.Serialize(pinned));
+        var credentialPinned = pinned with
+        {
+            ModelCredentialReference = new SecretRef("model-credential", "version-1")
+        };
+        Assert.Contains("ModelCredentialReference", JsonSerializer.Serialize(credentialPinned));
+        Assert.Throws<RuntimeAuthorizationException>(() => RuntimeContractValidation.Validate(
+            CreateRegistration() with
+            {
+                Binding = binding with
+                {
+                    ModelCredentialReference = new SecretRef("model-credential", "version-1")
+                }
+            }));
     }
 
     [Fact]

@@ -234,12 +234,21 @@ static AgentSandboxOptions ReadSandboxOptions(IConfiguration configuration)
         Required(section["Namespace"], "Environment:Sandbox:AgentSandbox:Namespace"),
         Required(section["WorkspaceStorageProviderId"], "Environment:Sandbox:AgentSandbox:WorkspaceStorageProviderId"),
         Required(section["ContainerImage"], "Environment:Sandbox:AgentSandbox:ContainerImage"),
+        Required(section["ContainerImagePlatform"], "Environment:Sandbox:AgentSandbox:ContainerImagePlatform"),
+        section.GetValue("ContainerImageCompressedPullBytes", 0L),
         Required(section["RuntimeClassName"], "Environment:Sandbox:AgentSandbox:RuntimeClassName"),
         Required(section["ExpectedRuntimeHandler"], "Environment:Sandbox:AgentSandbox:ExpectedRuntimeHandler"),
         Required(section["CpuRequest"], "Environment:Sandbox:AgentSandbox:CpuRequest"),
         Required(section["MemoryRequest"], "Environment:Sandbox:AgentSandbox:MemoryRequest"),
         section.GetValue("ReconciliationTimeoutSeconds", 0),
-        section.GetValue("PollIntervalMilliseconds", 0)).Validate();
+        section.GetValue("PollIntervalMilliseconds", 0),
+        new AgentSandboxStartupBudgets(
+            section.GetValue("StartupBudgets:ScheduledSeconds", 0),
+            section.GetValue("StartupBudgets:ImageReadySeconds", 0),
+            section.GetValue("StartupBudgets:StartedSeconds", 0),
+            section.GetValue("StartupBudgets:ConfiguredSeconds", 0),
+            section.GetValue("StartupBudgets:ReadySeconds", 0),
+            section.GetValue("StartupBudgets:TotalSeconds", 0))).Validate();
 }
 
 static string Required(string? value, string name) =>

@@ -40,17 +40,20 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             X509KeyStorageFlags.EphemeralKeySet);
         var signingKey = new X509SecurityKey(signingCertificate);
         var sandboxOptions = new AgentSandboxOptions(
-            1,
+            AgentSandboxOptions.CurrentOptionsSchemaVersion,
             "sandbox-options-1",
             "agentweaver",
             AzureFilesCsiProviderMetadata.ProviderId,
-            "ghcr.io/agentweaver/agenthost:1",
+            "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "linux/amd64",
+            1,
             "kata-vm",
             "kata-qemu",
             "500m",
             "512Mi",
             60,
-            100);
+            100,
+            new(30, 30, 30, 30, 30, 120));
         var storageOptions = new AzureFilesCsiOptions(
             1, "options-1", "agentweaver", "azure-files", 100, 60, 100);
         var ciliumOptions = new CiliumEgressProviderOptions(

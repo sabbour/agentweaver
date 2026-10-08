@@ -122,6 +122,7 @@ internal sealed class RuntimeRegistrationOwner(
                 placement.ConfigureEndpoint, placement.ObservationEndpoint)
             {
                 ModelSelectionReference = owner.ModelSelectionReference,
+                ModelCredentialReference = owner.ModelCredentialReference,
                 PlacementProviderId = placement.Resource.ProviderId,
                 EnvironmentLifecycleGeneration = placement.LifecycleGeneration,
                 EnvironmentLeaseRevision = placement.LeaseRevision,

@@ -54,7 +54,8 @@ public sealed record SandboxObservationSummary(
     bool WorkspaceAttachmentVerified,
     long? VerifiedNetworkGeneration,
     ImmutableArray<SandboxStartupPhaseObservation> StartupPhases,
-    SandboxTerminalEvidence? TerminalEvidence);
+    SandboxTerminalEvidence? TerminalEvidence,
+    SandboxStartupBudgetFailure? StartupFailure);
 
 public sealed record EnvironmentSandboxResult(
     Guid OperationId,
@@ -536,7 +537,10 @@ public sealed class EnvironmentSandboxManager(
                 new SandboxListOwnedRequest(
                     context.Fence,
                     lease.ProviderFencingGeneration,
-                    lease.ProvisionIntent),
+                    lease.ProvisionIntent,
+                    lease.CreatedAt ?? throw new EnvironmentLifecycleException(
+                        "sandbox_lease_created_at_missing",
+                        "The Sandbox lease has no persisted creation timestamp for startup budgets.")),
                 cancellationToken).ConfigureAwait(false);
             var recovered = owned.Where(observation =>
                     observation.ProvisionOperationId == lease.OperationId &&
@@ -551,7 +555,10 @@ public sealed class EnvironmentSandboxManager(
                     context.Fence,
                     recovered[0].Resource,
                     lease.ProviderFencingGeneration,
-                    recoveredResource.ProviderBinding));
+                    recoveredResource.ProviderBinding,
+                    lease.CreatedAt ?? throw new EnvironmentLifecycleException(
+                        "sandbox_lease_created_at_missing",
+                        "The Sandbox lease has no persisted creation timestamp for startup budgets.")));
                 lease = await leaseStore.CompleteProvisionAsync(
                     lease.OperationId,
                     context.Fence,
@@ -1394,7 +1401,10 @@ public sealed class EnvironmentSandboxManager(
                     "sandbox_resource_unknown",
                     "The Sandbox lease has no pinned provider resource."),
             lease.ProviderFencingGeneration,
-            lease.ProvisionedResource.ProviderBinding);
+            lease.ProvisionedResource.ProviderBinding,
+            lease.CreatedAt ?? throw new EnvironmentLifecycleException(
+                "sandbox_lease_created_at_missing",
+                "The Sandbox lease has no persisted creation timestamp for startup budgets."));
 
     private static string RequiredJsonString(JsonElement document, string name)
     {
@@ -1433,7 +1443,8 @@ public sealed class EnvironmentSandboxManager(
                 observation.WorkspaceAttachmentVerified,
                 observation.VerifiedNetworkGeneration,
                 observation.StartupPhases,
-                observation.TerminalEvidence);
+                observation.TerminalEvidence,
+                observation.StartupFailure);
         var phases = observation?.StartupPhases ??
             resource?.StartupPhases ??
             ImmutableArray<SandboxStartupPhaseObservation>.Empty;

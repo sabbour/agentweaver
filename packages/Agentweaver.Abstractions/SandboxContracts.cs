@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace Agentweaver.Abstractions;
 
@@ -104,10 +105,16 @@ public enum SandboxStartupPhase
 
 public sealed record SandboxStartupPhaseObservation
 {
+    private static readonly Regex Sha256Digest = new(
+        "^sha256:[a-f0-9]{64}$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     public SandboxStartupPhaseObservation(
         SandboxStartupPhase phase,
         int contractVersion,
-        DateTimeOffset observedAt)
+        DateTimeOffset observedAt,
+        string? imageDigest = null,
+        long? compressedPullBytes = null)
     {
         if (!Enum.IsDefined(phase))
             throw new ArgumentOutOfRangeException(nameof(phase));
@@ -115,14 +122,27 @@ public sealed record SandboxStartupPhaseObservation
             throw new ArgumentOutOfRangeException(nameof(contractVersion));
         if (observedAt <= DateTimeOffset.MinValue)
             throw new ArgumentOutOfRangeException(nameof(observedAt));
+        if (phase == SandboxStartupPhase.ImageReady)
+        {
+            if (imageDigest is null || !Sha256Digest.IsMatch(imageDigest) || compressedPullBytes is not > 0)
+                throw new ArgumentException("Image-ready evidence requires the selected OCI digest and compressed pull bytes.");
+        }
+        else if (imageDigest is not null || compressedPullBytes is not null)
+        {
+            throw new ArgumentException("OCI image evidence is valid only for the image-ready phase.");
+        }
         Phase = phase;
         ContractVersion = contractVersion;
         ObservedAt = observedAt;
+        ImageDigest = imageDigest;
+        CompressedPullBytes = compressedPullBytes;
     }
 
     public SandboxStartupPhase Phase { get; }
     public int ContractVersion { get; }
     public DateTimeOffset ObservedAt { get; }
+    public string? ImageDigest { get; }
+    public long? CompressedPullBytes { get; }
 }
 
 public sealed record SandboxOperationReference(Guid Value)
@@ -253,14 +273,16 @@ public sealed record SandboxDescribeRequest(
     EnvironmentGenerationFence Fence,
     ProviderResourceRef Resource,
     long FencingGeneration,
-    SandboxProviderBindingSnapshot ProviderBinding)
+    SandboxProviderBindingSnapshot ProviderBinding,
+    DateTimeOffset LeaseCreatedAt)
 {
     public SandboxDescribeRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Fence);
         ArgumentNullException.ThrowIfNull(Resource);
         ArgumentNullException.ThrowIfNull(ProviderBinding);
-        if (FencingGeneration < 1 || Resource.Seam != ProviderSeam.Sandbox ||
+        if (FencingGeneration < 1 || LeaseCreatedAt <= DateTimeOffset.MinValue ||
+            Resource.Seam != ProviderSeam.Sandbox ||
             Resource.Generation < 1)
             throw new ArgumentOutOfRangeException(nameof(FencingGeneration));
         _ = ProviderBinding.ValidateFor(Resource);
@@ -271,15 +293,16 @@ public sealed record SandboxDescribeRequest(
 public sealed record SandboxListOwnedRequest(
     EnvironmentGenerationFence Fence,
     long MinimumFencingGeneration,
-    SandboxLeaseProvisionIntent ProvisionIntent)
+    SandboxLeaseProvisionIntent ProvisionIntent,
+    DateTimeOffset LeaseCreatedAt)
 {
     public SandboxListOwnedRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Fence);
         ArgumentNullException.ThrowIfNull(ProvisionIntent);
         _ = ProvisionIntent.Validate();
-        if (MinimumFencingGeneration < 1)
-            throw new ArgumentOutOfRangeException(nameof(MinimumFencingGeneration));
+        if (MinimumFencingGeneration < 1 || LeaseCreatedAt <= DateTimeOffset.MinValue)
+            throw new ArgumentException("A valid fencing generation and persisted lease creation time are required.");
         return this;
     }
 }
@@ -352,7 +375,8 @@ public sealed record SandboxObservation(
     ImmutableArray<SandboxStartupPhaseObservation> StartupPhases,
     SandboxTerminalEvidence? TerminalEvidence = null,
     Guid? ProvisionOperationId = null,
-    SandboxProvisionedResource? ProvisionedResource = null)
+    SandboxProvisionedResource? ProvisionedResource = null,
+    SandboxStartupBudgetFailure? StartupFailure = null)
 {
     public SandboxObservation ValidateFor(SandboxDescribeRequest request)
     {
@@ -368,6 +392,8 @@ public sealed record SandboxObservation(
             TerminalEvidence is not null &&
                 (TerminalEvidence.ClaimUid != request.Resource.ResourceId ||
                  TerminalEvidence.FencingGeneration != request.FencingGeneration) ||
+            StartupFailure is not null &&
+                (State != SandboxObservedState.Failed || StartupFailure.Validate() != StartupFailure) ||
             ProvisionOperationId is { } operationId && operationId == Guid.Empty ||
             ProvisionedResource is not null &&
                 (ProvisionedResource.Resource != request.Resource ||
@@ -395,6 +421,31 @@ public sealed record SandboxObservation(
         JsonNode.DeepEquals(
             JsonNode.Parse(left.ReleaseDescriptor.GetRawText()),
             JsonNode.Parse(right.ReleaseDescriptor.GetRawText()));
+}
+
+public enum SandboxStartupBudgetFailureKind
+{
+    PhaseExceeded,
+    TotalExceeded
+}
+
+public sealed record SandboxStartupBudgetFailure(
+    SandboxStartupBudgetFailureKind Kind,
+    SandboxStartupPhase Phase,
+    int BudgetSeconds,
+    DateTimeOffset Deadline,
+    DateTimeOffset ObservedAt)
+{
+    public SandboxStartupBudgetFailure Validate()
+    {
+        if (!Enum.IsDefined(Kind) ||
+            !Enum.IsDefined(Phase) ||
+            BudgetSeconds <= 0 ||
+            Deadline <= DateTimeOffset.MinValue ||
+            ObservedAt <= Deadline)
+            throw new ArgumentException("The Sandbox startup budget failure is invalid.");
+        return this;
+    }
 }
 
 public enum SandboxTerminalReason
@@ -625,6 +676,7 @@ public sealed record SandboxLeaseSnapshot(
     public long LeaseRevision { get; init; }
     public DateTimeOffset? LeaseExpiresAt { get; init; }
     public SandboxPartialReleaseReceipt? PartialReleaseReceipt { get; init; }
+    public DateTimeOffset? CreatedAt { get; init; }
 
     public SandboxLeaseSnapshot Validate()
     {

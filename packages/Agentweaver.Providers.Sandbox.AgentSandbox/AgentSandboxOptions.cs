@@ -10,20 +10,26 @@ public sealed record AgentSandboxOptions(
     string Namespace,
     string WorkspaceStorageProviderId,
     string ContainerImage,
+    string ContainerImagePlatform,
+    long ContainerImageCompressedPullBytes,
     string RuntimeClassName,
     string ExpectedRuntimeHandler,
     string CpuRequest,
     string MemoryRequest,
     int ReconciliationTimeoutSeconds,
-    int PollIntervalMilliseconds)
+    int PollIntervalMilliseconds,
+    AgentSandboxStartupBudgets StartupBudgets)
 {
-    public const int CurrentOptionsSchemaVersion = 1;
+    public const int CurrentOptionsSchemaVersion = 2;
 
     private static readonly Regex CpuQuantity = new(
         "^(?:[1-9][0-9]*m|[1-9][0-9]*(?:\\.[0-9]+)?)$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
     private static readonly Regex MemoryQuantity = new(
         "^[1-9][0-9]*(?:Ki|Mi|Gi|Ti)$",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex ImageReference = new(
+        "^.+@sha256:[a-f0-9]{64}$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     public AgentSandboxOptions Validate()
@@ -37,9 +43,15 @@ public sealed record AgentSandboxOptions(
         if (string.IsNullOrWhiteSpace(ContainerImage) || ContainerImage.Length > 512 ||
             ContainerImage.Any(char.IsControl) ||
             ContainerImage.Any(character => char.IsWhiteSpace(character) || character is '"' or '\'' or '\\') ||
-            ContainerImage.Contains("://", StringComparison.Ordinal))
-            throw new ArgumentException("A bounded container image reference is required.",
+            ContainerImage.Contains("://", StringComparison.Ordinal) ||
+            !ImageReference.IsMatch(ContainerImage))
+            throw new ArgumentException("A bounded OCI image reference pinned to a SHA-256 digest is required.",
                 nameof(ContainerImage));
+        if (!string.Equals(ContainerImagePlatform, "linux/amd64", StringComparison.Ordinal))
+            throw new ArgumentException("AgentHost images must be pinned to the linux/amd64 platform.",
+                nameof(ContainerImagePlatform));
+        if (ContainerImageCompressedPullBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(ContainerImageCompressedPullBytes));
         ValidateDnsSubdomain(RuntimeClassName, nameof(RuntimeClassName));
         ValidateDnsSubdomain(ExpectedRuntimeHandler, nameof(ExpectedRuntimeHandler));
         if (!CpuQuantity.IsMatch(CpuRequest))
@@ -52,8 +64,12 @@ public sealed record AgentSandboxOptions(
             throw new ArgumentOutOfRangeException(nameof(ReconciliationTimeoutSeconds));
         if (PollIntervalMilliseconds is < 1 or > 5000)
             throw new ArgumentOutOfRangeException(nameof(PollIntervalMilliseconds));
+        ArgumentNullException.ThrowIfNull(StartupBudgets);
+        _ = StartupBudgets.Validate();
         return this;
     }
+
+    public string ContainerImageDigest => ContainerImage[(ContainerImage.LastIndexOf("@sha256:", StringComparison.Ordinal) + 1)..];
 
     private static void ValidateOpaque(string value, string name)
     {
@@ -83,6 +99,34 @@ public sealed record AgentSandboxOptions(
                     character is not (>= 'a' and <= 'z' or >= '0' and <= '9' or '-'))))
             throw new ArgumentException("A valid Kubernetes DNS subdomain is required.", name);
     }
+}
+
+public sealed record AgentSandboxStartupBudgets(
+    int ScheduledSeconds,
+    int ImageReadySeconds,
+    int StartedSeconds,
+    int ConfiguredSeconds,
+    int ReadySeconds,
+    int TotalSeconds)
+{
+    public AgentSandboxStartupBudgets Validate()
+    {
+        if (ScheduledSeconds <= 0 || ImageReadySeconds <= 0 || StartedSeconds <= 0 ||
+            ConfiguredSeconds <= 0 || ReadySeconds <= 0 || TotalSeconds <= 0)
+            throw new ArgumentOutOfRangeException(nameof(AgentSandboxStartupBudgets),
+                "Every startup phase and total time budget must be configured with a positive value.");
+        return this;
+    }
+
+    public int For(SandboxStartupPhase phase) => phase switch
+    {
+        SandboxStartupPhase.Scheduled => ScheduledSeconds,
+        SandboxStartupPhase.ImageReady => ImageReadySeconds,
+        SandboxStartupPhase.Started => StartedSeconds,
+        SandboxStartupPhase.Configured => ConfiguredSeconds,
+        SandboxStartupPhase.Ready => ReadySeconds,
+        _ => throw new ArgumentOutOfRangeException(nameof(phase))
+    };
 }
 
 public static class AgentSandboxProviderMetadata

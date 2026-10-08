@@ -214,7 +214,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ExpectedRevision = 0,
                 Defaults = new PlatformRuntimeDefaults
                 {
-                    ModelSelection = new ModelSelectionSettings("platform-model"),
+                    ModelSelection = new ModelSelectionSettings(
+                        "platform-model", new SecretRef("model-api", "model-v1")),
                     EgressBaseline = [],
                     RunLimits = new CopilotRunLimits
                     {
@@ -2499,6 +2500,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal("child", runtimeOwner.SessionId);
             Assert.Equal("test-agent", runtimeOwner.AgentId);
             Assert.Equal("platform-model", runtimeOwner.ModelSelectionReference);
+            Assert.Equal(new SecretRef("model-api", "model-v1"), runtimeOwner.ModelCredentialReference);
             Assert.Equal(child.ExecutionFence, runtimeOwner.ExecutionFence);
             Assert.Equal(boundary.LogicalTurnOrdinal, runtimeOwner.LogicalTurnOrdinal);
             Assert.Equal(boundary.StateVersion, runtimeOwner.OwnerStateVersion);
