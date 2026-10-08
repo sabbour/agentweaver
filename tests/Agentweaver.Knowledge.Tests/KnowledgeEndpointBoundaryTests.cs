@@ -834,8 +834,8 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         CosmosMemoryOptions options,
         AcceptedEffectReceipt receipt) : ICosmosMemoryDocumentStore
     {
-        private readonly CosmosMemoryStoredDocument _stored = new(
-            new CosmosMemoryDocument(
+        private readonly MemoryStoredDocument _stored = new(
+            new KnowledgeMemoryDocument(
                 $"accepted-effect:{receipt.ReceiptId:N}",
                 receipt.ProjectId,
                 "accepted-effect",
@@ -854,24 +854,24 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                 HasRequiredSearchCompositeIndex: true));
         }
 
-        public Task<CosmosMemoryStoredDocument?> ReadAsync(
+        public Task<MemoryStoredDocument?> ReadAsync(
             string projectId,
             string documentId,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult<CosmosMemoryStoredDocument?>(
+            return Task.FromResult<MemoryStoredDocument?>(
                 projectId == _stored.Document.ProjectId && documentId == _stored.Document.Id
                     ? _stored
                     : null);
         }
 
-        public Task<IReadOnlyList<CosmosMemoryDocument>> FindAcceptedEffectAsync(
+        public Task<IReadOnlyList<KnowledgeMemoryDocument>> FindAcceptedEffectAsync(
             Guid receiptId,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            IReadOnlyList<CosmosMemoryDocument> documents = receiptId == receipt.ReceiptId
+            IReadOnlyList<KnowledgeMemoryDocument> documents = receiptId == receipt.ReceiptId
                 ? [_stored.Document]
                 : [];
             return Task.FromResult(documents);
@@ -938,13 +938,13 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             return Task.FromResult(false);
         }
 
-        public Task<CosmosMemoryBatchResult> ExecuteBatchAsync(
+        public Task<MemoryBatchResult> ExecuteBatchAsync(
             string projectId,
-            IReadOnlyList<CosmosMemoryBatchOperation> operations,
+            IReadOnlyList<MemoryBatchOperation> operations,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(new CosmosMemoryBatchResult(HttpStatusCode.ServiceUnavailable));
+            return Task.FromResult(new MemoryBatchResult(MemoryBatchStatus.Failed));
         }
     }
 
