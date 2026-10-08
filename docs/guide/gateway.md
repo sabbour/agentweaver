@@ -19,13 +19,16 @@ configured audience before forwarding the original bearer token to the owning AP
 validation; it is not an identity or role claim. The owner remains authoritative for
 current project membership, role, binding, and operation-specific checks.
 
-The `createKnowledgeRecord`, `updateKnowledgeRecord`, `promoteKnowledgeProposal`, and
-`rejectKnowledgeProposal` operations require exactly one `Idempotency-Key` string
-header. Its value must be 1–128 ASCII letters or digits, or `.`, `_`, `-`, or `:`.
-Reuse the same key when retrying the same write. The key is only for idempotency; it
-does not establish identity or approve an operation. Knowledge rejects missing,
-duplicate, blank, and invalid values. Reads and other Gateway operations do not
-require this header.
+The `createKnowledgeRecord`, `updateKnowledgeRecord`, `restoreKnowledgeRecord`,
+`approveKnowledgeDecision`, `importKnowledgeRecords`, `promoteKnowledgeProposal`,
+and `rejectKnowledgeProposal` operations require exactly one `Idempotency-Key`
+string header. Its value must be 1–128 ASCII letters or digits, or `.`, `_`, `-`,
+or `:`. Reuse the same key when retrying the same write. The key is only for
+idempotency; it does not establish identity or approve an operation. Knowledge
+rejects missing, duplicate, blank, and invalid values. Reads, including
+`exportKnowledgeRecords`, and other Gateway operations do not require this header.
+Knowledge import bundles are limited to 1 MiB; MCP allows an additional 64 KiB for
+the JSON-RPC envelope.
 
 Responses preserve the owner's status and body. In particular, `202 Accepted` means
 only that the owner accepted work; it is not proof that an asynchronous effect

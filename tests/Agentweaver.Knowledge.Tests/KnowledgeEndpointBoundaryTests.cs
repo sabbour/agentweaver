@@ -172,11 +172,11 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             (long)KnowledgeRecordTransferContract.MaximumBytes,
             importEndpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>()?.MaxRequestBodySize);
 
-        async Task<Guid> CreateDecisionAsync(string key, string content)
+        async Task<Guid> CreateDecisionAsync(string key, string content, string agentId = "agent-a")
         {
             using var create = new HttpRequestMessage(
                 HttpMethod.Post,
-                "/api/projects/project-a/runs/run-a/agents/agent-a/records")
+                $"/api/projects/project-a/runs/run-a/agents/{agentId}/records")
             {
                 Content = JsonContent.Create(
                     new
@@ -199,7 +199,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
 
             using var promote = new HttpRequestMessage(
                 HttpMethod.Post,
-                $"/api/projects/project-a/runs/run-a/agents/agent-a/proposals/{proposalId:D}/promote")
+                $"/api/projects/project-a/runs/run-a/agents/{agentId}/proposals/{proposalId:D}/promote")
             {
                 Content = JsonContent.Create(new { expectedRevision = 1 }, options: JsonOptions)
             };
@@ -215,7 +215,9 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             Guid recordId,
             int expectedRevision,
             string state,
-            Guid? supersededByRecordId = null)
+            Guid? supersededByRecordId = null,
+            string agentId = "agent-a",
+            string? keySuffix = null)
         {
             var payload = new Dictionary<string, object?>
             {
@@ -231,12 +233,13 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                 payload["supersededByRecordId"] = target;
             var request = new HttpRequestMessage(
                 HttpMethod.Put,
-                $"/api/projects/project-a/runs/run-a/agents/agent-a/records/{recordId:D}")
+                $"/api/projects/project-a/runs/run-a/agents/{agentId}/records/{recordId:D}")
             {
                 Content = JsonContent.Create(payload, options: JsonOptions)
             };
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
-            request.Headers.TryAddWithoutValidation("Idempotency-Key", $"decision-{recordId:N}-{state}");
+            request.Headers.TryAddWithoutValidation(
+                "Idempotency-Key", $"decision-{recordId:N}-{keySuffix ?? state}");
             var response = await client.SendAsync(request);
             request.Dispose();
             return response;
@@ -244,6 +247,51 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
 
         var first = await CreateDecisionAsync("first-decision", "first content");
         var second = await CreateDecisionAsync("second-decision", "second content");
+        var foreignDirectTarget = await CreateDecisionAsync(
+            "foreign-direct-target", "foreign direct target", "agent-b");
+        using (var foreignDirect = await UpdateDecisionAsync(
+                   first, 1, "superseded", foreignDirectTarget, keySuffix: "foreign-direct"))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, foreignDirect.StatusCode);
+            Assert.Contains("invalid_replacement",
+                await foreignDirect.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+
+        var transitiveSource = await CreateDecisionAsync("foreign-chain-source", "chain source");
+        var chainTarget = await CreateDecisionAsync("foreign-chain-target", "same-agent link");
+        var foreignDownstream = await CreateDecisionAsync(
+            "foreign-chain-downstream", "foreign downstream", "agent-b");
+        await using (var connection = await database.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{database.Options.Schema}".knowledge_records
+            SET state = 'Superseded', superseded_by_record_id = @replacement
+            WHERE project_id = @project AND record_id = @record
+            """, connection))
+        {
+            command.Parameters.AddWithValue("replacement", foreignDownstream);
+            command.Parameters.AddWithValue("project", "project-a");
+            command.Parameters.AddWithValue("record", chainTarget);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+        using (var foreignTransitive = await UpdateDecisionAsync(
+                   transitiveSource, 1, "superseded", chainTarget, keySuffix: "foreign-transitive"))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, foreignTransitive.StatusCode);
+            Assert.Contains("invalid_replacement",
+                await foreignTransitive.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+        await using (var connection = await database.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{database.Options.Schema}".knowledge_records
+            SET state = 'Active', superseded_by_record_id = NULL
+            WHERE project_id = @project AND record_id = @record
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", "project-a");
+            command.Parameters.AddWithValue("record", chainTarget);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
         using (var supersede = await UpdateDecisionAsync(
                    first, 1, "superseded", second))
         {
@@ -311,7 +359,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         Assert.Equal(KnowledgeRecordTransferContract.SchemaVersion,
             bundle.RootElement.GetProperty("schemaVersion").GetInt32());
         var records = bundle.RootElement.GetProperty("records");
-        Assert.Equal(2, records.GetArrayLength());
+        Assert.Equal(4, records.GetArrayLength());
         Assert.All(records.EnumerateArray(), entry =>
         {
             Assert.Equal("agent-a", entry.GetProperty("record").GetProperty("agentId").GetString());
