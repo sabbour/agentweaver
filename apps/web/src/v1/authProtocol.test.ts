@@ -89,12 +89,25 @@ describe('Identity Broker authorization', () => {
     const [url, init] = fetcher.mock.calls[0];
     expect(String(url)).toBe(`${config.brokerUrl}/connect/consent`);
     expect(init?.credentials).toBe('include');
+    expect(init?.redirect).toBe('manual');
     expect(new Headers(init?.headers).get('X-CSRF-TOKEN')).toBe('csrf-value');
     expect(JSON.parse(String(init?.body))).toEqual({
       consent_handle: 'consent-handle',
       approve: true,
       scopes: ['projects.read', 'runs.read'],
     });
+  });
+
+  it('does not follow the Broker consent redirect from fetch', async () => {
+    const redirect = { type: 'opaqueredirect', status: 0, ok: false, url: '' } as Response;
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(redirect);
+    await expect(submitBrokerConsent(config, {
+      consent_required: true,
+      consent_handle: 'consent-handle',
+      client_id: config.clientId,
+      requested_scopes: ['projects.read'],
+      csrf_token: 'csrf-value',
+    }, true, fetcher)).resolves.toBe(redirect);
   });
 
   it('submits a Broker consent denial without granting requested scopes', async () => {

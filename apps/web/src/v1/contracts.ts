@@ -40,7 +40,77 @@ export interface ProjectConfiguration {
     maxWallTimeSeconds?: number | null;
     maxPromptTokens?: number | null;
   };
-  sourceControl?: unknown;
+  sourceControl?: SourceControlProjectSettings | null;
+}
+
+export type SourceControlAuthMode = 'secret' | 'githubApp';
+
+export interface SourceControlProjectSettings {
+  authMode?: SourceControlAuthMode;
+  appConnectionId?: string;
+  repository?: { owner: string; name: string };
+  apiSecretReference?: { id: string; version: string } | null;
+  checkoutSecretReference?: { id: string; version: string } | null;
+  webhookSecretReference?: { id: string; version: string } | null;
+}
+
+export interface RepoAppAuthorizationStart {
+  authorizationUrl: string;
+  transactionId: string;
+  expiresAt: string;
+}
+
+export interface RepoAppAuthorizationStatus {
+  connected: boolean;
+  githubLogin: string | null;
+  connectionId: string | null;
+}
+
+export interface RepoAppAuthorizationTransaction {
+  status: string;
+}
+
+export interface RepoAppRepositoryCandidate {
+  fullName: string;
+  ownerLogin: string;
+  isPrivate: boolean;
+  defaultBranch: string;
+  pushedAt: string | null;
+}
+
+export interface RepoAppInstallationCandidate {
+  accountLogin: string;
+  accountType: string;
+  repositorySelection: string;
+  managementUrl: string;
+}
+
+export interface RepoAppRepositorySelectionList {
+  repositories: RepoAppRepositoryCandidate[];
+  installations: RepoAppInstallationCandidate[];
+}
+
+export interface RepoAppRepositorySelectionCode {
+  selectionCode: string;
+  expiresAt: string;
+}
+
+export interface RepoAppInstallationStart {
+  installationUrl: string;
+  transactionId: string;
+  expiresAt: string;
+}
+
+export interface SourceControlRepositoryPinView {
+  pinId: string;
+  repository: string;
+  providerId: string;
+  resourceId: string;
+  resourceGeneration: number;
+  providerRepositoryId: number;
+  defaultBranch: string;
+  isPrivate: boolean;
+  pinnedAt: string;
 }
 
 export interface VersionedProjectConfiguration {

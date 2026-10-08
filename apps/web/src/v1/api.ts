@@ -11,10 +11,17 @@ import type {
   OwnerRunStatus,
   ProjectConfiguration,
   ProjectSummary,
+  RepoAppAuthorizationStart,
+  RepoAppAuthorizationStatus,
+  RepoAppAuthorizationTransaction,
+  RepoAppInstallationStart,
+  RepoAppRepositorySelectionCode,
+  RepoAppRepositorySelectionList,
   SessionEventEnvelope,
   SessionEventPage,
   SessionStatusSnapshot,
   SessionTreeSnapshot,
+  SourceControlRepositoryPinView,
   UsageRunTotals,
   VersionedProjectConfiguration,
 } from './contracts';
@@ -46,13 +53,17 @@ function encodeSegments(...segments: string[]): string {
 
 export class AgentweaverGatewayClient {
   private readonly baseUrl: string;
+  private readonly gatewayRootUrl: string;
   private readonly fetcher: typeof fetch;
 
   constructor(
     baseUrl = gatewayBaseUrl,
     fetcher: typeof fetch = fetch,
   ) {
-    this.baseUrl = baseUrl;
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.gatewayRootUrl = this.baseUrl.endsWith('/api/v1')
+      ? this.baseUrl.slice(0, -'/api/v1'.length)
+      : this.baseUrl;
     this.fetcher = fetcher;
   }
 
@@ -60,6 +71,7 @@ export class AgentweaverGatewayClient {
     token: string,
     path: string,
     init: RequestInit = {},
+    baseUrl = this.baseUrl,
   ): Promise<T> {
     if (!token) {
       throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in through the Identity Broker to continue.');
@@ -69,10 +81,10 @@ export class AgentweaverGatewayClient {
     headers.set('Accept', 'application/json');
     if (init.body !== undefined) headers.set('Content-Type', 'application/json');
 
-    const response = await this.fetcher(`${this.baseUrl}${path}`, {
+    const response = await this.fetcher.call(globalThis, `${baseUrl}${path}`, {
       ...init,
       headers,
-      credentials: 'omit',
+      credentials: init.credentials ?? 'omit',
       cache: 'no-store',
     });
     if (!response.ok) {
@@ -120,6 +132,120 @@ export class AgentweaverGatewayClient {
       method: 'PUT',
       body: JSON.stringify({ expectedRevision, configuration }),
     });
+  }
+
+  beginRepoAppAuthorization(
+    token: string,
+    returnRouteKey: 'projects' | 'settings' = 'projects',
+  ): Promise<RepoAppAuthorizationStart> {
+    return this.request(
+      token,
+      '/api/auth/github/repo-app/authorizations',
+      {
+        method: 'POST',
+        body: JSON.stringify({ returnRouteKey }),
+        credentials: 'include',
+      },
+      this.gatewayRootUrl,
+    );
+  }
+
+  getRepoAppAuthorizationStatus(token: string): Promise<RepoAppAuthorizationStatus> {
+    return this.request(
+      token,
+      '/api/auth/github/repo-app/authorization/status',
+      {},
+      this.gatewayRootUrl,
+    );
+  }
+
+  getRepoAppAuthorization(
+    token: string,
+    transactionId: string,
+  ): Promise<RepoAppAuthorizationTransaction> {
+    return this.request(
+      token,
+      `/api/auth/github/repo-app/authorizations/${encodeSegments(transactionId)}`,
+      {},
+      this.gatewayRootUrl,
+    );
+  }
+
+  refreshRepoAppAuthorization(token: string): Promise<void> {
+    return this.request(
+      token,
+      '/api/auth/github/repo-app/authorization/refresh',
+      { method: 'POST' },
+      this.gatewayRootUrl,
+    );
+  }
+
+  disconnectRepoAppAuthorization(token: string): Promise<void> {
+    return this.request(
+      token,
+      '/api/auth/github/repo-app/authorization',
+      { method: 'DELETE' },
+      this.gatewayRootUrl,
+    );
+  }
+
+  listRepoAppRepositorySelections(token: string): Promise<RepoAppRepositorySelectionList> {
+    return this.request(
+      token,
+      '/api/github/repository-selections',
+      {},
+      this.gatewayRootUrl,
+    );
+  }
+
+  issueRepoAppRepositorySelection(
+    token: string,
+    fullName: string,
+  ): Promise<RepoAppRepositorySelectionCode> {
+    return this.request(
+      token,
+      '/api/github/repository-selections',
+      { method: 'POST', body: JSON.stringify({ fullName }) },
+      this.gatewayRootUrl,
+    );
+  }
+
+  beginProjectGitHubAppInstallationAuthorization(
+    token: string,
+    projectId: string,
+    runId: string,
+    tenantId: string,
+  ): Promise<RepoAppInstallationStart> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'github-app-installations', 'authorizations')}`,
+      {
+        method: 'POST',
+        headers: { 'X-Agentweaver-Tenant': tenantId },
+        credentials: 'include',
+      },
+    );
+  }
+
+  pinSourceControlRepository(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    tenantId: string,
+    selectionCode?: string,
+  ): Promise<SourceControlRepositoryPinView> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'pin')}`,
+      {
+        method: 'POST',
+        headers: { 'X-Agentweaver-Tenant': tenantId },
+        ...(selectionCode === undefined
+          ? {}
+          : { body: JSON.stringify({ selectionCode }) }),
+      },
+    );
   }
 
   getRunSelection(token: string, projectId: string, runId: string): Promise<EffectiveRunSelection> {

@@ -11,6 +11,7 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="10.0.1" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.63.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <PackageReference Include="Testcontainers.PostgreSql" Version="4.14.0" />
@@ -29,7 +30,6 @@
     <ProjectReference Include="..\..\services\agenthost\Agentweaver.AgentHost\Agentweaver.AgentHost.csproj" Aliases="AgentHostService" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Migrations\runtime_registration.sql"
-                      LogicalName="Agentweaver.Identity.Broker.Tests.runtime_registration.sql" />
+    <EmbeddedResource Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Migrations\runtime_registration.sql" LogicalName="Agentweaver.Identity.Broker.Tests.runtime_registration.sql" />
   </ItemGroup>
 </Project>

@@ -110,7 +110,7 @@ flowchart LR
     Cli -->|"MCP"| Mcp
     Mcp -->|"HTTP with the validated Broker bearer"| Bff
     Bff -->|"internal gRPC"| Orch
-    Bff -->|"authentication"| Identity
+    Bff -->|"Broker auth and Repo App BFF"| Identity
     Orch -->|"run-selection API"| Config
     Orch -->|"gRPC"| Knowledge
     Orch -->|"gRPC"| Source
@@ -134,8 +134,8 @@ flowchart LR
 
 | Component | Owns | Does not own |
 | --- | --- | --- |
-| Gateway/BFF | HTTP REST and server-sent events (SSE) for web and CLI; authentication entry, route dispatch, and authorized projections. | Agent execution or an application provider's viewer identity decisions. |
-| Identity | OpenIddict broker, MCP OAuth, purpose-bound run tokens, `SecretRef` redemption, scoped gateway credential injection, and the source-only GitHub App connection, refresh, callback, and run-bound token-mint routes. This is the trust boundary. | Long-lived agent secrets or GitHub installation tokens in a run database or image. |
+| Gateway/BFF | HTTP REST and server-sent events (SSE) for web and CLI; authentication entry, finite route dispatch, and authorized projections, including explicit Repo App and Copilot connection BFF routes. | Agent execution, arbitrary upstream proxying, or an application provider's viewer identity decisions. |
+| Identity | OpenIddict broker, MCP OAuth, purpose-bound run tokens, `SecretRef` redemption, scoped gateway credential injection, owner-held Repo App and Copilot credentials, stable opaque connection references, OAuth/install callbacks, and run-bound token-mint routes. This is the trust boundary. | Long-lived agent secrets or provider tokens in a run database or image, or provider credentials in browser responses. |
 | Projects & Config | Project lifecycle and revisioned configuration, casting/charters, blueprint/workflow references, skill settings, model-selection references, project provider overrides, platform runtime defaults, egress narrowing, validated run limits, and its own tenant memberships, resource-role assignments, and authorization audit. | Identity issuance, provider catalog registrations, repository/workflow materialization, raw credentials, or final provisioned-resource pins. |
 | Orchestrator | Runs, Microsoft Agent Framework (MAF) workflows, session tree and coordination verbs, typed coordinator decisions, OutcomeSpec and WorkPlan, approval and question gates, immutable accepted-run Sandbox and Source Control owner bindings, source-specific merge intents and narrow action grants, checkpoints, recovery, consistency manifest, run-limit budget enforcement, and the current session/work-item/turn context and runtime-registration source. | The run journal's storage, Sandbox resource provisioning, direct cross-schema updates, complete runtime delivery, or usage accounting. |
 | Environment manager | Sandbox, Snapshots, Storage, Network Policy, and Application Hosting adapters; leases and fencing; egress verification; startup phases; retention, reclaim, application deployments, and control-plane image publication. | Viewer authentication or a workflow's publish decision. |

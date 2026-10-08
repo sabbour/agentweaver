@@ -77,7 +77,9 @@ describe('Gateway API client', () => {
   });
 
   it('sends Knowledge idempotency keys in the required header', async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 200 }));
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () => new Response('{}', { status: 200 }),
+    );
     const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
     const idempotencyKey = 'knowledge-create-intent';
 
@@ -157,5 +159,82 @@ describe('Gateway API client', () => {
     expect(new Headers(init?.headers).get('Accept')).toBe('text/event-stream');
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer broker-token');
     expect(init?.credentials).toBe('omit');
+  });
+
+  it('keeps Repo App authorization at the Gateway root and stores its callback cookie', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () => new Response('{}', { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await client.beginRepoAppAuthorization('broker-token');
+    await client.getRepoAppAuthorizationStatus('broker-token');
+    await client.listRepoAppRepositorySelections('broker-token');
+    await client.issueRepoAppRepositorySelection('broker-token', 'octo/agentweaver');
+
+    const [beginUrl, beginInit] = fetcher.mock.calls[0];
+    expect(String(beginUrl)).toBe(
+      'https://gateway.example.test/api/auth/github/repo-app/authorizations',
+    );
+    expect(JSON.parse(String(beginInit?.body))).toEqual({ returnRouteKey: 'projects' });
+    expect(beginInit?.credentials).toBe('include');
+    expect(new Headers(beginInit?.headers).get('X-Agentweaver-Tenant')).toBeNull();
+    expect(String(fetcher.mock.calls[1][0])).toBe(
+      'https://gateway.example.test/api/auth/github/repo-app/authorization/status',
+    );
+    expect(String(fetcher.mock.calls[2][0])).toBe(
+      'https://gateway.example.test/api/github/repository-selections',
+    );
+    expect(new Headers(fetcher.mock.calls[2][1]?.headers).get('X-Agentweaver-Tenant')).toBeNull();
+    expect(JSON.parse(String(fetcher.mock.calls[3][1]?.body))).toEqual({
+      fullName: 'octo/agentweaver',
+    });
+    expect(fetcher.mock.calls.slice(1).every(([, init]) => init?.credentials === 'omit')).toBe(true);
+  });
+
+  it('keeps repository pin run-bound and preserves legacy bodyless pin requests', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () => new Response('{}', { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await client.pinSourceControlRepository(
+      'broker-token', 'project-1', 'run-1', 'root-1', 'tenant-1', 'opaque-selection-code',
+    );
+    await client.pinSourceControlRepository(
+      'broker-token', 'project-1', 'run-1', 'root-1', 'tenant-1',
+    );
+
+    const [selectionUrl, selectionInit] = fetcher.mock.calls[0];
+    expect(String(selectionUrl)).toBe(
+      'https://gateway.example.test/api/v1/projects/project-1/runs/run-1/source-control/sessions/root-1/pin',
+    );
+    expect(selectionInit?.method).toBe('POST');
+    expect(new Headers(selectionInit?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(JSON.parse(String(selectionInit?.body))).toEqual({
+      selectionCode: 'opaque-selection-code',
+    });
+    const [, legacyInit] = fetcher.mock.calls[1];
+    expect(legacyInit?.method).toBe('POST');
+    expect(new Headers(legacyInit?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(legacyInit?.body).toBeUndefined();
+  });
+
+  it('sends the run-bound App installation start with the exact tenant selector', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 200 }));
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await client.beginProjectGitHubAppInstallationAuthorization(
+      'broker-token', 'project-1', 'run-1', 'tenant-1',
+    );
+
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe(
+      'https://gateway.example.test/api/v1/projects/project-1/runs/run-1/source-control/github-app-installations/authorizations',
+    );
+    expect(init?.method).toBe('POST');
+    expect(init?.credentials).toBe('include');
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(init?.body).toBeUndefined();
   });
 });

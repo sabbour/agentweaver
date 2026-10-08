@@ -1,32 +1,47 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EffectiveRunSelection } from './contracts';
 
 const mocks = vi.hoisted(() => ({
   binding: null as { projectId: string; runId: string } | null,
+  listProjects: vi.fn(),
   getProject: vi.fn(),
   getProjectConfiguration: vi.fn(),
   updateProjectConfiguration: vi.fn(),
   getRunStatus: vi.fn(),
   getRunSelection: vi.fn(),
   getRunUsage: vi.fn(),
+  getRepoAppAuthorizationStatus: vi.fn(),
+  listRepoAppRepositorySelections: vi.fn(),
+  issueRepoAppRepositorySelection: vi.fn(),
+  pinSourceControlRepository: vi.fn(),
   getSessionTree: vi.fn(),
   getSessionStatus: vi.fn(),
   getDecisions: vi.fn(),
   searchKnowledge: vi.fn(),
+  replayEvents: vi.fn(),
+  streamEvents: vi.fn(),
 }));
 
 vi.mock('./api', () => ({
   gatewayClient: {
+    listProjects: mocks.listProjects,
     getProject: mocks.getProject,
     getProjectConfiguration: mocks.getProjectConfiguration,
     updateProjectConfiguration: mocks.updateProjectConfiguration,
     getRunStatus: mocks.getRunStatus,
     getRunSelection: mocks.getRunSelection,
     getRunUsage: mocks.getRunUsage,
+    getRepoAppAuthorizationStatus: mocks.getRepoAppAuthorizationStatus,
+    listRepoAppRepositorySelections: mocks.listRepoAppRepositorySelections,
+    issueRepoAppRepositorySelection: mocks.issueRepoAppRepositorySelection,
+    pinSourceControlRepository: mocks.pinSourceControlRepository,
     getSessionTree: mocks.getSessionTree,
     getSessionStatus: mocks.getSessionStatus,
     getDecisions: mocks.getDecisions,
     searchKnowledge: mocks.searchKnowledge,
+    replayEvents: mocks.replayEvents,
+    streamEvents: mocks.streamEvents,
   },
   GatewayError: class GatewayError extends Error {
     status = 0;
@@ -98,7 +113,7 @@ function projectSummary(projectId: string, name: string) {
   };
 }
 
-function selectionSnapshot(projectId: string, runId: string) {
+function selectionSnapshot(projectId: string, runId: string): EffectiveRunSelection {
   return {
     projectId,
     runId,
@@ -181,6 +196,23 @@ function sessionStatusSnapshot(projectId: string, runId: string) {
   };
 }
 
+function configureRunSnapshots(projectId: string, runId: string) {
+  mocks.getRunStatus.mockResolvedValue(runStatusSnapshot(projectId, runId));
+  mocks.getRunSelection.mockResolvedValue(selectionSnapshot(projectId, runId));
+  mocks.getRunUsage.mockResolvedValue(usageSnapshot(projectId, runId));
+  mocks.getSessionTree.mockResolvedValue(sessionTreeSnapshot(projectId, runId));
+  mocks.getSessionStatus.mockResolvedValue(sessionStatusSnapshot(projectId, runId));
+  mocks.getDecisions.mockResolvedValue({
+    stateVersion: 1,
+    executionFence: 1,
+    outcomeConfirmed: false,
+    workflowConfirmed: false,
+    canDecompose: false,
+    canDispatch: false,
+    pendingGate: null,
+  });
+}
+
 function knowledgeRecord(recordId: string, projectId = 'p1', agentId = 'a1') {
   return {
     recordId,
@@ -205,16 +237,242 @@ describe('v1 web project scoping', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/projects/p1/settings');
     mocks.binding = null;
+    mocks.listProjects.mockReset().mockResolvedValue([]);
     mocks.getProject.mockReset();
     mocks.getProjectConfiguration.mockReset();
     mocks.updateProjectConfiguration.mockReset();
     mocks.getRunStatus.mockReset();
     mocks.getRunSelection.mockReset();
     mocks.getRunUsage.mockReset();
+    mocks.getRepoAppAuthorizationStatus.mockReset();
+    mocks.getRepoAppAuthorizationStatus.mockResolvedValue({
+      connected: false,
+      githubLogin: null,
+      connectionId: null,
+    });
+    mocks.listRepoAppRepositorySelections.mockReset();
+    mocks.issueRepoAppRepositorySelection.mockReset();
+    mocks.pinSourceControlRepository.mockReset();
     mocks.getSessionTree.mockReset();
     mocks.getSessionStatus.mockReset();
     mocks.getDecisions.mockReset();
     mocks.searchKnowledge.mockReset();
+    mocks.replayEvents.mockReset();
+    mocks.replayEvents.mockResolvedValue({ events: [], hasMore: false, nextCursor: null });
+    mocks.streamEvents.mockReset();
+    mocks.streamEvents.mockImplementation(() => {
+      throw new Error('The event stream is not used by this test.');
+    });
+  });
+
+  it('returns Repo App callback results to the originating browser window', async () => {
+    const previousOpener = Object.getOwnPropertyDescriptor(window, 'opener');
+    const opener = { postMessage: vi.fn() } as unknown as Window;
+    Object.defineProperty(window, 'opener', { configurable: true, value: opener });
+    const close = vi.spyOn(window, 'close').mockImplementation(() => {});
+    try {
+      window.history.replaceState({}, '', '/projects?repo_app_auth=success');
+      render(<App />);
+
+      await waitFor(() => {
+        expect(opener.postMessage).toHaveBeenCalledWith(
+          {
+            type: 'agentweaver.repo-app.callback',
+            kind: 'authorization',
+            outcome: 'success',
+          },
+          window.location.origin,
+        );
+      });
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      close.mockRestore();
+      if (previousOpener)
+        Object.defineProperty(window, 'opener', previousOpener);
+      else
+        Reflect.deleteProperty(window, 'opener');
+    }
+  });
+
+  it('keeps Run chat disabled until a session has an exact run binding', () => {
+    window.history.replaceState({}, '', '/projects?preset=1');
+    render(<App />);
+
+    const runChat = screen.getByRole('button', { name: 'Run chat opens from a run' }) as HTMLButtonElement;
+    expect(runChat.disabled).toBe(true);
+    fireEvent.click(runChat);
+    expect(window.location.pathname).toBe('/projects');
+    expect(window.location.search).toBe('?preset=1');
+  });
+
+  it('opens the exact bound run directly on Chat from the shell', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    window.history.replaceState({}, '', '/projects');
+    render(<App />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run chat' }));
+
+    const chatTab = await screen.findByRole('tab', { name: 'Chat' });
+    await waitFor(() => expect(chatTab.getAttribute('aria-selected')).toBe('true'));
+    expect(window.location.pathname).toBe('/projects/p1/runs/r1');
+    expect(new URLSearchParams(window.location.search).get('view')).toBe('chat');
+  });
+
+  it('opens the Chat tab from the view query and preserves other query parameters', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat&source=notification');
+    render(<App />);
+
+    const chatTab = await screen.findByRole('tab', { name: 'Chat' });
+    await waitFor(() => expect(chatTab.getAttribute('aria-selected')).toBe('true'));
+    expect(new URLSearchParams(window.location.search).get('source')).toBe('notification');
+  });
+
+  it('updates the run view query when tabs change without dropping other query parameters', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=chat&source=notification');
+    render(<App />);
+
+    await screen.findByRole('tab', { name: 'Chat' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Activity' }));
+
+    await waitFor(() => {
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get('view')).toBe('activity');
+      expect(params.get('source')).toBe('notification');
+    });
+    expect(screen.getByRole('tab', { name: 'Activity' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('pins a selected Repo App repository only for the exact accepted run and tenant', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    const selection = selectionSnapshot('p1', 'r1');
+    selection.projectConfiguration.sourceControl = {
+      authMode: 'githubApp',
+      appConnectionId: 'identity-app-1',
+    };
+    mocks.getRunSelection.mockResolvedValue(selection);
+    mocks.getRepoAppAuthorizationStatus.mockResolvedValue({
+      connected: true,
+      githubLogin: 'octo',
+      connectionId: 'identity-app-1',
+    });
+    mocks.listRepoAppRepositorySelections.mockResolvedValue({
+      repositories: [{
+        fullName: 'octo/agentweaver',
+        ownerLogin: 'octo',
+        isPrivate: true,
+        defaultBranch: 'main',
+        pushedAt: null,
+      }],
+      installations: [],
+    });
+    mocks.issueRepoAppRepositorySelection.mockResolvedValue({
+      selectionCode: 'opaque-selection-code',
+      expiresAt: '2026-10-08T01:00:00Z',
+    });
+    mocks.pinSourceControlRepository.mockResolvedValue({
+      pinId: 'pin-1',
+      repository: 'octo/agentweaver',
+      providerId: 'github',
+      resourceId: 'resource-1',
+      resourceGeneration: 1,
+      providerRepositoryId: 123,
+      defaultBranch: 'main',
+      isPrivate: true,
+      pinnedAt: '2026-10-08T00:00:00Z',
+    });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=selection');
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'GitHub App repository access' });
+    await screen.findByText('octo', { selector: 'strong' });
+    fireEvent.click(screen.getByRole('button', { name: 'Load repositories' }));
+    await screen.findByRole('combobox', { name: 'Repository' });
+    fireEvent.click(screen.getByRole('button', { name: 'Pin repository to this run' }));
+
+    await screen.findByText('Pinned repository: octo/agentweaver · main');
+    expect(mocks.issueRepoAppRepositorySelection).toHaveBeenCalledWith(
+      'broker-token',
+      'octo/agentweaver',
+    );
+    expect(mocks.pinSourceControlRepository).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      'r1',
+      's1',
+      'tenant-1',
+      'opaque-selection-code',
+    );
+  });
+
+  it('disables run-bound Repo App operations when the tenant selector is unavailable', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    const selection = selectionSnapshot('p1', 'r1');
+    selection.projectConfiguration.sourceControl = {
+      authMode: 'githubApp',
+      appConnectionId: 'identity-app-1',
+    };
+    mocks.getRunSelection.mockResolvedValue(selection);
+    mocks.getRunUsage.mockRejectedValue(new Error('usage unavailable'));
+    mocks.getRepoAppAuthorizationStatus.mockResolvedValue({
+      connected: true,
+      githubLogin: 'octo',
+      connectionId: 'identity-app-1',
+    });
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=selection');
+    render(<App />);
+
+    expect(await screen.findByText(
+      'The current run tenant selector is unavailable; run-bound App installation and pinning are disabled.',
+    )).toBeTruthy();
+    const installButton = await screen.findByRole('button', { name: 'Install GitHub App for this run' });
+    expect(
+      (installButton as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('does not claim the Repo App is disconnected when its status owner is unavailable', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    const selection = selectionSnapshot('p1', 'r1');
+    selection.projectConfiguration.sourceControl = {
+      authMode: 'githubApp',
+      appConnectionId: 'identity-app-1',
+    };
+    mocks.getRunSelection.mockResolvedValue(selection);
+    mocks.getRepoAppAuthorizationStatus.mockRejectedValue(new Error('Identity Broker owner unavailable'));
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=selection');
+    render(<App />);
+
+    expect(await screen.findByText(
+      'GitHub App connection status is unavailable; no connection state is assumed.',
+    )).toBeTruthy();
+    expect(screen.queryByText('No GitHub App user connection is available for this identity.')).toBeNull();
+    expect(screen.queryByRole(
+      'link',
+      { name: 'Connect GitHub Repo App and configure this project' },
+    )).toBeNull();
+  });
+
+  it('defaults invalid run view queries to Topology while preserving other query parameters', async () => {
+    mocks.binding = { projectId: 'p1', runId: 'r1' };
+    configureRunSnapshots('p1', 'r1');
+    window.history.replaceState({}, '', '/projects/p1/runs/r1?view=unsupported&source=notification');
+    render(<App />);
+
+    await screen.findByRole('tab', { name: 'Topology' });
+    await waitFor(() => {
+      const params = new URLSearchParams(window.location.search);
+      expect(params.get('view')).toBe('topology');
+      expect(params.get('source')).toBe('notification');
+    });
+    expect(screen.getByRole('tab', { name: 'Topology' }).getAttribute('aria-selected')).toBe('true');
   });
 
   it('hides the previous project and ignores a stale project response after navigation', async () => {

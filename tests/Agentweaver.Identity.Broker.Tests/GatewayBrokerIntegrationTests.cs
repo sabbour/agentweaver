@@ -245,6 +245,47 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 liveEventResponses.GetProperty("200").GetProperty("content")
                     .TryGetProperty("text/event-stream", out _));
             Assert.True(liveEventResponses.TryGetProperty("400", out _));
+            Assert.False(paths.TryGetProperty("/api/connections/copilot-user/v1/begin", out _));
+            Assert.False(paths.TryGetProperty("/api/auth/github/repo-app/authorizations", out _));
+            Assert.False(paths.TryGetProperty("/api/github/repository-selections", out _));
+            Assert.False(paths.TryGetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/github-app-installations/authorizations",
+                out _));
+            Assert.DoesNotContain(
+                paths.EnumerateObject(),
+                path => path.Name.Contains("webhook-relay", StringComparison.Ordinal));
+            var sourceControlIssue = paths.GetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/issues")
+                .GetProperty("post");
+            Assert.Equal("createSourceControlIssue", sourceControlIssue.GetProperty("operationId").GetString());
+            Assert.Equal("Orchestrator", sourceControlIssue.GetProperty("x-agentweaver-owner").GetString());
+            Assert.Equal(
+                "#/components/schemas/SourceControlIssueRequest",
+                sourceControlIssue.GetProperty("requestBody").GetProperty("content")
+                    .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+            var sourceControlPin = paths.GetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/pin")
+                .GetProperty("post");
+            Assert.False(sourceControlPin.GetProperty("requestBody").GetProperty("required").GetBoolean());
+            Assert.Equal(
+                "#/components/schemas/SourceControlRepositoryPinRequest",
+                sourceControlPin.GetProperty("requestBody").GetProperty("content")
+                    .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+            Assert.True(sourceControlPin.GetProperty("parameters").EnumerateArray()
+                .Single(parameter => parameter.GetProperty("name").GetString() == "X-Agentweaver-Tenant")
+                .GetProperty("required").GetBoolean());
+            var sourceControlReviews = paths.GetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}" +
+                "/pull-requests/{pullRequestNumber}/reviews").GetProperty("get");
+            var pullRequestNumber = sourceControlReviews.GetProperty("parameters").EnumerateArray()
+                .Single(parameter => parameter.GetProperty("name").GetString() == "pullRequestNumber");
+            Assert.Equal("integer", pullRequestNumber.GetProperty("schema").GetProperty("type").GetString());
+            Assert.Equal("int64", pullRequestNumber.GetProperty("schema").GetProperty("format").GetString());
+            var mergeIntent = paths.GetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents")
+                .GetProperty("post");
+            Assert.True(mergeIntent.GetProperty("x-agentweaver-accepted-only").GetBoolean());
+            Assert.True(mergeIntent.GetProperty("responses").TryGetProperty("202", out _));
             var readRecord = paths.GetProperty(
                 "/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}")
                 .GetProperty("get");

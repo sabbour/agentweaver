@@ -61,7 +61,7 @@ public sealed class GatewayOwnerClient(
             context.Response.StatusCode = (int)response.StatusCode;
             context.Response.Headers.CacheControl = "no-store";
             context.Response.Headers.XContentTypeOptions = "nosniff";
-            CopyResponseHeaders(context, response, route.Owner);
+            CopyResponseHeaders(context, response, route.Owner, route.ForwardSetCookie);
             if (response.Content.Headers.ContentType is { } contentType)
                 context.Response.ContentType = contentType.ToString();
             if (response.Content.Headers.ContentLength is { } contentLength)
@@ -102,6 +102,249 @@ public sealed class GatewayOwnerClient(
             await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
                 .ConfigureAwait(false);
         }
+    }
+
+    public Task ProxyCopilotConnectionAsync(
+        HttpContext context,
+        string method,
+        string ownerPath,
+        bool forwardLinkCookie,
+        CancellationToken cancellationToken) =>
+        ProxyIdentityBrokerApiAsync(
+            context,
+            method,
+            ownerPath,
+            hasJsonBody: HttpMethods.IsPost(method),
+            forwardTenantSelector: true,
+            forwardCookieName: forwardLinkCookie ? "__Host-agentweaver-copilot-link" : null,
+            cookieErrorCode: "copilot_connection_cookie_invalid",
+            cancellationToken);
+
+    public async Task ProxyIdentityBrokerApiAsync(
+        HttpContext context,
+        string method,
+        string ownerPath,
+        bool hasJsonBody,
+        bool forwardTenantSelector,
+        string? forwardCookieName,
+        string cookieErrorCode,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (context.Request.Query.Count > 0)
+                throw new GatewayOwnerFailureException(
+                    StatusCodes.Status400BadRequest,
+                    "application/problem+json",
+                    ProblemBody("request_query_invalid", StatusCodes.Status400BadRequest));
+
+            var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
+            using var timeout = CreateOwnerTimeout(cancellationToken);
+            using var request = new HttpRequestMessage(
+                new HttpMethod(method),
+                BuildOwnerUri(GatewayOwner.IdentityBroker, ownerPath));
+            request.Headers.Authorization = bearer;
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            if (forwardTenantSelector)
+                CopyTenantSelector(context, request);
+            if (hasJsonBody)
+            {
+                var requestContentType = context.Request.ContentType;
+                if (requestContentType is not null &&
+                    (!MediaTypeHeaderValue.TryParse(requestContentType, out var parsed) ||
+                     parsed.MediaType is null ||
+                     !(parsed.MediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+                       parsed.MediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase))))
+                {
+                    throw new GatewayOwnerFailureException(
+                        StatusCodes.Status415UnsupportedMediaType,
+                        "application/problem+json",
+                        ProblemBody("request_content_type_invalid", StatusCodes.Status415UnsupportedMediaType));
+                }
+                request.Content = new StreamContent(context.Request.Body);
+                if (context.Request.ContentLength is { } requestContentLength)
+                    request.Content.Headers.ContentLength = requestContentLength;
+                request.Content.Headers.ContentType = requestContentType is null
+                    ? new MediaTypeHeaderValue("application/json")
+                    : MediaTypeHeaderValue.Parse(requestContentType);
+            }
+            if (forwardCookieName is not null)
+                CopyNamedCookie(context, request, forwardCookieName, cookieErrorCode);
+
+            using var response = await SendAsync(
+                GatewayOwner.IdentityBroker,
+                request,
+                timeout.Token).ConfigureAwait(false);
+            if (IsRedirect(response.StatusCode))
+            {
+                await WriteProblemAsync(context, "owner_redirect_rejected", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+                return;
+            }
+            if (response.Content.Headers.ContentLength is > MaximumProxyResponseBytes)
+            {
+                await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            context.Response.StatusCode = (int)response.StatusCode;
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            CopyHeader(response.Headers, context.Response.Headers, "Set-Cookie");
+            CopyHeader(response.Headers, context.Response.Headers, "Retry-After");
+            if (response.Content.Headers.ContentType is { } contentType)
+                context.Response.ContentType = contentType.ToString();
+            if (response.Content.Headers.ContentLength is { } responseContentLength)
+                context.Response.ContentLength = responseContentLength;
+            if (response.StatusCode is not HttpStatusCode.NoContent and not HttpStatusCode.NotModified)
+                await CopyBoundedAsync(
+                    await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false),
+                    context.Response.Body,
+                    MaximumProxyResponseBytes,
+                    timeout.Token).ConfigureAwait(false);
+        }
+        catch (GatewayOwnerFailureException exception)
+        {
+            await WriteOwnerFailureAsync(context, exception).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            await WriteProblemAsync(context, "owner_timeout", StatusCodes.Status504GatewayTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            if (context.Response.HasStarted)
+                context.Abort();
+            else
+                await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+    }
+
+    public async Task ProxyGitHubRepoAppCallbackAsync(
+        HttpContext context,
+        string ownerPath,
+        string cookieName,
+        string cookieErrorCode,
+        IReadOnlyCollection<string> allowedQueryParameters,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var allowedQuery = new HashSet<string>(allowedQueryParameters, StringComparer.Ordinal);
+            if (context.Request.Query.Keys.Any(key =>
+                    !allowedQuery.Contains(key) || context.Request.Query[key].Count != 1))
+                throw new GatewayOwnerFailureException(
+                    StatusCodes.Status400BadRequest,
+                    "application/problem+json",
+                    ProblemBody("callback_query_invalid", StatusCodes.Status400BadRequest));
+
+            using var timeout = CreateOwnerTimeout(cancellationToken);
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                BuildOwnerUri(GatewayOwner.IdentityBroker, ownerPath + context.Request.QueryString));
+            CopyNamedCookie(context, request, cookieName, cookieErrorCode);
+            using var response = await SendAsync(
+                GatewayOwner.IdentityBroker,
+                request,
+                timeout.Token).ConfigureAwait(false);
+            if (response.Content.Headers.ContentLength is > MaximumProxyResponseBytes)
+            {
+                await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            context.Response.StatusCode = (int)response.StatusCode;
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            CopyHeader(response.Headers, context.Response.Headers, "Set-Cookie");
+            CopyHeader(response.Headers, context.Response.Headers, "Location");
+            if (response.Content.Headers.ContentType is { } contentType)
+                context.Response.ContentType = contentType.ToString();
+            if (response.Content.Headers.ContentLength is { } responseContentLength)
+                context.Response.ContentLength = responseContentLength;
+            if (response.StatusCode is not HttpStatusCode.NoContent and not HttpStatusCode.NotModified)
+                await CopyBoundedAsync(
+                    await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false),
+                    context.Response.Body,
+                    MaximumProxyResponseBytes,
+                    timeout.Token).ConfigureAwait(false);
+        }
+        catch (GatewayOwnerFailureException exception)
+        {
+            await WriteOwnerFailureAsync(context, exception).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            await WriteProblemAsync(context, "owner_timeout", StatusCodes.Status504GatewayTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            if (context.Response.HasStarted)
+                context.Abort();
+            else
+                await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private static void CopyNamedCookie(
+        HttpContext context,
+        HttpRequestMessage request,
+        string cookieName,
+        string errorCode)
+    {
+        var matchingCookies = context.Request.Headers.Cookie
+            .SelectMany(value => (value ?? string.Empty).Split(';'))
+            .Select(value => value.Trim())
+            .Where(value => value.StartsWith(cookieName + "=", StringComparison.Ordinal))
+            .ToArray();
+        if (matchingCookies.Length != 1)
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status400BadRequest,
+                "application/problem+json",
+                ProblemBody(errorCode, StatusCodes.Status400BadRequest));
+
+        var cookieValue = matchingCookies[0][(cookieName.Length + 1)..];
+        if (cookieValue.Length is 0 or > 4096 ||
+            cookieValue.Any(char.IsControl) ||
+            !request.Headers.TryAddWithoutValidation("Cookie", $"{cookieName}={cookieValue}"))
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status400BadRequest,
+                "application/problem+json",
+                ProblemBody(errorCode, StatusCodes.Status400BadRequest));
     }
 
     public async Task SubscribeRunEventsAsync(
@@ -324,7 +567,10 @@ public sealed class GatewayOwnerClient(
         CopyTenantSelector(context, request);
         CopySingleRequestHeader(context, request, "Idempotency-Key");
         CopySingleRequestHeader(context, request, "If-Match");
-        if (route.HasJsonBody)
+        var hasRequestBody = context.Request.ContentLength is > 0 ||
+            context.Request.ContentType is not null ||
+            context.Request.Headers.ContainsKey("Transfer-Encoding");
+        if (route.HasJsonBody && (route.JsonBodyRequired || hasRequestBody))
         {
             var contentType = context.Request.ContentType;
             if (contentType is not null &&
@@ -479,11 +725,14 @@ public sealed class GatewayOwnerClient(
     private void CopyResponseHeaders(
         HttpContext context,
         HttpResponseMessage response,
-        GatewayOwner owner)
+        GatewayOwner owner,
+        bool forwardSetCookie)
     {
         CopyHeader(response.Headers, context.Response.Headers, "ETag");
         CopyHeader(response.Content.Headers, context.Response.Headers, "Last-Modified");
         CopyHeader(response.Headers, context.Response.Headers, "Retry-After");
+        if (forwardSetCookie)
+            CopyHeader(response.Headers, context.Response.Headers, "Set-Cookie");
         if (response.Headers.Location is { } location &&
             RewriteLocation(location, owner) is { } rewritten)
             context.Response.Headers.Location = rewritten;

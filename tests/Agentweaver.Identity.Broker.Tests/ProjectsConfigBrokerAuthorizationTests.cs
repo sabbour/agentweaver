@@ -1418,12 +1418,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    private async Task CreateRunBindingGrantAsync(string subject, string projectId, string runId)
+    private async Task CreateRunBindingGrantAsync(
+        string subject,
+        string projectId,
+        string runId,
+        string? grantId = null)
     {
         using var scope = _brokerFactory.Services.CreateScope();
         var authority = scope.ServiceProvider.GetRequiredService<IdentityGrantAuthority>();
         var grant = new SecretRedemptionGrant(
-            $"projects-config:{runId}",
+            grantId ?? $"projects-config:{runId}",
             subject,
             projectId,
             runId,

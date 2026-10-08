@@ -34,12 +34,105 @@ and structured error bodies pass through; an unavailable or redirected owner, in
 owner contract, or bounded-response violation returns `502`, and a finite owner
 request timeout returns `504`.
 
+## Identity Broker browser BFF
+
+The Gateway also exposes explicit, non-OpenAPI routes to the configured
+`Gateway:Owners:IdentityBrokerAddress`. These routes are not generic proxy
+operations and are not included in the MCP tool catalog.
+These source mappings do not prove owner availability: Repo App routes remain
+unavailable until the Identity/Source Control producers in #1907 are admitted
+and configured; Copilot routes require the #1906 producer. A missing owner
+address or incompatible audience is surfaced as an explicit owner failure.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Web as Retained v1 web
+    participant Gateway
+    participant Identity as Identity Broker
+    participant Orchestrator as Source Control owner
+    participant GitHub
+    User->>Web: Connect Repo App
+    Web->>Gateway: POST authorization (current bearer)
+    Gateway->>Identity: Same bearer; no tenant selector
+    Identity-->>Gateway: Authorization URL + host-only callback cookie
+    Gateway-->>Web: URL + unchanged Set-Cookie
+    Web->>GitHub: Provider consent in popup
+    GitHub-->>Gateway: Browser callback + exact host-only cookie
+    Gateway->>Identity: Allow-listed query + named cookie
+    Identity-->>Gateway: 302 + unchanged Location and clearing Set-Cookie
+    Gateway-->>Web: Allow-listed callback outcome
+    Web->>Gateway: GET status / repository metadata (current bearer)
+    Gateway->>Identity: Same bearer; no tenant selector
+    Identity-->>Web: Opaque connection ID + safe metadata
+    Web->>Gateway: POST run-bound installation start (bearer + tenant)
+    Gateway->>Orchestrator: Same bearer + tenant
+    Orchestrator-->>Web: Installation URL
+    Web->>GitHub: Install App for this run
+    GitHub-->>Gateway: Installation callback + exact host-only cookie
+    Gateway->>Identity: Allow-listed query + named cookie
+    Identity-->>Gateway: 302 + unchanged Location and clearing Set-Cookie
+    Gateway-->>Web: Allow-listed callback outcome
+    Web->>Gateway: POST existing run-bound pin {selectionCode}
+    Gateway->>Orchestrator: Same bearer + tenant
+```
+
+User-level GitHub Repo App authorization and repository discovery require the
+current validated Broker bearer and no tenant selector:
+
+- `POST /api/auth/github/repo-app/authorizations` begins OAuth and returns an
+  authorization URL, transaction ID, and expiry.
+- `GET /api/auth/github/repo-app/authorization/status` returns connection
+  status, GitHub login, and the stable opaque Identity `connectionId`.
+- `GET /api/auth/github/repo-app/authorizations/{transactionId}` reads the
+  transaction status; `POST /api/auth/github/repo-app/authorization/refresh`
+  refreshes owner-held credentials; `DELETE /api/auth/github/repo-app/authorization`
+  revokes the connection.
+- `GET` and `POST /api/github/repository-selections` list redacted repository
+  and installation metadata and issue a short-lived opaque selection code for
+  a caller-selected full repository name.
+
+The browser never receives provider tokens, numeric installation/repository IDs,
+or permission grants. OAuth callbacks are bearerless `GET` requests to
+`/auth/github/repo-app/callback` with only `code`, `state`, and `error`; the
+installation callback is `/auth/github/repo-app/installation/callback` with
+only `installation_id`, `setup_action`, and `state`. Each callback forwards only
+its exact `__Host-agentweaver-repo-app-auth` or
+`__Host-agentweaver-repo-app-install-auth` cookie, preserves the owner's
+`Location` and every `Set-Cookie` value, and trusts the owner to consume its
+persisted single-use state and redirect only to a configured allow-listed route.
+
+The run-bound installation start is
+`POST /api/v1/projects/{projectId}/runs/{runId}/source-control/github-app-installations/authorizations`.
+It forwards the original Broker bearer and required `X-Agentweaver-Tenant`
+selector to Orchestrator and preserves the callback cookie. User-level
+authorization/discovery, callbacks, and this browser-only start are not MCP
+tools. Run-bound repository operations remain ordinary Gateway/MCP operations;
+`pinSourceControlRepository` accepts an optional `{ "selectionCode": "..." }`
+body for GitHub App mode and keeps its existing response and status behavior.
+Omitting the body preserves legacy secret-mode pin requests. Source Control
+operations require the exact tenant selector; the owner checks the accepted
+run configuration and binds the selected repository server-side.
+
+Copilot browser consent follows the same original-bearer rule at
+`/api/connections/copilot-user/v1/{begin,complete,refresh,revoke}` and
+`GET /api/connections/copilot-user/v1/{connectionId}`. Begin sets only the
+`__Host-agentweaver-copilot-link` callback cookie; complete forwards only that
+cookie with the unchanged validated bearer and tenant selector. Gateway and
+Identity Broker audiences must already match the admitted client resource; the
+Gateway does not exchange or mint a different identity token. Where Projects &
+Core uses a separate resource, that same client token must also carry its
+existing Projects API resource. These lifecycle routes are excluded from MCP
+tools.
+
 ## First-party MCP client
 
 `Agentweaver.Mcp` exposes native Streamable HTTP at `POST /mcp`. Its `tools/list`
 catalog is built from the live Gateway `GET /openapi/v1.json` document; `tools/call`
 only invokes those finite routes and their declared schemas. SSE routes and
 unsupported request shapes are not exposed as tools.
+User-level consent, repository discovery/selection, and browser callbacks are
+not in that OpenAPI document and cannot be called through MCP.
 
 The MCP host validates the Identity Broker issuer, signature, lifetime, and its
 configured audience using OpenIddict. It publishes RFC 9728 protected-resource
@@ -103,9 +196,15 @@ the Gateway aborts the stream instead of appending a JSON problem to event data.
 
 The host requires HTTPS `Identity:Issuer`, `Identity:Audience`, and service-root
 addresses at `Gateway:Owners:Projects`, `Gateway:Owners:Orchestrator`,
-`Gateway:Owners:Knowledge`, and `Gateway:Owners:Events`. Set
+`Gateway:Owners:Knowledge`, `Gateway:Owners:Events`, and
+`Gateway:Owners:IdentityBrokerAddress`. Set
 `Gateway:OwnerRequestTimeoutSeconds` to a finite value from 1 to 120; the default is
 15 seconds. Redirects and insecure or non-root owner addresses are rejected.
+
+Run produced-file list, diff, and content reads are not yet mapped in v1. P2 #1917
+owns the durable run-bound manifest and object-version references; until that
+producer is admitted, the Gateway and retained UI do not proxy host files or claim
+produced-file browsing parity.
 
 From the repository root, build the host with
 `dotnet build services\gateway\Agentweaver.Gateway\Agentweaver.Gateway.csproj

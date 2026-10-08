@@ -6,7 +6,9 @@ const mocks = vi.hoisted(() => ({
   buildAuthorizeUrl: vi.fn((_config: unknown, transaction: { state: string }) =>
     `https://broker.test/authorize?state=${encodeURIComponent(transaction.state)}`),
   exchangeAuthorizationCode: vi.fn(),
+  isConsentPrompt: vi.fn(() => false),
   refreshBrokerToken: vi.fn(),
+  submitBrokerConsent: vi.fn(),
 }));
 
 vi.mock('./authProtocol', () => ({
@@ -19,7 +21,7 @@ vi.mock('./authProtocol', () => ({
     scopes: ['agentweaver.api'],
   }),
   exchangeAuthorizationCode: mocks.exchangeAuthorizationCode,
-  isConsentPrompt: () => false,
+  isConsentPrompt: mocks.isConsentPrompt,
   parseAuthorizationResult: (responseUrl: string, expectedState: string) => {
     const url = new URL(responseUrl);
     if (url.searchParams.get('state') !== expectedState) return null;
@@ -32,7 +34,7 @@ vi.mock('./authProtocol', () => ({
   readAuthorizationTransaction: () => null,
   refreshBrokerToken: mocks.refreshBrokerToken,
   storeAuthorizationTransaction: vi.fn(),
-  submitBrokerConsent: vi.fn(),
+  submitBrokerConsent: mocks.submitBrokerConsent,
 }));
 
 vi.mock('./config', () => ({
@@ -75,9 +77,16 @@ function Harness() {
   return (
     <div>
       <button type="button" onClick={() => { void auth.authorize(null); }}>Sign in</button>
+      <button type="button" onClick={() => { void auth.authorize({ projectId: 'project-1', runId: 'run-1' }); }}>
+        Sign in for run
+      </button>
+      {auth.consent && (
+        <button type="button" onClick={() => { void auth.decideConsent(true); }}>Approve consent</button>
+      )}
       <button type="button" onClick={() => { void runConcurrentCalls().catch(() => undefined); }}>Call twice</button>
       <button type="button" onClick={auth.signOut}>Sign out</button>
       <output>{auth.session?.accessToken ?? 'signed-out'}</output>
+      <output>{auth.error ?? 'no-auth-error'}</output>
     </div>
   );
 }
@@ -137,5 +146,67 @@ describe('Broker refresh coordination', () => {
     });
     await screen.findByText('signed-out');
     expect(screen.queryByText('access-2')).toBeNull();
+  });
+
+  it('surfaces Broker authorization errors instead of polling indefinitely', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      url: 'https://broker.test/authorize?state=state-1',
+      json: async () => ({
+        error: 'access_denied',
+        error_description: 'No active grant authorizes the requested project and run.',
+      }),
+    } as Response));
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in for run' }));
+
+    await screen.findByText('No active grant authorizes the requested project and run.');
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it('restarts Broker authorization after consent without losing the run binding', async () => {
+    window.history.replaceState({}, '', '/projects/project-1/runs/run-1?view=approvals');
+    mocks.exchangeAuthorizationCode.mockResolvedValue(token('access-after-consent'));
+    mocks.isConsentPrompt.mockReturnValueOnce(true);
+    mocks.submitBrokerConsent.mockResolvedValue({
+      type: 'opaqueredirect',
+      status: 0,
+      ok: false,
+      url: 'https://broker.test/connect/consent',
+    } as Response);
+    vi.mocked(fetch)
+      .mockResolvedValueOnce({
+        ok: true,
+        url: 'https://broker.test/authorize?state=state-1',
+        json: async () => ({
+          consent_required: true,
+          consent_handle: 'consent-1',
+          client_id: 'client-1',
+          requested_scopes: ['agentweaver.api'],
+          csrf_token: 'csrf-1',
+        }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        url: 'https://app.test/auth/callback?code=code-2&state=state-1',
+        json: async () => null,
+      } as Response);
+
+    render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in for run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve consent' }));
+
+    await screen.findByText('access-after-consent');
+    expect(mocks.submitBrokerConsent).toHaveBeenCalledOnce();
+    expect(mocks.buildAuthorizeUrl).toHaveBeenCalledTimes(2);
+    expect(mocks.buildAuthorizeUrl).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        binding: { projectId: 'project-1', runId: 'run-1' },
+      }),
+      'challenge',
+    );
+    expect(window.location.pathname).toBe('/projects/project-1/runs/run-1');
   });
 });

@@ -37,11 +37,15 @@ import type {
   KnowledgeRecord,
   ProjectConfiguration,
   ProjectSummary,
+  RepoAppRepositorySelectionList,
+  RepoAppAuthorizationStatus,
+  RepoAppRepositoryCandidate,
   SessionEventEnvelope,
   SessionStatusBlocker,
   SessionStatusSnapshot,
   SessionTreeNode,
   SessionTreeSnapshot,
+  SourceControlRepositoryPinView,
   UsageRunTotals,
   VersionedProjectConfiguration,
   OwnerRunStatus,
@@ -66,6 +70,13 @@ function isSameBinding(
   expected: RunBinding | null,
 ): boolean {
   return actual?.projectId === expected?.projectId && actual?.runId === expected?.runId;
+}
+
+const RUN_TAB_VALUES = ['topology', 'chat', 'approvals', 'activity', 'selection', 'usage'] as const;
+type RunTab = typeof RUN_TAB_VALUES[number];
+
+function isRunTab(value: string | null): value is RunTab {
+  return value !== null && RUN_TAB_VALUES.includes(value as RunTab);
 }
 
 function ErrorNotice({ children, code }: { children: ReactNode; code?: string }) {
@@ -192,7 +203,16 @@ function Shell({ children }: { children: ReactNode }) {
           <hr className="aw-nav-divider" />
           <div className="aw-nav-section" role="group" aria-label="Account">
             <div className="aw-nav-section__heading">Account</div>
-            <button className="aw-nav-item v1-nav-button" onClick={() => navigate('/projects')}>
+            <button
+              className="aw-nav-item v1-nav-button"
+              disabled={!session?.binding}
+              onClick={() => {
+                if (!session?.binding) return;
+                navigate(
+                  `/projects/${encodeURIComponent(session.binding.projectId)}/runs/${encodeURIComponent(session.binding.runId)}?view=chat`,
+                );
+              }}
+            >
               <span className="aw-nav-item__icon"><Chat24Regular /></span>
               <span className="aw-nav-item__label">{session?.binding ? 'Run chat' : 'Run chat opens from a run'}</span>
             </button>
@@ -411,6 +431,142 @@ function ProjectOverviewPage() {
   );
 }
 
+function ProjectRepoAppConnectionPanel() {
+  const { apiCall } = useAuth();
+  const [connection, setConnection] = useState<RepoAppAuthorizationStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [notice, setNotice] = useState<{ intent: 'success' | 'warning'; text: string } | null>(null);
+  const popupRef = useRef<Window | null>(null);
+  const statusUnavailable = !statusLoading && connection === null && error != null;
+
+  const loadConnection = useCallback(async () => {
+    setStatusLoading(true);
+    try {
+      const result = await apiCall(
+        (token) => gatewayClient.getRepoAppAuthorizationStatus(token),
+        null,
+      );
+      setConnection(result);
+      setError(null);
+    } catch (reason) {
+      setConnection(null);
+      setError(reason);
+    } finally {
+      setStatusLoading(false);
+    }
+  }, [apiCall]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadConnection(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadConnection]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent<unknown>) => {
+      if (event.origin !== window.location.origin ||
+          event.source !== popupRef.current ||
+          !isRepoAppCallbackMessage(event.data))
+        return;
+      popupRef.current?.close();
+      popupRef.current = null;
+      setNotice({
+        intent: event.data.outcome === 'success' ? 'success' : 'warning',
+        text: `GitHub Repo App authorization finished: ${event.data.outcome}.`,
+      });
+      setBusy(false);
+      if (event.data.outcome === 'success') void loadConnection();
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [loadConnection]);
+
+  const connect = async () => {
+    if (statusUnavailable) return;
+    const popup = window.open(
+      'about:blank',
+      'agentweaver-github-repo-app',
+      'popup,width=560,height=720',
+    );
+    if (!popup) {
+      setError(new Error('Allow pop-ups to connect GitHub without losing this session.'));
+      return;
+    }
+    popupRef.current = popup;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const started = await apiCall(
+        (token) => gatewayClient.beginRepoAppAuthorization(token, 'projects'),
+        null,
+      );
+      popup.location.replace(started.authorizationUrl);
+    } catch (reason) {
+      popup.close();
+      popupRef.current = null;
+      setBusy(false);
+      setError(reason);
+    }
+  };
+
+  const refreshAuthorization = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiCall((token) => gatewayClient.refreshRepoAppAuthorization(token), null);
+      await loadConnection();
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel title="GitHub Repo App">
+      <p className="v1-muted">
+        Connect a GitHub account for repository access. The Identity connection ID is a reference only; tokens and provider credentials stay with the owner.
+      </p>
+      {statusLoading ? <Loading label="Checking GitHub Repo App connection…" /> : statusUnavailable ? (
+        <p className="v1-muted">GitHub Repo App connection status is unavailable; no connection state is assumed.</p>
+      ) : connection?.connected ? (
+        <p>
+          Connected as <strong>{connection.githubLogin ?? 'GitHub user'}</strong>
+          {connection.connectionId && <> · Identity connection <code>{connection.connectionId}</code></>}
+        </p>
+      ) : (
+        <p className="v1-muted">No GitHub Repo App connection is available for this identity.</p>
+      )}
+      <p className="v1-muted">
+        To use this connection in a project, set <code>sourceControl.authMode</code> to <code>githubApp</code> and
+        set <code>sourceControl.appConnectionId</code> to the matching Identity connection ID. Existing configurations
+        that omit <code>authMode</code> remain in legacy secret mode.
+      </p>
+      {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
+      {notice && <MessageBar intent={notice.intent}><MessageBarBody>{notice.text}</MessageBarBody></MessageBar>}
+      <div className="v1-actions">
+        <Button
+          appearance="primary"
+          disabled={busy || statusLoading || statusUnavailable}
+          onClick={() => void connect()}
+        >
+          {statusUnavailable ? 'Connection status unavailable' : busy ? 'Opening GitHub…' : connection?.connected ? 'Reauthorize GitHub Repo App' : 'Connect GitHub Repo App'}
+        </Button>
+        {connection?.connected && (
+          <Button appearance="secondary" disabled={busy || statusLoading} onClick={() => void refreshAuthorization()}>
+            Refresh GitHub authorization
+          </Button>
+        )}
+        <Button appearance="secondary" disabled={statusLoading || busy} onClick={() => void loadConnection()}>
+          Refresh status
+        </Button>
+      </div>
+    </Panel>
+  );
+}
+
 function ProjectConfigurationPage() {
   const { projectId = '' } = useParams();
   const { session, apiCall } = useAuth();
@@ -518,6 +674,7 @@ function ProjectConfigurationPage() {
   return (
     <>
       <PageHeading title="Project configuration" description="Edit the owner-defined configuration document. This view does not supply or guess provider/model catalog options." />
+      <ProjectRepoAppConnectionPanel />
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="success"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
       {currentLoading ? <Loading /> : currentConfiguration && (
@@ -527,7 +684,7 @@ function ProjectConfigurationPage() {
               Model references and provider IDs are opaque. Only IDs already present in this project or returned by the Gateway are shown.
               The owner validates all changes and rejects unavailable selections. Secret references are metadata; credential values are never entered here.
             </p>
-            <Field label="Typed ProjectConfiguration JSON" hint="Keep the complete current document to preserve unrelated settings and source-control SecretRefs.">
+            <Field label="Typed ProjectConfiguration JSON" hint="Keep the complete current document to preserve unrelated settings, GitHub App connection references, and legacy source-control SecretRefs.">
               <Textarea
                 className="v1-json-editor"
                 value={editor}
@@ -1348,10 +1505,294 @@ function UsageView({ usage }: { usage: UsageRunTotals | null }) {
   );
 }
 
+function RunGitHubAppPanel({
+  projectId,
+  runId,
+  sessionId,
+  tenantId,
+  appConnectionId,
+}: {
+  projectId: string;
+  runId: string;
+  sessionId: string;
+  tenantId: string | null;
+  appConnectionId: string;
+}) {
+  const { apiCall } = useAuth();
+  const binding = useMemo(() => ({ projectId, runId }), [projectId, runId]);
+  const [connection, setConnection] = useState<RepoAppAuthorizationStatus | null>(null);
+  const [repositories, setRepositories] = useState<RepoAppRepositoryCandidate[]>([]);
+  const [installations, setInstallations] = useState<RepoAppRepositorySelectionList['installations']>([]);
+  const [repositoriesLoaded, setRepositoriesLoaded] = useState(false);
+  const [selectedRepository, setSelectedRepository] = useState('');
+  const [pinnedRepository, setPinnedRepository] = useState<SourceControlRepositoryPinView | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+  const [repositoriesLoading, setRepositoriesLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [notice, setNotice] = useState<{ intent: 'info' | 'success' | 'warning'; text: string } | null>(null);
+  const popupRef = useRef<Window | null>(null);
+  const connectionMatches = connection?.connected === true &&
+    connection.connectionId === appConnectionId;
+  const statusUnavailable = !statusLoading && connection === null && error != null;
+
+  const loadConnection = useCallback(async (): Promise<RepoAppAuthorizationStatus | null> => {
+    setStatusLoading(true);
+    try {
+      const next = await apiCall(
+        (token) => gatewayClient.getRepoAppAuthorizationStatus(token),
+        binding,
+      );
+      setConnection(next);
+      if (!next.connected || next.connectionId !== appConnectionId) {
+        setRepositories([]);
+        setInstallations([]);
+        setRepositoriesLoaded(false);
+      }
+      setError(null);
+      return next;
+    } catch (reason) {
+      setConnection(null);
+      setError(reason);
+      return null;
+    } finally {
+      setStatusLoading(false);
+    }
+  }, [apiCall, appConnectionId, binding]);
+
+  const loadRepositories = useCallback(async () => {
+    setRepositoriesLoading(true);
+    setError(null);
+    try {
+      const result = await apiCall(
+        (token) => gatewayClient.listRepoAppRepositorySelections(token),
+        binding,
+      );
+      setRepositories(result.repositories);
+      setInstallations(result.installations);
+      setRepositoriesLoaded(true);
+      setSelectedRepository((current) =>
+        result.repositories.some((repository) => repository.fullName === current)
+          ? current
+          : result.repositories[0]?.fullName ?? '');
+    } catch (reason) {
+      setRepositories([]);
+      setInstallations([]);
+      setRepositoriesLoaded(false);
+      setError(reason);
+    } finally {
+      setRepositoriesLoading(false);
+    }
+  }, [apiCall, binding]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadConnection(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadConnection]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent<unknown>) => {
+      if (event.origin !== window.location.origin ||
+          event.source !== popupRef.current ||
+          !isRepoAppCallbackMessage(event.data))
+        return;
+
+      popupRef.current?.close();
+      popupRef.current = null;
+      const callback = event.data;
+      setNotice({
+        intent: callback.outcome === 'success' ? 'success' : 'warning',
+        text: `GitHub App ${callback.kind} finished: ${callback.outcome}.`,
+      });
+      if (callback.kind === 'authorization') {
+        void loadConnection().then((next) => {
+          if (next?.connectionId === appConnectionId)
+            void loadRepositories();
+        });
+      } else {
+        void loadRepositories();
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [appConnectionId, loadConnection, loadRepositories]);
+
+  const openPopup = (): Window | null => {
+    const popup = window.open(
+      'about:blank',
+      'agentweaver-github-repo-app',
+      'popup,width=560,height=720',
+    );
+    if (!popup) {
+      setError(new Error('Allow pop-ups to connect GitHub without losing this run session.'));
+      return null;
+    }
+    popupRef.current = popup;
+    setError(null);
+    setNotice(null);
+    return popup;
+  };
+
+  const installRepoApp = async () => {
+    if (!tenantId) {
+      setError(new Error('The current run tenant selector is unavailable.'));
+      return;
+    }
+    const popup = openPopup();
+    if (!popup) return;
+    setBusy(true);
+    try {
+      const started = await apiCall(
+        (token) => gatewayClient.beginProjectGitHubAppInstallationAuthorization(
+          token, projectId, runId, tenantId,
+        ),
+        binding,
+      );
+      popup.location.replace(started.installationUrl);
+      setNotice({ intent: 'info', text: 'Complete GitHub App installation in the new browser window.' });
+    } catch (reason) {
+      popup.close();
+      popupRef.current = null;
+      setError(reason);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pinRepository = async () => {
+    if (!selectedRepository) return;
+    if (!tenantId) {
+      setError(new Error('The current run tenant selector is unavailable.'));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setPinnedRepository(null);
+    try {
+      const selection = await apiCall(
+        (token) => gatewayClient.issueRepoAppRepositorySelection(token, selectedRepository),
+        binding,
+      );
+      const pinned = await apiCall(
+        (token) => gatewayClient.pinSourceControlRepository(
+          token, projectId, runId, sessionId, tenantId, selection.selectionCode,
+        ),
+        binding,
+      );
+      setPinnedRepository(pinned);
+      setNotice({ intent: 'success', text: `Repository ${pinned.repository} was pinned for this run.` });
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel title="GitHub App repository access">
+      <p className="v1-muted">
+        The accepted run uses Identity App connection <code>{appConnectionId || 'not configured'}</code>.
+        Only the selected repository name and an opaque, short-lived selection code are sent to the owner.
+      </p>
+      {statusLoading ? <Loading label="Checking GitHub App connection…" /> : statusUnavailable ? (
+        <p className="v1-muted">GitHub App connection status is unavailable; no connection state is assumed.</p>
+      ) : connection?.connected ? (
+        <p>
+          Connected as <strong>{connection.githubLogin ?? 'GitHub user'}</strong>
+          {connection.connectionId && <> · Identity connection <code>{connection.connectionId}</code></>}
+        </p>
+      ) : (
+        <p className="v1-muted">No GitHub App user connection is available for this identity.</p>
+      )}
+      {connection?.connected && connection.connectionId !== appConnectionId && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            This project references a different App connection. Update <code>sourceControl.appConnectionId</code> in{' '}
+            <Link to={`/projects/${encodeURIComponent(projectId)}/settings`}>project settings</Link> to use the displayed Identity connection.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {!tenantId && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            The current run tenant selector is unavailable; run-bound App installation and pinning are disabled.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {error != null && <ErrorNotice code={errorCode(error)}>{errorMessage(error)}</ErrorNotice>}
+      {notice && <MessageBar intent={notice.intent}><MessageBarBody>{notice.text}</MessageBarBody></MessageBar>}
+      <div className="v1-actions">
+        <Button appearance="secondary" disabled={statusLoading || busy} onClick={() => void loadConnection()}>
+          Refresh connection status
+        </Button>
+        {connectionMatches && (
+          <>
+            <Button appearance="secondary" disabled={busy || !tenantId} onClick={() => void installRepoApp()}>
+              Install GitHub App for this run
+            </Button>
+            <Button appearance="secondary" disabled={busy || repositoriesLoading} onClick={() => void loadRepositories()}>
+              {repositoriesLoading ? 'Loading repositories…' : 'Load repositories'}
+            </Button>
+          </>
+        )}
+      </div>
+      {!statusLoading && !statusUnavailable && !connectionMatches && (
+        <p>
+          <Link className="v1-link-button" to={`/projects/${encodeURIComponent(projectId)}/settings`}>
+            Connect GitHub Repo App and configure this project
+          </Link>
+        </p>
+      )}
+      {connectionMatches && repositories.length > 0 && (
+        <div className="v1-form">
+          <Field label="Repository">
+            <select
+              className="v1-select"
+              aria-label="Repository"
+              value={selectedRepository}
+              onChange={(event) => setSelectedRepository(event.currentTarget.value)}
+            >
+              {repositories.map((repository) => (
+                <option key={repository.fullName} value={repository.fullName}>
+                  {repository.fullName}{repository.isPrivate ? ' · private' : ''}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Button appearance="primary" disabled={busy || !selectedRepository || !tenantId} onClick={() => void pinRepository()}>
+            {busy ? 'Pinning…' : 'Pin repository to this run'}
+          </Button>
+        </div>
+      )}
+      {repositoriesLoaded && repositories.length === 0 && connectionMatches && !repositoriesLoading && (
+        <p className="v1-muted">No accessible repositories have been loaded. Install the GitHub App for this run, then reload the repository list.</p>
+      )}
+      {installations.length > 0 && (
+        <ul className="v1-list">
+          {installations.map((installation) => (
+            <li key={`${installation.accountLogin}/${installation.accountType}`}>
+              <a href={installation.managementUrl} target="_blank" rel="noreferrer">
+                Manage GitHub App for {installation.accountLogin}
+              </a>
+              {' · '}{installation.accountType} · {installation.repositorySelection}
+            </li>
+          ))}
+        </ul>
+      )}
+      {pinnedRepository && (
+        <p className="v1-muted">Pinned repository: {pinnedRepository.repository} · {pinnedRepository.defaultBranch}</p>
+      )}
+    </Panel>
+  );
+}
+
 function RunPage() {
   const { projectId = '', runId = '' } = useParams();
   const binding = useMemo(() => ({ projectId, runId }), [projectId, runId]);
   const { session, apiCall, authorize } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get('view');
+  const tab: RunTab = isRunTab(requestedTab) ? requestedTab : 'topology';
   const authorized = isSameBinding(session?.binding, binding);
   const snapshotScope = useMemo(() => ({
     projectId,
@@ -1367,13 +1808,19 @@ function RunPage() {
   const [snapshotErrors, setSnapshotErrors] = useState<Record<string, string>>({});
   const [selection, setSelection] = useState<EffectiveRunSelection | null>(null);
   const [usage, setUsage] = useState<UsageRunTotals | null>(null);
-  const [tab, setTab] = useState('topology');
   const [selectedSession, setSelectedSession] = useState('');
   const [snapshotBusy, setSnapshotBusy] = useState(true);
   const [snapshotMessage, setSnapshotMessage] = useState<string | null>(null);
   const [loadedSnapshotScope, setLoadedSnapshotScope] = useState<typeof snapshotScope | null>(null);
   const refreshGeneration = useRef(0);
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
+
+  useEffect(() => {
+    if (requestedTab === null || isRunTab(requestedTab)) return;
+    const normalizedParams = new URLSearchParams(searchParams);
+    normalizedParams.set('view', 'topology');
+    setSearchParams(normalizedParams, { replace: true });
+  }, [requestedTab, searchParams, setSearchParams]);
 
   useLayoutEffect(() => {
     activeSnapshotScope.current = snapshotScope;
@@ -1606,7 +2053,17 @@ function RunPage() {
             <p className="v1-muted">The status comes from the Orchestrator owner. It does not indicate AgentHost health or infer pod state.</p>
           </Panel>
           <div className="v1-run-tabs">
-            <TabList selectedValue={tab} onTabSelect={(_, data) => setTab(String(data.value))} aria-label="Run views">
+            <TabList
+              selectedValue={tab}
+              onTabSelect={(_, data) => {
+                const nextTab = String(data.value);
+                if (!isRunTab(nextTab)) return;
+                const nextParams = new URLSearchParams(searchParams);
+                nextParams.set('view', nextTab);
+                setSearchParams(nextParams);
+              }}
+              aria-label="Run views"
+            >
               <Tab value="topology" icon={<Flowchart24Regular />}>Topology</Tab>
               <Tab value="chat" icon={<Chat24Regular />}>Chat</Tab>
               <Tab value="approvals">Outcomes & approvals</Tab>
@@ -1657,7 +2114,20 @@ function RunPage() {
               <ActivityView runStatus={currentRunStatus} statuses={currentStatuses} />
             </div>
           )}
-          {tab === 'selection' && <Panel title="Accepted run selection"><SelectionView selection={currentSelection} /></Panel>}
+          {tab === 'selection' && (
+            <div className="v1-stack">
+              <Panel title="Accepted run selection"><SelectionView selection={currentSelection} /></Panel>
+              {currentSelection?.projectConfiguration.sourceControl?.authMode === 'githubApp' && (
+                <RunGitHubAppPanel
+                  projectId={projectId}
+                  runId={runId}
+                  sessionId={currentRunStatus.rootSessionId}
+                  tenantId={currentUsage?.tenantId ?? null}
+                  appConnectionId={currentSelection.projectConfiguration.sourceControl.appConnectionId ?? ''}
+                />
+              )}
+            </div>
+          )}
           {tab === 'usage' && <Panel title="Run usage and accounting"><UsageView usage={currentUsage} /></Panel>}
         </>
       )}
@@ -1708,6 +2178,46 @@ function CallbackPage() {
   );
 }
 
+interface RepoAppCallbackMessage {
+  type: 'agentweaver.repo-app.callback';
+  kind: 'authorization' | 'installation';
+  outcome: string;
+}
+
+function isRepoAppCallbackMessage(value: unknown): value is RepoAppCallbackMessage {
+  return value !== null &&
+    typeof value === 'object' &&
+    'type' in value &&
+    value.type === 'agentweaver.repo-app.callback' &&
+    'kind' in value &&
+    (value.kind === 'authorization' || value.kind === 'installation') &&
+    'outcome' in value &&
+    typeof value.outcome === 'string';
+}
+
+function RepoAppCallbackRelay() {
+  const [searchParams] = useSearchParams();
+  const authorizationOutcome = searchParams.get('repo_app_auth');
+  const installationOutcome = searchParams.get('repo_app_install');
+
+  useEffect(() => {
+    const outcome = authorizationOutcome ?? installationOutcome;
+    const kind = authorizationOutcome
+      ? 'authorization'
+      : installationOutcome
+        ? 'installation'
+        : null;
+    if (!kind || !outcome || !window.opener || window.opener === window) return;
+    window.opener.postMessage(
+      { type: 'agentweaver.repo-app.callback', kind, outcome },
+      window.location.origin,
+    );
+    window.close();
+  }, [authorizationOutcome, installationOutcome]);
+
+  return null;
+}
+
 function AuthenticatedRoutes() {
   const { session, consent } = useAuth();
   if (consent) return <ConsentScreen />;
@@ -1737,6 +2247,7 @@ export default function App() {
     <FluentProvider theme={agentweaverLightTheme}>
       <AuthProvider>
         <BrowserRouter>
+          <RepoAppCallbackRelay />
           <AuthenticatedRoutes />
         </BrowserRouter>
       </AuthProvider>
