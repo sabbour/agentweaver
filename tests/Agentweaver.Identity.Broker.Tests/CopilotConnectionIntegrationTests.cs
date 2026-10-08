@@ -14,7 +14,8 @@ using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
 
-public sealed partial class ProjectsConfigBrokerAuthorizationTests
+[Collection("IdentityBrokerPostgres")]
+public sealed class CopilotConnectionConfigurationTests
 {
     [Theory]
     [InlineData("https://client.test/copilot-callback")]
@@ -22,19 +23,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     [InlineData("https://client.test/auth/github/copilot-app/callback?next=other")]
     public async Task CopilotConnectionConfigurationRequiresTheExactHttpsBrowserReturnPath(string callbackUri)
     {
+        await using var fakeIdp = await FakeIdentityProvider.StartAsync();
         using var transport = new ControlledCopilotConnection();
         await using var invalid = new IdentityBrokerWebApplicationFactory(
-            _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
+            "Host=127.0.0.1;Port=1;Database=copilot_callback_validation;Username=unused;Timeout=1",
+            fakeIdp,
             configure: settings =>
             {
                 transport.ConfigureSettings(settings);
                 settings["IdentityBroker__CopilotConnection__CallbackUri"] = callbackUri;
             });
-        Assert.Throws<InvalidOperationException>(() => invalid.CreateClient());
+        var error = Assert.Throws<InvalidOperationException>(() => invalid.CreateClient());
+        Assert.Contains("fixed browser return path", error.Message, StringComparison.Ordinal);
         Assert.Equal(0, transport.Exchanges);
         Assert.Equal(0, transport.Writes);
     }
+}
 
+public sealed partial class ProjectsConfigBrokerAuthorizationTests
+{
     private async Task<CopilotConnectionReceipt> LinkRuntimeCopilotConnectionAsync(
         ProjectsConfigResourceServer projects, string ownerToken, ControlledCopilotConnection transport,
         ProjectAuthorityResourceType connectionScope = ProjectAuthorityResourceType.Platform, string scopeId = "default")

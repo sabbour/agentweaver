@@ -509,9 +509,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             environment.Client, HttpMethod.Get, internalPlacementPath, runToken, [TenantId]))
         {
             await AssertStatusAsync(runBoundPlacement, HttpStatusCode.OK);
+            var internalPlacementProjection =
+                await ReadJsonAsync<EnvironmentSandboxPlacementProjectionV1>(runBoundPlacement);
             Assert.Equal(
-                publicPlacementProjection,
-                await ReadJsonAsync<EnvironmentSandboxPlacementProjectionV1>(runBoundPlacement));
+                publicPlacementProjection with { ProviderPin = internalPlacementProjection.ProviderPin },
+                internalPlacementProjection);
+            Assert.NotNull(publicPlacementProjection.ProviderPin);
+            Assert.NotNull(internalPlacementProjection.ProviderPin);
+            Assert.Equal(
+                publicPlacementProjection.ProviderPin with
+                {
+                    NegotiatedCapabilities = internalPlacementProjection.ProviderPin.NegotiatedCapabilities
+                },
+                internalPlacementProjection.ProviderPin);
+            Assert.True(publicPlacementProjection.ProviderPin.NegotiatedCapabilities.SetEquals(
+                internalPlacementProjection.ProviderPin.NegotiatedCapabilities));
         }
         Assert.Equal(
             authorizationReadsBeforeInternalPlacement + 3,
@@ -620,6 +632,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Contains(
                 result.Observation.StartupPhases,
                 phase => phase.Phase == SandboxStartupPhase.Started);
+            var imageReady = Assert.Single(result.Observation.StartupPhases,
+                phase => phase.Phase == SandboxStartupPhase.ImageReady);
+            Assert.Equal(sandboxOptions.ContainerImageDigest, imageReady.ImageDigest);
+            Assert.Equal(sandboxOptions.ContainerImageCompressedPullBytes, imageReady.CompressedPullBytes);
             Assert.DoesNotContain(
                 result.Observation.StartupPhases,
                 phase => phase.Phase is SandboxStartupPhase.Configured or SandboxStartupPhase.Ready);
@@ -1193,6 +1209,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         private const string ClaimUidLabel = "agents.x-k8s.io/claim-uid";
         private readonly Dictionary<string, JsonNode> _resources = new(StringComparer.Ordinal);
         private readonly List<JsonNode> _pods = [];
+        private readonly List<JsonNode> _events = [];
         private ClaimCreateResponseGate? _nextClaimGate;
         private int _failNextClaimCreateResponse;
         private int _createCount;
@@ -1250,6 +1267,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         public void MarkSandboxReady()
         {
+            var observedAt = DateTimeOffset.UtcNow;
             var sandbox = _resources.Single(resource =>
                     resource.Key.StartsWith(SandboxApiPrefix + "/", StringComparison.Ordinal))
                 .Value;
@@ -1259,7 +1277,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 {
                     ["type"] = "Ready",
                     ["status"] = "True",
-                    ["lastTransitionTime"] = "2026-10-06T12:01:00Z"
+                    ["lastTransitionTime"] = observedAt
                 }
             };
 
@@ -1268,12 +1286,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             status["phase"] = "Running";
             var container = status["containerStatuses"]!.AsArray()
                 .Single(item => item?["name"]?.GetValue<string>() == "agenthost")!;
-            container["imageID"] = "ghcr.io/agentweaver/agenthost@sha256:deadbeef";
+            var image = pod["spec"]!["containers"]!.AsArray()
+                .Single(item => item?["name"]?.GetValue<string>() == "agenthost")!["image"]!.GetValue<string>();
+            container["imageID"] = image;
             container["ready"] = true;
             container["state"] = new JsonObject
             {
-                ["running"] = new JsonObject { ["startedAt"] = "2026-10-06T12:01:00Z" }
+                ["running"] = new JsonObject { ["startedAt"] = observedAt }
             };
+            _events.Add(JsonSerializer.SerializeToNode(new
+            {
+                reason = "Pulled",
+                involvedObject = new { uid = pod["metadata"]!["uid"]!.GetValue<string>() },
+                message = $"Container image \"{image}\" already present on machine",
+                eventTime = observedAt
+            })!);
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -1285,6 +1312,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             {
                 if (path == $"api/v1/namespaces/{KubernetesNamespace}/pods")
                     return JsonResponse(HttpStatusCode.OK, CreateList(_pods));
+                if (path == $"api/v1/namespaces/{KubernetesNamespace}/events")
+                    return JsonResponse(HttpStatusCode.OK, CreateList(_events));
                 if (path == SandboxApiPrefix)
                     return JsonResponse(
                         HttpStatusCode.OK,
@@ -1442,7 +1471,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         {
                             type = "PodScheduled",
                             status = "True",
-                            lastTransitionTime = "2026-10-06T12:00:00Z"
+                            lastTransitionTime = DateTimeOffset.UtcNow
                         }
                     },
                     containerStatuses = new[]
