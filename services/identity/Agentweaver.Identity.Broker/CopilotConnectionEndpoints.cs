@@ -23,6 +23,7 @@ public sealed record ChangeCopilotConnectionRequest(Guid ConnectionId, long Expe
 public static class CopilotConnectionEndpoints
 {
     public const string CallbackCookieName = "__Host-agentweaver-copilot-link";
+    public const string BrowserCallbackPath = "/auth/github/copilot-app/callback";
     public static void MapCopilotConnectionEndpoints(this IEndpointRouteBuilder app)
     {
         var routes = app.MapGroup("/internal/connections/copilot-user")

@@ -188,8 +188,10 @@ if (copilotConnectionOptions is not null)
     RuntimeOwnerHttpTransport.RequireOwnerAddress(copilotConnectionOptions.ProjectsOwnerAddress);
     if (string.IsNullOrWhiteSpace(copilotConnectionOptions.ClientId) ||
         !RuntimeContractValidation.IsHttpsEndpoint(copilotConnectionOptions.CallbackUri) ||
+        copilotConnectionOptions.CallbackUri.AbsolutePath != CopilotConnectionEndpoints.BrowserCallbackPath ||
         copilotConnectionOptions.ClientSecretReference is null)
-        throw new InvalidOperationException("Copilot connections require explicit OAuth and protected-store configuration.");
+        throw new InvalidOperationException(
+            "Copilot connections require explicit OAuth and protected-store configuration with the fixed browser return path.");
     builder.Services.AddSingleton(copilotConnectionOptions);
     builder.Services.AddHttpClient("CopilotConnectionProjects")
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
