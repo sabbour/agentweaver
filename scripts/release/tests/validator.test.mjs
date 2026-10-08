@@ -32,6 +32,7 @@ const projectReferences = new Map([
   ['Agentweaver.ObjectStore.AzureBlob', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
   ['Agentweaver.Identity.Broker', [
     '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
+    '..\\..\\..\\packages\\Agentweaver.SourceControl\\Agentweaver.SourceControl.csproj',
     '..\\..\\..\\packages\\Agentweaver.Secrets.AzureKeyVault\\Agentweaver.Secrets.AzureKeyVault.csproj',
   ]],
   ['Agentweaver.Orchestrator.Core', [
