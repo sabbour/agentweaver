@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -25,7 +26,30 @@ public static class SessionsEndpoints
             .RequireAuthorization();
         app.MapGet("/internal/projects/{projectId}/runs/{runId}/events/live", SubscribeRunAsync)
             .RequireAuthorization();
+        app.MapGet("/internal/projects/{projectId}/runs/{runId}/sessions-provider-binding", ReadRunBindingAsync)
+            .RequireAuthorization();
     }
+
+    private static Task<IResult> ReadRunBindingAsync(
+        HttpContext context, string projectId, string runId, ISessionsJournal journal,
+        ISessionsProviderBinder bindings, [FromServices] IProjectsAuthorizationContextClient projects,
+        CancellationToken cancellationToken) => ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var first = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+            NativeUsageApplicationService.RequireReadAuthority(first);
+            if (first.BoundProjectId != projectId || first.BoundRunId != runId)
+                throw new RuntimeAuthorizationException("runtime_material_scope_invalid");
+            var pin = await journal.GetRunProviderBindingAsync(
+                context.User, projectId, runId, cancellationToken).ConfigureAwait(false);
+            await bindings.VerifyPinnedAsync(context.User, pin, cancellationToken).ConfigureAwait(false);
+            var current = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+            NativeUsageApplicationService.RequireReadAuthority(current);
+            if (current.TenantId != first.TenantId ||
+                current.BoundProjectId != projectId || current.BoundRunId != runId)
+                throw new RuntimeAuthorizationException("runtime_material_scope_invalid");
+            return Results.Json(pin, JsonOptions);
+        }, cancellationToken);
 
     private static async Task<IResult> CreateAsync(
         HttpContext context,
@@ -137,6 +161,7 @@ public static class SessionsEndpoints
         CancellationToken cancellationToken) =>
         await ExecuteAsync(async () =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             var binding = await journal.GetProviderBindingAsync(context.User, sessionId, cancellationToken);
             await bindings.VerifyPinnedAsync(context.User, binding, cancellationToken);
             var page = await journal.ReplayAsync(
@@ -258,6 +283,14 @@ public static class SessionsEndpoints
         catch (CoordinationOwnerClientException exception)
         {
             return Results.Json(new { error = exception.Code }, statusCode: exception.StatusCode);
+        }
+        catch (RuntimeAuthorizationException exception)
+        {
+            return Results.Json(new { error = exception.Code }, statusCode: StatusCodes.Status403Forbidden);
+        }
+        catch (ProjectsAuthorizationContextException exception)
+        {
+            return Results.Json(new { error = exception.Code }, statusCode: (int)exception.StatusCode);
         }
         catch (SessionAuthenticationException)
         {

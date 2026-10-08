@@ -7,12 +7,43 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Agentweaver.Environment.Tests;
 
 public sealed class AgentSandboxProviderTests
 {
+    [Theory]
+    [InlineData(null, null, true)]
+    [InlineData("agenthost-runtime-v1", "agenthost-runtime-tls", true)]
+    [InlineData("invalid name", "agenthost-runtime-tls", false)]
+    [InlineData("agenthost-runtime-v1", "", false)]
+    public void ProductionSandboxConfigurationBindsAndValidatesTheOptionalAgentHostProfile(
+        string? configurationMapName, string? tlsSecretName, bool valid)
+    {
+        var options = new AgentSandboxOptions(
+            AgentSandboxOptions.CurrentOptionsSchemaVersion, "sandbox-options-1", "agentweaver",
+            "azure-files-csi",
+            "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "linux/amd64", 1, "kata-vm", "kata-qemu", "500m", "512Mi", 1, 1,
+            new(30, 90, 30, 30, 30, 180))
+        {
+            AgentHost = configurationMapName is null
+                ? null : new(configurationMapName, tlsSecretName!)
+        };
+        using var stream = new MemoryStream(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            Environment = new { Sandbox = new { AgentSandbox = options } }
+        }));
+        var configuration = new ConfigurationBuilder().AddJsonStream(stream).Build();
+
+        if (valid)
+            Assert.Equal(options, global::Program.ReadSandboxOptions(configuration));
+        else
+            Assert.Throws<ArgumentException>(() => global::Program.ReadSandboxOptions(configuration));
+    }
+
     [Fact]
     public async Task ListOwnedUsesPinnedOptionsNamespaceInsteadOfCurrentDefaults()
     {
@@ -65,8 +96,13 @@ public sealed class AgentSandboxProviderTests
         Assert.Equal("agentweaver", handler.LastSandboxClaimsNamespace);
     }
 
-    [Fact]
-    public async Task ProvisionIsIdempotentDescribeWithholdsReadyWithoutNetworkGenerationAndReleaseUsesUidPreconditions()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ProvisionIsIdempotentDescribeWithholdsReadyWithoutNetworkGenerationAndReleaseUsesUidPreconditions(
+        bool agentHostProfile, bool cachedImage)
     {
         var options = new AgentSandboxOptions(
             AgentSandboxOptions.CurrentOptionsSchemaVersion,
@@ -82,7 +118,10 @@ public sealed class AgentSandboxProviderTests
             "512Mi",
             1,
             1,
-            new(30, 90, 30, 30, 30, 180));
+            new(30, 90, 30, 30, 30, 180))
+        {
+            AgentHost = agentHostProfile ? new("agenthost-runtime-v1", "agenthost-runtime-tls") : null
+        };
         var registration = AgentSandboxProviderMetadata.CreateRegistration(options);
         var catalog = ProviderCatalog.Create(
             [registration],
@@ -201,7 +240,7 @@ public sealed class AgentSandboxProviderTests
             };
         }
 
-        var handler = new FakeKubernetesHandler();
+        var handler = new FakeKubernetesHandler { ImageAlreadyPresent = cachedImage };
         using var httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://kubernetes.example/")
@@ -219,6 +258,38 @@ public sealed class AgentSandboxProviderTests
         Assert.Equal(3, handler.CreateCount);
         Assert.Equal(provisioned.Resource, duplicate.Resource);
         Assert.Equal(provisioned.Endpoint, duplicate.Endpoint);
+        var podSpec = handler.GetCreated("sandboxtemplates")["spec"]!["podTemplate"]!["spec"]!;
+        var container = podSpec["containers"]![0]!;
+        Assert.Equal(1000, podSpec["securityContext"]!["runAsUser"]!.GetValue<int>());
+        Assert.Equal(agentHostProfile ? 5 : 1, podSpec["volumes"]!.AsArray().Count);
+        Assert.Equal(agentHostProfile ? 5 : 1, container["volumeMounts"]!.AsArray().Count);
+        var pinnedJson = JsonSerializer.Serialize(options, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        if (agentHostProfile)
+        {
+            Assert.Equal(1000, podSpec["securityContext"]!["fsGroup"]!.GetValue<int>());
+            Assert.Equal(1000, container["securityContext"]!["runAsUser"]!.GetValue<int>());
+            Assert.Equal(1000, container["securityContext"]!["runAsGroup"]!.GetValue<int>());
+            Assert.Equal("/app", container["workingDir"]!.GetValue<string>());
+            Assert.Equal("/workspace/agentweaver/project", container["env"]![1]!["value"]!.GetValue<string>());
+            Assert.Equal("/state", container["volumeMounts"]![1]!["mountPath"]!.GetValue<string>());
+            Assert.Equal("/tmp", container["volumeMounts"]![2]!["mountPath"]!.GetValue<string>());
+            Assert.Equal("agenthost-runtime-v1", podSpec["volumes"]![3]!["configMap"]!["name"]!.GetValue<string>());
+            Assert.Equal(288, podSpec["volumes"]![3]!["configMap"]!["defaultMode"]!.GetValue<int>());
+            Assert.Equal("agenthost-runtime-tls", podSpec["volumes"]![4]!["secret"]!["secretName"]!.GetValue<string>());
+            Assert.Equal(288, podSpec["volumes"]![4]!["secret"]!["defaultMode"]!.GetValue<int>());
+            Assert.True(container["volumeMounts"]![3]!["readOnly"]!.GetValue<bool>());
+            Assert.True(container["volumeMounts"]![4]!["readOnly"]!.GetValue<bool>());
+            Assert.Equal("HTTPS", container["readinessProbe"]!["httpGet"]!["scheme"]!.GetValue<string>());
+            Assert.Equal(8443, container["readinessProbe"]!["httpGet"]!["port"]!.GetValue<int>());
+            Assert.Equal(36, container["startupProbe"]!["failureThreshold"]!.GetValue<int>());
+            Assert.Contains("\"agentHost\":", pinnedJson);
+        }
+        else
+        {
+            Assert.Null(container["env"]);
+            Assert.Null(container["readinessProbe"]);
+            Assert.DoesNotContain("\"agentHost\"", pinnedJson);
+        }
         var claimBody = handler.GetCreated("sandboxclaims");
         Assert.Equal("SandboxClaim", claimBody["kind"]!.GetValue<string>());
         Assert.Equal(
@@ -251,6 +322,20 @@ public sealed class AgentSandboxProviderTests
             observation.StartupPhases,
             phase => phase.Phase is SandboxStartupPhase.Configured or SandboxStartupPhase.Ready);
         Assert.Null(observation.StartupFailure);
+        handler.ImageEventPodUid = "different-pod-uid";
+        var mismatchedEvent = await provider.DescribeAsync(new(
+            fence, provisioned.Resource, 1, provisioned.ProviderBinding, leaseCreatedAt));
+        Assert.DoesNotContain(mismatchedEvent.StartupPhases,
+            phase => phase.Phase == SandboxStartupPhase.ImageReady);
+        handler.ImageEventPodUid = "pod-uid";
+        if (agentHostProfile)
+        {
+            handler.SetPodStateMount("/workspace/agentweaver/project");
+            var mismatch = await Assert.ThrowsAsync<SandboxProviderException>(() => provider.DescribeAsync(
+                new(fence, provisioned.Resource, 1, provisioned.ProviderBinding, leaseCreatedAt)));
+            Assert.Equal("provider_resource_mismatch", mismatch.Code);
+            handler.SetPodStateMount("/state");
+        }
 
         handler.SetPodImageId(
             "ghcr.io/agentweaver/agenthost@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
@@ -432,6 +517,9 @@ public sealed class AgentSandboxProviderTests
                 .Value.DeepClone();
         }
 
+        public bool ImageAlreadyPresent { get; init; }
+        public string ImageEventPodUid { get; set; } = "pod-uid";
+
         public void AddReadySandbox(string claimUid)
         {
             var claimPath = _resources.Keys.Single(path =>
@@ -536,7 +624,12 @@ public sealed class AgentSandboxProviderTests
                     }
                 }
             });
+            _podList!["items"]![0]!["spec"] =
+                GetCreated("sandboxtemplates")["spec"]!["podTemplate"]!["spec"]!.DeepClone();
         }
+
+        public void SetPodStateMount(string path) =>
+            _podList!["items"]![0]!["spec"]!["containers"]![0]!["volumeMounts"]![1]!["mountPath"] = path;
 
         public void SetPodImageId(string imageId)
         {
@@ -571,9 +664,11 @@ public sealed class AgentSandboxProviderTests
                             new JsonObject
                             {
                                 ["reason"] = "Pulled",
-                                ["message"] = "Successfully pulled image ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                ["message"] = ImageAlreadyPresent
+                                    ? "Container image ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa already present on machine"
+                                    : "Successfully pulled image ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                                 ["eventTime"] = "2026-10-06T12:00:00Z",
-                                ["involvedObject"] = new JsonObject { ["uid"] = "pod-uid" }
+                                ["involvedObject"] = new JsonObject { ["uid"] = ImageEventPodUid }
                             }
                         }
                     });

@@ -339,6 +339,9 @@ public sealed class EnvironmentPostgresFixture : IAsyncLifetime
 
     public EnvironmentLifecycleStore CreateStore() => new(DataSource, TimeProvider.System);
 
+    public NpgsqlDataSource CreateDataSource(string applicationName) => NpgsqlDataSource.Create(
+        new NpgsqlConnectionStringBuilder(_container.GetConnectionString()) { ApplicationName = applicationName }.ConnectionString);
+
     public async Task DisposeAsync()
     {
         if (DataSource is not null)

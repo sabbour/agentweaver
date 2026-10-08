@@ -35,7 +35,7 @@ internal sealed class NativeUsageApplicationService(
             throw new ArgumentException("A native source receipt identity is required.");
         var current = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
         RequireReadAuthority(current);
-        var bearer = await BearerAsync(context).ConfigureAwait(false);
+        var bearer = await BearerAsync(context, timeProvider).ConfigureAwait(false);
         try
         {
             var actor = new RuntimeActorAuthorization(bearer, current.TenantId);
@@ -79,7 +79,7 @@ internal sealed class NativeUsageApplicationService(
         return result;
     }
 
-    private async Task<SecretCredential> BearerAsync(HttpContext context)
+    internal static async Task<SecretCredential> BearerAsync(HttpContext context, TimeProvider timeProvider)
     {
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
         var expiry = context.User.GetExpirationDate() ?? authentication.Properties?.ExpiresUtc;
@@ -90,7 +90,7 @@ internal sealed class NativeUsageApplicationService(
         return new(value, expiry.Value, timeProvider);
     }
 
-    private static void RequireReadAuthority(ProjectsAuthorizationContextResponse authority)
+    internal static void RequireReadAuthority(ProjectsAuthorizationContextResponse authority)
     {
         if (authority.BoundProjectId is null || authority.BoundRunId is null ||
             !authority.EffectiveAuthority.Any(resource =>

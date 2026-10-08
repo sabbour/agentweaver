@@ -192,13 +192,13 @@ rechecks the actual actor and current Core write authority/accepted selection im
 before owner commit; Allow additionally rechecks its exact current grant, expiry, and
 fence. The Core guard waits for the durable Events acknowledgment and rechecks authority
 before its protected callback. The services connect through protected HTTP contracts,
-not a shared transaction; downstream protected-effect call-site wiring is not claimed.
+not a shared transaction. AgentHost wires guarded model turns and registered tools to this record-before-effect boundary.
 There is no background message relay, automatic AgentHost scheduler, or full dispatch engine.
 The runtime library commits authorized SDK observations to immutable Orchestrator receipts.
 Events fetches those receipts through a reference-only route and uses the existing keyed Cost resolver.
 Its append-only ledger preserves exact totals and immutable rate-card history.
-Gateway source exists, but deployment, product AgentHost integration, automatic
-scheduling, and cloud acceptance remain future work.
+Gateway source and authenticated AgentHost routes exist.
+Deployment, automatic scheduling, and cloud acceptance remain separate work.
 
 The Gateway and Identity boundary makes viewer authorization independent of the chosen [Application
 Hosting](applications-and-surfaces.md#application-hosting) provider. The first-party MCP server uses
@@ -231,6 +231,13 @@ ready before egress intent has been applied and verified. The selected
 [Sandbox](provider-seams.md#sandbox), [Storage](provider-seams.md#storage), and [Network
 Policy](provider-seams.md#network-policy) adapters must agree on attach and placement capabilities
 before dispatch.
+
+The [AgentHost source candidate](../agenthost.md) implements the versioned HTTPS routes, native turns/tools, and readiness receipt.
+Environment supplies the first three startup observations under the retained lease.
+AgentHost adds its actual authenticated `configured` and `ready` timestamps.
+Missing or stale evidence fails readiness.
+The unpublished CI image receipt measures compressed OCI bytes and runs the exact pinned native runtime without a model call.
+Neither source checks nor image checks prove live AKS placement.
 
 For image-backed applications, BuildKit produces isolated output, but only the trusted control plane
 publishes the approved image digest with registry credentials
@@ -310,9 +317,9 @@ Events and Blob have different jobs. Events commits ordered journal entries,
 usage, and run artifact references in its PostgreSQL schema.
 The shared Object Store adapter writes and reads large opaque bytes in Azure Blob.
 Blob does not store the authoritative journal or authorize callers.
-The planned trusted-owner content path connects the two without giving AgentHost
-direct container access. That content API and Events Blob composition are not
-implemented in the current source.
+The typed trusted-owner content path connects the two without giving AgentHost direct container access.
+Events implements bounded `TurnContent` and `SdkCache` writes and authorized historical reads through the existing Blob adapter.
+It stores bytes before references and checks current authority, length, and digest before disclosure.
 See [PostgreSQL and Blob](../persistence-objects.md#events-and-blob-have-different-jobs)
 for upload ordering, authorized reads, and the current boundary.
 

@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
@@ -22,6 +23,128 @@ internal sealed class ExecutableActionGrantOwnerStore(
 {
     private const int MaximumIdLength = 256;
     private readonly string _schema = $"\"{options.Schema}\"";
+
+    internal async Task<ExecutableActionGrantReference> IssueRuntimeActionGrantAsync(
+        HttpContext context, RuntimeRegistration registration, RuntimeActionRequest request,
+        CancellationToken cancellationToken)
+    {
+        RuntimeActionContract.Validate(request);
+        var binding = registration.Binding;
+        if (request.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            request.RegistrationRevision != registration.Revision ||
+            request.ExecutionFence != binding.ExecutionFence ||
+            binding.WorkflowStepId is not { Length: > 0 and <= 128 } step)
+            throw new RuntimeAuthorizationException("runtime_action_binding_invalid");
+        var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
+        if (actor.Issuer != binding.ActorIssuer || actor.Subject != binding.ActorId)
+            throw new RuntimeAuthorizationException("runtime_action_actor_invalid");
+        var reference = new ExecutableActionGrantReference(request.EventId.ToString("N"), "1");
+        var requestHash = RuntimeActionContract.Hash(request);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        Guid decisionId;
+        long decisionVersion;
+        await using (var current = new NpgsqlCommand($"""
+            SELECT d.decision_id, d.state_version
+            FROM {_schema}.coordination_sessions s
+            JOIN {_schema}.accepted_runs r ON r.project_id = s.project_id AND r.run_id = s.run_id
+            JOIN {_schema}.coordinator_decisions d
+              ON d.project_id = s.project_id AND d.run_id = s.run_id AND d.session_id = s.root_session_id
+            WHERE s.project_id = @project AND s.run_id = @run AND s.session_id = @session
+              AND s.writer_issuer = @issuer AND s.writer_subject = @actor
+              AND s.node_kind = 'child_work' AND s.lifecycle_state = 'active' AND s.turn_state = 'active'
+              AND s.execution_fence = @fence AND r.execution_fence = @fence
+              AND r.execution_state <> 'completed' AND r.tenant_id = @tenant
+              AND r.accepted_selection_hash = @selectionHash AND d.decision_state = 'accepted'
+            ORDER BY d.state_version DESC LIMIT 1
+            FOR SHARE OF s, r, d
+            """, connection, transaction))
+        {
+            BindRuntime(current, binding);
+            await using var reader = await current.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new RuntimeAuthorizationException("runtime_action_owner_unavailable");
+            decisionId = reader.GetGuid(0);
+            decisionVersion = reader.GetInt64(1);
+        }
+        // Authority is read after the owner row-lock wait, before grant publication.
+        var authorized = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+            context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
+        var roleRevisions = authorized.Authorization.EffectiveAuthority
+            .Where(item => item.ResourceType == "project" && item.ResourceId == binding.ProjectId)
+            .SelectMany(item => item.Permissions)
+            .Where(item => item.Permission == "acceptRunSelection")
+            .Select(item => item.RoleRevision).Distinct().Take(2).ToArray();
+        if (roleRevisions is not [var roleRevision] ||
+            authorized.Authorization.ActorId != binding.ActorId ||
+            authorized.Authorization.Issuer != binding.ActorIssuer ||
+            authorized.Authorization.TenantId != binding.TenantId ||
+            authorized.Selection.ProjectRevision != binding.ProjectRevision ||
+            authorized.Selection.ProjectConfigurationRevision != binding.ProjectConfigurationRevision ||
+            authorized.Selection.PlatformRuntimeRevision != binding.PlatformRuntimeRevision ||
+            authorized.Selection.ContextRevision != binding.ContextRevision ||
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(authorized.Selection.Snapshot.GetRawText())) !=
+                binding.AcceptedSelectionHash || registration.ExpiresAt <= timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_action_selection_changed");
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO {_schema}.executable_action_grants
+                (project_id, run_id, grant_id, revision, is_current, grant_state,
+                 issuer, actor_id, tenant_id, session_id, step_id, action_ids, purpose,
+                 project_revision, project_configuration_revision, platform_runtime_revision,
+                 context_revision, accepted_selection_hash, membership_revision, role_revision,
+                 execution_fence, expires_at, source_state_version, source_decision_id, source_request_id)
+            VALUES
+                (@project, @run, @grant, '1', true, 'active',
+                 @issuer, @actor, @tenant, @session, @step, @actions, @purpose,
+                 @projectRevision, @configurationRevision, @platformRevision,
+                 @contextRevision, @selectionHash, @membershipRevision, @roleRevision,
+                 @fence, @expiresAt, @stateVersion, @decision, @requestHash)
+            ON CONFLICT (project_id, run_id, grant_id, revision) DO NOTHING
+            """, connection, transaction))
+        {
+            BindRuntime(insert, binding);
+            insert.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, reference.GrantId);
+            insert.Parameters.AddWithValue("step", NpgsqlDbType.Varchar, step);
+            insert.Parameters.AddWithValue("actions", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(new[] { request.ActionId }));
+            insert.Parameters.AddWithValue("purpose", NpgsqlDbType.Varchar, RuntimeActionContract.Purpose);
+            insert.Parameters.AddWithValue("projectRevision", NpgsqlDbType.Bigint, binding.ProjectRevision);
+            insert.Parameters.AddWithValue("configurationRevision", NpgsqlDbType.Bigint, binding.ProjectConfigurationRevision);
+            insert.Parameters.AddWithValue("platformRevision", NpgsqlDbType.Bigint, binding.PlatformRuntimeRevision);
+            insert.Parameters.AddWithValue("contextRevision", NpgsqlDbType.Varchar, binding.ContextRevision);
+            insert.Parameters.AddWithValue("membershipRevision", NpgsqlDbType.Bigint, authorized.Authorization.MembershipRevision);
+            insert.Parameters.AddWithValue("roleRevision", NpgsqlDbType.Bigint, roleRevision);
+            insert.Parameters.AddWithValue("expiresAt", NpgsqlDbType.TimestampTz, registration.ExpiresAt);
+            insert.Parameters.AddWithValue("stateVersion", NpgsqlDbType.Bigint, decisionVersion);
+            insert.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, decisionId);
+            insert.Parameters.AddWithValue("requestHash", NpgsqlDbType.Varchar, requestHash);
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await using (var exact = new NpgsqlCommand($"""
+            SELECT source_request_id FROM {_schema}.executable_action_grants
+            WHERE project_id = @project AND run_id = @run AND grant_id = @grant AND revision = '1'
+            """, connection, transaction))
+        {
+            exact.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+            exact.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+            exact.Parameters.AddWithValue("grant", NpgsqlDbType.Varchar, reference.GrantId);
+            if ((string?)await exact.ExecuteScalarAsync(cancellationToken) != requestHash)
+                throw new RuntimeAuthorizationException("runtime_action_conflict");
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return reference;
+    }
+
+    private static void BindRuntime(NpgsqlCommand command, RuntimeBinding binding)
+    {
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, binding.SessionId);
+        command.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, binding.ActorIssuer);
+        command.Parameters.AddWithValue("actor", NpgsqlDbType.Varchar, binding.ActorId);
+        command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, binding.TenantId);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
+        command.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, binding.AcceptedSelectionHash.ToUpperInvariant());
+    }
 
     public async Task<ExecutableActionGrantLookupResult> GetCurrentAsync(
         ExecutableActionGrantReference reference,
@@ -136,6 +259,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
                    s.execution_fence, s.writer_issuer, s.writer_subject, s.lifecycle_state,
                    g.source_state_version,
                    CASE
+                     WHEN g.purpose = 'runtime.execution' THEN
+                       s.node_kind = 'child_work' AND s.turn_state = 'active'
+                       AND g.source_control_intent_id IS NULL
                      WHEN g.action_ids @> '["source_control.merge"]'::jsonb THEN
                        jsonb_array_length(g.action_ids) = 1
                        AND g.purpose = 'source-control.merge'
@@ -170,12 +296,11 @@ internal sealed class ExecutableActionGrantOwnerStore(
             INNER JOIN {_schema}.coordination_sessions AS s
               ON s.project_id = g.project_id AND s.run_id = g.run_id
              AND s.session_id = g.session_id
-             AND s.parent_session_id IS NULL
             INNER JOIN LATERAL (
                 SELECT d.decision_id, d.state_version, d.decision_state
                 FROM {_schema}.coordinator_decisions AS d
                 WHERE d.project_id = g.project_id AND d.run_id = g.run_id
-                  AND d.session_id = g.session_id
+                  AND d.session_id = s.root_session_id
                 ORDER BY d.state_version DESC
                 LIMIT 1
             ) AS current_decision

@@ -52,6 +52,12 @@
       "project": "packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj"
     },
     {
+      "id": "Agentweaver.AgentHost",
+      "kind": "service",
+      "version": "0.0.0",
+      "project": "services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj"
+    },
+    {
       "id": "Agentweaver.Telemetry",
       "kind": "library",
       "version": "0.0.0",
@@ -137,6 +143,16 @@
     }
   ],
   "compatibility": [
+    {
+      "consumer": "Agentweaver.AgentHost",
+      "dependency": "Agentweaver.AgentRuntime",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.AgentHost",
+      "dependency": "Agentweaver.Telemetry",
+      "versions": ["0.0.0"]
+    },
     {
       "consumer": "Agentweaver.AgentRuntime",
       "dependency": "Agentweaver.Abstractions",
@@ -303,6 +319,11 @@
     {
       "consumer": "Agentweaver.EventsAndSessions",
       "dependency": "Agentweaver.Telemetry",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.EventsAndSessions",
+      "dependency": "Agentweaver.ObjectStore.AzureBlob",
       "versions": ["0.0.0"]
     },
     {

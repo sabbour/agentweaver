@@ -506,6 +506,12 @@ public interface IEnvironmentLifecycleStore
         long policyGeneration,
         CancellationToken cancellationToken);
 
+    Task ReadVerifiedNetworkPolicyGenerationAsync(
+        EnvironmentGenerationFence fence,
+        string resourceId,
+        long policyGeneration,
+        CancellationToken cancellationToken);
+
     Task<EnvironmentNetworkEffectReservation> CompleteNetworkEffectAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,

@@ -47,6 +47,21 @@ internal sealed class RuntimeUsageSourceOwner(
                     connection, transaction, registration, grant, request.Observation, token), cancellationToken);
     }
 
+    internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceAsync(
+        HttpContext context, Guid runtimeInstanceId, CancellationToken cancellationToken)
+    {
+        var receipt = await store.ExecuteLockedAsync(runtimeInstanceId,
+            (connection, transaction, token) => registrations.ExecuteCurrentAsync(
+                context, runtimeInstanceId, (registration, currentToken) =>
+                    store.ReadCurrentSourceAsync(connection, transaction, registration, currentToken),
+                token), cancellationToken).ConfigureAwait(false);
+        var current = await registrations.ReadCurrentAsync(context, runtimeInstanceId, cancellationToken)
+            .ConfigureAwait(false);
+        if (receipt.CanonicalPayloadHash != RuntimeUsageSourceReceiptContract.HashSource(current, receipt.Source))
+            throw new RuntimeAuthorizationException("runtime_sdk_source_conflict");
+        return receipt;
+    }
+
     private async Task<T> ExecuteWriteAsync<T>(
         HttpContext context, RuntimeCredentialHttpRequest proof,
         Func<NpgsqlConnection, NpgsqlTransaction, RuntimeRegistration, RuntimeGrantReceipt,

@@ -30,11 +30,14 @@ public sealed class IdentityBrokerDbContext : DbContext
     public DbSet<RuntimeGrantRevision> RuntimeGrantRevisions => Set<RuntimeGrantRevision>();
     public DbSet<RuntimeGrantOperation> RuntimeGrantOperations => Set<RuntimeGrantOperation>();
     public DbSet<RuntimeGrantOperationReceipt> RuntimeGrantOperationReceipts => Set<RuntimeGrantOperationReceipt>();
+    public DbSet<CopilotConnectionRecord> CopilotConnections => Set<CopilotConnectionRecord>();
+    public DbSet<CopilotConnectionRevision> CopilotConnectionRevisions => Set<CopilotConnectionRevision>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);
         RuntimeGrantModel.Configure(modelBuilder);
+        CopilotConnectionModel.Configure(modelBuilder);
 
         modelBuilder.Entity<BrokerUser>(entity =>
         {

@@ -23,4 +23,6 @@ public sealed record EnvironmentRuntimeBootstrapContext(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeOwnerContext? RuntimeOwnerContext { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxImageIdentity? Image { get; init; }
 }

@@ -6,6 +6,7 @@ namespace Agentweaver.Abstractions;
 public static class SdkMeterSources
 {
     public const string CopilotNanoAiu = "copilot.nano_aiu";
+    public const string ByokTokens = "byok.tokens";
 }
 
 public sealed record SdkSessionFacts(

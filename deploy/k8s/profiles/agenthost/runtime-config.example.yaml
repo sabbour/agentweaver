@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agenthost-runtime-v1
+  namespace: agentweaver
+immutable: true
+data:
+  appsettings.json: |
+    {
+      "AgentHost": {
+        "ConfigureEndpoint": "https://runtime.example.invalid/runtime/v1/configure",
+        "BrokerAddress": "https://identity.example.invalid/",
+        "OrchestratorAddress": "https://orchestrator.example.invalid/",
+        "EnvironmentAddress": "https://environment.example.invalid/",
+        "EventsAddress": "https://events.example.invalid/",
+        "Image": {
+          "Digest": "REQUIRED_FROM_EXACT_SOURCE_OCI_IMAGE_RECEIPT",
+          "Platform": "linux/amd64",
+          "CompressedPullBytes": 0
+        },
+        "MaximumPendingTurns": 8,
+        "Authentication": {
+          "Authority": "https://identity.example.invalid/",
+          "Audience": "https://runtime.example.invalid/runtime/v1/configure"
+        },
+        "ModelBindings": {
+          "REQUIRED_ACCEPTED_MODEL_REFERENCE": {
+            "ModelId": "REQUIRED_NATIVE_SDK_MODEL_ID",
+            "SourceMode": "HostedCopilot"
+          }
+        }
+      }
+    }

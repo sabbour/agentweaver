@@ -1,0 +1,551 @@
+using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.IdentityModel.Tokens.Jwt;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
+using Agentweaver.Identity;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.IdentityModel.Tokens;
+using Xunit;
+
+namespace Agentweaver.Identity.Broker.Tests;
+
+public sealed class RuntimeAgentHostTests
+{
+    [Fact]
+    public async Task ConfigureAndRefreshReplaysKeepOneNativeSessionAndRejectChangedAuthority()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        Assert.Equal(Enum.GetValues<SandboxStartupPhase>(), ready.StartupPhases.Select(phase => phase.Phase));
+        Assert.Equal(fixture.Image.CompressedPullBytes,
+            ready.StartupPhases.Single(phase => phase.Phase == SandboxStartupPhase.ImageReady).CompressedPullBytes);
+        Assert.Equal(JsonSerializer.Serialize(ready), JsonSerializer.Serialize(
+            await fixture.Host.ConfigureAsync(fixture.Configure, fixture.Actor, timeout.Token)));
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.create");
+        Assert.Equal("runtime_configuration_conflict",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.ConfigureAsync(fixture.Configure with { ConsumeOperationId = Guid.NewGuid() },
+                    fixture.Actor, timeout.Token))).Code);
+        Assert.Equal(JsonSerializer.Serialize(ready), JsonSerializer.Serialize(
+            await fixture.Host.ReadinessAsync(timeout.Token)));
+        var proof = fixture.Proof(ready);
+        var refresh = new RuntimeHostRefreshRequest(proof, Guid.NewGuid());
+        var rotated = await fixture.Host.RefreshAsync(refresh, fixture.Actor, timeout.Token);
+        Assert.Equal(2, rotated.SourceGrant.Revision);
+        Assert.Equal(rotated, await fixture.Host.RefreshAsync(refresh, fixture.Actor, timeout.Token));
+        Assert.Equal(1, fixture.Rotations);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token));
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(fixture.Message(proof with
+            {
+                SourceGrantRevision = 2, Purpose = RuntimeCredentialPurpose.Configure
+            }), fixture.Actor, timeout.Token));
+        fixture.Registration = fixture.Registration with { Revision = 2 };
+        Assert.Equal("runtime_registration_stale",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.ReadinessAsync(timeout.Token))).Code);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Fact]
+    public async Task ImmediateRunsAtIdleAheadOfEnqueuedWorkAndExactMessageReplayDoesNotRunAgain()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var turns = 0;
+        fixture.Sdk.BeforeTurnResponse = token => Interlocked.Increment(ref turns) == 1
+            ? release.Task.WaitAsync(token) : Task.CompletedTask;
+        var proof = fixture.Proof(ready);
+        var first = fixture.Message(proof);
+        var queued = fixture.Message(proof);
+        var immediate = fixture.Message(proof, AddressedMessageDeliveryMode.Immediate);
+        var active = fixture.Host.SendAsync(first, fixture.Actor, timeout.Token);
+        await fixture.Sdk.TurnReceived.Task.WaitAsync(timeout.Token);
+        var enqueue = fixture.Host.SendAsync(queued, fixture.Actor, timeout.Token);
+        var priority = fixture.Host.SendAsync(immediate, fixture.Actor, timeout.Token);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+        release.TrySetResult();
+        var response = await active;
+        await Task.WhenAll(enqueue, priority).WaitAsync(timeout.Token);
+        Assert.Equal(new[] { first.Message.MessageId, immediate.Message.MessageId, queued.Message.MessageId },
+            fixture.Material.Where(request => request.Role == "user").Select(request => request.EventId));
+        Assert.Equal(response, await fixture.Host.SendAsync(first, fixture.Actor, timeout.Token));
+        Assert.Equal(3, fixture.Sdk.Requests.Count(request => request.Method == "session.send"));
+        Assert.Equal("runtime_a2a_message_conflict",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => fixture.Host.SendAsync(
+                first with { Message = first.Message with { Parts = [new("text", "changed")] } },
+                fixture.Actor, timeout.Token))).Code);
+        Assert.Equal(3, fixture.Material.Count(request => request.Kind == SessionMaterialKind.SdkCache));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeUsageMustReachTheAccountingAcknowledgmentBeforeTheTurnSucceeds(bool failAccounting)
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.BeforeAccounting = token => release.Task.WaitAsync(token);
+        fixture.FailAccounting = failAccounting;
+        fixture.Sdk.BeforeTurnResponse = _ => fixture.Sdk.EmitUsageAsync(fixture.Sdk.UsageData());
+        var response = fixture.Host.SendAsync(fixture.Message(fixture.Proof(ready)), fixture.Actor, timeout.Token);
+        await fixture.AccountingReceived.Task.WaitAsync(timeout.Token);
+        Assert.False(response.IsCompleted);
+        release.TrySetResult();
+        if (failAccounting)
+        {
+            Assert.Equal("runtime_usage_persistence_failed",
+                (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => response)).Code);
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.ReadinessAsync(timeout.Token));
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => fixture.Host.DisposeAsync().AsTask());
+        }
+        else
+        {
+            Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single((await response).Parts).Text);
+            Assert.Single(fixture.Usage);
+            Assert.Equal(1234567.25m, fixture.Usage.Single().Usage.Measurement.ProviderUnits);
+            Assert.Equal(1, fixture.Accounted);
+        }
+    }
+
+    [Fact]
+    public async Task CompletedMessageReplaySurvivesMoreTurnsThanThePendingCapacity()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var first = fixture.Message(proof);
+        var response = await fixture.Host.SendAsync(first, fixture.Actor, timeout.Token);
+        for (var turn = 0; turn < 9; turn++)
+            await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+
+        Assert.Equal(response, await fixture.Host.SendAsync(first, fixture.Actor, timeout.Token));
+        Assert.Equal(10, fixture.Sdk.Requests.Count(request => request.Method == "session.send"));
+        Assert.Equal(10, fixture.Material.Count(request => request.Role == "user"));
+        Assert.Equal("runtime_a2a_message_conflict",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => fixture.Host.SendAsync(
+                first with { Message = first.Message with { Parts = [new("text", "changed")] } },
+                fixture.Actor, timeout.Token))).Code);
+        fixture.Registration = fixture.Registration with { Revision = 2 };
+        Assert.Equal("runtime_registration_stale",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SendAsync(first, fixture.Actor, timeout.Token))).Code);
+    }
+
+    [Theory]
+    [InlineData("isolation")]
+    [InlineData("workspace")]
+    [InlineData("egress")]
+    [InlineData("resource")]
+    [InlineData("lease")]
+    [InlineData("owner")]
+    [InlineData("image")]
+    [InlineData("bytes")]
+    [InlineData("phase")]
+    [InlineData("future")]
+    [InlineData("state")]
+    [InlineData("budget")]
+    public async Task ReadinessRequiresFreshLeaseOwnerIsolationWorkspaceEgressAndMeasuredStartup(string loss)
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.ConfigureAsync(timeout.Token);
+        var context = fixture.Readiness;
+        fixture.Readiness = loss switch
+        {
+            "isolation" => context with { Observation = context.Observation with { VmIsolationVerified = false } },
+            "workspace" => context with { WorkspaceMountPath = Path.GetFullPath("wrong-workspace") },
+            "egress" => context with { Observation = context.Observation with { VerifiedNetworkGeneration = null } },
+            "resource" => context with
+            {
+                Observation = context.Observation with
+                { Resource = context.Observation.Resource with { ResourceId = "replacement-placement" } }
+            },
+            "lease" => context with { Placement = context.Placement with { LeaseRevision = 2 } },
+            "owner" => context with
+            {
+                Placement = context.Placement with
+                { RuntimeOwnerContext = context.Placement.RuntimeOwnerContext! with { ExecutionFence = 2 } }
+            },
+            "image" => context with
+            {
+                Observation = context.Observation with
+                { StartupPhases = context.Observation.StartupPhases.SetItem(1,
+                    new(SandboxStartupPhase.ImageReady, 1, context.Observation.StartupPhases[1].ObservedAt,
+                        "sha256:" + new string('b', 64), fixture.Image.CompressedPullBytes)) }
+            },
+            "bytes" => context with
+            {
+                Observation = context.Observation with
+                { StartupPhases = context.Observation.StartupPhases.SetItem(1,
+                    new(SandboxStartupPhase.ImageReady, 1, context.Observation.StartupPhases[1].ObservedAt,
+                        fixture.Image.Digest, fixture.Image.CompressedPullBytes + 1)) }
+            },
+            "phase" => context with
+            { Observation = context.Observation with { StartupPhases = context.Observation.StartupPhases.RemoveAt(0) } },
+            "future" => context with
+            {
+                Observation = context.Observation with
+                { StartupPhases = context.Observation.StartupPhases.SetItem(2,
+                    new(SandboxStartupPhase.Started, 1, fixture.Time.GetUtcNow().AddSeconds(1))) }
+            },
+            "state" => context with { Observation = context.Observation with { State = (SandboxObservedState)99 } },
+            "budget" => context with { StartupBudgets = context.StartupBudgets with { TotalSeconds = 1 } },
+            _ => throw new InvalidOperationException(loss)
+        };
+        var failure = await Record.ExceptionAsync(() => fixture.Host.ReadinessAsync(timeout.Token));
+        Assert.True(failure is RuntimeAuthorizationException or RuntimeStartupException, failure?.ToString());
+        using var httpHost = await fixture.StartHttpAsync();
+        using var client = httpHost.GetTestClient();
+        using var health = await client.GetAsync("/health/ready", timeout.Token);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, health.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(120, true)]
+    [InlineData(121, false)]
+    public async Task ConfiguredPhaseAcceptsItsExactTimeCeilingButNotOneSecondOver(int seconds, bool accepted)
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        fixture.Sdk.BeforeStatusResponse = _ =>
+        {
+            fixture.Time.Now = fixture.Readiness.Observation.StartupPhases[2].ObservedAt.AddSeconds(seconds);
+            return Task.CompletedTask;
+        };
+        if (accepted)
+        {
+            var ready = await fixture.ConfigureAsync(timeout.Token);
+            Assert.Equal(fixture.Time.GetUtcNow(), ready.StartupPhases.Last().ObservedAt);
+        }
+        else
+        {
+            var failure = await Assert.ThrowsAsync<RuntimeStartupException>(() => fixture.ConfigureAsync(timeout.Token));
+            Assert.Equal("runtime_startup_time_budget_exceeded", failure.Code);
+            Assert.Equal(SandboxStartupPhase.Configured, failure.Failure?.Phase);
+        }
+    }
+
+    [Fact]
+    public async Task HttpBoundaryRequiresSignedUnexpiredBearerAndExactHttpsAudienceBeforeEffects()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        var request = fixture.Configure;
+        using var anonymous = await client.PostAsJsonAsync("/runtime/v1/configure/activate", request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var wrongAudience = await client.PostAsJsonAsync("http://runtime.test/runtime/v1/configure/activate",
+            request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongAudience.StatusCode);
+        Assert.Empty(fixture.Sdk.Requests);
+        await fixture.DeliverAsync(timeout.Token);
+        using var configured = await client.PostAsJsonAsync("/runtime/v1/configure/activate", request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, configured.StatusCode);
+        Assert.True(configured.Headers.CacheControl?.NoStore);
+        var ready = await configured.Content.ReadFromJsonAsync<RuntimeHostReadinessReceipt>(HostFixture.Json, timeout.Token);
+        using var turn = await client.PostAsJsonAsync("/runtime/v1/a2a/message:send",
+            fixture.Message(fixture.Proof(ready!)), HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, turn.StatusCode);
+        var answer = await turn.Content.ReadFromJsonAsync<RuntimeA2AResponse>(HostFixture.Json, timeout.Token);
+        Assert.Equal("agent", answer!.Role);
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(answer.Parts).Text);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token + "invalid");
+        using var forged = await client.PostAsJsonAsync("/runtime/v1/refresh",
+            new RuntimeHostRefreshRequest(fixture.Proof(ready!), Guid.NewGuid()), HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, forged.StatusCode);
+        Assert.Equal(0, fixture.Rotations);
+    }
+
+    private sealed class HostFixture : IAsyncDisposable
+    {
+        internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+        private readonly SymmetricSecurityKey _key = new(Encoding.UTF8.GetBytes(new string('s', 64)));
+        private readonly HttpClient _http;
+        private readonly Guid _bootstrap = Guid.NewGuid();
+        private readonly Guid _source = Guid.NewGuid();
+        private readonly string _hash = RuntimeContractValidation.Hash("{}"u8);
+        private RuntimeModelCredentialGrantReceipt? _model;
+        private SdkSessionFacts? _facts;
+        private long _sourceRevision = 1;
+        private int _position;
+        private readonly ConcurrentDictionary<Guid, SessionMaterialReadResult> _material = new();
+        public HostFixture()
+        {
+            Time = new() { Now = DateTimeOffset.UtcNow };
+            Token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
+                issuer: "https://broker.test/", audience: "runtime-host", expires: Time.Now.AddMinutes(6).UtcDateTime,
+                signingCredentials: new(_key, SecurityAlgorithms.HmacSha256)));
+            Actor = new(new SecretCredential(Token, Time.Now.AddMinutes(5), Time), "tenant");
+            Image = new("sha256:" + new string('a', 64), "linux/amd64", 123456789);
+            Registration = RuntimeCopilotSessionTests.Registration();
+            Registration = Registration with
+            {
+                ExpiresAt = Time.Now.AddMinutes(5),
+                Binding = Registration.Binding with
+                {
+                    ConfigureEndpoint = new("https://runtime.test/runtime/v1/configure"),
+                    PlacementProviderId = "sandbox-test", EnvironmentLifecycleGeneration = 1,
+                    EnvironmentLeaseRevision = 1, Image = Image, ModelConnectionId = Guid.NewGuid(),
+                    ModelConnectionScope = ProjectAuthorityResourceType.Project
+                }
+            };
+            Sdk = new() { EmitUsageAfterCreate = false, ExpectedAvailableToolsCount = 7, PersistNativeSessionState = true };
+            var factory = RuntimeCopilotSessionTests.Factory(Sdk);
+            var b = Registration.Binding;
+            var owner = new RuntimeOwnerContext(1, b.ActorIssuer, b.ActorId, b.TenantId, b.ProjectId, b.RunId,
+                b.SessionId, b.AgentId, b.ModelSelectionReference!, b.TurnId, b.ProjectRevision,
+                b.ProjectConfigurationRevision, b.PlatformRuntimeRevision, b.ContextRevision,
+                b.AcceptedSelectionHash, b.ExecutionFence, 1, 1, 1)
+            { ModelSourceMode = b.ModelSourceMode, ModelConnectionId = b.ModelConnectionId, ModelConnectionScope = b.ModelConnectionScope };
+            var placement = new EnvironmentRuntimeBootstrapContext(1, b.TenantId, b.ProjectId, b.RunId, b.EnvironmentId,
+                1, b.EnvironmentCurrentFencingGeneration, b.EnvironmentProviderFencingGeneration, 1, Registration.ExpiresAt,
+                new(ProviderSeam.Sandbox, b.PlacementProviderId!, b.PlacementUid, b.PlacementGeneration),
+                new(Guid.NewGuid()), new("placement"), b.ProfileId, b.ConfigureEndpoint, b.ObservationEndpoint)
+            { RuntimeOwnerContext = owner, Image = Image };
+            Readiness = new(1, placement, Time.Now.AddSeconds(-4),
+                new(placement.Resource, SandboxObservedState.Pending, placement.ProviderFencingGeneration, true, true, 1,
+                    [new(SandboxStartupPhase.Scheduled, 1, Time.Now.AddSeconds(-3)),
+                     new(SandboxStartupPhase.ImageReady, 1, Time.Now.AddSeconds(-2), Image.Digest, Image.CompressedPullBytes),
+                     new(SandboxStartupPhase.Started, 1, Time.Now.AddSeconds(-1))]),
+                new(120, 120, 120, 120, 120, 600), factory.WorkingDirectory);
+            _http = new(new Handler(SendOwnerAsync));
+            Host = new(new(b.ConfigureEndpoint, new("https://broker.test/"), new("https://orchestrator.test/"),
+                    new("https://environment.test/"), new("https://events.test/"), Image, 8),
+                _http, new RuntimeRegistrationHttpClient(_http, new("https://orchestrator.test/")), factory, Time);
+            Configure = new(1, Registration, Guid.NewGuid(), Guid.NewGuid(), JsonSerializer.SerializeToElement(new { }));
+        }
+        public TestClock Time { get; }
+        public string Token { get; }
+        public RuntimeActorAuthorization Actor { get; }
+        public SandboxImageIdentity Image { get; }
+        public RuntimeRegistration Registration { get; set; }
+        public EnvironmentRuntimeReadinessContext Readiness { get; set; }
+        public RuntimeAgentHost Host { get; }
+        public RuntimeHostConfigureRequest Configure { get; }
+        public ControlledCopilotRuntime Sdk { get; }
+        public ConcurrentQueue<SessionMaterialWriteRequest> Material { get; } = new();
+        public ConcurrentQueue<RuntimeUsageSourceReceipt> Usage { get; } = new();
+        public TaskCompletionSource AccountingReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Func<CancellationToken, Task>? BeforeAccounting { get; set; }
+        public bool FailAccounting { get; set; }
+        public int Accounted { get; private set; }
+        public int Rotations { get; private set; }
+
+        public Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(CancellationToken token) =>
+            Host.ReceiveAsync(new(Registration.RuntimeInstanceId, Guid.NewGuid(), _bootstrap, _hash,
+                new string('c', 64), Registration.ExpiresAt), Actor, token);
+        public async Task<RuntimeHostReadinessReceipt> ConfigureAsync(CancellationToken token)
+        {
+            await DeliverAsync(token);
+            return await Host.ConfigureAsync(Configure, Actor, token);
+        }
+        public RuntimeHostSessionProof Proof(RuntimeHostReadinessReceipt ready) =>
+            new(1, Configure.Registration, ready.SourceGrant.GrantId, ready.SourceGrant.Revision, RuntimeCredentialPurpose.Observe);
+        public RuntimeA2ASendRequest Message(RuntimeHostSessionProof proof,
+            AddressedMessageDeliveryMode mode = AddressedMessageDeliveryMode.Enqueue) =>
+            new(new("message", Guid.NewGuid(), RuntimeContractValidation.NativeSessionId(proof.Registration.Binding),
+                "user", [new("text", "A bounded user request.")], new(proof, mode)));
+
+        public Task<IHost> StartHttpAsync() => new HostBuilder().ConfigureWebHost(web =>
+        {
+            web.UseTestServer();
+            web.ConfigureServices(services =>
+            {
+                services.AddRouting();
+                services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+                {
+                    options.TokenValidationParameters = new()
+                    {
+                        ValidIssuer = "https://broker.test/", ValidAudience = "runtime-host",
+                        IssuerSigningKey = _key, ClockSkew = TimeSpan.Zero,
+                        ValidAlgorithms = [SecurityAlgorithms.HmacSha256]
+                    };
+                });
+                services.AddAuthorization();
+                services.ConfigureHttpJsonOptions(options =>
+                    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
+            });
+            web.Configure(app =>
+            {
+                app.UseRouting(); app.UseAuthentication(); app.UseAuthorization();
+                app.UseEndpoints(endpoints => endpoints.MapRuntimeAgentHost(Host, Time));
+            });
+        }).StartAsync();
+
+        private RuntimeGrantReceipt Grant(Guid id, RuntimeCredentialPurpose purpose,
+            RuntimeCredentialState state = RuntimeCredentialState.Active, long revision = 1) =>
+            new(id, Configure.Registration.RuntimeInstanceId, Configure.Registration.Revision, revision,
+                "https://broker.test/", purpose,
+                purpose == RuntimeCredentialPurpose.Configure ? Configure.Registration.Binding.ConfigureEndpoint :
+                    Configure.Registration.Binding.ObservationEndpoint, state, _hash,
+                Configure.Registration.ExpiresAt, Time.GetUtcNow());
+
+        private async Task<HttpResponseMessage> SendOwnerAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            if (request.Headers.Authorization?.Parameter != Token ||
+                request.Headers.GetValues("X-Agentweaver-Tenant").Single() != "tenant")
+                return Response(request, new { }, HttpStatusCode.Forbidden);
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.StartsWith("/internal/runtime/registrations/", StringComparison.Ordinal))
+                return Response(request, Registration);
+            if (path.EndsWith("/readiness", StringComparison.Ordinal))
+                return Response(request, Readiness);
+            if (path == "/internal/runtime/bootstrap/verify-pending")
+                return Response(request, Grant(_bootstrap, RuntimeCredentialPurpose.Configure));
+            if (path == "/internal/runtime/bootstrap/consume")
+                return Response(request, Grant(_bootstrap, RuntimeCredentialPurpose.Configure, RuntimeCredentialState.Consumed, 2));
+            if (path == "/internal/runtime/bootstrap/exchange")
+                return Response(request, new RuntimeCredentialExchangeResponse(
+                    Grant(_source, RuntimeCredentialPurpose.Observe), new string('d', 64), false));
+            if (path == "/internal/runtime/source/verify")
+                return Response(request, Grant(_source, RuntimeCredentialPurpose.Observe, revision: _sourceRevision));
+            if (path == "/internal/runtime/source/rotate")
+            {
+                Rotations++;
+                return Response(request, new RuntimeCredentialExchangeResponse(
+                    Grant(_source, RuntimeCredentialPurpose.Observe, revision: ++_sourceRevision), new string('e', 64), false));
+            }
+            if (path == "/internal/runtime/source/revoke")
+                return Response(request, Grant(_source, RuntimeCredentialPurpose.Observe, RuntimeCredentialState.Revoked, ++_sourceRevision));
+            if (path == "/internal/runtime/model-session/grant")
+            {
+                _model = new("model-grant", 1, Configure.Registration.RuntimeInstanceId, Configure.Registration.Revision,
+                    Configure.Registration.Binding.ModelSelectionReference!, new("copilot-user", "v1"),
+                    RuntimeSecretPurposes.ModelSession, Configure.Registration.ExpiresAt)
+                {
+                    SourceMode = ModelSourceMode.HostedCopilot, ConnectionId = Configure.Registration.Binding.ModelConnectionId,
+                    ConnectionRevision = 1, CredentialKind = RuntimeModelCredentialKind.GitHubUserAccess
+                };
+                return Response(request, _model);
+            }
+            if (path == "/internal/runtime/model-session/redeem")
+                return Response(request, new RuntimeModelCredentialResponse(_model!, _model!.ExpiresAt, Sdk.SdkCredential));
+            if (path == "/internal/runtime/model-session/verify")
+                return Response(request, _model!);
+            if (path.Contains("/actions/", StringComparison.Ordinal))
+            {
+                if (path.EndsWith("/authorize", StringComparison.Ordinal))
+                {
+                    var action = await ReadAsync<RuntimeActionRequest>(request, token);
+                    _admission = new(1, action, action.EventId.ToString("N"), "1", action.EventId,
+                        PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed);
+                }
+                return Response(request, _admission!);
+            }
+            if (path.StartsWith("/internal/runtime/sources/", StringComparison.Ordinal))
+            {
+                var source = await ReadAsync<RuntimeSdkSourceRequest>(request, token);
+                _facts = source.Source;
+                return Response(request, new RuntimeSdkSourceReceipt(Configure.Registration.RuntimeInstanceId,
+                    Configure.Registration.Revision, _source, _facts,
+                    RuntimeUsageSourceReceiptContract.HashSource(Configure.Registration, _facts), Time.GetUtcNow()));
+            }
+            if (path == "/internal/runtime/observations")
+            {
+                var observation = await ReadAsync<RuntimeUsageObservationRequest>(request, token);
+                var usage = RuntimeUsageSourceReceiptContract.CreateUsage(Configure.Registration, _facts!, observation.Observation);
+                var receipt = new RuntimeUsageSourceReceipt(1, Guid.NewGuid(), Configure.Registration, usage,
+                    RuntimeUsageSourceReceiptContract.Hash(Configure.Registration, usage), Time.GetUtcNow());
+                Usage.Enqueue(receipt);
+                return Response(request, receipt);
+            }
+            if (path.EndsWith("/usage-receipts", StringComparison.Ordinal))
+            {
+                AccountingReceived.TrySetResult();
+                if (BeforeAccounting is not null)
+                    await BeforeAccounting(token);
+                if (FailAccounting)
+                    return Response(request, new { }, HttpStatusCode.ServiceUnavailable);
+                var id = await ReadAsync<RuntimeUsageReceiptReferenceRequest>(request, token);
+                var usage = Usage.Single(receipt => receipt.ReceiptId == id.ReceiptId).Usage;
+                Accounted++;
+                return Response(request, new RuntimeUsageAccountingAcknowledgment(id.ReceiptId,
+                    new(usage.EventId, usage.Attribution, new string('f', 64), CostDisposition.Unpriced,
+                        null, null, "controlled fixture", null, null, Time.GetUtcNow()), false));
+            }
+            if (path.EndsWith("/events", StringComparison.Ordinal))
+                return Response(request, new SessionEventPage([], null, false));
+            if (path.EndsWith("/material", StringComparison.Ordinal))
+            {
+                var material = await ReadAsync<SessionMaterialWriteRequest>(request, token);
+                Material.Enqueue(material);
+                var b = Configure.Registration.Binding;
+                var receipt = new SessionMaterialAcknowledgment(1, new(b.ProjectId, b.RunId, b.SessionId),
+                    material.EventId, Interlocked.Increment(ref _position),
+                    new(new ObjectKey(material.EventId.ToString("N")), SessionMaterialValidation.Purpose(material.Kind),
+                        material.Bytes.Length)
+                    {
+                        Material = new(1, material.Kind, b.TenantId, RuntimeContractValidation.Hash(material.Bytes),
+                            Configure.Registration.RuntimeInstanceId, Configure.Registration.Revision, b.ExecutionFence,
+                            b.AcceptedSelectionHash, _facts!.SdkVersion, _facts.RuntimeVersion,
+                            _facts.ModelSelectionReference, _facts.ModelId)
+                    });
+                _material[material.EventId] = new(receipt, material.Bytes);
+                return Response(request, receipt);
+            }
+            if (path.Contains("/material/", StringComparison.Ordinal))
+            {
+                var id = Guid.Parse(path.Split('/')[5]);
+                return _material.TryGetValue(id, out var recorded) ? Response(request, recorded) :
+                    Response(request, new { }, HttpStatusCode.NotFound);
+            }
+            throw new InvalidOperationException("Unexpected fixture owner route: " + path);
+        }
+        private RuntimeActionAdmission? _admission;
+        private static async Task<T> ReadAsync<T>(HttpRequestMessage request, CancellationToken token) =>
+            (await request.Content!.ReadFromJsonAsync<T>(Json, token))!;
+        private static HttpResponseMessage Response<T>(HttpRequestMessage request, T body,
+            HttpStatusCode status = HttpStatusCode.OK) =>
+            new(status)
+            {
+                RequestMessage = request, Content = JsonContent.Create(body, options: Json),
+                Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+            };
+        public async ValueTask DisposeAsync()
+        {
+            try { await Host.DisposeAsync(); }
+            finally
+            {
+                Actor.Bearer.Invalidate();
+                _http.Dispose();
+                await Sdk.DisposeAsync();
+            }
+        }
+    }
+    private sealed class TestClock : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; }
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+    private sealed class Handler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token) => send(request, token);
+    }
+}

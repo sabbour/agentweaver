@@ -5,6 +5,8 @@ using Agentweaver.EventsAndSessions.Cost;
 using Azure.Core;
 using Agentweaver.Providers;
 using Agentweaver.Telemetry;
+using Agentweaver.ObjectStore.AzureBlob;
+using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.Authentication;
 using Npgsql;
 using OpenIddict.Validation.AspNetCore;
@@ -156,6 +158,19 @@ builder.Services.AddSingleton(messagingProvider);
 builder.Services.AddSingleton(catalogResult.Value!);
 builder.Services.AddSingleton(resolver);
 var nativeUsageEnabled = builder.Services.AddNativeUsageConsumer(builder.Configuration);
+var materialContainer = builder.Configuration["EventsAndSessions:SessionMaterial:ContainerUri"];
+if (materialContainer is not null)
+{
+    if (!Uri.TryCreate(materialContainer, UriKind.Absolute, out var containerUri) ||
+        containerUri.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(containerUri.UserInfo) ||
+        !string.IsNullOrEmpty(containerUri.Query) || !string.IsNullOrEmpty(containerUri.Fragment) ||
+        containerUri.AbsolutePath.Trim('/').Contains('/') ||
+        string.IsNullOrWhiteSpace(containerUri.AbsolutePath.Trim('/')))
+        throw new InvalidOperationException("Session material requires an explicitly configured HTTPS Blob container.");
+    builder.Services.AddSingleton<IObjectStore>(services => new AzureBlobObjectStore(
+        new BlobContainerClient(containerUri, services.GetRequiredService<TokenCredential>())));
+    builder.Services.AddSessionMaterialOwner();
+}
 builder.Services.AddSingleton<IReadOnlyDictionary<string, string>>(projectOverrides);
 builder.Services.AddSingleton<SessionsProviderBindingService>();
 builder.Services.AddSingleton<ISessionsProviderBinder>(services =>
@@ -176,6 +191,8 @@ var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 await EventsAndSessionsMigrator.VerifyAsync(dataSource, options.Schema);
 app.UseAuthentication();
 app.UseAuthorization();
+if (materialContainer is not null)
+    app.MapSessionMaterialEndpoints();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 app.MapGet("/health/ready", async (CancellationToken ct) =>
 {

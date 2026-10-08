@@ -18,6 +18,10 @@ public static class RuntimeCredentialEndpoints
         routes.MapPost("/model-session/grant", (HttpContext context, RuntimeModelCredentialGrantRequest input) =>
             ExecuteAsync(context, authority => authority.IssueModelCredentialGrantAsync(
                 input.RuntimeInstanceId, input.OperationId, context.RequestAborted)));
+        routes.MapPost("/model-session/verify", (HttpContext context, RuntimeModelCredentialProof input) =>
+            ExecuteAsync(context, authority => authority.VerifyModelCredentialAsync(
+                input.Receipt, context.RequestAborted)));
+        routes.MapPost("/model-session/redeem", RedeemModelAsync);
         routes.MapPost("/bootstrap/request", RequestAsync);
         routes.MapPost("/bootstrap/verify-pending", VerifyPendingAsync);
         routes.MapPost("/bootstrap/consume", (HttpContext context, RuntimeCredentialHttpRequest input) =>
@@ -30,6 +34,33 @@ public static class RuntimeCredentialEndpoints
             ApplyProofAsync(context, input, "rotate"));
         routes.MapPost("/source/revoke", (HttpContext context, RuntimeCredentialHttpRequest input) =>
             ApplyProofAsync(context, input, "revoke"));
+    }
+
+    private static async Task RedeemModelAsync(HttpContext context, RuntimeModelCredentialProof input)
+    {
+        RuntimeModelCredential? issued = null;
+        try
+        {
+            await ExecuteAsync(context, async authority =>
+            {
+                issued = await authority.RedeemModelCredentialAsync(input.Receipt,
+                    context.RequestServices.GetRequiredService<ISecretRedemption>(), context.RequestAborted);
+                return new RuntimeModelCredentialResponse(
+                    issued.Receipt, issued.Credential.ExpiresAt, issued.Credential.GetValue());
+            });
+        }
+        catch (SecretAuthorizationDeniedException)
+        {
+            await DenyAsync(context, "runtime_model_grant_denied", StatusCodes.Status403Forbidden);
+        }
+        catch (Agentweaver.Secrets.AzureKeyVault.AzureKeyVaultSecretException)
+        {
+            await DenyAsync(context, "runtime_model_store_unavailable", StatusCodes.Status503ServiceUnavailable);
+        }
+        finally
+        {
+            issued?.Credential.Invalidate();
+        }
     }
 
     private static Task RequestAsync(HttpContext context, RuntimeBootstrapRequest input) =>
@@ -118,7 +149,7 @@ public static class RuntimeCredentialEndpoints
                 context.RequestServices.GetRequiredService<IRuntimeRegistrationOwner>(),
                 context.RequestServices.GetRequiredService<IRuntimeBootstrapDelivery>(),
                 context.RequestServices.GetRequiredService<RuntimeCredentialPolicy>(),
-                actor, time);
+                actor, time, context.RequestServices.GetService<CopilotConnectionAuthority>());
             var result = await action(authority);
             context.RequestAborted.ThrowIfCancellationRequested();
             await Results.Json(result).ExecuteAsync(context);

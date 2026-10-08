@@ -66,6 +66,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             condition: "action_id == 'source_control.merge'"
             action: allow
             priority: 100
+          - name: allow-current-runtime-model-turn
+            condition: "action_id == 'model.turn'"
+            action: allow
+            priority: 100
         """;
 
     private static readonly JsonSerializerOptions CoordinationJsonOptions = new(JsonSerializerDefaults.Web)
@@ -73,8 +77,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    [Fact]
+    public Task CopilotConnectionRotationPreservesAcceptedSelectionThroughNativeSdkAccounting() =>
+        BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(false, null);
+
     [Theory]
-    [InlineData(false, null)]
     [InlineData(true, null)]
     [InlineData(false, "grant")]
     [InlineData(false, "head")]
@@ -122,6 +129,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(HttpStatusCode.Created, createdProject.StatusCode);
         var project = await createdProject.Content.ReadFromJsonAsync<ProjectSummary>(AuthorizationJsonOptions);
         Assert.NotNull(project);
+        using var copilotConnection = new ControlledCopilotConnection();
+        var linkedConnection = await LinkRuntimeCopilotConnectionAsync(
+            projects, platformAdminToken, copilotConnection);
 
         var bootstrapToken = await IssueTokenAsync(
             "projects.bootstrap", [TenantId], "coordination-runner", null, null, ["orchestrator"]);
@@ -215,7 +225,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Defaults = new PlatformRuntimeDefaults
                 {
                     ModelSelection = new ModelSelectionSettings(
-                        "platform-model", new SecretRef("model-api", "model-v1")),
+                        "platform-model", SourceMode: ModelSourceMode.HostedCopilot,
+                        ConnectionId: linkedConnection.ConnectionId),
                     EgressBaseline = [],
                     RunLimits = new CopilotRunLimits
                     {
@@ -2500,7 +2511,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal("child", runtimeOwner.SessionId);
             Assert.Equal("test-agent", runtimeOwner.AgentId);
             Assert.Equal("platform-model", runtimeOwner.ModelSelectionReference);
-            Assert.Equal(new SecretRef("model-api", "model-v1"), runtimeOwner.ModelCredentialReference);
+            Assert.Null(runtimeOwner.ModelCredentialReference);
+            Assert.Equal(linkedConnection.ConnectionId, runtimeOwner.ModelConnectionId);
+            Assert.Equal(ProjectAuthorityResourceType.Platform, runtimeOwner.ModelConnectionScope);
+            Assert.Equal(ModelSourceMode.HostedCopilot, runtimeOwner.ModelSourceMode);
             Assert.Equal(child.ExecutionFence, runtimeOwner.ExecutionFence);
             Assert.Equal(boundary.LogicalTurnOrdinal, runtimeOwner.LogicalTurnOrdinal);
             Assert.Equal(boundary.StateVersion, runtimeOwner.OwnerStateVersion);
@@ -2520,9 +2534,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 orchestrator, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]);
             await AssertStatusAsync(replayedOwner, HttpStatusCode.OK);
             Assert.Equal(runtimeOwner, await ReadJsonAsync<RuntimeOwnerContext>(replayedOwner));
-            await VerifyRunBoundRuntimeRegistrationWithCurrentEnvironmentAsync(
-                ownerSchema, signingKey, projects, eventsFactory, runToken, runtimeOwner,
-                runnerMembership.MembershipId, sandboxProvider, revokeSourceBeforeSdk, sourceLoss);
         }
         using (var unmappedOwner = await SendAsync(
                    orchestrator, HttpMethod.Get,
@@ -2813,6 +2824,41 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.NotNull(acknowledged.AcknowledgedAt);
         Assert.Equal("pending", await ReadGateStateAsync(_connectionString, ownerSchema, child.PendingRequestId));
 
+        using (var currentRuntimeOwnerResponse = await SendAsync(
+                   orchestrator, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]))
+        {
+            await AssertStatusAsync(currentRuntimeOwnerResponse, HttpStatusCode.OK);
+            var currentRuntimeOwner = await ReadJsonAsync<RuntimeOwnerContext>(currentRuntimeOwnerResponse);
+            if (!revokeSourceBeforeSdk && sourceLoss is null)
+            {
+                using var beforeRotation = await SendAsync(projects.Client, HttpMethod.Get,
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/selection", runToken, [TenantId]);
+                await AssertStatusAsync(beforeRotation, HttpStatusCode.OK);
+                var acceptedBytes = await beforeRotation.Content.ReadAsByteArrayAsync();
+                await RefreshRuntimeCopilotConnectionAsync(
+                    projects, platformAdminToken, copilotConnection, linkedConnection);
+                using var afterRotation = await SendAsync(projects.Client, HttpMethod.Get,
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/selection", runToken, [TenantId]);
+                await AssertStatusAsync(afterRotation, HttpStatusCode.OK);
+                Assert.Equal(acceptedBytes, await afterRotation.Content.ReadAsByteArrayAsync());
+                Assert.Equal(acceptedSelectionSnapshot,
+                    await ReadAcceptedSelectionSnapshotAsync(_connectionString, ownerSchema, project.ProjectId));
+            }
+            await VerifyRunBoundRuntimeRegistrationWithCurrentEnvironmentAsync(
+                ownerSchema, signingKey, projects, eventsFactory, runToken, currentRuntimeOwner,
+                runnerMembership.MembershipId, sandboxProvider, revokeSourceBeforeSdk, sourceLoss, copilotConnection,
+                platformAdminToken, async eligible =>
+                {
+                    if (eligible)
+                        runnerRole = await AssignRoleAsync(projects.PrivilegedFixtureDataSource,
+                            runnerMembership.MembershipId, ProjectAuthorityResourceType.Project,
+                            project.ProjectId, ProjectAuthorityRole.Orchestrator);
+                    else
+                        await RevokeRoleAsync(projects.PrivilegedFixtureDataSource,
+                            runnerRole.AssignmentId, runnerRole.Revision);
+                });
+        }
+
         using var sendReply = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
@@ -2889,7 +2935,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             [TenantId]);
         await AssertStatusAsync(replyJournalResponse, HttpStatusCode.OK);
         using var replyJournal = JsonDocument.Parse(await replyJournalResponse.Content.ReadAsStringAsync());
-        var replyJournalEvent = Assert.Single(replyJournal.RootElement.GetProperty("events").EnumerateArray());
+        var childEvents = replyJournal.RootElement.GetProperty("events").EnumerateArray().ToArray();
+        Assert.Equal(!revokeSourceBeforeSdk && sourceLoss is null ? 6 : 1, childEvents.Length);
+        if (!revokeSourceBeforeSdk && sourceLoss is null)
+        {
+            Assert.Equal(3, childEvents.Count(item => item.GetProperty("kind").GetString() == "turn"));
+            Assert.Single(childEvents, item => item.GetProperty("kind").GetString() == "cacheReference");
+            Assert.Single(childEvents, item => item.GetProperty("kind").GetString() == "policyEvaluation");
+        }
+        var replyJournalEvent = Assert.Single(
+            childEvents, item => item.GetProperty("kind").GetString() == "addressedMessage");
         Assert.Equal("addressedMessage", replyJournalEvent.GetProperty("kind").GetString());
         Assert.Equal(
             replyPresented.MessageId,
@@ -4280,7 +4335,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ?? throw new InvalidOperationException("Expected the coordinator gate to be persisted.");
     }
 
-    private static async Task<HttpResponseMessage> SendJsonAsync<T>(
+    private async Task<HttpResponseMessage> SendJsonAsync<T>(
         HttpClient client,
         HttpMethod method,
         string path,
@@ -4292,7 +4347,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Content = JsonContent.Create(body, options: CoordinationJsonOptions)
         };
         AddBearerAndTenant(request, token, TenantId);
-        return await client.SendAsync(request);
+        output.WriteLine($"Native HTTP {method} {path} begin.");
+        var response = await client.SendAsync(request);
+        output.WriteLine($"Native HTTP {method} {path} returned {(int)response.StatusCode}.");
+        return response;
     }
 
     private static async Task<HttpResponseMessage> SendSignedWebhookRelayAsync(
@@ -5069,7 +5127,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         SecurityKey signingKey,
         Func<HttpMessageHandler> projectsHandler,
         Func<HttpMessageHandler> orchestratorHandler,
-        Func<HttpMessageHandler>? nativeUsageHandler = null)
+        Func<HttpMessageHandler>? nativeUsageHandler = null,
+        IObjectStore? sessionMaterialObjects = null)
         : WebApplicationFactory<EventsHost::Program>
     {
         public string Schema { get; } = schema;
@@ -5080,6 +5139,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ?? throw new InvalidOperationException("The integration database name is missing.");
             builder.UseSetting("EventsAndSessions:Knowledge:BaseAddress", "https://knowledge.test/");
             builder.UseSetting("ProjectsConfig:BaseAddress", "https://projects.test/");
+            if (sessionMaterialObjects is not null)
+                builder.UseSetting("EventsAndSessions:SessionMaterial:ContainerUri",
+                    "https://owned.blob.core.windows.net/session-material");
             builder.ConfigureAppConfiguration((_, configuration) =>
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
@@ -5101,7 +5163,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["ProjectsConfig:AuthorizationContext:Audience"] = "https://api.test",
                     ["EventsAndSessions:OrchestratorOwner:OwnerBaseAddress"] = "https://orchestrator.test/",
                     ["EventsAndSessions:OrchestratorOwner:Audience"] = "https://api.test",
-                    ["EventsAndSessions:RuntimeUsage:Enabled"] = nativeUsageHandler is null ? "false" : "true"
+                    ["EventsAndSessions:RuntimeUsage:Enabled"] = nativeUsageHandler is null ? "false" : "true",
+                    ["EventsAndSessions:SessionMaterial:ContainerUri"] = sessionMaterialObjects is null
+                        ? null : "https://owned.blob.core.windows.net/session-material"
                 }));
             builder.ConfigureTestServices(services =>
             {
@@ -5119,6 +5183,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 if (nativeUsageHandler is not null)
                     services.AddHttpClient("NativeUsageReceiptClient")
                         .ConfigurePrimaryHttpMessageHandler(nativeUsageHandler);
+                if (sessionMaterialObjects is not null)
+                {
+                    services.RemoveAll<IObjectStore>();
+                    services.AddSingleton(sessionMaterialObjects);
+                    services.AddHttpClient("SessionMaterialRuntimeClient")
+                        .ConfigurePrimaryHttpMessageHandler(orchestratorHandler);
+                }
             });
         }
     }

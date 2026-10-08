@@ -1189,7 +1189,7 @@ internal static class SourceControlEndpoints
                 "source_control_merge_grant_not_current", StatusCodes.Status403Forbidden);
     }
 
-    private static async Task<PinnedProviderBinding> ResolvePolicyBindingAsync(
+    internal static async Task<PinnedProviderBinding> ResolvePolicyBindingAsync(
         System.Text.Json.JsonElement acceptedSelectionSnapshot,
         string runId,
         ProviderCatalog catalog,

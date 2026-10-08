@@ -16,6 +16,41 @@ public sealed class EnvironmentRuntimeBootstrapDelivery(
     private readonly RuntimeRegistrationHttpClient _owner = new(
         client, options.OrchestratorOwnerAddress);
 
+    public async Task<RuntimeHostReadinessReceipt> ActivateAsync(
+        RuntimeHostConfigureRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
+    {
+        if (request.ContractVersion != 1)
+            throw new RuntimeAuthorizationException("runtime_configuration_invalid");
+        var registration = await ReadCurrentAsync(request.Registration.RuntimeInstanceId, actor, cancellationToken)
+            .ConfigureAwait(false);
+        if (registration != request.Registration)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+        var placement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
+        var endpoint = placement.ConfigureEndpoint;
+        if (endpoint.AbsolutePath != "/runtime/v1/configure")
+            throw new RuntimeAuthorizationException("runtime_configuration_version_unavailable");
+        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeHostReadinessReceipt>(
+            client, new Uri(endpoint.GetLeftPart(UriPartial.Authority) + "/"),
+            endpoint.AbsolutePath + "/activate", actor, request, cancellationToken).ConfigureAwait(false);
+        var currentPlacement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
+        var current = await ReadCurrentAsync(registration.RuntimeInstanceId, actor, cancellationToken)
+            .ConfigureAwait(false);
+        if (current != registration || placement != currentPlacement ||
+            receipt.ContractVersion != 1 || receipt.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            receipt.RegistrationRevision != registration.Revision ||
+            receipt.ExecutionFence != registration.Binding.ExecutionFence || receipt.Image != registration.Binding.Image ||
+            receipt.StartupPhases.IsDefault || receipt.StartupPhases.Length != 5 ||
+            receipt.StartupPhases.Select(phase => phase.Phase).Distinct().Count() != 5 ||
+            receipt.SourceGrant.Purpose != RuntimeCredentialPurpose.Observe ||
+            receipt.SourceGrant.State != RuntimeCredentialState.Active ||
+            receipt.SourceGrant.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            receipt.SourceGrant.RegistrationRevision != registration.Revision ||
+            receipt.SourceGrant.ExpiresAt > registration.ExpiresAt || !actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_activation_receipt_invalid");
+        cancellationToken.ThrowIfCancellationRequested();
+        return receipt;
+    }
+
     public async Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
         RuntimeBootstrapDeliveryRequest request,
         RuntimeActorAuthorization actor,
@@ -94,6 +129,7 @@ public sealed class EnvironmentRuntimeBootstrapDelivery(
             placement.ProviderFencingGeneration != binding.EnvironmentProviderFencingGeneration ||
             placement.LeaseExpiresAt != registration.ExpiresAt ||
             placement.ProfileId != binding.ProfileId ||
+            placement.Image != binding.Image ||
             placement.ConfigureEndpoint != binding.ConfigureEndpoint ||
             placement.ObservationEndpoint != binding.ObservationEndpoint)
             throw new RuntimeAuthorizationException("runtime_placement_stale");

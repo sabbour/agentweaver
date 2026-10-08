@@ -19,6 +19,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
@@ -41,7 +42,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     private async Task VerifyRunBoundRuntimeRegistrationWithCurrentEnvironmentAsync(
         string ownerSchema, SecurityKey signingKey, ProjectsConfigResourceServer projects,
         EventsIntegrationFactory events, string runToken, RuntimeOwnerContext owner, Guid membershipId,
-        ICoordinatorSandboxResourceProvider sandboxProvider, bool revokeSourceBeforeSdk, string? sourceLoss)
+        ICoordinatorSandboxResourceProvider sandboxProvider, bool revokeSourceBeforeSdk, string? sourceLoss,
+        ControlledCopilotConnection copilotConnection, string connectionOwnerToken,
+        Func<bool, Task> setHistoricalReadAuthority)
     {
         await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membershipId,
             ProjectAuthorityResourceType.Project, owner.ProjectId, ProjectAuthorityRole.Owner);
@@ -89,6 +92,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using var factory = new OrchestratorIntegrationFactory(
             _connectionString, ownerSchema, signingKey, projects.CreateHandler,
             () => events.Server.CreateHandler(), sandboxProvider: sandboxProvider,
+            providerCatalog: CreateSourceControlProviderCatalog(), policyOptions: SourceControlMergePolicyOptions(),
             environmentHandler: () => new RuntimeServiceRouter(routes, failures),
             runtimeUsageHandler: () => new RuntimeServiceRouter(routes, failures));
         using var client = factory.CreateClient(new()
@@ -110,6 +114,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(owner.TurnId, registration.Binding.TurnId);
         Assert.Equal(owner.ModelSelectionReference, registration.Binding.ModelSelectionReference);
         Assert.Equal(owner.ModelCredentialReference, registration.Binding.ModelCredentialReference);
+        Assert.Equal(owner.ModelConnectionId, registration.Binding.ModelConnectionId);
+        Assert.Equal(owner.ModelConnectionScope, registration.Binding.ModelConnectionScope);
+        Assert.Equal(ModelSourceMode.HostedCopilot, owner.ModelSourceMode);
+        Assert.Equal(owner.ModelSourceMode, registration.Binding.ModelSourceMode);
         Assert.Equal(owner.AcceptedSelectionHash, registration.Binding.AcceptedSelectionHash);
         Assert.Equal(environment.Lease.LeaseRevision, registration.Binding.EnvironmentLeaseRevision);
         Assert.Equal(environment.Lease.ProvisionedResource!.Resource.ProviderId,
@@ -129,7 +137,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(forged, HttpStatusCode.BadRequest);
         await VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
             registration, signingKey, runToken, routes, failures, projects, events.Schema, ownerSchema,
-            revokeSourceBeforeSdk, sourceLoss, environment);
+            revokeSourceBeforeSdk, sourceLoss, environment, copilotConnection,
+            connectionOwnerToken, setHistoricalReadAuthority);
         TraceNativeStage(failures, "Runtime exercise and explicit cleanup completed.");
     }
 
@@ -137,7 +146,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         RuntimeRegistration registration, SecurityKey signingKey, string runToken,
         Dictionary<string, Func<HttpMessageHandler>> routes, ConcurrentQueue<string> failures,
         ProjectsConfigResourceServer projects, string eventsSchema, string ownerSchema, bool revokeSourceBeforeSdk,
-        string? sourceLoss, RuntimePlacementTestServer environment)
+        string? sourceLoss, RuntimePlacementTestServer environment, ControlledCopilotConnection copilotConnection,
+        string connectionOwnerToken, Func<bool, Task> setHistoricalReadAuthority)
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         TraceNativeStage(failures, "Broker startup begin.");
@@ -153,9 +163,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 settings["IdentityBroker__RuntimeBootstrap__BootstrapLifetime"] = "00:01:00";
                 settings["IdentityBroker__RuntimeBootstrap__SourceLifetime"] =
                     sourceLoss == "sdk-preparation-expiry" ? "00:00:10" : "00:02:00";
+                copilotConnection.ConfigureSettings(settings);
             },
             configureServices: services =>
             {
+                copilotConnection.ConfigureServices(services, projects.CreateHandler);
                 services.AddHttpClient(nameof(RuntimeRegistrationHttpClient))
                     .ConfigurePrimaryHttpMessageHandler(() => new RuntimeServiceRouter(routes, failures));
                 services.AddHttpClient(nameof(BrokerRuntimeBootstrapDeliveryClient))
@@ -168,11 +180,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         TraceNativeStage(failures, "Broker startup completed.");
         routes.Add("broker.test", () => brokerFactory.Server.CreateHandler());
         Func<HttpRequestMessage, HttpResponseMessage, CancellationToken, Task>? inspectOwnerResponse = null;
-        Func<HttpRequestMessage, HttpResponseMessage, CancellationToken, Task>? inspectRuntimeResponse = null;
+        Func<HttpRequestMessage, HttpResponseMessage, CancellationToken, Task>? inspectRuntimeResponse =
+            async (request, response, token) =>
+            {
+                if (request.RequestUri?.AbsolutePath != "/internal/runtime/model-session/redeem" ||
+                    !response.IsSuccessStatusCode)
+                    return;
+                var bytes = await response.Content.ReadAsByteArrayAsync(token);
+                var body = System.Text.Encoding.UTF8.GetString(bytes);
+                Assert.DoesNotContain(copilotConnection.RefreshToken, body);
+                Assert.DoesNotContain(ControlledCopilotConnection.ClientSecret, body);
+                Assert.DoesNotContain("refreshToken", body, StringComparison.OrdinalIgnoreCase);
+                var redeemed = JsonSerializer.Deserialize<RuntimeModelCredentialResponse>(
+                    bytes, CoordinationJsonOptions);
+                Assert.NotNull(redeemed);
+                Assert.Equal(copilotConnection.AccessToken, redeemed.Value);
+                Assert.Equal(registration.Binding.ModelConnectionId, redeemed.Receipt.ConnectionId);
+                Assert.Equal(RuntimeModelCredentialKind.GitHubUserAccess, redeemed.Receipt.CredentialKind);
+                Assert.Equal($"version-{copilotConnection.Writes}", redeemed.Receipt.CredentialReference.Version);
+                Assert.True(redeemed.ExpiresAt <= redeemed.Receipt.ExpiresAt);
+                Assert.True(response.Headers.CacheControl?.NoStore);
+            };
         using var owners = new HttpClient(new RuntimeServiceRouter(routes, failures,
             (request, response, token) => inspectOwnerResponse?.Invoke(request, response, token) ?? Task.CompletedTask));
         var currentOwner = new RuntimeRegistrationHttpClient(owners, new("https://orchestrator.test/"));
-        await using var sdk = new ControlledCopilotRuntime();
+        await using var sdk = new ControlledCopilotRuntime(TimeSpan.FromMinutes(5));
+        sdk.SdkCredential = copilotConnection.AccessToken;
         using var runtimeHttp = new HttpClient(new RuntimeServiceRouter(routes, failures,
             (request, response, token) => inspectRuntimeResponse?.Invoke(request, response, token) ?? Task.CompletedTask))
         {
@@ -237,18 +270,27 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(RuntimeBootstrapReceiverState.Pending, receiver.State);
             var factory = new RuntimeCopilotSessionFactory(
                 sdk.Connection, Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
-                new Dictionary<string, string> { [registration.Binding.ModelSelectionReference!] = sdk.ModelId });
+                new Dictionary<string, RuntimeModelBinding>
+                {
+                    [registration.Binding.ModelSelectionReference!] =
+                        new(sdk.ModelId, ModelSourceMode.HostedCopilot)
+                });
             var runtimeBroker = new RuntimeBrokerCredentialClient(
                 runtimeHttp, broker.BaseAddress!, IdentityBrokerWebApplicationFactory.Issuer, actor, TimeProvider.System);
-            var bootstrap = new RuntimeSessionBootstrap(currentOwner, runtimeBroker, factory, actor, TimeProvider.System);
+            sdk.ExpectedAvailableToolsCount = 7;
+            sdk.PersistNativeSessionState = true;
+            var bootstrap = new RuntimeSessionBootstrap(currentOwner, runtimeBroker, factory, actor, TimeProvider.System,
+                actions: new RuntimeActionHttpClient(runtimeHttp, new("https://orchestrator.test/"), actor));
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.ConfigureAsync(
                 bootstrap, "forged"u8.ToArray(), Guid.NewGuid(), Guid.NewGuid(), default));
             Assert.Equal(RuntimeBootstrapReceiverState.Pending, receiver.State);
             Assert.Empty(sdk.Requests);
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            var operationLimit = TimeSpan.FromMinutes(3);
+            using var timeout = new CancellationTokenSource(operationLimit);
             var operationElapsed = System.Diagnostics.Stopwatch.StartNew();
             using var deadlineTrace = timeout.Token.Register(() =>
-                TraceNativeStage(failures, $"Native operation deadline cancelled after {operationElapsed.Elapsed}; limit=00:00:20."));
+                TraceNativeStage(failures,
+                    $"Native operation deadline cancelled after {operationElapsed.Elapsed}; limit={operationLimit}."));
             var duringSdkPreparation = sourceLoss?.StartsWith("sdk-preparation-", StringComparison.Ordinal) == true;
             if (revokeSourceBeforeSdk || duringSdkPreparation)
             {
@@ -375,15 +417,45 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 return;
             }
             TraceNativeStage(failures, "Native configure begin.");
+            var consumeOperationId = Guid.NewGuid();
+            var exchangeOperationId = Guid.NewGuid();
             var session = await receiver.ConfigureAsync(
-                bootstrap, configuration, Guid.NewGuid(), Guid.NewGuid(), timeout.Token);
+                bootstrap, configuration, consumeOperationId, exchangeOperationId, timeout.Token);
             TraceNativeStage(failures, "Native configure completed.");
             Assert.Equal(RuntimeBootstrapReceiverState.Ready, receiver.State);
+            Assert.Contains(copilotConnection.Reads, request =>
+                request.Secret.Id == $"copilot-user-{registration.Binding.ModelConnectionId:N}" &&
+                request.Secret.Version == $"version-{copilotConnection.Writes}" &&
+                request.Purpose == RuntimeSecretPurposes.ModelSession &&
+                request.RunId == registration.Binding.RunId);
             failures.Enqueue($"After SDK configure: {elapsed.Elapsed}");
             output.WriteLine(failures.Last());
             Assert.Equal(registration, session.Registration);
             Assert.Equal(registration.Binding.ModelSelectionReference, session.Facts.ModelSelectionReference);
             Assert.Equal(registration.Binding.AcceptedSelectionHash, session.Facts.AcceptedSelectionHash);
+            var nativeWire = string.Join('\n', sdk.Requests.Select(request => request.Parameters.GetRawText()));
+            Assert.DoesNotContain(copilotConnection.RefreshToken, nativeWire);
+            Assert.DoesNotContain(ControlledCopilotConnection.ClientSecret, nativeWire);
+            Assert.DoesNotContain("refreshToken", nativeWire, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(copilotConnection.RefreshToken, string.Join('\n', brokerFactory.LogMessages));
+            Assert.DoesNotContain(ControlledCopilotConnection.ClientSecret, string.Join('\n', brokerFactory.LogMessages));
+            var create = Assert.Single(sdk.Requests, request => request.Method == "session.create");
+            Assert.False(create.Parameters.GetProperty("enableSessionStore").GetBoolean());
+            Assert.False(create.Parameters.GetProperty("enableConfigDiscovery").GetBoolean());
+            var sdkSessionCreateCount = sdk.Requests.Count(request => request.Method == "session.create");
+            var configureReplay = await receiver.ConfigureAsync(
+                bootstrap, configuration, consumeOperationId, exchangeOperationId, timeout.Token);
+            Assert.Same(session, configureReplay);
+            Assert.Equal(sdkSessionCreateCount,
+                sdk.Requests.Count(request => request.Method == "session.create"));
+            var changedConfiguration = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                receiver.ConfigureAsync(
+                    bootstrap, "changed"u8.ToArray(), consumeOperationId, exchangeOperationId, timeout.Token));
+            Assert.Equal("runtime_configuration_conflict", changedConfiguration.Code);
+            var changedOperation = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                receiver.ConfigureAsync(
+                    bootstrap, configuration, Guid.NewGuid(), exchangeOperationId, timeout.Token));
+            Assert.Equal("runtime_configuration_conflict", changedOperation.Code);
             var sourceClient = new RuntimeUsageSourceHttpClient(
                 runtimeHttp, new("https://orchestrator.test/"), actor);
             if (sourceLoss is not null)
@@ -424,7 +496,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 $"/coordination/sessions/{registration.Binding.SessionId}/usage-receipts/{accepted.ReceiptId:D}",
                 actor, null, timeout.Token);
             Assert.Equal(accepted, fetched);
-            await receiver.DisposeAsync();
+            await VerifyNativeSessionMaterialAsync(session, signingKey, runToken, actor,
+                projects, routes, failures, eventsSchema, sdk, async () =>
+                {
+                    using var currentConnection = await SendAsync(broker, HttpMethod.Get,
+                        $"/internal/connections/copilot-user/{registration.Binding.ModelConnectionId:D}",
+                        connectionOwnerToken, [registration.Binding.TenantId]);
+                    await AssertStatusAsync(currentConnection, HttpStatusCode.OK);
+                    var current = await currentConnection.Content.ReadFromJsonAsync<CopilotConnectionReceipt>(
+                        CoordinationJsonOptions);
+                    Assert.NotNull(current);
+                    using var disconnected = await SendJsonAsync(broker, HttpMethod.Post,
+                        "/internal/connections/copilot-user/revoke", connectionOwnerToken,
+                        new ChangeCopilotConnectionRequest(current.ConnectionId, current.Revision));
+                    await AssertStatusAsync(disconnected, HttpStatusCode.OK);
+                    environment.ExpireCurrentLease();
+                    await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                        currentOwner.ReadCurrentAsync(registration.RuntimeInstanceId, actor, timeout.Token));
+                }, setHistoricalReadAuthority, timeout.Token);
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.DisposeAsync().AsTask());
             Assert.Equal(RuntimeBootstrapReceiverState.Disposed, receiver.State);
             await VerifyNativeUsageAccountingAsync(
                 accepted, signingKey, runToken, projects, routes, failures, eventsSchema);
@@ -450,6 +540,180 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var message = $"Native fixture {DateTimeOffset.UtcNow:O}: {stage}";
         failures.Enqueue(message);
         Console.WriteLine(message);
+    }
+
+    private async Task VerifyNativeSessionMaterialAsync(
+        AuthorizedRuntimeSession session, SecurityKey signingKey, string runToken, RuntimeActorAuthorization actor,
+        ProjectsConfigResourceServer projects, Dictionary<string, Func<HttpMessageHandler>> routes,
+        ConcurrentQueue<string> failures, string eventsSchema, ControlledCopilotRuntime sdk,
+        Func<Task> endRuntimeAuthority, Func<bool, Task> setHistoricalReadAuthority,
+        CancellationToken cancellationToken)
+    {
+        var objects = new RuntimeMaterialObjects();
+        await using var factory = new EventsIntegrationFactory(
+            _connectionString, eventsSchema, signingKey, projects.CreateHandler,
+            () => new RuntimeServiceRouter(routes, failures), sessionMaterialObjects: objects);
+        using var client = factory.CreateDefaultClient(
+            new Uri("https://events.test/"), new MaterialResponseTraceHandler(failures));
+        var material = new RuntimeSessionMaterialHttpClient(client, client.BaseAddress!, actor);
+        var eventId = Guid.NewGuid();
+        const string userContent = "Run the accepted bounded turn.";
+        var receipt = await session.CommitTurnContentAsync(
+            material, eventId, "user", userContent, cancellationToken);
+        Assert.Equal(session.Registration.RuntimeInstanceId, receipt.Reference.Material!.RuntimeInstanceId);
+        Assert.Equal(session.Facts.SdkVersion, receipt.Reference.Material.SdkVersion);
+        Assert.Equal(session.Facts.ModelId, receipt.Reference.Material.ModelId);
+        Assert.Equal(1, objects.Writes);
+        var replay = await session.CommitTurnContentAsync(
+            material, eventId, "user", userContent, cancellationToken);
+        Assert.Equal(receipt, replay);
+        Assert.Equal(1, objects.Writes);
+        var read = await material.ReadRecordedAsync(
+            receipt.Identity, eventId, SessionMaterialKind.TurnContent, cancellationToken);
+        Assert.Equal(receipt, read.Material);
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes(userContent), read.Bytes);
+        var path = $"/internal/sessions/{session.Registration.Binding.SessionId}/material";
+        var input = new SessionMaterialWriteRequest(1, Guid.NewGuid(), session.Registration.RuntimeInstanceId,
+            session.Registration.Revision, session.Registration.Binding.ExecutionFence + 1,
+            SessionMaterialKind.TurnContent, read.Bytes, "user", session.Facts.SdkVersion, session.Facts.ModelId);
+        using var staleFence = await SendJsonAsync(client, HttpMethod.Post, path, runToken, input);
+        await AssertStatusAsync(staleFence, HttpStatusCode.Forbidden);
+        using var observeOnly = await SendJsonAsync(client, HttpMethod.Post, path,
+            session.Proof().Credential.GetValue(), input with
+            {
+                ExecutionFence = session.Registration.Binding.ExecutionFence
+            });
+        await AssertStatusAsync(observeOnly, HttpStatusCode.Unauthorized);
+        Assert.Equal(1, objects.Writes);
+        Assert.True(staleFence.Headers.CacheControl?.NoStore);
+        var refreshOperation = Guid.NewGuid();
+        var previousSource = session.Proof();
+        var refreshed = await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken);
+        Assert.Equal(previousSource.Revision + 1, refreshed.SourceGrant.Revision);
+        Assert.False(previousSource.Credential.IsUsable());
+        Assert.Equal(refreshed,
+            await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken));
+        TraceNativeStage(failures, "Guarded actual model turn and native cache begin.");
+        var answer = await session.SendTurnAsync("A bounded user request.", material, cancellationToken);
+        Assert.Equal(sdk.AssistantResponse, answer);
+        Assert.Equal(4, objects.Writes);
+        var recovery = await material.ReadRecoveryAsync(session.Registration, cancellationToken);
+        Assert.NotNull(recovery.Cache);
+        Assert.Contains(recovery.Turns, turn => turn == ("user", "A bounded user request."));
+        Assert.Contains(recovery.Turns, turn => turn == ("assistant", sdk.AssistantResponse));
+        Assert.Equal(session.Facts.SdkVersion, recovery.Cache.Material.Reference.Material!.SdkVersion);
+        Assert.DoesNotContain(sdk.SdkCredential, System.Text.Encoding.UTF8.GetString(recovery.Cache.Bytes));
+        Assert.DoesNotContain(session.Proof().Credential.GetValue(),
+            System.Text.Encoding.UTF8.GetString(recovery.Cache.Bytes));
+        Assert.True(await objects.DeleteAsync(recovery.Cache.Material.Reference.Key, cancellationToken));
+        var missing = await material.ReadRecoveryAsync(session.Registration, cancellationToken);
+        Assert.Null(missing.Cache);
+        Assert.Equal(recovery.Turns, missing.Turns);
+        await endRuntimeAuthority();
+        var historical = await material.ReadRecordedAsync(
+            receipt.Identity, eventId, SessionMaterialKind.TurnContent, cancellationToken);
+        Assert.Equal(receipt, historical.Material);
+        Assert.Equal(read.Bytes, historical.Bytes);
+        using var camelCase = await SendAsync(client, HttpMethod.Get,
+            $"{path}/{eventId:D}/turnContent", runToken, [session.Registration.Binding.TenantId]);
+        await AssertStatusAsync(camelCase, HttpStatusCode.OK);
+        foreach (var invalidKind in new[] { "unknown", "0", "1" })
+        {
+            using var invalid = await SendAsync(client, HttpMethod.Get,
+                $"{path}/{eventId:D}/{invalidKind}", runToken, [session.Registration.Binding.TenantId]);
+            await AssertStatusAsync(invalid, HttpStatusCode.BadRequest);
+        }
+        var pinPath = $"/internal/projects/{receipt.Identity.ProjectId}/runs/{receipt.Identity.RunId}/sessions-provider-binding";
+        using var pinResponse = await SendAsync(client, HttpMethod.Get, pinPath,
+            runToken, [session.Registration.Binding.TenantId]);
+        await AssertStatusAsync(pinResponse, HttpStatusCode.OK);
+        Assert.True(pinResponse.Headers.CacheControl?.NoStore);
+        var pin = await pinResponse.Content.ReadFromJsonAsync<SessionProviderBinding>(CoordinationJsonOptions);
+        Assert.NotNull(pin);
+        Assert.Equal(EventsHost::Agentweaver.EventsAndSessions.NativePostgresSessionsProvider.ProviderId, pin.ProviderId);
+        Assert.True(pin.ResourceGeneration > 0);
+        Assert.Contains(EventsHost::Agentweaver.EventsAndSessions.SessionsCapabilities.ObjectReferences,
+            pin.NegotiatedCapabilities);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => session.CommitTurnContentAsync(
+            material, Guid.NewGuid(), "user", "No execution after authority loss.", cancellationToken));
+        objects.AfterRead = async () =>
+        {
+            objects.AfterRead = null;
+            await setHistoricalReadAuthority(false);
+        };
+        try
+        {
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => material.ReadRecordedAsync(
+                receipt.Identity, eventId, SessionMaterialKind.TurnContent, cancellationToken));
+            using var summary = await SendAsync(projects.Client, HttpMethod.Get,
+                $"/api/projects/{receipt.Identity.ProjectId}?runId={receipt.Identity.RunId}",
+                runToken, [session.Registration.Binding.TenantId]);
+            await AssertStatusAsync(summary, HttpStatusCode.OK);
+            using var deniedCache = await SendAsync(client, HttpMethod.Get,
+                $"{path}/{recovery.Cache.Material.EventId:D}/sdkCache",
+                runToken, [session.Registration.Binding.TenantId]);
+            await AssertStatusAsync(deniedCache, HttpStatusCode.Forbidden);
+            using var deniedPin = await SendAsync(client, HttpMethod.Get, pinPath,
+                runToken, [session.Registration.Binding.TenantId]);
+            await AssertStatusAsync(deniedPin, HttpStatusCode.Forbidden);
+        }
+        finally
+        {
+            objects.AfterRead = null;
+            await setHistoricalReadAuthority(true);
+        }
+        var restored = await material.ReadRecordedAsync(
+            receipt.Identity, eventId, SessionMaterialKind.TurnContent, cancellationToken);
+        Assert.Equal(historical.Material, restored.Material);
+        Assert.Equal(historical.Bytes, restored.Bytes);
+        TraceNativeStage(failures, "Guarded model turn, exact native cache, and missing-cache journal path completed.");
+    }
+
+    private sealed class MaterialResponseTraceHandler(ConcurrentQueue<string> failures) : DelegatingHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = await base.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                TraceNativeStage(failures, $"Material response status: {(int)response.StatusCode}.");
+                TraceNativeStage(failures,
+                    $"Material response {(int)response.StatusCode}: " +
+                    await response.Content.ReadAsStringAsync(cancellationToken));
+            }
+            return response;
+        }
+    }
+
+    private sealed class RuntimeMaterialObjects : IObjectStore
+    {
+        private readonly ConcurrentDictionary<ObjectKey, byte[]> _values = [];
+        public int Writes;
+        public Func<Task>? AfterRead { get; set; }
+
+        public async Task WriteAsync(ObjectKey key, Stream content, CancellationToken cancellationToken = default)
+        {
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, cancellationToken);
+            if (!_values.TryAdd(key, buffer.ToArray()))
+                throw new InvalidOperationException("A material object already exists.");
+            Interlocked.Increment(ref Writes);
+        }
+
+        public async Task<ObjectRead?> ReadAsync(ObjectKey key, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_values.TryGetValue(key, out var bytes))
+                return null;
+            var content = new MemoryStream(bytes, writable: false);
+            if (AfterRead is not null)
+                await AfterRead();
+            return new(content, bytes.Length, content.Dispose);
+        }
+
+        public Task<bool> DeleteAsync(ObjectKey key, CancellationToken cancellationToken = default) =>
+            Task.FromResult(_values.TryRemove(key, out _));
     }
 
     private async Task VerifyNativeUsageAccountingAsync(
@@ -743,10 +1007,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     }
 
     private sealed class RuntimePlacementTestServer(IHost host, NpgsqlDataSource dataSource,
-        SandboxLeaseSnapshot lease) : IAsyncDisposable
+        SandboxLeaseSnapshot lease, RuntimePlacementReadTimeProvider readTime) : IAsyncDisposable
     {
         public SandboxLeaseSnapshot Lease { get; } = lease;
         public HttpMessageHandler CreateHandler() => host.GetTestServer().CreateHandler();
+
+        public void ExpireCurrentLease() =>
+            readTime.Current = Lease.LeaseExpiresAt!.Value.AddSeconds(1);
 
         public async Task RetireCurrentLeaseAsync(
             SandboxRetirementAuthorization authorization, CancellationToken cancellationToken)
@@ -765,6 +1032,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Func<HttpMessageHandler> outgoing)
         {
             var dataSource = NpgsqlDataSource.Create(connectionString);
+            // This cross-service integration can exceed the sandbox's short production lease.
+            var leaseTimeProvider = new RuntimeLeaseTestTimeProvider();
+            var readTimeProvider = new RuntimePlacementReadTimeProvider();
             IHost? host = null;
             try
             {
@@ -775,7 +1045,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var lifecycle = await new EnvironmentLifecycleProducer(
                     new EnvironmentLifecycleStore(dataSource, TimeProvider.System))
                     .RegisterAsync(owner, "runtime-register", default);
-                var leaseStore = new EnvironmentSandboxLeaseStore(dataSource, TimeProvider.System);
+                var leaseStore = new EnvironmentSandboxLeaseStore(dataSource, leaseTimeProvider);
                 var optionsSnapshot = JsonSerializer.SerializeToElement(new { namespaceName = "agentweaver" });
                 var intent = new SandboxLeaseProvisionIntent(
                     candidate.ProviderId, candidate.AdapterVersion, candidate.OptionsSchemaVersion,
@@ -806,7 +1076,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     {
                         services.AddRouting();
                         services.AddSingleton(dataSource);
-                        services.AddSingleton(TimeProvider.System);
+                        services.AddSingleton<TimeProvider>(readTimeProvider);
                         services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
                         services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
                         services.AddScoped<EnvironmentRuntimePlacementReader>();
@@ -857,7 +1127,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         });
                     });
                 }).StartAsync();
-                return new(host, dataSource, lease);
+                return new(host, dataSource, lease, readTimeProvider);
             }
             catch
             {
@@ -873,6 +1143,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             host.Dispose();
             await dataSource.DisposeAsync();
         }
+    }
+
+    private sealed class RuntimePlacementReadTimeProvider : TimeProvider
+    {
+        public DateTimeOffset? Current { get; set; }
+        public override DateTimeOffset GetUtcNow() => Current ?? TimeProvider.System.GetUtcNow();
+    }
+
+    private sealed class RuntimeLeaseTestTimeProvider : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() =>
+            TimeProvider.System.GetUtcNow().AddMinutes(5);
     }
 
     private sealed class UnusedRuntimeNetworkTransport : ICiliumPolicyResourceStore

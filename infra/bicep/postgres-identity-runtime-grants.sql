@@ -68,3 +68,18 @@ SELECT format(
   'identity_broker', 'runtime_grant_operations',
   'identity_broker', 'runtime_grant_operation_receipts',
   :'runtime_role') \gexec
+SELECT format(
+  'REVOKE ALL ON TABLE %I.%I, %I.%I FROM PUBLIC',
+  'identity_broker', 'copilot_connections',
+  'identity_broker', 'copilot_connection_revisions') \gexec
+SELECT format(
+  'REVOKE ALL ON TABLE %I.%I, %I.%I FROM %I',
+  'identity_broker', 'copilot_connections',
+  'identity_broker', 'copilot_connection_revisions',
+  :'runtime_role') \gexec
+SELECT format(
+  'GRANT SELECT, INSERT, UPDATE ON TABLE %I.%I TO %I',
+  'identity_broker', 'copilot_connections', :'runtime_role') \gexec
+SELECT format(
+  'GRANT SELECT, INSERT ON TABLE %I.%I TO %I',
+  'identity_broker', 'copilot_connection_revisions', :'runtime_role') \gexec

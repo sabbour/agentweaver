@@ -37,6 +37,15 @@ test('the explicit .NET coverage runner covers Agent Runtime through the Broker 
   assert.match(brokerTestProject, /coverlet\.collector/);
 });
 
+test('the explicit .NET coverage runner covers the AgentHost executable through the Broker suite', () => {
+  assert.match(runner, /\['identity-broker', 'Agentweaver\.Identity\.Broker\.Tests'\]/);
+  assert.match(runner, /'Agentweaver\.AgentHost',/);
+  assert.match(runsettings, /\[Agentweaver\.AgentHost\]\*/);
+  assert.match(solution, /services\\agenthost\\Agentweaver\.AgentHost\\Agentweaver\.AgentHost\.csproj/);
+  assert.match(brokerTestProject, /services\\agenthost\\Agentweaver\.AgentHost\\Agentweaver\.AgentHost\.csproj/);
+  assert.match(brokerTestProject, /coverlet\.collector/);
+});
+
 test('the explicit .NET coverage runner covers Gateway through the Broker suite', () => {
   assert.match(runner, /\['identity-broker', 'Agentweaver\.Identity\.Broker\.Tests'\]/);
   assert.match(runner, /'Agentweaver\.Gateway',/);

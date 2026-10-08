@@ -1248,6 +1248,13 @@ public sealed class EnvironmentEgressManagerTests
             return Task.CompletedTask;
         }
 
+        public Task ReadVerifiedNetworkPolicyGenerationAsync(
+            EnvironmentGenerationFence fence,
+            string resourceId,
+            long policyGeneration,
+            CancellationToken cancellationToken) =>
+            RequireVerifiedNetworkPolicyGenerationAsync(fence, resourceId, policyGeneration, cancellationToken);
+
         public Task<EnvironmentNetworkEffectReservation> CompleteNetworkEffectAsync(
             Guid operationId,
             EnvironmentGenerationFence fence,

@@ -8,7 +8,11 @@ public sealed class RuntimeSessionBootstrap(
     RuntimeBrokerCredentialClient broker,
     RuntimeCopilotSessionFactory sessions,
     RuntimeActorAuthorization actor,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    SandboxImageIdentity? expectedImage = null,
+    RuntimeSessionMaterialHttpClient? material = null,
+    RuntimeActionHttpClient? actions = null,
+    Func<RuntimeRegistration, CancellationToken, Task>? requireReadiness = null)
 {
     public async Task<AuthorizedRuntimeSession> ConfigureAsync(
         ReadOnlyMemory<byte> configuration,
@@ -26,11 +30,21 @@ public sealed class RuntimeSessionBootstrap(
         var registration = await owner.ReadCurrentAsync(
             bootstrap.RuntimeInstanceId, actor, cancellationToken);
         RequireCurrent(registration, actor, timeProvider);
+        if (expectedImage is { } image)
+        {
+            image.Validate();
+            if (registration.Binding.Image != image)
+                throw new RuntimeAuthorizationException("runtime_image_mismatch");
+        }
         var modelReference = registration.Binding.ModelSelectionReference;
         if (modelReference is null)
             throw new RuntimeAuthorizationException("runtime_model_reference_unavailable");
-        if (registration.Binding.ModelCredentialReference is null)
+        if (registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot
+            ? registration.Binding.ModelConnectionId is null || registration.Binding.ModelCredentialReference is not null
+            : registration.Binding.ModelCredentialReference is null || registration.Binding.ModelConnectionId is not null)
             throw new RuntimeAuthorizationException("runtime_model_credential_unavailable");
+        if (registration.Binding.ModelSourceMode is null)
+            throw new RuntimeAuthorizationException("runtime_model_source_mode_unavailable");
         if (bootstrap.Audience != registration.Binding.ConfigureEndpoint)
             throw new RuntimeAuthorizationException("runtime_configuration_audience_invalid");
 
@@ -53,28 +67,44 @@ public sealed class RuntimeSessionBootstrap(
                 throw new RuntimeAuthorizationException("runtime_source_credential_unavailable");
             var modelCredential = await broker.RedeemModelCredentialAsync(
                 registration, consumeOperationId, cancellationToken);
-            sdkCredential = modelCredential;
+            sdkCredential = modelCredential.Credential;
             await RequireUnchangedAsync(registration, cancellationToken);
             var sourceProof = SourceProof(source);
+            AuthorizedRuntimeSession? authorized = null;
             async Task RequireSourceAuthorityAsync(CancellationToken token)
             {
+                if (authorized is not null)
+                {
+                    await authorized.RequireCurrentAsync(token).ConfigureAwait(false);
+                    return;
+                }
                 await RequireUnchangedAsync(registration, token);
-                if (!sourceProof.Credential.IsUsable() || !modelCredential.IsUsable())
+                if (!sourceProof.Credential.IsUsable() || !modelCredential.Credential.IsUsable())
                     throw new RuntimeAuthorizationException("runtime_credential_unavailable");
+                if (requireReadiness is not null)
+                    await requireReadiness(registration, token).ConfigureAwait(false);
                 var verifiedSource = await broker.VerifySourceAsync(sourceProof, token);
                 RequireRegistrationReceipt(verifiedSource, registration);
+                await broker.VerifyModelCredentialAsync(modelCredential, token);
                 RequireCurrent(registration, actor, timeProvider);
                 token.ThrowIfCancellationRequested();
                 if (verifiedSource.ExpiresAt <= timeProvider.GetUtcNow() ||
-                    !sourceProof.Credential.IsUsable() || !modelCredential.IsUsable())
+                    !sourceProof.Credential.IsUsable() || !modelCredential.Credential.IsUsable())
                     throw new RuntimeAuthorizationException("runtime_credential_unavailable");
             }
             await RequireSourceAuthorityAsync(cancellationToken);
-            session = await sessions.CreateHostedAsync(
-                registration, modelReference, modelCredential, RequireSourceAuthorityAsync, cancellationToken);
+            var recovery = material is null ? null :
+                await material.ReadRecoveryAsync(registration, cancellationToken).ConfigureAwait(false);
             await RequireSourceAuthorityAsync(cancellationToken);
-            return new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,
-                session, modelCredential, owner, broker, actor, timeProvider);
+            session = await sessions.CreateAsync(
+                registration, modelReference, modelCredential.Credential, RequireSourceAuthorityAsync,
+                cancellationToken, recovery,
+                actions is null ? null : (action, input, token) =>
+                    actions.RequireAsync(registration, action, input, RequireSourceAuthorityAsync, token));
+            await RequireSourceAuthorityAsync(cancellationToken);
+            authorized = new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,
+                session, modelCredential, owner, broker, actor, timeProvider, actions, requireReadiness);
+            return authorized;
         }
         catch (Exception failure)
         {

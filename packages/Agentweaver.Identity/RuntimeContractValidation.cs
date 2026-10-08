@@ -33,6 +33,15 @@ public static class RuntimeContractValidation
             ValidateIdentifier(value);
         if (binding.ModelSelectionReference is { } modelSelectionReference)
             ValidateIdentifier(modelSelectionReference);
+        if (binding.WorkflowStepId is { } workflowStepId)
+        {
+            ValidateIdentifier(workflowStepId);
+            if (workflowStepId.Length > 128)
+                throw new RuntimeAuthorizationException("runtime_binding_invalid");
+        }
+        if (binding.ModelSourceMode is { } modelSourceMode &&
+            (!Enum.IsDefined(modelSourceMode) || binding.ModelSelectionReference is null))
+            throw new RuntimeAuthorizationException("runtime_binding_invalid");
         if (binding.ModelCredentialReference is { } modelCredentialReference)
         {
             ValidateIdentifier(modelCredentialReference.Id);
@@ -40,6 +49,13 @@ public static class RuntimeContractValidation
             if (binding.ModelSelectionReference is null)
                 throw new RuntimeAuthorizationException("runtime_binding_invalid");
         }
+        if (binding.ModelConnectionId is { } connectionId &&
+            (connectionId == Guid.Empty || binding.ModelSourceMode != Agentweaver.Abstractions.ModelSourceMode.HostedCopilot ||
+                binding.ModelCredentialReference is not null ||
+                binding.ModelConnectionScope is not (Agentweaver.Abstractions.ProjectAuthorityResourceType.Project or
+                    Agentweaver.Abstractions.ProjectAuthorityResourceType.Platform)) ||
+            binding.ModelConnectionId is null && binding.ModelConnectionScope is not null)
+            throw new RuntimeAuthorizationException("runtime_binding_invalid");
         if (binding.PlacementProviderId is { } placementProviderId)
         {
             ValidateIdentifier(placementProviderId);
@@ -48,6 +64,17 @@ public static class RuntimeContractValidation
         }
         else if (binding.EnvironmentLifecycleGeneration != 0 || binding.EnvironmentLeaseRevision != 0)
             throw new RuntimeAuthorizationException("runtime_binding_invalid");
+        if (binding.Image is { } image)
+        {
+            try
+            {
+                image.Validate();
+            }
+            catch (ArgumentException)
+            {
+                throw new RuntimeAuthorizationException("runtime_image_invalid");
+            }
+        }
         ValidateHash(binding.AcceptedSelectionHash);
     }
 
@@ -60,6 +87,15 @@ public static class RuntimeContractValidation
 
     public static string Hash(ReadOnlySpan<byte> value) =>
         Convert.ToHexStringLower(SHA256.HashData(value));
+
+    public static string NativeSessionId(RuntimeBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        foreach (var value in new[] { binding.TenantId, binding.ProjectId, binding.RunId, binding.SessionId })
+            ValidateIdentifier(value);
+        return "agentweaver-session-" + Hash(Encoding.UTF8.GetBytes(
+            $"{binding.TenantId}\0{binding.ProjectId}\0{binding.RunId}\0{binding.SessionId}"));
+    }
 
     public static string RegistrationHash(RuntimeRegistration registration) =>
         Hash(JsonSerializer.SerializeToUtf8Bytes(registration));

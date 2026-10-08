@@ -86,7 +86,30 @@ public sealed record EnvironmentSandboxPlacementProjectionV1(
     SandboxLeaseState State,
     ProviderResourceRef Resource,
     SandboxEndpointReference Endpoint,
-    SandboxPlacementReference Placement);
+    SandboxPlacementReference Placement)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxImageIdentity? Image { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public EnvironmentRuntimeReadinessEvidence? RuntimeReadiness { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public EnvironmentSandboxConsumerPinV1? ProviderPin { get; init; }
+}
+
+public sealed record EnvironmentSandboxConsumerPinV1(
+    int ContractVersion,
+    string ProviderId,
+    string AdapterVersion,
+    int OptionsSchemaVersion,
+    string OptionsRevision,
+    ProviderResourceRef Resource,
+    ImmutableHashSet<string> NegotiatedCapabilities);
+
+public sealed record EnvironmentRuntimeReadinessEvidence(
+    DateTimeOffset LeaseCreatedAt,
+    SandboxObservation Observation,
+    SandboxStartupTimeBudgets StartupBudgets,
+    string WorkspaceMountPath);
 
 public sealed class EnvironmentSandboxManager(
     IProjectsConfigClient projects,
@@ -368,8 +391,11 @@ public sealed class EnvironmentSandboxManager(
         string environmentId,
         bool runBoundRead,
         Func<EnvironmentSandboxPlacementProjectionV1?, CancellationToken, Task<TResult>> project,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool includeRuntimeReadiness = false)
     {
+        if (includeRuntimeReadiness && !runBoundRead)
+            throw new ArgumentException("Runtime readiness requires run-bound placement-read authority.");
         var authorization = runBoundRead
             ? await egressManager.GetAuthorizedRunEnvironmentPlacementReadAsync(
                 caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false)
@@ -415,6 +441,45 @@ public sealed class EnvironmentSandboxManager(
                         lifecycle.Fence,
                         currentLease,
                         DateTimeOffset.UtcNow);
+                if (projection is not null && includeRuntimeReadiness)
+                {
+                    var pinnedLease = currentLease!;
+                    var selection = pinnedLease.ProvisionIntent.SelectionSnapshot
+                        .Deserialize<EffectiveNetworkPolicySelection>(JsonOptions)
+                        ?? throw new EnvironmentLifecycleException(
+                            "sandbox_selection_unavailable", "The Sandbox lease has no retained run selection.");
+                    var provision = pinnedLease.ProvisionIntent.ProviderRequest
+                        .Deserialize<SandboxProvisionApiRequest>(JsonOptions)
+                        ?? throw new EnvironmentLifecycleException(
+                            "sandbox_provision_intent_unavailable", "The Sandbox lease has no recorded provision request.");
+                    provision.Validate();
+                    if (selection.ProjectId != projectId || selection.RunId != runId)
+                        throw new EnvironmentLifecycleException(
+                            "sandbox_selection_stale", "The retained Sandbox selection has a different owner.");
+                    var selected = new EnvironmentEgressManager.AuthorizedSelection(
+                        authorization.Authorization, selection);
+                    await egressManager.VerifyNetworkForSandboxAsync(
+                        caller, lifecycle.Fence, selected, provision.NetworkPolicyGeneration,
+                        callbackCancellationToken, runBoundRead).ConfigureAwait(false);
+                    var describe = CreateDescribeRequest(pinnedLease);
+                    var observation = (await sandboxProvider.DescribeAsync(describe, callbackCancellationToken)
+                        .ConfigureAwait(false)).ValidateFor(describe);
+                    await egressManager.VerifyNetworkForSandboxAsync(
+                        caller, lifecycle.Fence, selected, provision.NetworkPolicyGeneration,
+                        callbackCancellationToken, runBoundRead).ConfigureAwait(false);
+                    if (observation.State is not (SandboxObservedState.Finished or SandboxObservedState.Absent))
+                        observation = observation with { VerifiedNetworkGeneration = provision.NetworkPolicyGeneration };
+                    var pinnedOptions = pinnedLease.ProvisionIntent.OptionsSnapshot
+                        .Deserialize<AgentSandboxOptions>(JsonOptions)
+                        ?? throw new EnvironmentLifecycleException(
+                            "sandbox_provider_binding_invalid", "The retained Sandbox options are missing.");
+                    pinnedOptions.Validate();
+                    projection = projection with
+                    {
+                        RuntimeReadiness = new(describe.LeaseCreatedAt, observation.ValidateFor(describe),
+                            pinnedOptions.StartupBudgets.ToContract(), provision.MountPath)
+                    };
+                }
                 return await project(projection, callbackCancellationToken).ConfigureAwait(false);
             },
             cancellationToken).ConfigureAwait(false);
@@ -1499,6 +1564,22 @@ public sealed class EnvironmentSandboxManager(
                 "sandbox_lease_stale",
                 "The current Sandbox placement does not match its recorded lease.");
 
+        SandboxImageIdentity? image = null;
+        var binding = provisionedResource.ProviderBinding;
+        if (binding.ProviderId == AgentSandboxProviderMetadata.ProviderId && binding.OptionsSchemaVersion >= 2)
+        {
+            var options = binding.OptionsSnapshot.Deserialize<AgentSandboxOptions>(JsonOptions)
+                ?? throw new EnvironmentLifecycleException(
+                    "sandbox_provider_binding_invalid", "The provisioned Sandbox options are missing.");
+            options.Validate();
+            if (options.OptionsSchemaVersion != binding.OptionsSchemaVersion ||
+                options.OptionsRevision != binding.OptionsRevision)
+                throw new EnvironmentLifecycleException(
+                    "sandbox_provider_binding_invalid", "The provisioned Sandbox options do not match their binding.");
+            image = new SandboxImageIdentity(options.ContainerImageDigest, options.ContainerImagePlatform,
+                options.ContainerImageCompressedPullBytes).Validate();
+        }
+
         return new(
             ContractVersion: 1,
             owner.TenantId,
@@ -1514,7 +1595,13 @@ public sealed class EnvironmentSandboxManager(
             lease.State,
             provisionedResource.Resource,
             provisionedResource.Endpoint,
-            provisionedResource.Placement);
+            provisionedResource.Placement)
+        {
+            Image = image,
+            ProviderPin = new(1, binding.ProviderId, binding.AdapterVersion,
+                binding.OptionsSchemaVersion, binding.OptionsRevision, provisionedResource.Resource,
+                provisionedResource.NegotiatedCapabilities)
+        };
     }
 
     internal static bool SameCurrentPlacementLease(

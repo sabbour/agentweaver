@@ -31,6 +31,45 @@ automatic AgentHost scheduling, a background delivery relay, gate approval decis
 consistency manifests, MAF checkpoints, or Gateway/UI/MCP routes.
 The broader Sessions and coordination design remains Proposed for those workflows.
 
+## Typed session material
+
+Events owns bounded `TurnContent` and `SdkCache` material through the existing
+`IObjectStore` provider. This interface is not a general Blob API.
+The caller supplies actual bytes and an existing execution identity, not an
+object key, storage URL, container, or credential.
+
+`POST /internal/sessions/{sessionId}/material` requires the original authenticated
+bearer, current Projects authority, and the current Orchestrator runtime registration.
+Events also requires the recorded SDK source and exact actor, tenant, project,
+run, session, accepted selection, registration revision, and execution fence.
+An observe credential alone does not authorize a material write.
+
+Events generates the scoped object key and records the kind, SHA-256 digest,
+byte length, SDK version, runtime version, and model binding.
+Each object contains at most 1 MiB.
+Events stores the bytes before it commits the journal event and reference.
+It rechecks current authority after storage and database waits, including exact retries.
+The same event and material return the original acknowledgment.
+Changed material for the same event conflicts.
+An object without a committed journal reference is not acknowledged material.
+
+`GET /internal/sessions/{sessionId}/material/{eventId}/{kind}` reads only material
+from a committed event in the authorized session.
+Historical `TurnContent` requires current `ReadRunSelection` or actually supplied `ReadProjects` entitlement, exact signed project/run binding, and recorded session membership.
+Project-summary access alone does not authorize material.
+SDK-cache reads retain the stricter Core `ReadRunSelection` boundary.
+These reads require the immutable Sessions provider binding, not a still-active execution registration.
+Events checks the recorded digest and length, then rechecks authority before it returns bytes.
+SDK cache restoration additionally requires compatible SDK and model bindings.
+Material responses use `Cache-Control: no-store`.
+The route accepts `turnContent` and `sdkCache`, plus their original CLR names.
+Numeric or unknown kinds are denied.
+
+`GET /internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` returns the actual immutable Sessions consumer pin.
+It requires existing current `ReadRunSelection` and exact signed project/run binding before and after retrieval.
+The owner verifies its stored provider, options revision, resource generation, and negotiated capabilities.
+The no-store response contains no option values or credentials.
+
 ## Usage storage and Copilot pricing
 
 The service owns separate append-only `usage_ledger` and immutable
@@ -48,6 +87,12 @@ Native submissions also retain the turn, SDK event ID, and complete SDK source s
 Cache-read and cache-write measurements remain separate. Native request counts stay
 null because the SDK callback does not report them. Nullable measurements remain
 unknown rather than zero.
+
+The runtime source mode comes from the immutable platform or project selection.
+Hosted Copilot retains weighted nano-AIU under `copilot.nano_aiu`.
+BYOK retains native token measurements under `byok.tokens`, without Copilot units or a hosted multiplier.
+Without an admitted Cost provider, BYOK accounting remains `Unpriced`.
+Unknown cost cannot satisfy a hard cost bound.
 
 A transaction commits the rate card and usage entry before returning.
 The accounting receipt binds the canonical SHA-256 hash, attribution, immutable
@@ -97,7 +142,8 @@ Committed source receipts support explicit retries after restart.
 Unavailable providers and missing measurements produce `Unpriced`, not zero cost.
 `GET /internal/projects/{projectId}/runs/{runId}/usage` returns exact run and agent totals.
 These routes are enabled only with `EventsAndSessions:RuntimeUsage:Enabled`.
-This source has no background usage relay, AgentHost executable, or cloud acceptance.
+The [AgentHost candidate](agenthost.md) waits for this committed accounting acknowledgment before turn completion.
+This source has no background usage relay or cloud acceptance.
 
 ## Addressed-message owner integration
 

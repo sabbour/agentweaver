@@ -84,7 +84,8 @@ their external boundaries.
 | `Agentweaver.Providers` | In-memory provider catalog and resolver. | `Agentweaver.Abstractions` |
 | `Agentweaver.Orchestrator.Core` | Workflow validation and the platform-singleton AGT YAML Policy adapter. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Microsoft.AgentGovernance` |
 | `Agentweaver.Identity` | Trusted actor, exact secret grants, separate runtime nonce contracts, and fixed owner HTTP transport. | `Agentweaver.Abstractions` |
-| `Agentweaver.AgentRuntime` | Authenticated bootstrap, native SDK callbacks, and durable source-receipt client. No AgentHost executable or relay. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `GitHub.Copilot.SDK` |
+| `Agentweaver.AgentRuntime` | Authenticated bootstrap, guarded native turns/tools, actual turn content, accounting acknowledgment, and compatible SDK-cache or journal recovery. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `GitHub.Copilot.SDK` |
+| `Agentweaver.AgentHost` | Unpublished HTTPS runtime executable, exact image/native-runtime verification, priority at idle boundaries, and measured readiness. No automatic scheduler. | `Agentweaver.AgentRuntime`, `Agentweaver.Telemetry` |
 | `Agentweaver.Secrets.AzureKeyVault` | Exact-version Azure Key Vault adapter. | `Agentweaver.Abstractions` |
 | `Agentweaver.Persistence.Postgres` | Service-schema outbox, consumer inbox, and relay library. | — |
 | `Agentweaver.ObjectStore.AzureBlob` | Opaque-object Azure Blob adapter. | `Agentweaver.Abstractions` |
@@ -118,9 +119,9 @@ data erasure. Release is rejected while the volume is bound or attached. Known p
 owner record safely retryable; uncertain provider effects remain reconcilable. Azure Files does not claim
 Sandbox mounting or durable flush.
 
-The repository does not contain the AgentHost, product
-API, web UI, product MCP server, or application router. It does not contain a published
-platform image.
+The [AgentHost source candidate](agenthost.md) includes a pinned image definition and authenticated runtime routes.
+Its local fixtures and CI image receipt do not prove deployed scheduling or paid model execution.
+The repository does not contain a published platform image.
 
 The Knowledge source candidate and its current native Memory boundary are described in
 the [Knowledge and Memory reference](knowledge-memory.md).

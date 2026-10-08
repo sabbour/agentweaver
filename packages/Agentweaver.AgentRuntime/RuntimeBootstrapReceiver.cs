@@ -14,6 +14,8 @@ public sealed class RuntimeBootstrapReceiver(
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
     private PendingTicket? _pending;
+    private DeliveryReplay? _deliveryReplay;
+    private ConfiguredTicket? _configured;
     private AuthorizedRuntimeSession? _session;
     private int _state;
 
@@ -37,6 +39,8 @@ public sealed class RuntimeBootstrapReceiver(
         var retained = false;
         try
         {
+            var credentialHash = RuntimeContractValidation.Hash(
+                System.Text.Encoding.UTF8.GetBytes(credential.GetValue()));
             var proof = new RuntimeCredentialProof(
                 request.GrantId, request.RuntimeInstanceId, 1, RuntimeCredentialPurpose.Configure,
                 registration.Binding.ConfigureEndpoint, request.ConfigurationHash, credential);
@@ -44,7 +48,27 @@ public sealed class RuntimeBootstrapReceiver(
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (State is not (RuntimeBootstrapReceiverState.Empty or RuntimeBootstrapReceiverState.Pending))
+                if (_deliveryReplay is { } replay)
+                {
+                    if (!MatchesDelivery(replay, request, credentialHash))
+                        throw new RuntimeAuthorizationException("runtime_delivery_conflict");
+                    await RequireCurrentAsync(actor, credential, cancellationToken).ConfigureAwait(false);
+                    if (State == RuntimeBootstrapReceiverState.Pending && _pending is { } pendingReplay)
+                    {
+                        if (!pendingReplay.Proof.Credential.IsUsable())
+                            throw new RuntimeAuthorizationException("runtime_delivery_unavailable");
+                        RequireGrant(await verifier.VerifyPendingBootstrapDeliveryAsync(
+                            proof, request.OperationId, cancellationToken).ConfigureAwait(false));
+                        return replay.Receipt;
+                    }
+                    if (State == RuntimeBootstrapReceiverState.Ready && _session is { } configuredSession)
+                    {
+                        await configuredSession.RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+                        return replay.Receipt;
+                    }
+                    throw new RuntimeAuthorizationException("runtime_receiver_unavailable");
+                }
+                if (State != RuntimeBootstrapReceiverState.Empty)
                     throw new RuntimeAuthorizationException("runtime_receiver_unavailable");
                 RequireGrant(await verifier.VerifyPendingBootstrapDeliveryAsync(
                     proof, request.OperationId, cancellationToken).ConfigureAwait(false));
@@ -74,6 +98,8 @@ public sealed class RuntimeBootstrapReceiver(
                 };
                 _pending = new(proof, receipt, RuntimeContractValidation.Hash(
                     System.Text.Encoding.UTF8.GetBytes(credential.GetValue())));
+                _deliveryReplay = new(request.OperationId, request.GrantId, request.ConfigurationHash,
+                    request.CredentialExpiresAt, credentialHash, receipt);
                 Volatile.Write(ref _state, (int)RuntimeBootstrapReceiverState.Pending);
                 retained = true;
                 return receipt;
@@ -100,6 +126,16 @@ public sealed class RuntimeBootstrapReceiver(
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (State == RuntimeBootstrapReceiverState.Ready && _configured is { } configured &&
+                _session is { } currentSession)
+            {
+                if (configured.ConfigurationHash != RuntimeContractValidation.Hash(configuration.Span) ||
+                    configured.ConsumeOperationId != consumeOperationId ||
+                    configured.ExchangeOperationId != exchangeOperationId)
+                    throw new RuntimeAuthorizationException("runtime_configuration_conflict");
+                await currentSession.RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+                return currentSession;
+            }
             if (State != RuntimeBootstrapReceiverState.Pending || _pending is not { } pending)
                 throw new RuntimeAuthorizationException("runtime_delivery_unavailable");
             if (RuntimeContractValidation.Hash(configuration.Span) != pending.Proof.ConfigurationHash)
@@ -110,6 +146,8 @@ public sealed class RuntimeBootstrapReceiver(
                 _session = await bootstrap.ConfigureAsync(
                     configuration, pending.Proof, consumeOperationId, exchangeOperationId,
                     cancellationToken).ConfigureAwait(false);
+                _configured = new(pending.Proof.ConfigurationHash, consumeOperationId,
+                    exchangeOperationId);
                 Volatile.Write(ref _state, (int)RuntimeBootstrapReceiverState.Ready);
                 return _session;
             }
@@ -140,6 +178,16 @@ public sealed class RuntimeBootstrapReceiver(
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
+    private static bool MatchesDelivery(
+        DeliveryReplay replay,
+        RuntimeBootstrapDeliveryRequest request,
+        string credentialHash) =>
+        replay.OperationId == request.OperationId &&
+        replay.GrantId == request.GrantId &&
+        replay.ConfigurationHash == request.ConfigurationHash &&
+        replay.CredentialExpiresAt == request.CredentialExpiresAt &&
+        replay.CredentialHash == credentialHash;
+
     private void RequireGrant(RuntimeGrantReceipt grant)
     {
         if (grant.RegistrationRevision != registration.Revision ||
@@ -157,6 +205,8 @@ public sealed class RuntimeBootstrapReceiver(
             Volatile.Write(ref _state, (int)RuntimeBootstrapReceiverState.Disposed);
             _pending?.Proof.Credential.Invalidate();
             _pending = null;
+            _deliveryReplay = null;
+            _configured = null;
             if (_session is not null)
             {
                 await _session.DisposeAsync().ConfigureAwait(false);
@@ -171,4 +221,17 @@ public sealed class RuntimeBootstrapReceiver(
 
     private sealed record PendingTicket(
         RuntimeCredentialProof Proof, RuntimeBootstrapDeliveryReceipt Receipt, string CredentialHash);
+
+    private sealed record DeliveryReplay(
+        Guid OperationId,
+        Guid GrantId,
+        string ConfigurationHash,
+        DateTimeOffset CredentialExpiresAt,
+        string CredentialHash,
+        RuntimeBootstrapDeliveryReceipt Receipt);
+
+    private sealed record ConfiguredTicket(
+        string ConfigurationHash,
+        Guid ConsumeOperationId,
+        Guid ExchangeOperationId);
 }

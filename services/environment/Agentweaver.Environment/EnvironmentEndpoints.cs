@@ -128,8 +128,12 @@ public static class EnvironmentEndpoints
             })
             .RequireAuthorization();
 
-        endpoints.MapGet(
-            "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}",
+        MapRuntimePlacement(readiness: false);
+        MapRuntimePlacement(readiness: true);
+
+        void MapRuntimePlacement(bool readiness) => endpoints.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}" +
+                (readiness ? "/readiness" : ""),
             async (
                 string projectId,
                 string runId,
@@ -152,9 +156,16 @@ public static class EnvironmentEndpoints
                 var bearer = new SecretCredential(caller!.BearerToken, expiresAt, timeProvider);
                 try
                 {
+                    var actor = new RuntimeActorAuthorization(bearer, caller.TenantSelector);
+                    if (readiness)
+                    {
+                        var observed = await reader.GetReadinessContextAsync(
+                            actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken)
+                            .ConfigureAwait(false);
+                        return observed is null ? Results.NotFound() : Results.Ok(observed);
+                    }
                     var bootstrap = await reader.GetBootstrapContextAsync(
-                        new(bearer, caller.TenantSelector), projectId, runId, sessionId, environmentId,
-                        profileId, profiles, cancellationToken)
+                        actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken)
                         .ConfigureAwait(false);
                     return bootstrap is null ? Results.NotFound() : Results.Ok(bootstrap);
                 }
@@ -171,6 +182,14 @@ public static class EnvironmentEndpoints
                     return Results.Json(new { code = exception.Code, message = exception.Message },
                         statusCode: exception.Code == "environment_unknown"
                             ? StatusCodes.Status404NotFound : StatusCodes.Status409Conflict);
+                }
+                catch (CiliumPolicyException exception)
+                {
+                    return Results.Conflict(new { code = exception.Code });
+                }
+                catch (SandboxProviderException exception)
+                {
+                    return Results.Conflict(new { code = exception.Code });
                 }
                 catch (HttpRequestException)
                 {

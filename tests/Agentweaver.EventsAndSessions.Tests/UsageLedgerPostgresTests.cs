@@ -85,6 +85,41 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SelectedByokTokensRemainDurableAndUnpricedWithoutAnAdmittedCostProvider()
+    {
+        var hosted = NativeReceipt();
+        var registration = hosted.Registration with
+        {
+            Binding = hosted.Registration.Binding with { ModelSourceMode = ModelSourceMode.Byok }
+        };
+        var source = hosted.Usage.SdkSource! with
+        {
+            SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null
+        };
+        var sdkEvent = Guid.NewGuid().ToString("D");
+        var observation = new SdkUsageObservation(
+            SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, sdkEvent),
+            sdkEvent, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
+            17, 11, 7, 5, 3, null, 12.5m);
+        var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
+        var receipt = new RuntimeUsageSourceReceipt(1, Guid.NewGuid(), registration, usage,
+            RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
+
+        var first = await NativeConsumer().AppendAsync(receipt, _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, first.Accounting.Disposition);
+        Assert.Null(first.Accounting.Amount);
+        Assert.Null(first.Accounting.RateCardId);
+        Assert.False(string.IsNullOrWhiteSpace(first.Accounting.UnpricedReason));
+        var replay = await NativeConsumer().AppendAsync(receipt, _ => Task.CompletedTask, default);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(first.Accounting, replay.Accounting);
+        var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        Assert.False(totals.IsFullyPriced);
+        Assert.Empty(totals.Amounts);
+        Assert.Equal(17, Assert.Single(totals.Agents).InputTokens);
+    }
+
+    [Fact]
     public async Task NativeConsumerAuthorityFailureAfterLedgerWaitRollsBackEveryAccountingArtifact()
     {
         var receipt = NativeReceipt();
@@ -534,11 +569,12 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
                 new("https://orchestrator.test/internal/runtime/observations"))
             {
                 ModelSelectionReference = "native-model-selection", PlacementProviderId = "sandbox",
+                ModelSourceMode = ModelSourceMode.HostedCopilot,
                 EnvironmentLifecycleGeneration = 1, EnvironmentLeaseRevision = 2,
                 EnvironmentCurrentFencingGeneration = 3, EnvironmentProviderFencingGeneration = 3
             }, RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(1));
         var source = new SdkSessionFacts(
-            registration.RuntimeInstanceId, $"agentweaver-runtime-{registration.RuntimeInstanceId:D}",
+            registration.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(registration.Binding),
             "1.0.11", "runtime-v1", "native-model-selection", modelId, new string('b', 64),
             2.5m, "hosted-copilot", SdkMeterSources.CopilotNanoAiu, registration.Binding.AcceptedSelectionHash, 1);
         var eventId = Guid.NewGuid().ToString("D");

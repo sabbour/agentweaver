@@ -90,6 +90,11 @@ included. Profile mapping, receiver registration, and delivery receipts remain
 the responsibility of the separately owned bootstrap profile adapter; absent
 approved production transport remains unavailable.
 
+The additive `providerPin` contains the successful consumer's provider, adapter version, options schema and revision, resource identity and generation, and negotiated capabilities.
+It contains no option values, recovery metadata, credentials, or unresolved candidates.
+The current placement read still denies an expired lease.
+Historical material and usage receipts retain their original runtime and selection facts under separate current read authorization.
+
 The callback is for a bounded owner-scoped read, such as the fixed Core
 authorization-context request. It must not recurse through a registration route
 that reads the same Environment lease or perform provider effects. A successful
@@ -132,8 +137,11 @@ admission or permission to execute a run.
 
 The current provider emits `scheduled`, `image ready`, and `started` phases
 from Kubernetes observations. It does not emit `configured` or dispatch
-`ready`: this source does not contain an AgentHost configure/readiness
-handshake. Object readback also does not prove Cilium datapath enforcement.
+`ready` on its own.
+The separate [AgentHost handshake](agenthost.md) adds authenticated configuration and current readiness evidence.
+Its internal readiness owner read retains the exact lease across fresh egress and Sandbox observations.
+It uses the retained selection snapshot, not a recursive accepted-selection lookup.
+Object readback does not prove Cilium datapath enforcement.
 
 ## Agent Sandbox resources and recovery
 
@@ -146,6 +154,13 @@ RuntimeClass, mounts the exact Workspace PVC, and carries the verified Cilium
 selector labels. Ownership labels bind the tenant/project/run/Environment hash,
 Environment lifecycle generation, Sandbox resource generation, provider fence,
 and operation ID.
+
+The optional typed `AgentHost` launch profile pins only a trusted ConfigMap name and TLS Secret name.
+The adapter adds fixed private state/temporary volumes, readonly configuration/TLS mounts, UID/GID/fsGroup 1654, and HTTPS health probes.
+It uses the exact negotiated workspace as the SDK working directory.
+It validates the profile on both template and actual Pod readback.
+Absent profiles preserve the legacy template without native-host configuration.
+See the [AgentHost image and launch boundary](agenthost#startup-evidence-and-image).
 
 Before returning a resource, the adapter validates Kubernetes object names,
 UIDs, owner labels, the pinned template and pool references, the RuntimeClass

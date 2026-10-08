@@ -110,13 +110,13 @@ model compatibility. AgentHost receives permitted content, not Blob account cred
 or direct container access.
 Retention follows owner records; the Blob adapter does not decide which run data to delete.
 
-The current source has the Blob adapter and journal-reference contracts.
-It does **not** yet have this typed Events interface or production Blob composition.
-The diagram describes approved source work, not an implemented or deployed route.
+The current source implements this typed Events interface with the existing Blob adapter.
+It supports bounded `TurnContent` and `SdkCache` material, committed journal references, and authorized integrity-checked reads.
+The diagram describes source behavior, not a deployed route.
 [#1903](https://github.com/sabbour/agentweaver/issues/1903) tracks the bounded integration
 inside the original AgentHost and orchestration criteria, not a new blanket P1 prerequisite.
 `IObjectStore` is a shared adapter, not a requirement to introduce another service.
-A cache must come from actual SDK-supported serialization and be safe to persist.
+A cache comes from actual SDK-supported serialization through the runtime's custom filesystem.
 Do not rewrite an opaque SDK payload to fabricate safety or claim portable restore without SDK support.
 Missing, incompatible, or unpersistable cache requires actual journal-context rebuilding,
 without model or external-effect replay. Session IDs and blob-existence checks do not prove recovery.

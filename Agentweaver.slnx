@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="services\agenthost\Agentweaver.AgentHost\Agentweaver.AgentHost.csproj" />
   <Project Path="services\events-and-sessions\Agentweaver.EventsAndSessions\Agentweaver.EventsAndSessions.csproj" />
   <Project Path="services\gateway\Agentweaver.Gateway\Agentweaver.Gateway.csproj" />
   <Project Path="services\environment\Agentweaver.Environment\Agentweaver.Environment.csproj" />

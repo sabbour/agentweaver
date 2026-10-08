@@ -173,7 +173,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         var grantsApplied = await ApplyRuntimeGrantsIfMigratedAsync(databaseConnection,
             options.RuntimeRole, options.MigrationRole, cancellationToken).ConfigureAwait(false);
         Console.WriteLine(grantsApplied
-            ? $"IDENTITY_POSTGRES_RUNTIME_GRANTS_APPLIED runtimeRole={options.RuntimeRole} explicitDmlTables=13 runtimeGrantDelete=FALSE runtimeAuditUpdate=FALSE historySelect=TRUE historyWrite=FALSE schemaCreate=FALSE"
+            ? $"IDENTITY_POSTGRES_RUNTIME_GRANTS_APPLIED runtimeRole={options.RuntimeRole} explicitDmlTables=15 runtimeGrantDelete=FALSE runtimeAuditUpdate=FALSE historySelect=TRUE historyWrite=FALSE schemaCreate=FALSE"
             : "IDENTITY_POSTGRES_RUNTIME_GRANTS_PENDING migrationHistory=absent");
         Console.WriteLine($"IDENTITY_POSTGRES_BOOTSTRAP_OK database={options.DatabaseName} schema=identity_broker");
     }
@@ -207,10 +207,10 @@ internal static class IdentityBrokerPostgresBootstrapCommand
             "secret_grant_operations", "OpenIddictApplications", "OpenIddictAuthorizations",
             "OpenIddictScopes", "OpenIddictTokens", "__ef_migrations_history",
             "runtime_grant_heads", "runtime_grant_revisions", "runtime_grant_operations",
-            "runtime_grant_operation_receipts"
+            "runtime_grant_operation_receipts", "copilot_connections", "copilot_connection_revisions"
         ];
         if (!tables.ToHashSet(StringComparer.Ordinal).SetEquals(requiredTables) ||
-            statements.Length != 12)
+            statements.Length != 16)
             throw new InvalidOperationException("The canonical Identity runtime grant contract is malformed.");
 
         await using (var ownership = new NpgsqlCommand("""
@@ -242,6 +242,7 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         {
             var history = table == "__ef_migrations_history";
             var runtimeGrant = table.StartsWith("runtime_grant_", StringComparison.Ordinal);
+            var copilotConnection = table.StartsWith("copilot_connection", StringComparison.Ordinal);
             await using var readback = new NpgsqlCommand("""
                 SELECT has_table_privilege(@runtimeRole, @relation, 'SELECT')
                   AND has_table_privilege(@runtimeRole, @relation, 'INSERT') = @insert
@@ -253,8 +254,10 @@ internal static class IdentityBrokerPostgresBootstrapCommand
             readback.Parameters.AddWithValue("runtimeRole", runtimeRole);
             readback.Parameters.AddWithValue("relation", $"identity_broker.{QuoteIdentifier(table)}");
             readback.Parameters.AddWithValue("insert", !history);
-            readback.Parameters.AddWithValue("update", !history && (!runtimeGrant || table == "runtime_grant_heads"));
-            readback.Parameters.AddWithValue("delete", !history && !runtimeGrant);
+            readback.Parameters.AddWithValue("update", !history &&
+                (!runtimeGrant || table == "runtime_grant_heads") &&
+                (!copilotConnection || table == "copilot_connections"));
+            readback.Parameters.AddWithValue("delete", !history && !runtimeGrant && !copilotConnection);
             if (await readback.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
                 throw new InvalidOperationException("The exact Identity runtime table privileges did not read back.");
         }
