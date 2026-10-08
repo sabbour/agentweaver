@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Knowledge accepted project facts",
-  "alt": "Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and delivery intent together through the selected Memory provider: native PostgreSQL by default or an existing project-partitioned Cosmos container. Current relay requests include project/run scope and Events reads from the pinned provider; the original three-field N-1 request uses the legacy unscoped native PostgreSQL receipt route. Partial scope is rejected and scoped reads never fall back. Events appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. The Knowledge run pin and Sessions journal remain in PostgreSQL.",
+  "alt": "Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and delivery intent together through the selected Memory provider: native PostgreSQL by default or an existing project-partitioned Cosmos container. Current relay requests include project/run scope and Events reads from the pinned provider; the original three-field N-1 request uses the legacy unscoped native PostgreSQL receipt route. Partial scope is rejected and scoped reads never fall back. Events appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. The Knowledge run pin and Sessions journal remain in PostgreSQL. Separate record update, archive, supersession, restore, approval, and versioned transfer operations preserve immutable history; imported records return Active with Pending trust.",
   "autonumber": true,
   "participants": [
     {
@@ -65,6 +65,16 @@
       "type": "note",
       "over": ["knowledge", "database"],
       "label": "Original six-capability selections retain their immutable pin; a missing existing-run pin still returns 503."
+    },
+    {
+      "type": "note",
+      "over": ["knowledge", "database"],
+      "label": "Edits, archive, supersession, restore, and approval append immutable revisions. Restore adds an Active+Pending head; it never rewinds history."
+    },
+    {
+      "type": "note",
+      "over": ["knowledge", "database"],
+      "label": "Versioned transfers preserve Memory/Decision history. Imports are exact project/agent scoped, bounded, non-merging, and Active+Pending."
     },
     {
       "type": "message",

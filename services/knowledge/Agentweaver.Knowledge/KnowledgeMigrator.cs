@@ -9,7 +9,7 @@ public static class KnowledgeMigrator
 {
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
 
     public static async Task MigrateAsync(
         NpgsqlDataSource dataSource,
@@ -46,15 +46,19 @@ public static class KnowledgeMigrator
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 versions.Add(reader.GetInt32(0));
-        if (versions.Any(version => version is not (1 or 2)))
+        if (versions.Any(version => version is < 1 or > CurrentSchemaVersion))
             throw new InvalidOperationException("The Knowledge database has an unsupported schema version.");
 
         foreach (var version in Enumerable.Range(1, CurrentSchemaVersion).Where(version => !versions.Contains(version)))
         {
             await using var resource = typeof(KnowledgeMigrator).Assembly.GetManifestResourceStream(
-                version == 1
-                    ? "Agentweaver.Knowledge.Migrations.001_knowledge.sql"
-                    : "Agentweaver.Knowledge.Migrations.002_accepted_effect_receipts.sql")
+                version switch
+                {
+                    1 => "Agentweaver.Knowledge.Migrations.001_knowledge.sql",
+                    2 => "Agentweaver.Knowledge.Migrations.002_accepted_effect_receipts.sql",
+                    3 => "Agentweaver.Knowledge.Migrations.003_knowledge_decision_lifecycle.sql",
+                    _ => throw new InvalidOperationException("The Knowledge migration version is unsupported.")
+                })
                 ?? throw new InvalidOperationException("The Knowledge migration resource is missing.");
             using var text = new StreamReader(resource);
             var sql = (await text.ReadToEndAsync(cancellationToken).ConfigureAwait(false))
@@ -85,9 +89,9 @@ public static class KnowledgeMigrator
             SELECT pg_catalog.to_regnamespace(@schema) IS NOT NULL
                AND pg_catalog.to_regclass(@migrations) IS NOT NULL
                AND (SELECT count(*) FROM {quotedSchema}.knowledge_schema_migrations
-                    WHERE version IN (1, 2)) = 2
+                    WHERE version IN (1, 2, 3)) = 3
                AND (SELECT count(*) FROM {quotedSchema}.knowledge_schema_migrations
-                    WHERE version NOT IN (1, 2)) = 0
+                    WHERE version NOT IN (1, 2, 3)) = 0
                AND (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations
                     WHERE version IN (1, 2)) = 2
                AND (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations

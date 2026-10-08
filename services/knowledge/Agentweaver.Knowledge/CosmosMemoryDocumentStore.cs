@@ -71,6 +71,17 @@ public interface ICosmosMemoryDocumentStore
         KnowledgeRecordQuery query,
         CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<KnowledgeRecord>> ReadTransferCandidatesAsync(
+        string projectId,
+        string agentId,
+        int maximumRecords,
+        CancellationToken cancellationToken);
+
+    Task<IReadOnlyCollection<Guid>> FindRevisionIdsAsync(
+        string projectId,
+        IReadOnlyCollection<Guid> revisionIds,
+        CancellationToken cancellationToken);
+
     Task<KnowledgeRecordRevisionPage> ReadRevisionsAsync(
         string projectId,
         Guid recordId,
@@ -224,6 +235,69 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
             (int)Math.Min(total, int.MaxValue),
             query.Page,
             query.PageSize);
+    }
+
+    public async Task<IReadOnlyList<KnowledgeRecord>> ReadTransferCandidatesAsync(
+        string projectId,
+        string agentId,
+        int maximumRecords,
+        CancellationToken cancellationToken)
+    {
+        var query = new QueryDefinition("""
+            SELECT * FROM c
+            WHERE c.projectId = @project
+              AND c.documentType = @recordType
+              AND c.record.agentId = @agent
+              AND (
+                c.record.kind = @decision
+                OR c.record.kind = @memory
+              )
+            ORDER BY c.record.updatedAt DESC, c.record.recordId
+            """)
+            .WithParameter("@project", projectId)
+            .WithParameter("@recordType", RecordDocumentType)
+            .WithParameter("@decision", (int)KnowledgeRecordKind.Decision)
+            .WithParameter("@memory", (int)KnowledgeRecordKind.Memory)
+            .WithParameter("@agent", agentId);
+        var documents = await ReadManyAsync(
+            query, projectId, cancellationToken, maximumRecords + 1).ConfigureAwait(false);
+        return documents.Select(document => document.Record
+                ?? throw new KnowledgeStorageUnavailableException())
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyCollection<Guid>> FindRevisionIdsAsync(
+        string projectId,
+        IReadOnlyCollection<Guid> revisionIds,
+        CancellationToken cancellationToken)
+    {
+        if (revisionIds.Count == 0)
+            return Array.Empty<Guid>();
+        var query = new QueryDefinition("""
+            SELECT VALUE c.recordRevision.revisionId
+            FROM c
+            WHERE c.projectId = @project
+              AND c.documentType = @revisionType
+              AND ARRAY_CONTAINS(@revisionIds, c.recordRevision.revisionId)
+            """)
+            .WithParameter("@project", projectId)
+            .WithParameter("@revisionType", RevisionDocumentType)
+            .WithParameter("@revisionIds", revisionIds.Select(id => id.ToString("D")).ToArray());
+        using var iterator = _container.GetItemQueryIterator<string>(
+            query,
+            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(projectId) });
+        var found = new HashSet<Guid>();
+        while (iterator.HasMoreResults)
+        {
+            var response = await iterator.ReadNextAsync(cancellationToken).ConfigureAwait(false);
+            foreach (var value in response)
+            {
+                if (!Guid.TryParse(value, out var id))
+                    throw new KnowledgeStorageUnavailableException();
+                found.Add(id);
+            }
+        }
+        return found;
     }
 
     public async Task<KnowledgeRecordRevisionPage> ReadRevisionsAsync(
