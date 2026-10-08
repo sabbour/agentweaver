@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createPlan } from './plan.mjs';
-import { validateManifest } from './validate.mjs';
+import { validateManifest, WEB_LOCK_PATH, WEB_PROJECT_PATH } from './validate.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (message) => { throw new Error(`release preparation: ${message}`); };
@@ -15,6 +15,28 @@ export function preparationFiles(manifestText, plan, appliedAt, readSource) {
   for (const entry of plan.components) {
     const component = manifest.components.find(({ id }) => id === entry.id);
     if (!component || component.version !== entry.fromVersion) fail(`source version mismatch for ${entry.id}`);
+    if (component.project === WEB_PROJECT_PATH) {
+      if (component.id !== 'Agentweaver.Web' || component.kind !== 'service') fail(`invalid web component ${entry.id}`);
+      let packageJson;
+      let packageLock;
+      try {
+        packageJson = JSON.parse(readSource(WEB_PROJECT_PATH));
+        packageLock = JSON.parse(readSource(WEB_LOCK_PATH));
+      } catch (error) {
+        fail(WEB_PROJECT_PATH, `cannot read npm version mirrors: ${error.message}`);
+      }
+      if (packageJson.version !== entry.fromVersion) fail(`${WEB_PROJECT_PATH}: source version mismatch for ${entry.id}`);
+      if (packageLock?.packages?.['']?.version !== entry.fromVersion) {
+        fail(`${WEB_LOCK_PATH}: source root package version mismatch for ${entry.id}`);
+      }
+      packageJson.version = entry.toVersion;
+      packageLock.packages[''].version = entry.toVersion;
+      files.set(WEB_PROJECT_PATH, JSON.stringify(packageJson, null, 2) + '\n');
+      files.set(WEB_LOCK_PATH, JSON.stringify(packageLock, null, 2) + '\n');
+      component.version = entry.toVersion;
+      if (component.kind === 'service') delete component.imageDigest;
+      continue;
+    }
     const original = readSource(component.project);
     const marker = `<Version>${entry.fromVersion}</Version>`;
     if (original.split(marker).length !== 2) fail(`expected a single ${marker} in ${component.project}`);

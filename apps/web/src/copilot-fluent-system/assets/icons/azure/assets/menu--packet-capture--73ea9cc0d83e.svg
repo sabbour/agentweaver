@@ -1,0 +1,58 @@
+<svg id="uuid-548bbaa7-bf22-4d5b-b584-f213519d0a42" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-8f7e1cf7-4d94-4cf2-a654-cde92203f27d" x1="8.038" y1="0" x2="8.038" y2="10.746" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset=".817" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="uuid-c827092e-c5d7-4b92-a7bb-e708a00419f4" x1="7.494" y1="10.746" x2="7.494" y2="14.897" gradientUnits="userSpaceOnUse">
+      <stop offset=".149" stop-color="#ccc" />
+      <stop offset="1" stop-color="#707070" />
+    </linearGradient>
+    <radialGradient id="uuid-423e5f4b-be76-4252-a976-e2be80fd6f87" cx="14.788" cy="778.983" r="3.534" gradientTransform="translate(-.311 791.516) scale(.999 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".225" stop-color="#32d4f5" />
+      <stop offset=".59" stop-color="#32d2f2" />
+      <stop offset=".825" stop-color="#32caea" />
+      <stop offset="1" stop-color="#32bedd" />
+    </radialGradient>
+    <linearGradient id="uuid-b8fdfc1f-a589-4d6f-95bf-2c510668947e" x1="13.104" y1="14.144" x2="13.104" y2="11.441" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset=".817" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="uuid-e25d7912-db59-4cb8-810e-c7ad16f287fa" x1="14.467" y1="14.144" x2="14.467" y2="12.342" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset=".817" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="uuid-7a8ba350-ed6d-4113-92c0-2d1036d433b8" x1="15.818" y1="14.144" x2="15.818" y2="10.54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset=".817" stop-color="#5ea0ef" />
+    </linearGradient>
+  </defs>
+  <g>
+    <g id="uuid-a68cb816-2f87-4de4-a53a-a440f44a1ee4">
+      <g>
+        <g>
+          <path d="m14.468,8.45c.571,0,1.114.118,1.608.331V.537C16.076.241,15.835,0,15.539,0H.537C.24,0,0,.241,0,.537v9.671c0,.297.24.537.537.537h10.263c.664-1.358,2.058-2.296,3.668-2.296Z" fill="url(#uuid-8f7e1cf7-4d94-4cf2-a654-cde92203f27d)" />
+          <path d="m10.97,14.635c-.16-.265-.286-.546-.381-.837-.937-.453-.98-1.509-.976-3.052h-3.154c0,1.851-.058,3.001-1.647,3.25-.447.07-.78.449-.792.901h6.689l.262-.262Z" fill="url(#uuid-c827092e-c5d7-4b92-a7bb-e708a00419f4)" />
+        </g>
+        <rect x="1.687" y="3.38" width="1.075" height="4.527" rx=".135" ry=".135" fill="#fff" />
+        <rect x="6.111" y="3.38" width="1.075" height="4.527" rx=".135" ry=".135" fill="#c3f1ff" />
+        <rect x="13.314" y="3.38" width="1.075" height="4.527" rx=".135" ry=".135" fill="#50e6ff" />
+        <rect x="8.294" y="3.38" width="1.075" height="4.527" rx=".135" ry=".135" fill="#50e6ff" />
+        <rect x="11.5" y="3.38" width="1.075" height="4.527" rx=".135" ry=".135" fill="#50e6ff" />
+      </g>
+    </g>
+    <g id="uuid-a4db8505-a119-46b2-8db1-36fd28c5e749">
+      <g>
+        <path d="m9.194,15.405h4.053c.302,0,.548.246.548.548v.076c0,.303-.246.549-.549.549h-4.053c-.302,0-.548-.246-.548-.548v-.076c0-.303.246-.549.549-.549Z" transform="translate(-8.022 12.624) rotate(-45.018)" fill="#198ab3" />
+        <circle cx="14.468" cy="12.533" r="3.532" fill="url(#uuid-423e5f4b-be76-4252-a976-e2be80fd6f87)" />
+        <circle cx="14.461" cy="12.47" r="2.775" fill="#fff" />
+        <path d="m11.773,13.157s.759-3.802,4.307-2.94c-.974-.723-2.31-.713-3.273.025-.919.66-1.332,1.823-1.034,2.915Z" fill="#c3f1ff" />
+      </g>
+    </g>
+  </g>
+  <g>
+    <rect x="12.654" y="11.441" width=".9" height="2.703" rx=".141" ry=".141" fill="url(#uuid-b8fdfc1f-a589-4d6f-95bf-2c510668947e)" />
+    <rect x="14.017" y="12.342" width=".9" height="1.802" rx=".141" ry=".141" fill="url(#uuid-e25d7912-db59-4cb8-810e-c7ad16f287fa)" />
+    <rect x="15.367" y="10.54" width=".9" height="3.604" rx=".141" ry=".141" fill="url(#uuid-7a8ba350-ed6d-4113-92c0-2d1036d433b8)" />
+  </g>
+</svg>

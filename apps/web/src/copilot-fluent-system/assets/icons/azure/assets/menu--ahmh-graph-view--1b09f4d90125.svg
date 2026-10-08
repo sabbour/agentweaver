@@ -1,0 +1,33 @@
+<svg id="uuid-6e3c5f54-65de-444c-9935-cd3069441ee7" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-1d19f7a8-7feb-4881-9cd3-7b3df31ee0a4" x1="9" y1="13.076" x2="9" y2="8.295" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b1b3b3" />
+      <stop offset=".217" stop-color="#bcbebd" />
+      <stop offset=".687" stop-color="#d1d1cf" />
+      <stop offset="1" stop-color="#d9d9d6" />
+    </linearGradient>
+    <linearGradient id="uuid-3510c1dc-9c1e-4c52-a1c7-a8749de73436" x1="-561.304" y1="1012.925" x2="-561.304" y2="1007.516" gradientTransform="translate(564 1025.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".002" stop-color="#8de971" />
+      <stop offset="1" stop-color="#4aa647" />
+    </linearGradient>
+    <linearGradient id="uuid-3f6c97eb-bd22-4e83-a7f9-344e1f24523c" x1="-548.696" x2="-548.696" gradientTransform="translate(564 1025.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".002" stop-color="#8de971" />
+      <stop offset="1" stop-color="#4aa647" />
+    </linearGradient>
+    <linearGradient id="uuid-91db3e1a-3f1c-4691-97b1-ffb8670dd2ff" x1="-554.939" y1="1012.925" x2="-554.939" gradientTransform="translate(564 1025.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".002" stop-color="#8de971" />
+      <stop offset="1" stop-color="#4aa647" />
+    </linearGradient>
+    <linearGradient id="uuid-6fdb3391-c938-49d6-bc7b-35755aaf7c4b" x1="9.061" y1="0" x2="9.061" y2="6.615" gradientUnits="userSpaceOnUse">
+      <stop offset=".1" stop-color="#54aef0" />
+      <stop offset=".44" stop-color="#379ce5" />
+      <stop offset=".78" stop-color="#218ddc" />
+      <stop offset="1" stop-color="#1988d9" />
+    </linearGradient>
+  </defs>
+  <path d="M14.702,8.581h-5.04v-2.471h-1.202v2.471H3.297c-.663,0-1.202.539-1.202,1.202v5.512h1.202v-5.512h5.163v5.512h1.202v-5.512h5.04v5.404h1.202v-5.404c0-.663-.539-1.202-1.202-1.202Z" fill="url(#uuid-1d19f7a8-7feb-4881-9cd3-7b3df31ee0a4)" />
+  <circle cx="2.696" cy="15.295" r="2.705" fill="url(#uuid-3510c1dc-9c1e-4c52-a1c7-a8749de73436)" />
+  <circle cx="15.304" cy="15.295" r="2.705" fill="url(#uuid-3f6c97eb-bd22-4e83-a7f9-344e1f24523c)" />
+  <circle cx="9.061" cy="15.295" r="2.705" fill="url(#uuid-91db3e1a-3f1c-4691-97b1-ffb8670dd2ff)" />
+  <path d="M9.061,1.125c1.203,0,2.182.979,2.182,2.182s-.979,2.182-2.182,2.182-2.182-.979-2.182-2.182.979-2.182,2.182-2.182M9.061,0C7.235,0,5.754,1.481,5.754,3.307s1.481,3.307,3.307,3.307,3.307-1.481,3.307-3.307S10.888,0,9.061,0h0Z" fill="url(#uuid-6fdb3391-c938-49d6-bc7b-35755aaf7c4b)" />
+</svg>

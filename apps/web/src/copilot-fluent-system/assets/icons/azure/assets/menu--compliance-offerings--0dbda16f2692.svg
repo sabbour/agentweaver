@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="bfbf3603-d4e6-4e11-9656-eb75fedc0047" x1="-1515" y1="1549.28" x2="-1515" y2="1559.917" gradientTransform="matrix(1, 0, 0, -1, 1524, 1565.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#005ba1" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+  </defs>
+  <g id="b44620da-ace5-4bfa-910d-08be5d7a8a25">
+    <g>
+      <g id="aad6ba60-c034-4b30-86b8-f6f43154698f">
+        <g>
+          <path d="M0,5.6H18V15.635a.6.6,0,0,1-.6.6H.6a.6.6,0,0,1-.6-.6V5.6Z" fill="url(#bfbf3603-d4e6-4e11-9656-eb75fedc0047)" />
+          <path d="M.605,1.764H17.4a.6.6,0,0,1,.6.6h0V5.6H0V2.365a.6.6,0,0,1,.6-.6Z" fill="#005ba1" />
+        </g>
+      </g>
+      <g>
+        <circle cx="3.89" cy="10.537" r="0.932" fill="#b4ec36" />
+        <circle cx="9" cy="10.537" r="0.932" fill="#b4ec36" />
+        <circle cx="14.11" cy="10.537" r="0.932" fill="#b4ec36" />
+      </g>
+      <circle cx="3.89" cy="13.478" r="0.932" fill="#b4ec36" />
+      <circle cx="9" cy="13.478" r="0.932" fill="#b4ec36" />
+      <rect x="1.599" y="7.1" width="14.803" height="1.079" rx="0.281" fill="#83b9f9" opacity="0.8" />
+    </g>
+  </g>
+</svg>

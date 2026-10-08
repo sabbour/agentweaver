@@ -1,0 +1,1593 @@
+import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { authConfigModeToAuthMode, buildEntraAdminLink } from '../api/entraAdminLink';
+import { formatApiErrorMessage } from '../api/errors';
+import { ProjectModelProviderSettings } from '../components/ProjectModelProviderSettings';
+import { CopilotAuthorizationResultNotice } from '../components/CopilotAuthorizationResultNotice';
+import { RepoAppInstallationResultNotice } from '../components/RepoAppInstallationResultNotice';
+import { ConnectGitHubRepositoryDialog } from '../components/ConnectGitHubRepositoryDialog';
+import {
+  Badge,
+  Button,
+  Checkbox,
+  Divider,
+  Field,
+  Input,
+  MessageBar,
+  MessageBarActions,
+  MessageBarBody,
+  Select,
+  Spinner,
+  Switch,
+  makeStyles,
+  mergeClasses,
+  tokens,
+} from '@fluentui/react-components';
+import { Branch24Regular, Delete24Regular, People24Regular, Settings24Regular, Shield24Regular, Wrench24Regular } from '@fluentui/react-icons';
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import type {
+  AuthConfigResponse,
+  AutomationActivationStatus,
+  Project,
+  ProjectAccessOverview,
+  SandboxPolicy,
+  UnattendedReadiness,
+  UpdateProjectProviderSettingsRequest,
+} from '../api/types';
+import type { ReactElement } from 'react';
+import {
+  Body,
+  Label,
+  MetricRow,
+  PageContainer,
+  PageHeader,
+  PageSection,
+  SetupReadiness,
+  TitleText,
+} from '../components/ui';
+// Spec settings-subnav — project Settings restructured into a left in-page rail +
+// right content pane. Only sections with a real Agentweaver backend are shipped
+// (Principle VII): General, Sandbox policy, Danger Zone. The rail is
+// data-driven so more sections can be appended as their backends land.
+type SectionId = 'general' | 'access' | 'repository' | 'unattended' | 'sandbox' | 'danger';
+
+const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
+
+function modelProviderReadiness(readiness: UnattendedReadiness) {
+  if (readiness.model_provider) return readiness.model_provider;
+  const blocked = readiness.reason_code === 'model_provider_connection_required'
+    || readiness.reason_code === 'copilot_binding_required'
+    || readiness.reason_code === 'copilot_app_not_configured'
+    || readiness.reason_code === 'copilot_app_repository_permissions_detected'
+    || readiness.reason_code === 'copilot_app_registration_unavailable'
+    || readiness.reason_code === 'project_model_provider_reconnect_required';
+  return {
+    status: blocked ? 'unavailable' as const : 'unattended_ready' as const,
+    source: 'none' as const,
+    reason_code: readiness.reason_code === 'project_model_provider_reconnect_required'
+      ? 'project_model_provider_reconnect_required' as const
+      : blocked
+        ? 'model_provider_connection_required' as const
+        : 'unattended_ready' as const,
+  };
+}
+
+function repositoryReadiness(
+  readiness: UnattendedReadiness,
+  repositoryRequired: boolean,
+): NonNullable<UnattendedReadiness['repository']> {
+  if (readiness.repository) return readiness.repository;
+  if (!repositoryRequired) {
+    return {
+      required: false,
+      status: 'not_required',
+      reason_code: 'not_required',
+      repo_app_installation_connected: readiness.repo_app_installation_connected,
+    };
+  }
+  if (!readiness.repo_app_installation_connected) {
+    return {
+      required: true,
+      status: 'not_ready',
+      reason_code: 'repo_app_installation_required',
+      repo_app_installation_connected: false,
+    };
+  }
+  if (readiness.reason_code === 'repo_app_installation_required'
+    || readiness.reason_code === 'repo_app_repository_grant_required') {
+    return {
+      required: true,
+      status: 'not_ready',
+      reason_code: readiness.reason_code,
+      repo_app_installation_connected: readiness.repo_app_installation_connected,
+    };
+  }
+  return {
+    required: true,
+    status: 'repository_ready',
+    reason_code: 'repository_ready',
+    repo_app_installation_connected: readiness.repo_app_installation_connected,
+  };
+}
+
+function modelProviderReadinessMessage(reasonCode: string) {
+  if (reasonCode === 'project_model_provider_reconnect_required') {
+    return 'Reconnect the project GitHub Copilot authorization used for unattended AI work.';
+  }
+  if (reasonCode === 'model_provider_connection_required') {
+    return 'Connect a model provider before background automation can run.';
+  }
+  return 'The model provider is ready for background automation.';
+}
+
+function repositoryReadinessMessage(reasonCode: string) {
+  if (reasonCode === 'not_required') return 'This project does not require repository access.';
+  if (reasonCode === 'repo_app_installation_required') {
+    return 'Install the GitHub Repo App to grant background repository access for this project.';
+  }
+  if (reasonCode === 'repo_app_repository_grant_required') {
+    return 'Update the GitHub Repo App installation to grant access to this repository.';
+  }
+  return 'Repository access is ready for background automation.';
+}
+
+interface GenerationModelState {
+  blueprint_generation_model: string;
+  workflow_generation_model: string;
+  outcome_spec_generation_model: string;
+}
+
+const emptyGenerationModels: GenerationModelState = {
+  blueprint_generation_model: '',
+  workflow_generation_model: '',
+  outcome_spec_generation_model: '',
+};
+
+const AUTH_MODE_LABELS = {
+  entra: 'Entra ID',
+} as const;
+
+interface SectionDef {
+  id: SectionId;
+  label: string;
+  description: string;
+  icon: ReactElement;
+  danger?: boolean;
+}
+
+const SECTIONS: SectionDef[] = [
+  {
+    id: 'general',
+    label: 'General',
+    description: 'Project name and model overrides.',
+    icon: <Settings24Regular />,
+  },
+  {
+    id: 'access',
+    label: 'Access',
+    description: 'Manage project membership.',
+    icon: <People24Regular />,
+  },
+  {
+    id: 'repository',
+    label: 'Repository',
+    description: 'Connect or create the GitHub repository for this project.',
+    icon: <Branch24Regular />,
+  },
+  {
+    id: 'unattended',
+    label: 'Background',
+    description: 'Review safe background automation prerequisites for this project.',
+    icon: <Shield24Regular />,
+  },
+  {
+    id: 'sandbox',
+    label: 'Sandbox policy',
+    description: 'Control how agent commands execute and what they may reach.',
+    icon: <Wrench24Regular />,
+  },
+  {
+    id: 'danger',
+    label: 'Danger Zone',
+    description: 'Irreversible actions for this project.',
+    icon: <Delete24Regular />,
+    danger: true,
+  },
+];
+
+function isSectionId(value: string | null): value is SectionId {
+  return value === 'general'
+    || value === 'access'
+    || value === 'repository'
+    || value === 'unattended'
+    || value === 'sandbox'
+    || value === 'danger';
+}
+
+const useStyles = makeStyles({
+  root: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalL,
+    maxWidth: '1180px',
+  },
+  breadcrumb: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground2,
+  },
+  breadcrumbLink: {
+    color: tokens.colorNeutralForeground2,
+    textDecoration: 'none',
+    ':hover': { textDecorationLine: 'underline' },
+  },
+  layout: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalXXL,
+    alignItems: 'flex-start',
+  },
+  rail: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    width: '240px',
+    flexShrink: 0,
+    position: 'sticky',
+    top: '0',
+    padding: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusXLarge,
+  },
+  railItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusMedium,
+    border: 'none',
+    background: 'transparent',
+    cursor: 'pointer',
+    textAlign: 'left',
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+    fontFamily: tokens.fontFamilyBase,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      color: tokens.colorNeutralForeground1,
+    },
+  },
+  railItemActive: {
+    backgroundColor: tokens.colorNeutralBackground1Selected,
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  railItemDanger: {
+    color: tokens.colorPaletteRedForeground1,
+    ':hover': {
+      backgroundColor: tokens.colorPaletteRedBackground1,
+      color: tokens.colorPaletteRedForeground1,
+    },
+  },
+  railIcon: {
+    display: 'flex',
+    flexShrink: 0,
+  },
+  pane: {
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalL,
+  },
+  section: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    maxWidth: '640px',
+  },
+  subBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  formActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalM,
+    alignItems: 'center',
+  },
+  dangerSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorPaletteRedBorder2}`,
+    maxWidth: '640px',
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
+  },
+  listBox: {
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+  },
+  listItem: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+    padding: `${tokens.spacingVerticalXS} 0`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+    ':last-child': {
+      borderBottom: 'none',
+    },
+  },
+  emptyNote: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    fontStyle: 'italic',
+  },
+  helperText: {
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase300,
+  },
+  badgeRow: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalXS,
+    flexWrap: 'wrap',
+  },
+  roleList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+  },
+  roleRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    padding: tokens.spacingHorizontalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    flexWrap: 'wrap',
+  },
+  roleIdentity: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXXS,
+    minWidth: 0,
+  },
+  roleActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+});
+
+export function ProjectSettingsPage() {
+  const styles = useStyles();
+  const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Selected settings section is deep-linked via ?section=… so it is shareable and
+  // survives refresh; fall back to General for missing/unknown values.
+  const sectionParam = searchParams.get('section');
+  const activeSection: SectionId = isSectionId(sectionParam) ? sectionParam : 'general';
+
+  const selectSection = (id: SectionId) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('section', id);
+    setSearchParams(next, { replace: true });
+  };
+  const copilotAuthorizationResult = searchParams.get('copilot_app_auth');
+  const dismissCopilotAuthorizationResult = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('copilot_app_auth');
+    setSearchParams(next, { replace: true });
+  };
+  const repoAppInstallationResult = searchParams.get('repo_app_install');
+  const dismissRepoAppInstallationResult = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('repo_app_install');
+    setSearchParams(next, { replace: true });
+  };
+  const repoAppAuthorizationResult = searchParams.get('repo_app_auth');
+
+  const [connectRepoOpen, setConnectRepoOpen] = useState(false);
+
+  const [project, setProject] = useState<Project | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Model settings
+  const [copilotModel, setCopilotModel] = useState('');
+  const [savingModel, setSavingModel] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelSuccess, setModelSuccess] = useState(false);
+  const [generationModels, setGenerationModels] = useState<GenerationModelState>(emptyGenerationModels);
+  const [savingGeneration, setSavingGeneration] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [generationSuccess, setGenerationSuccess] = useState(false);
+
+  // Rename
+  const [newName, setNewName] = useState('');
+  const [savingRename, setSavingRename] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameSuccess, setRenameSuccess] = useState(false);
+
+  // Delete
+  const [deleteConfirmed, setDeleteConfirmed] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Sandbox policy
+  const [sandboxPolicy, setSandboxPolicy] = useState<SandboxPolicy | null>(null);
+  const [sandboxFetched, setSandboxFetched] = useState(false);
+  const [sandboxError, setSandboxError] = useState<string | null>(null);
+  const [savingSandbox, setSavingSandbox] = useState(false);
+  const [sandboxSaveError, setSandboxSaveError] = useState<string | null>(null);
+  const [sandboxSaveSuccess, setSandboxSaveSuccess] = useState(false);
+  const sandboxLoading = project !== null && !sandboxFetched;
+  const [previewApprovalTimeout, setPreviewApprovalTimeout] = useState(1440);
+  const [previewLifetime, setPreviewLifetime] = useState(1440);
+  const [previewDnsConvergenceTimeout, setPreviewDnsConvergenceTimeout] = useState(600);
+  const [savingPreviewApproval, setSavingPreviewApproval] = useState(false);
+  const [previewApprovalError, setPreviewApprovalError] = useState<string | null>(null);
+  const [previewApprovalSuccess, setPreviewApprovalSuccess] = useState(false);
+
+  // Entra access management.
+  const [accessOverview, setAccessOverview] = useState<ProjectAccessOverview | null>(null);
+  const [accessLoading, setAccessLoading] = useState(true);
+  const [accessError, setAccessError] = useState<string | null>(null);
+  const [accessOverviewUnavailable, setAccessOverviewUnavailable] = useState(false);
+  const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
+  const [principalId, setPrincipalId] = useState('');
+  const [principalDisplayName, setPrincipalDisplayName] = useState('');
+  const [projectRole, setProjectRole] = useState('Viewer');
+  const [savingRoleAssignment, setSavingRoleAssignment] = useState(false);
+  const [roleAssignmentError, setRoleAssignmentError] = useState<string | null>(null);
+  const [roleAssignmentSuccess, setRoleAssignmentSuccess] = useState<string | null>(null);
+  const [roleActionKey, setRoleActionKey] = useState<string | null>(null);
+  const [unattendedReadiness, setUnattendedReadiness] = useState<UnattendedReadiness | null>(null);
+  const [unattendedLoading, setUnattendedLoading] = useState(true);
+  const [unattendedError, setUnattendedError] = useState<string | null>(null);
+  const [installingRepoApp, setInstallingRepoApp] = useState(false);
+  const [installRepoAppError, setInstallRepoAppError] = useState<string | null>(null);
+  const [automationStatus, setAutomationStatus] = useState<AutomationActivationStatus | null>(null);
+  const [automationLoading, setAutomationLoading] = useState(true);
+  const [automationActionPending, setAutomationActionPending] = useState(false);
+  const [automationError, setAutomationError] = useState<string | null>(null);
+
+  const formatError = (err: unknown): string => formatApiErrorMessage(err);
+
+  useEffect(() => {
+    if (!repoAppAuthorizationResult) return;
+    queueMicrotask(() => {
+      setConnectRepoOpen(true);
+    });
+  }, [repoAppAuthorizationResult]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    apiClient.getProject(projectId)
+      .then((p) => {
+        if (!cancelled) {
+          setProject(p);
+          setCopilotModel(p.default_model_github_copilot ?? '');
+          setGenerationModels({
+            blueprint_generation_model: p.blueprint_generation_model ?? '',
+            workflow_generation_model: p.workflow_generation_model ?? '',
+            outcome_spec_generation_model: p.outcome_spec_generation_model ?? '',
+          });
+          setNewName(p.name);
+          setPreviewApprovalTimeout(p.preview_approval_timeout_minutes ?? 1440);
+          setPreviewLifetime(p.preview_lifetime_minutes ?? 1440);
+          setPreviewDnsConvergenceTimeout(p.preview_dns_convergence_timeout_seconds ?? 600);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(formatError(err));
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiClient.getAuthConfig()
+      .then((config) => {
+        if (!cancelled) setAuthConfig(config);
+      })
+      .catch(() => {
+        if (!cancelled) setAuthConfig(null);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const refreshAccessOverview = useCallback(async () => {
+    if (!projectId) return;
+    setAccessLoading(true);
+    setAccessError(null);
+    setAccessOverviewUnavailable(false);
+    try {
+      // Assumption for Tank's authz rollout: a single access snapshot endpoint returns
+      // the current auth mode, platform-role view, and project role assignments.
+      const overview = await apiClient.getProjectAccessOverview(projectId);
+      setAccessOverview(overview);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setAccessOverviewUnavailable(true);
+      } else {
+        setAccessError(formatError(err));
+      }
+      setAccessOverview(null);
+    } finally {
+      setAccessLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    queueMicrotask(() => { void refreshAccessOverview(); });
+  }, [projectId, refreshAccessOverview]);
+
+  const refreshUnattendedReadiness = useCallback(async () => {
+    if (!projectId) return;
+    setUnattendedLoading(true);
+    setUnattendedError(null);
+    try {
+      setUnattendedReadiness(await apiClient.getUnattendedReadiness(projectId));
+    } catch {
+      setUnattendedReadiness(null);
+      setUnattendedError('Automation readiness is unavailable. Refresh the page and try again.');
+    } finally {
+      setUnattendedLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    queueMicrotask(() => { void refreshUnattendedReadiness(); });
+  }, [projectId, refreshUnattendedReadiness]);
+
+  const refreshAutomationStatus = useCallback(async () => {
+    if (!projectId) return;
+    setAutomationLoading(true);
+    setAutomationError(null);
+    try {
+      setAutomationStatus(await apiClient.getAutomationStatus(projectId));
+    } catch (err) {
+      setAutomationStatus(null);
+      // 403 (not an Owner) is expected for non-Owners; the control is hidden for them anyway, so
+      // only surface an error for unexpected failures.
+      if (!(err instanceof ApiError && err.status === 403)) {
+        setAutomationError('Automation activation status is unavailable. Refresh the page and try again.');
+      }
+    } finally {
+      setAutomationLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    queueMicrotask(() => { void refreshAutomationStatus(); });
+  }, [projectId, refreshAutomationStatus]);
+
+  const handleActivateAutomation = async () => {
+    if (!projectId) return;
+    setAutomationActionPending(true);
+    setAutomationError(null);
+    try {
+      setAutomationStatus(await apiClient.activateAutomation(projectId));
+    } catch (err) {
+      setAutomationError(formatError(err));
+    } finally {
+      setAutomationActionPending(false);
+    }
+  };
+
+  const handleDeactivateAutomation = async () => {
+    if (!projectId) return;
+    setAutomationActionPending(true);
+    setAutomationError(null);
+    try {
+      setAutomationStatus(await apiClient.deactivateAutomation(projectId));
+    } catch (err) {
+      setAutomationError(formatError(err));
+    } finally {
+      setAutomationActionPending(false);
+    }
+  };
+
+  const handleSaveModel = async () => {
+    if (!projectId) return;
+    setSavingModel(true);
+    setModelError(null);
+    setModelSuccess(false);
+    try {
+      const req: UpdateProjectProviderSettingsRequest = {};
+      req.default_provider = project?.default_provider ?? 'github-copilot';
+      req.default_model_github_copilot = copilotModel.trim() || null;
+      req.default_model_microsoft_foundry = project?.default_model_microsoft_foundry ?? null;
+      req.blueprint_generation_model = generationModels.blueprint_generation_model.trim() || null;
+      req.workflow_generation_model = generationModels.workflow_generation_model.trim() || null;
+      req.outcome_spec_generation_model = generationModels.outcome_spec_generation_model.trim() || null;
+      await apiClient.updateProjectProviderSettings(projectId, req);
+      setProject((prev) => prev ? {
+        ...prev,
+        default_model_github_copilot: req.default_model_github_copilot ?? null,
+        blueprint_generation_model: req.blueprint_generation_model ?? null,
+        workflow_generation_model: req.workflow_generation_model ?? null,
+        outcome_spec_generation_model: req.outcome_spec_generation_model ?? null,
+      } : prev);
+      setModelSuccess(true);
+    } catch (err) {
+      setModelError(formatError(err));
+    } finally {
+      setSavingModel(false);
+    }
+  };
+
+  const saveGenerationModels = async (models: GenerationModelState) => {
+    if (!projectId) return;
+    setSavingGeneration(true);
+    setGenerationError(null);
+    setGenerationSuccess(false);
+    try {
+      const req: UpdateProjectProviderSettingsRequest = {
+        default_provider: project?.default_provider ?? 'github-copilot',
+        default_model_github_copilot: copilotModel.trim() || null,
+        default_model_microsoft_foundry: project?.default_model_microsoft_foundry ?? null,
+        blueprint_generation_model: models.blueprint_generation_model.trim() || null,
+        workflow_generation_model: models.workflow_generation_model.trim() || null,
+        outcome_spec_generation_model: models.outcome_spec_generation_model.trim() || null,
+      };
+      await apiClient.updateProjectProviderSettings(projectId, req);
+      setProject((prev) => prev ? {
+        ...prev,
+        blueprint_generation_model: req.blueprint_generation_model ?? null,
+        workflow_generation_model: req.workflow_generation_model ?? null,
+        outcome_spec_generation_model: req.outcome_spec_generation_model ?? null,
+      } : prev);
+      setGenerationSuccess(true);
+    } catch (err) {
+      setGenerationError(formatError(err));
+    } finally {
+      setSavingGeneration(false);
+    }
+  };
+
+  const handleSaveGeneration = async () => {
+    await saveGenerationModels(generationModels);
+  };
+
+  const handleResetGeneration = async () => {
+    const inherited = { ...emptyGenerationModels };
+    setGenerationModels(inherited);
+    await saveGenerationModels(inherited);
+  };
+
+  useEffect(() => {
+    if (!project?.working_directory) return;
+    let cancelled = false;
+    apiClient.getSandboxPolicy(project.working_directory)
+      .then((p) => {
+        if (!cancelled) {
+          setSandboxPolicy(p);
+          setSandboxFetched(true);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setSandboxFetched(true);
+          setSandboxError(formatError(err));
+        }
+      });
+    return () => { cancelled = true; };
+  }, [project?.working_directory]);
+
+  const handleSaveSandbox = async () => {
+    if (!sandboxPolicy) return;
+    setSavingSandbox(true);
+    setSandboxSaveError(null);
+    setSandboxSaveSuccess(false);
+    try {
+      // Round-trip the FULL policy (including allowed_repository_roots and
+      // destructive_command_patterns) so omitted fields are never dropped.
+      const updated = await apiClient.updateSandboxPolicy(sandboxPolicy);
+      setSandboxPolicy(updated);
+      setSandboxSaveSuccess(true);
+    } catch (err) {
+      setSandboxSaveError(formatError(err));
+    } finally {
+      setSavingSandbox(false);
+    }
+  };
+
+  const handleSavePreviewApproval = async () => {
+    if (!projectId) return;
+    if (!Number.isInteger(previewApprovalTimeout)
+      || previewApprovalTimeout < 1
+      || previewApprovalTimeout > 1440) {
+      setPreviewApprovalError('Approval timeout must be a whole number between 1 and 1440 minutes.');
+      setPreviewApprovalSuccess(false);
+      return;
+    }
+    if (!Number.isInteger(previewDnsConvergenceTimeout)
+      || previewDnsConvergenceTimeout < 60
+      || previewDnsConvergenceTimeout > 3600) {
+      setPreviewApprovalError('Infrastructure convergence deadline must be a whole number between 60 and 3600 seconds.');
+      setPreviewApprovalSuccess(false);
+      return;
+    }
+    if (!Number.isInteger(previewLifetime)
+      || previewLifetime < 1
+      || previewLifetime > 1440) {
+      setPreviewApprovalError('Preview lifetime must be a whole number between 1 and 1440 minutes.');
+      setPreviewApprovalSuccess(false);
+      return;
+    }
+
+    setSavingPreviewApproval(true);
+    setPreviewApprovalError(null);
+    setPreviewApprovalSuccess(false);
+    try {
+      const saved = await apiClient.updateProjectPreviewSettings(projectId, {
+        approval_timeout_minutes: previewApprovalTimeout,
+        lifetime_minutes: previewLifetime,
+        dns_convergence_timeout_seconds: previewDnsConvergenceTimeout,
+      });
+      setPreviewApprovalTimeout(saved.approval_timeout_minutes);
+      setPreviewLifetime(saved.lifetime_minutes);
+      setPreviewDnsConvergenceTimeout(saved.dns_convergence_timeout_seconds);
+      setProject((prev) => prev
+        ? {
+          ...prev,
+          preview_approval_timeout_minutes: saved.approval_timeout_minutes,
+          preview_lifetime_minutes: saved.lifetime_minutes,
+          preview_dns_convergence_timeout_seconds: saved.dns_convergence_timeout_seconds,
+        }
+        : prev);
+      setPreviewApprovalSuccess(true);
+    } catch (err) {
+      setPreviewApprovalError(formatError(err));
+    } finally {
+      setSavingPreviewApproval(false);
+    }
+  };
+
+  const handleRename = async () => {
+    if (!projectId || !newName.trim()) return;
+    setSavingRename(true);
+    setRenameError(null);
+    setRenameSuccess(false);
+    try {
+      await apiClient.renameProject(projectId, newName.trim());
+      setProject((prev) => prev ? { ...prev, name: newName.trim() } : prev);
+      setRenameSuccess(true);
+    } catch (err) {
+      setRenameError(formatError(err));
+    } finally {
+      setSavingRename(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!projectId || !deleteConfirmed) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await apiClient.deleteProject(projectId);
+      navigate('/');
+    } catch (err) {
+      setDeleteError(formatError(err));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleAddRoleAssignment = async () => {
+    if (!projectId || !principalId.trim()) return;
+    setSavingRoleAssignment(true);
+    setRoleAssignmentError(null);
+    setRoleAssignmentSuccess(null);
+    try {
+      await apiClient.createProjectRoleAssignment(projectId, {
+        principal_id: principalId.trim(),
+        display_name: principalDisplayName.trim() || null,
+        email: principalId.includes('@') ? principalId.trim() : null,
+        role: projectRole,
+      });
+      setPrincipalId('');
+      setPrincipalDisplayName('');
+      setProjectRole('Viewer');
+      setRoleAssignmentSuccess('Project member saved.');
+      await refreshAccessOverview();
+    } catch (err) {
+      setRoleAssignmentError(formatError(err));
+    } finally {
+      setSavingRoleAssignment(false);
+    }
+  };
+
+  const handleDeleteRoleAssignment = async (assignmentId: string) => {
+    if (!projectId) return;
+    setRoleActionKey(assignmentId);
+    setRoleAssignmentError(null);
+    setRoleAssignmentSuccess(null);
+    try {
+      await apiClient.deleteProjectRoleAssignment(projectId, assignmentId);
+      setRoleAssignmentSuccess('Project member removed.');
+      await refreshAccessOverview();
+    } catch (err) {
+      setRoleAssignmentError(formatError(err));
+    } finally {
+      setRoleActionKey(null);
+    }
+  };
+
+  if (!projectId) return null;
+
+  const visibleSections = SECTIONS.filter((s) => s.id !== 'repository' || project?.origin === 'blank');
+  const displayedSection = visibleSections.some((section) => section.id === activeSection)
+    ? activeSection
+    : 'unattended';
+  const activeDef = visibleSections.find((s) => s.id === displayedSection) ?? visibleSections[0];
+  const fallbackAuthMode = authConfigModeToAuthMode(authConfig?.mode);
+  const resolvedAuthMode = accessOverview?.auth_mode ?? fallbackAuthMode;
+  const authModeLabel = resolvedAuthMode ? AUTH_MODE_LABELS[resolvedAuthMode] : 'GitHub';
+  const entraAdminLink = buildEntraAdminLink(authConfig?.entra);
+  const accessStatusMessage = accessOverviewUnavailable
+    ? resolvedAuthMode === 'entra'
+      ? 'Access management is handled in Microsoft Entra ID for this deployment.'
+      : 'Access management is not available on this deployment yet.'
+    : accessError;
+  const projectRoleSummary = accessOverview?.current_user_project_role ?? (project?.owner ? `Owner (${project.owner})` : 'Unspecified');
+
+  return (
+    <PageContainer>
+      <PageHeader
+        title="Project settings"
+        description="Project configuration and pickup behavior."
+        breadcrumbs={
+          <div className={styles.breadcrumb}>
+            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <span>/</span>
+            <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>{project?.name ?? projectId}</Link>
+            <span>/</span>
+            <span>Settings</span>
+          </div>
+        }
+      />
+
+      {loading && <Spinner label="Loading project" />}
+
+      {loadError && (
+        <MessageBar intent="error">
+          <MessageBarBody>{loadError}</MessageBarBody>
+        </MessageBar>
+      )}
+      <CopilotAuthorizationResultNotice
+        code={copilotAuthorizationResult}
+        onDismiss={dismissCopilotAuthorizationResult}
+      />
+      <RepoAppInstallationResultNotice
+        code={repoAppInstallationResult}
+        onDismiss={dismissRepoAppInstallationResult}
+      />
+
+      {project && (
+        <div className={styles.layout}>
+          <nav className={styles.rail} aria-label="Settings sections">
+            {visibleSections.map((section) => (
+              <button
+                key={section.id}
+                className={mergeClasses(
+                  styles.railItem,
+                  displayedSection === section.id && styles.railItemActive,
+                  section.danger ? styles.railItemDanger : undefined,
+                )}
+                onClick={() => selectSection(section.id)}
+              >
+                <span className={styles.railIcon}>{section.icon}</span>
+                <span>{section.label}</span>
+                {section.danger && (
+                  <Badge appearance="tint" color="danger" size="small">Risk</Badge>
+                )}
+              </button>
+            ))}
+          </nav>
+
+          <div className={styles.pane}>
+            <PageSection title={activeDef.label} description={activeDef.description}>
+              <MetricRow items={[
+                { label: 'Project', value: project.name },
+                { label: 'Working directory', value: project.working_directory ?? 'Not configured' },
+                { label: 'AI source', value: 'Deployment setting' },
+                { label: 'Authentication mode', value: authModeLabel },
+                { label: 'Your project role', value: projectRoleSummary },
+              ]} />
+            </PageSection>
+
+            {displayedSection === 'general' && (
+              <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>AI source</TitleText>
+                  <Body as="p" tone="muted">
+                    This project uses the AI source configured for the deployment. Change it in Platform settings.
+                  </Body>
+                </div>
+
+                <div className={styles.subBlock}>
+                  <TitleText>Rename project</TitleText>
+                  <Field
+                    label="Name"
+                    hint="Shown in project navigation, run context, and team views."
+                  >
+                    <Input id="project-settings-name" value={newName} onChange={(_, v) => setNewName(v.value)} />
+                  </Field>
+                  <div className={styles.formActions}>
+                    <Button
+                      appearance="primary"
+                      disabled={savingRename || !newName.trim() || newName.trim() === project.name}
+                      onClick={() => void handleRename()}
+                    >
+                      {savingRename ? 'Saving' : 'Save'}
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      disabled={savingRename || newName === project.name}
+                      onClick={() => setNewName(project.name)}
+                    >
+                      Cancel
+                    </Button>
+                    {savingRename && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
+                  {renameError && (
+                    <MessageBar intent="error"><MessageBarBody>{renameError}</MessageBarBody></MessageBar>
+                  )}
+                  {renameSuccess && (
+                    <MessageBar intent="success"><MessageBarBody>Project renamed.</MessageBarBody></MessageBar>
+                  )}
+                </div>
+
+                <div className={styles.subBlock}>
+                  <TitleText>Default run model</TitleText>
+                  <Field
+                    label="GitHub Copilot model"
+                    hint="Leave blank to use the service default for Copilot-backed runs."
+                  >
+                    <Input
+                      id="project-settings-copilot-model"
+                      value={copilotModel}
+                      onChange={(_, v) => setCopilotModel(v.value)}
+                      placeholder="Auto (coordinator picks) — e.g. claude-sonnet-4.6"
+                    />
+                  </Field>
+                  <div className={styles.formActions}>
+                    <Button
+                      appearance="primary"
+                      disabled={savingModel}
+                      onClick={() => void handleSaveModel()}
+                    >
+                      {savingModel ? 'Saving' : 'Save'}
+                    </Button>
+                    {savingModel && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
+                  {modelError && (
+                    <MessageBar intent="error"><MessageBarBody>{modelError}</MessageBarBody></MessageBar>
+                  )}
+                  {modelSuccess && (
+                    <MessageBar intent="success"><MessageBarBody>Model settings saved.</MessageBarBody></MessageBar>
+                  )}
+                </div>
+
+                <div className={styles.subBlock}>
+                  <TitleText>Generation models</TitleText>
+                  <Body as="p" tone="muted">
+                    Leave a field blank to inherit the global generation default ({GENERATION_DEFAULT_MODEL}).
+                  </Body>
+                  <Field
+                    label="Blueprint generation model"
+                    hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}
+                  >
+                    <Input
+                      id="project-settings-blueprint-model"
+                      value={generationModels.blueprint_generation_model}
+                      onChange={(_, v) => setGenerationModels((prev) => ({ ...prev, blueprint_generation_model: v.value }))}
+                      placeholder={`Inherit ${GENERATION_DEFAULT_MODEL}`}
+                    />
+                  </Field>
+                  <Field
+                    label="Workflow generation model"
+                    hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}
+                  >
+                    <Input
+                      id="project-settings-workflow-model"
+                      value={generationModels.workflow_generation_model}
+                      onChange={(_, v) => setGenerationModels((prev) => ({ ...prev, workflow_generation_model: v.value }))}
+                      placeholder={`Inherit ${GENERATION_DEFAULT_MODEL}`}
+                    />
+                  </Field>
+                  <Field
+                    label="Outcome spec generation model"
+                    hint={`Blank inherits ${GENERATION_DEFAULT_MODEL}.`}
+                  >
+                    <Input
+                      id="project-settings-outcome-model"
+                      value={generationModels.outcome_spec_generation_model}
+                      onChange={(_, v) => setGenerationModels((prev) => ({ ...prev, outcome_spec_generation_model: v.value }))}
+                      placeholder={`Inherit ${GENERATION_DEFAULT_MODEL}`}
+                    />
+                  </Field>
+                  <div className={styles.formActions}>
+                    <Button
+                      appearance="primary"
+                      disabled={savingGeneration}
+                      onClick={() => void handleSaveGeneration()}
+                    >
+                      {savingGeneration ? 'Saving generation models' : 'Save generation models'}
+                    </Button>
+                    <Button
+                      appearance="secondary"
+                      disabled={savingGeneration}
+                      onClick={() => void handleResetGeneration()}
+                    >
+                      Reset to inherit defaults
+                    </Button>
+                    {savingGeneration && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
+                  {generationError && (
+                    <MessageBar intent="error"><MessageBarBody>{generationError}</MessageBarBody></MessageBar>
+                  )}
+                  {generationSuccess && (
+                    <MessageBar intent="success"><MessageBarBody>Generation model settings saved.</MessageBarBody></MessageBar>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {displayedSection === 'access' && (
+              <div className={styles.section}>
+                {accessLoading && <Spinner label="Loading access settings" size="extra-tiny" />}
+                {accessStatusMessage && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>{accessStatusMessage}</MessageBarBody>
+                    {accessOverviewUnavailable && resolvedAuthMode === 'entra' && entraAdminLink && (
+                      <MessageBarActions>
+                        <Button
+                          as="a"
+                          href={entraAdminLink.href}
+                          target="_blank"
+                          rel="noreferrer"
+                          size="small"
+                        >
+                          {entraAdminLink.label}
+                        </Button>
+                      </MessageBarActions>
+                    )}
+                  </MessageBar>
+                )}
+                {accessOverview && (
+                  <>
+                    <div className={styles.subBlock}>
+                      <TitleText>Platform access</TitleText>
+                      {accessOverview.auth_mode === 'entra' ? (
+                        <>
+                          <Body as="p" tone="muted">
+                            Platform roles are assigned in Microsoft Entra ID. Agentweaver shows them here for
+                            context, but changes must be made in Entra rather than in this project.
+                          </Body>
+                          <div className={styles.badgeRow}>
+                            {accessOverview.platform_roles.length > 0 ? (
+                              accessOverview.platform_roles.map((role) => (
+                                <Badge key={role} appearance="filled">{role}</Badge>
+                              ))
+                            ) : (
+                              <Label as="span" className={styles.emptyNote}>No Entra platform roles are assigned.</Label>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            This deployment uses GitHub authentication. Project access continues to follow the
+                            current GitHub-based ownership model, so Entra platform-role mapping is inactive here.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                    </div>
+
+                    <div className={styles.subBlock}>
+                      <TitleText>Project members</TitleText>
+                      {accessOverview.auth_mode === 'entra' ? (
+                        <>
+                          <Body as="p" tone="muted">
+                            Owners, contributors, and viewers are stored in Agentweaver for this project. These roles control Agentweaver actions only; GitHub repository access still depends on the authorization granted through the Repo App.
+                          </Body>
+                          <div className={styles.roleList}>
+                            {accessOverview.project_role_assignments.length === 0 ? (
+                              <Label as="span" className={styles.emptyNote}>No project role assignments yet.</Label>
+                            ) : (
+                              accessOverview.project_role_assignments.map((assignment) => (
+                                <div key={assignment.assignment_id} className={styles.roleRow}>
+                                  <div className={styles.roleIdentity}>
+                                    <TitleText>{assignment.display_name ?? assignment.email ?? assignment.principal_id}</TitleText>
+                                    <Body tone="muted">
+                                      {assignment.email ?? assignment.principal_id}
+                                    </Body>
+                                    <div className={styles.badgeRow}>
+                                      <Badge appearance="filled">{assignment.role}</Badge>
+                                      <Badge appearance="outline">{assignment.scope}</Badge>
+                                    </div>
+                                  </div>
+                                  {accessOverview.can_manage_role_assignments && (
+                                    <div className={styles.roleActions}>
+                                      <Button
+                                        appearance="subtle"
+                                        disabled={roleActionKey !== null}
+                                        onClick={() => void handleDeleteRoleAssignment(assignment.assignment_id)}
+                                      >
+                                        {roleActionKey === assignment.assignment_id ? 'Removing' : 'Remove'}
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              ))
+                            )}
+                          </div>
+
+                          <Field
+                            label="Add member"
+                            hint="Enter the Entra object ID or email of the person who should receive access."
+                          >
+                            <Input
+                              value={principalId}
+                              placeholder="person@contoso.com"
+                              onChange={(_, data) => setPrincipalId(data.value)}
+                            />
+                          </Field>
+                          <Field
+                            label="Display name (optional)"
+                            hint="Stored for readability until Tank's directory lookup lands."
+                          >
+                            <Input
+                              value={principalDisplayName}
+                              placeholder="Ada Lovelace"
+                              onChange={(_, data) => setPrincipalDisplayName(data.value)}
+                            />
+                          </Field>
+                          <Field label="Role">
+                            <Select value={projectRole} onChange={(_, data) => setProjectRole(data.value)}>
+                              <option value="Owner">Owner</option>
+                              <option value="Contributor">Contributor</option>
+                              <option value="Viewer">Viewer</option>
+                            </Select>
+                          </Field>
+                          <div className={styles.formActions}>
+                            <Button
+                              appearance="primary"
+                              disabled={!accessOverview.can_manage_role_assignments || savingRoleAssignment || !principalId.trim()}
+                              onClick={() => void handleAddRoleAssignment()}
+                            >
+                              {savingRoleAssignment ? 'Saving' : 'Add member'}
+                            </Button>
+                            {savingRoleAssignment && <Spinner size="extra-tiny" aria-hidden="true" />}
+                          </div>
+                        </>
+                      ) : (
+                        <Body as="p" tone="muted">
+                          In GitHub mode, the project continues to rely on the existing single-owner model.
+                          Project role assignments are only used in Entra ID mode.
+                        </Body>
+                      )}
+                      {roleAssignmentError && (
+                        <MessageBar intent="error"><MessageBarBody>{roleAssignmentError}</MessageBarBody></MessageBar>
+                      )}
+                      {roleAssignmentSuccess && (
+                        <MessageBar intent="success"><MessageBarBody>{roleAssignmentSuccess}</MessageBarBody></MessageBar>
+                      )}
+                    </div>
+
+                  </>
+                )}
+              </div>
+            )}
+
+            {displayedSection === 'unattended' && (
+              <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>Background automation readiness</TitleText>
+                  <Body as="p" tone="muted">
+                    This read-only status reports the server-verified prerequisites for background work.
+                  </Body>
+                  {!automationLoading && automationStatus && (
+                    <>
+                      <TitleText>Automation activation</TitleText>
+                      <Body as="p" tone="muted">
+                        Turn scheduled and event-triggered automation on or off for this project. Only a
+                        project Owner can change this. Deactivating does not remove the repository access
+                        or GitHub Copilot account below — reactivating re-checks them fresh.
+                      </Body>
+                      <MetricRow items={[
+                        { label: 'Status', value: automationStatus.is_active ? 'Active' : 'Inactive' },
+                        ...(automationStatus.is_active
+                          ? [{
+                              label: 'Model provider',
+                              value: automationStatus.model_provider_source === 'byok' ? 'BYOK' : 'GitHub Copilot',
+                            }]
+                          : []),
+                      ]} />
+                      <div className={styles.formActions}>
+                        {automationStatus.is_active ? (
+                          <Button
+                            appearance="secondary"
+                            disabled={automationActionPending}
+                            onClick={() => void handleDeactivateAutomation()}
+                          >
+                            {automationActionPending ? 'Deactivating' : 'Deactivate automation'}
+                          </Button>
+                        ) : (
+                          <Button
+                            appearance="primary"
+                            disabled={automationActionPending}
+                            onClick={() => void handleActivateAutomation()}
+                          >
+                            {automationActionPending ? 'Activating' : 'Activate automation'}
+                          </Button>
+                        )}
+                        {automationActionPending && <Spinner size="extra-tiny" aria-hidden="true" />}
+                      </div>
+                      {automationError && (
+                        <MessageBar intent="error"><MessageBarBody>{automationError}</MessageBarBody></MessageBar>
+                      )}
+                      <Divider />
+                    </>
+                  )}
+                  <TitleText>GitHub Copilot account</TitleText>
+                  <Body as="p" tone="muted">
+                    Authorize GitHub Copilot uses GitHub user OAuth to create a durable project binding for unattended AI work.
+                    It does not install a GitHub App or grant repository access.
+                  </Body>
+                  <ProjectModelProviderSettings
+                    projectId={projectId}
+                    showConnectionStatus
+                    suppressProjectOverrideWhenPlatformDefault
+                    repairRequired={unattendedReadiness
+                      ? modelProviderReadiness(unattendedReadiness).reason_code === 'project_model_provider_reconnect_required'
+                      : false}
+                  />
+                  <Divider />
+                  <TitleText>Background requirements</TitleText>
+                  <Body as="p" tone="muted">
+                    {project.source_repository
+                      ? 'These server checks cover branch, push, and pull-request work for the connected repository.'
+                      : 'These server checks apply after you add repository access. Local agent work can continue without a repository.'}
+                  </Body>
+                  {unattendedLoading && <Spinner label="Checking automation readiness" size="extra-tiny" />}
+                  {unattendedReadiness && (
+                    <>
+                      {(() => {
+                        const model = modelProviderReadiness(unattendedReadiness);
+                        const repository = repositoryReadiness(unattendedReadiness, Boolean(project.source_repository));
+                        return (
+                          <>
+                            <TitleText>Model provider readiness</TitleText>
+                            <MetricRow items={[
+                              { label: 'Status', value: model.status === 'unattended_ready' ? 'Ready' : 'Not ready' },
+                              { label: 'Reason code', value: model.reason_code },
+                            ]} />
+                            <MessageBar intent={model.status === 'unattended_ready' ? 'success' : 'warning'}>
+                              <MessageBarBody>{modelProviderReadinessMessage(model.reason_code)}</MessageBarBody>
+                            </MessageBar>
+                            <TitleText>Repository readiness</TitleText>
+                            <MetricRow items={[
+                              {
+                                label: 'Status',
+                                value: repository.status === 'repository_ready'
+                                  ? 'Ready'
+                                  : repository.status === 'not_required'
+                                    ? 'Not required'
+                                    : 'Not ready',
+                              },
+                              { label: 'Reason code', value: repository.reason_code },
+                            ]} />
+                            <MessageBar intent={repository.status === 'repository_ready' ? 'success' : 'warning'}>
+                              <MessageBarBody>{repositoryReadinessMessage(repository.reason_code)}</MessageBarBody>
+                            </MessageBar>
+                          </>
+                        );
+                      })()}
+                    </>
+                  )}
+                  <div className={styles.formActions}>
+                    {unattendedReadiness
+                      && repositoryReadiness(unattendedReadiness, Boolean(project.source_repository)).reason_code === 'repo_app_installation_required'
+                      && projectId && (
+                      <Button
+                        appearance="primary"
+                        disabled={installingRepoApp}
+                        onClick={async () => {
+                          setInstallingRepoApp(true);
+                          setInstallRepoAppError(null);
+                          try {
+                            const handoff = await apiClient.beginProjectRepoAppInstallation(projectId);
+                            window.location.assign(handoff.installation_url);
+                          } catch (err) {
+                            setInstallRepoAppError(formatApiErrorMessage(err, 'The GitHub Repo App installation did not start. Try again.'));
+                            setInstallingRepoApp(false);
+                          }
+                        }}
+                      >
+                        Install GitHub Repo App
+                      </Button>
+                    )}
+                    <Button appearance="secondary" disabled={unattendedLoading} onClick={() => void refreshUnattendedReadiness()}>
+                      Refresh status
+                    </Button>
+                  </div>
+                  {installRepoAppError && (
+                    <MessageBar intent="error"><MessageBarBody>{installRepoAppError}</MessageBarBody></MessageBar>
+                  )}
+                  {unattendedError && (
+                    <MessageBar intent="error"><MessageBarBody>{unattendedError}</MessageBarBody></MessageBar>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {displayedSection === 'repository' && (
+              <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <SetupReadiness
+                    model={{
+                      title: 'Repository access',
+                      description: 'The local project is ready for agent work.',
+                      items: [{
+                        id: 'repository-access',
+                        title: 'GitHub repository',
+                        description: 'Local agent work can continue without a repository. Pull-request publishing requires repository access.',
+                        requirement: 'optional',
+                        status: 'optional',
+                      }],
+                    }}
+                    primaryAction={(
+                      <Button appearance="primary" onClick={() => setConnectRepoOpen(true)}>
+                        Set up repository access
+                      </Button>
+                    )}
+                  />
+                </div>
+                <ConnectGitHubRepositoryDialog
+                  projectId={projectId}
+                  projectName={project.name}
+                  open={connectRepoOpen}
+                  onOpenChange={(open) => {
+                    setConnectRepoOpen(open);
+                    if (!open && repoAppAuthorizationResult) {
+                      const next = new URLSearchParams(searchParams);
+                      next.delete('repo_app_auth');
+                      setSearchParams(next, { replace: true });
+                    }
+                  }}
+                  authorizationResult={repoAppAuthorizationResult}
+                  onConnected={(sourceRepository) => {
+                    setProject((prev) => prev ? { ...prev, origin: 'github', source_repository: sourceRepository } : prev);
+                    setConnectRepoOpen(false);
+                    const next = new URLSearchParams(searchParams);
+                    next.delete('repo_app_auth');
+                    next.set('section', 'unattended');
+                    setSearchParams(next, { replace: true });
+                  }}
+                />
+              </div>
+            )}
+
+            {displayedSection === 'sandbox' && (
+              <div className={styles.section}>
+                <div className={styles.subBlock}>
+                  <TitleText>Preview lifetime</TitleText>
+                  <Body as="p" tone="muted">
+                    Agent-requested previews remain private until approved. A published preview expires
+                    after its configured lifetime, which is also its hard cap.
+                  </Body>
+                  <Field
+                    label="Approval timeout (minutes)"
+                    hint="Whole number from 1 to 1440. Default 1440 minutes (24 hours)."
+                    validationState={previewApprovalError ? 'error' : 'none'}
+                    validationMessage={previewApprovalError ?? undefined}
+                  >
+                    <Input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      step={1}
+                      value={String(previewApprovalTimeout)}
+                      onChange={(_, data) => setPreviewApprovalTimeout(Number(data.value))}
+                      aria-label="Preview approval timeout in minutes"
+                    />
+                  </Field>
+                  <Field
+                    label="Preview lifetime (minutes)"
+                    hint="Whole number from 1 to 1440. Default 1440 minutes (24 hours). This is both the expiration and hard cap."
+                  >
+                    <Input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      step={1}
+                      value={String(previewLifetime)}
+                      onChange={(_, data) => setPreviewLifetime(Number(data.value))}
+                      aria-label="Preview lifetime in minutes"
+                    />
+                  </Field>
+                  <Field
+                    label="Infrastructure convergence deadline (seconds)"
+                    hint="Whole number from 60 to 3600. Default 600 seconds (10 minutes). This covers App Routing DNS and Gateway route programming."
+                  >
+                    <Input
+                      type="number"
+                      min={60}
+                      max={3600}
+                      step={1}
+                      value={String(previewDnsConvergenceTimeout)}
+                      onChange={(_, data) => setPreviewDnsConvergenceTimeout(Number(data.value))}
+                      aria-label="Preview infrastructure convergence deadline in seconds"
+                    />
+                  </Field>
+                  <div className={styles.formActions}>
+                    <Button
+                      appearance="primary"
+                      disabled={savingPreviewApproval}
+                      onClick={() => void handleSavePreviewApproval()}
+                    >
+                      {savingPreviewApproval ? 'Saving preview settings' : 'Save preview settings'}
+                    </Button>
+                    {savingPreviewApproval && <Spinner size="extra-tiny" aria-hidden="true" />}
+                  </div>
+                  {previewApprovalSuccess && (
+                    <MessageBar intent="success">
+                      <MessageBarBody>Preview settings saved.</MessageBarBody>
+                    </MessageBar>
+                  )}
+                </div>
+                {sandboxLoading && <Spinner size="extra-tiny" label="Loading policy" />}
+                {sandboxError && (
+                  <MessageBar intent="error"><MessageBarBody>{sandboxError}</MessageBarBody></MessageBar>
+                )}
+                {sandboxPolicy && (
+                  <>
+                    <Field label="Shell execution">
+                      <Switch
+                        label={sandboxPolicy.shell_enabled ? 'Enabled' : 'Disabled'}
+                        checked={sandboxPolicy.shell_enabled}
+                        onChange={(_, data) =>
+                          setSandboxPolicy((prev) => prev ? { ...prev, shell_enabled: data.checked } : prev)
+                        }
+                      />
+                    </Field>
+                    <Field
+                      label="Sandbox enabled"
+                      hint="When off, commands run directly on the host with no isolation layer."
+                    >
+                      <Switch
+                        label={sandboxPolicy.direct ? 'Off — no isolation layer' : 'On — commands run in the sandbox'}
+                        checked={!sandboxPolicy.direct}
+                        onChange={(_, data) =>
+                          setSandboxPolicy((prev) => prev ? { ...prev, direct: !data.checked } : prev)
+                        }
+                      />
+                    </Field>
+                    <Field
+                      label="Outbound network"
+                      hint={sandboxPolicy.direct ? 'Only applies when the sandbox is enabled.' : undefined}
+                    >
+                      <Switch
+                        label={sandboxPolicy.network_enabled ? 'Enabled' : 'Blocked'}
+                        checked={sandboxPolicy.network_enabled}
+                        disabled={sandboxPolicy.direct}
+                        onChange={(_, data) =>
+                          setSandboxPolicy((prev) => prev ? { ...prev, network_enabled: data.checked } : prev)
+                        }
+                      />
+                    </Field>
+                    <Field label="Allowed repository roots">
+                      <div className={styles.listBox}>
+                        {sandboxPolicy.allowed_repository_roots.length === 0 ? (
+                          <Label as="span" className={styles.emptyNote}>None configured</Label>
+                        ) : (
+                          sandboxPolicy.allowed_repository_roots.map((root, i) => (
+                            <div key={i} className={styles.listItem}>{root}</div>
+                          ))
+                        )}
+                      </div>
+                    </Field>
+                    <Field label="Blocked command patterns">
+                      <div className={styles.listBox}>
+                        {sandboxPolicy.destructive_command_patterns.length === 0 ? (
+                          <Label as="span" className={styles.emptyNote}>None configured</Label>
+                        ) : (
+                          sandboxPolicy.destructive_command_patterns.map((pat, i) => (
+                            <div key={i} className={styles.listItem}>{pat}</div>
+                          ))
+                        )}
+                      </div>
+                    </Field>
+                    <div className={styles.formActions}>
+                      <Button
+                        appearance="primary"
+                        disabled={savingSandbox}
+                        onClick={() => void handleSaveSandbox()}
+                      >
+                        {savingSandbox ? 'Saving' : 'Save'}
+                      </Button>
+                      <Button
+                        appearance="secondary"
+                        disabled={savingSandbox || sandboxLoading}
+                        onClick={() => {
+                          if (!project?.working_directory) return;
+                          setSandboxFetched(false);
+                          setSandboxSaveError(null);
+                          setSandboxSaveSuccess(false);
+                          void apiClient.getSandboxPolicy(project.working_directory)
+                            .then((p) => {
+                              setSandboxPolicy(p);
+                              setSandboxFetched(true);
+                            })
+                            .catch((err) => {
+                              setSandboxFetched(true);
+                              setSandboxError(formatError(err));
+                            });
+                        }}
+                      >
+                        Discard changes
+                      </Button>
+                      {savingSandbox && <Spinner size="extra-tiny" aria-hidden="true" />}
+                    </div>
+                    {sandboxSaveError && (
+                      <MessageBar intent="error"><MessageBarBody>{sandboxSaveError}</MessageBarBody></MessageBar>
+                    )}
+                    {sandboxSaveSuccess && (
+                      <MessageBar intent="success"><MessageBarBody>Sandbox policy saved.</MessageBarBody></MessageBar>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {displayedSection === 'danger' && (
+              <div className={styles.dangerSection}>
+                <TitleText>Delete project</TitleText>
+                <Body as="p">This action cannot be undone. The project and all its run history will be permanently removed.</Body>
+                <Checkbox
+                  label="I understand this is permanent"
+                  checked={deleteConfirmed}
+                  onChange={(_, data) => setDeleteConfirmed(!!data.checked)}
+                />
+                <div className={styles.formActions}>
+                  <Button
+                    appearance="primary"
+                    style={{ backgroundColor: tokens.colorPaletteRedBackground3, borderColor: tokens.colorPaletteRedBorder2 }}
+                    disabled={!deleteConfirmed || deleting}
+                    onClick={() => void handleDelete()}
+                  >
+                    {deleting ? 'Deleting' : 'Delete project'}
+                  </Button>
+                  {deleting && <Spinner size="extra-tiny" aria-hidden="true" />}
+                </div>
+                {deleteError && (
+                  <MessageBar intent="error"><MessageBarBody>{deleteError}</MessageBarBody></MessageBar>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </PageContainer>
+  );
+}

@@ -196,6 +196,14 @@ Platform release composition, chart wiring, and deployment gates remain future w
 - No version bump or publication is implied by this draft entry. Documentation,
   tests, and CI-only changes do not require a component changeset; product component
   changes require a fresh changeset even when the release prose describes them.
+- `Agentweaver.Web` is the React client mirrored by `apps/web/package.json` and
+  `apps/web/package-lock.json`. It is a separate service image in the draft
+  manifest, not the retired .NET static host. Its source-bound preparation runs
+  `npm ci --offline` and the Vite build with ambient `VITE_*` values removed,
+  then builds a local image from the checked-in digest-pinned web Dockerfile.
+  The runtime entrypoint supplies browser configuration from container
+  environment variables. The resulting local image archive and build/source
+  hashes are recorded in provenance; preparation does not publish or deploy it.
 
 Run `npm run release:validate` to check the draft against checked-in projects
 and validate all `.changeset/*.md` records. Run
@@ -305,6 +313,11 @@ The manual workflow has a separate publication choice.
   By default it packs contracts/libraries and prepares service images in a fresh,
   empty `artifacts/release/pack/` directory. Pass `--packages-only` to prepare
   only the manifest's contracts and libraries; service images are not rebuilt.
+  The web service uses its committed npm lockfile and an isolated staging context
+  containing the source-bound `apps/web` files and fresh build output. Its
+  `FROM` images must be immutable digest references already available locally;
+  web packing disables network access during Docker build and never pulls or
+  pushes an image.
   It writes an atomic `provenance.json` receipt after all artifacts succeed.
   The receipt includes the source commit SHA, manifest hash, each component's ID/kind/version,
   and a SHA-256 hash of every artifact file it actually produced. It refuses

@@ -88,6 +88,12 @@
       "project": "services/gateway/Agentweaver.Gateway/Agentweaver.Gateway.csproj"
     },
     {
+      "id": "Agentweaver.Web",
+      "kind": "service",
+      "version": "0.0.0",
+      "project": "apps/web/package.json"
+    },
+    {
       "id": "Agentweaver.Orchestrator",
       "kind": "service",
       "version": "0.0.0",

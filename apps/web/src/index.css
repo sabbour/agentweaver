@@ -1,0 +1,71 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  font-family: "Segoe UI", "Segoe UI Web (West European)", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
+}
+
+html {
+  font-size: 15px;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* Fallback only — Fluent webLightTheme owns all background theming. */
+body {
+  background-color: var(--colorNeutralBackground2, #f8f4f1);
+  color: var(--colorNeutralForeground1, #272320);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+}
+
+/* Impeccable live-mode compatibility.
+   These rules are inert unless the local live toolbar is injected. */
+body:has(#impeccable-live-global-bar) [id^='impeccable-live-'] {
+  z-index: 2147483647 !important;
+}
+
+body:has(#impeccable-live-global-bar) #impeccable-live-highlight,
+body:has(#impeccable-live-global-bar) #impeccable-live-tooltip,
+body:has(#impeccable-live-global-bar) #impeccable-live-edit-badge,
+body:has(#impeccable-live-global-bar) #impeccable-live-annot,
+body:has(#impeccable-live-global-bar) #impeccable-live-annot-svg,
+body:has(#impeccable-live-global-bar) #impeccable-live-annot-pins,
+body:has(#impeccable-live-global-bar) #impeccable-live-annot-clear,
+body:has(#impeccable-live-global-bar) #impeccable-live-placeholder-resize,
+body:has(#impeccable-live-global-bar) #impeccable-live-bar,
+body:has(#impeccable-live-global-bar) #impeccable-live-picker,
+body:has(#impeccable-live-global-bar) #impeccable-live-params-panel,
+body:has(#impeccable-live-global-bar) #impeccable-live-pending-dock,
+body:has(#impeccable-live-global-bar) #impeccable-live-design-host {
+  pointer-events: none !important;
+}
+
+body:has(#impeccable-live-global-bar) #impeccable-live-global-bar,
+body:has(#impeccable-live-global-bar) #impeccable-live-global-bar * {
+  pointer-events: auto !important;
+}
+
+body:has(#impeccable-live-global-bar) .fui-DialogSurface__backdrop,
+body:has(#impeccable-live-global-bar) [class*='DialogSurface__backdrop'],
+body:has(#impeccable-live-global-bar) [class*='dialogSurfaceBackdrop'],
+body:has(#impeccable-live-global-bar) [class*='backdrop'] {
+  z-index: 100000 !important;
+  pointer-events: none !important;
+}
+
+body:has(#impeccable-live-global-bar) .fui-DialogSurface,
+body:has(#impeccable-live-global-bar) [role='dialog'][aria-modal='true'] {
+  z-index: 100001 !important;
+  pointer-events: auto !important;
+}
