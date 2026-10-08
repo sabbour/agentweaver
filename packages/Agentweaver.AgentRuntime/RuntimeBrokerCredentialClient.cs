@@ -57,6 +57,61 @@ public sealed class RuntimeBrokerCredentialClient(
         return receipt;
     }
 
+    public async Task<SecretCredential> RedeemModelCredentialAsync(
+        RuntimeRegistration registration, Guid operationId, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        var binding = registration.Binding;
+        var credentialReference = binding.ModelCredentialReference;
+        if (operationId == Guid.Empty || credentialReference is null ||
+            string.IsNullOrWhiteSpace(binding.ModelSelectionReference) ||
+            registration.State != RuntimeRegistrationState.Active ||
+            registration.ExpiresAt <= timeProvider.GetUtcNow() || !actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_model_credential_unavailable");
+
+        var grant = await RuntimeOwnerHttpTransport.SendAsync<RuntimeModelCredentialGrantReceipt>(
+            client, _brokerAddress, "/internal/runtime/model-session/grant", actor,
+            new RuntimeModelCredentialGrantRequest(registration.RuntimeInstanceId, operationId),
+            cancellationToken);
+        if (string.IsNullOrWhiteSpace(grant.GrantId) || grant.Revision <= 0 ||
+            grant.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            grant.RegistrationRevision != registration.Revision ||
+            grant.ModelSelectionReference != binding.ModelSelectionReference ||
+            grant.CredentialReference != credentialReference ||
+            grant.Purpose != RuntimeSecretPurposes.ModelSession ||
+            grant.ExpiresAt <= timeProvider.GetUtcNow() || grant.ExpiresAt > registration.ExpiresAt)
+            throw new RuntimeAuthorizationException("runtime_model_grant_receipt_invalid");
+
+        var redeemed = await RuntimeOwnerHttpTransport.SendAsync<ModelCredentialRedemptionResponse>(
+            client, _brokerAddress, "/secrets/redeem", actor,
+            new ModelCredentialRedemptionRequest(
+                credentialReference.Id, credentialReference.Version,
+                RuntimeSecretPurposes.ModelSession, binding.RunId),
+            cancellationToken);
+        if (redeemed.SecretId != credentialReference.Id ||
+            redeemed.SecretVersion != credentialReference.Version ||
+            string.IsNullOrEmpty(redeemed.Value) ||
+            redeemed.ExpiresAt <= timeProvider.GetUtcNow() ||
+            redeemed.ExpiresAt > grant.ExpiresAt)
+            throw new RuntimeAuthorizationException("runtime_model_credential_response_invalid");
+
+        SecretCredential? credential = null;
+        try
+        {
+            credential = new SecretCredential(redeemed.Value, redeemed.ExpiresAt, timeProvider);
+            var lifetimeLimit = grant.ExpiresAt < actor.Bearer.ExpiresAt
+                ? grant.ExpiresAt
+                : actor.Bearer.ExpiresAt;
+            credential.LimitLifetime(lifetimeLimit);
+            return credential;
+        }
+        catch
+        {
+            credential?.Invalidate();
+            throw;
+        }
+    }
+
     private Task<RuntimeGrantReceipt> SendReceiptAsync(
         string path, RuntimeCredentialProof proof, Guid operationId, CancellationToken cancellationToken) =>
         RuntimeOwnerHttpTransport.SendAsync<RuntimeGrantReceipt>(
@@ -119,5 +174,14 @@ public sealed class RuntimeBrokerCredentialClient(
     {
         if (proof.Purpose != purpose)
             throw new RuntimeAuthorizationException("runtime_purpose_invalid");
+    }
+
+    private sealed record ModelCredentialRedemptionRequest(
+        string SecretId, string SecretVersion, string Purpose, string RunId);
+
+    private sealed record ModelCredentialRedemptionResponse(
+        string SecretId, string SecretVersion, DateTimeOffset ExpiresAt, string Value)
+    {
+        public override string ToString() => nameof(ModelCredentialRedemptionResponse) + " [REDACTED]";
     }
 }

@@ -110,18 +110,27 @@ public sealed class KubernetesAgentSandboxClient
         string resource,
         string kubernetesNamespace,
         ImmutableDictionary<string, string> labelSelector,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? fieldSelector = null)
     {
         ArgumentNullException.ThrowIfNull(labelSelector);
+        if (fieldSelector is { Length: > 1024 } || fieldSelector?.Any(char.IsControl) == true)
+            throw new ArgumentException("Kubernetes field selectors must be bounded and contain no control characters.",
+                nameof(fieldSelector));
         var path = NamespacedResourcePath(apiGroup, resource, kubernetesNamespace, null);
+        var selectors = new List<string>(2);
         if (labelSelector.Count > 0)
         {
             var selector = string.Join(
                 ",",
                 labelSelector.OrderBy(pair => pair.Key, StringComparer.Ordinal)
                     .Select(pair => $"{pair.Key}={pair.Value}"));
-            path = $"{path}?labelSelector={Uri.EscapeDataString(selector)}";
+            selectors.Add($"labelSelector={Uri.EscapeDataString(selector)}");
         }
+        if (!string.IsNullOrWhiteSpace(fieldSelector))
+            selectors.Add($"fieldSelector={Uri.EscapeDataString(fieldSelector)}");
+        if (selectors.Count > 0)
+            path = $"{path}?{string.Join("&", selectors)}";
 
         using var response = await SendAsync(
             HttpMethod.Get,

@@ -15,6 +15,9 @@ public static class RuntimeCredentialEndpoints
         {
             AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme
         });
+        routes.MapPost("/model-session/grant", (HttpContext context, RuntimeModelCredentialGrantRequest input) =>
+            ExecuteAsync(context, authority => authority.IssueModelCredentialGrantAsync(
+                input.RuntimeInstanceId, input.OperationId, context.RequestAborted)));
         routes.MapPost("/bootstrap/request", RequestAsync);
         routes.MapPost("/bootstrap/verify-pending", VerifyPendingAsync);
         routes.MapPost("/bootstrap/consume", (HttpContext context, RuntimeCredentialHttpRequest input) =>

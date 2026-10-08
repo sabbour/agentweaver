@@ -42,6 +42,16 @@ public sealed class SecretContractsTests
     }
 
     [Fact]
+    public void SecretReferencesUseValueEqualityAcrossSerialization()
+    {
+        var reference = new SecretRef("opaque-id", "v:2");
+        var restored = JsonSerializer.Deserialize<SecretRef>(JsonSerializer.Serialize(reference));
+
+        Assert.Equal(reference, restored);
+        Assert.Equal(reference.GetHashCode(), restored!.GetHashCode());
+    }
+
+    [Fact]
     public void CredentialRequiresFutureExpiryAndNonemptyValue()
     {
         Assert.Throws<ArgumentException>(() => new SecretCredential("", Now.AddMinutes(1), _clock));

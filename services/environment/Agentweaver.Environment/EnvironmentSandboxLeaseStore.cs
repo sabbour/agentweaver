@@ -1091,7 +1091,7 @@ public sealed class EnvironmentSandboxLeaseStore(
                    provider_request_fingerprint, resource_json, retirement_reason, terminal_evidence_json, retiring_issuer,
                    retiring_actor_id, retiring_membership_revision, release_idempotency_key,
                    retirement_fingerprint, is_current, updated_at, lease_revision, lease_expires_at,
-                   partial_release_receipt_json
+                   partial_release_receipt_json, created_at
             FROM {Leases}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND run_id = @run_id AND environment_id = @environment_id
@@ -1119,6 +1119,7 @@ public sealed class EnvironmentSandboxLeaseStore(
               left.State == right.State &&
               left.IsCurrent == right.IsCurrent &&
               left.LeaseExpiresAt == right.LeaseExpiresAt &&
+              left.CreatedAt == right.CreatedAt &&
               left.UpdatedAt == right.UpdatedAt;
 
     private static async Task<SandboxLeaseSnapshot?> ReadByGenerationAsync(
@@ -1136,7 +1137,7 @@ public sealed class EnvironmentSandboxLeaseStore(
                    provider_request_fingerprint, resource_json, retirement_reason, terminal_evidence_json, retiring_issuer,
                    retiring_actor_id, retiring_membership_revision, release_idempotency_key,
                    retirement_fingerprint, is_current, updated_at, lease_revision, lease_expires_at,
-                   partial_release_receipt_json
+                   partial_release_receipt_json, created_at
             FROM {Leases}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND run_id = @run_id AND environment_id = @environment_id
@@ -1166,7 +1167,7 @@ public sealed class EnvironmentSandboxLeaseStore(
                    provider_request_fingerprint, resource_json, retirement_reason, terminal_evidence_json, retiring_issuer,
                    retiring_actor_id, retiring_membership_revision, release_idempotency_key,
                    retirement_fingerprint, is_current, updated_at, lease_revision, lease_expires_at,
-                   partial_release_receipt_json
+                   partial_release_receipt_json, created_at
             FROM {Leases}
             WHERE operation_id = @operation_id
               AND tenant_id = @tenant_id AND project_id = @project_id
@@ -1196,7 +1197,7 @@ public sealed class EnvironmentSandboxLeaseStore(
                    provider_request_fingerprint, resource_json, retirement_reason, terminal_evidence_json, retiring_issuer,
                    retiring_actor_id, retiring_membership_revision, release_idempotency_key,
                    retirement_fingerprint, is_current, updated_at, lease_revision, lease_expires_at,
-                   partial_release_receipt_json
+                   partial_release_receipt_json, created_at
             FROM {Leases}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND run_id = @run_id AND environment_id = @environment_id
@@ -1259,6 +1260,8 @@ public sealed class EnvironmentSandboxLeaseStore(
             : reader.GetFieldValue<DateTimeOffset>(offset);
         offset++;
         var partialReleaseJson = reader.IsDBNull(offset) ? null : reader.GetString(offset);
+        offset++;
+        var createdAt = reader.GetFieldValue<DateTimeOffset>(offset);
         var intent = new SandboxLeaseProvisionIntent(
             providerId,
             adapterVersion,
@@ -1301,7 +1304,8 @@ public sealed class EnvironmentSandboxLeaseStore(
             ProviderRequestFingerprint = providerRequestFingerprint,
             LeaseRevision = leaseRevision,
             LeaseExpiresAt = leaseExpiresAt,
-            PartialReleaseReceipt = partialReleaseReceipt
+            PartialReleaseReceipt = partialReleaseReceipt,
+            CreatedAt = createdAt
         }.Validate();
     }
 

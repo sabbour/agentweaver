@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
@@ -34,6 +35,21 @@ public sealed record RuntimeBootstrapRequest(
     Guid RuntimeInstanceId,
     Guid OperationId,
     string ConfigurationHash);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeModelCredentialGrantRequest(
+    Guid RuntimeInstanceId,
+    Guid OperationId);
+
+public sealed record RuntimeModelCredentialGrantReceipt(
+    string GrantId,
+    long Revision,
+    Guid RuntimeInstanceId,
+    long RegistrationRevision,
+    string ModelSelectionReference,
+    SecretRef CredentialReference,
+    string Purpose,
+    DateTimeOffset ExpiresAt);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeCredentialHttpRequest(

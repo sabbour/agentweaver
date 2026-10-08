@@ -33,6 +33,13 @@ public static class RuntimeContractValidation
             ValidateIdentifier(value);
         if (binding.ModelSelectionReference is { } modelSelectionReference)
             ValidateIdentifier(modelSelectionReference);
+        if (binding.ModelCredentialReference is { } modelCredentialReference)
+        {
+            ValidateIdentifier(modelCredentialReference.Id);
+            ValidateIdentifier(modelCredentialReference.Version);
+            if (binding.ModelSelectionReference is null)
+                throw new RuntimeAuthorizationException("runtime_binding_invalid");
+        }
         if (binding.PlacementProviderId is { } placementProviderId)
         {
             ValidateIdentifier(placementProviderId);

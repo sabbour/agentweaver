@@ -352,8 +352,14 @@ public sealed class AgentSandboxProvider : ISandboxProvider
             pod,
             options,
             cancellationToken).ConfigureAwait(false);
-        var phases = ReadStartupPhases(pod);
-        var failed = IsPodFailed(pod);
+        var phases = await ReadStartupPhasesAsync(
+            pod, descriptor.Namespace, options, cancellationToken).ConfigureAwait(false);
+        var startupFailure = EvaluateStartupBudget(
+            request.LeaseCreatedAt,
+            phases,
+            options.StartupBudgets,
+            _timeProvider.GetUtcNow());
+        var failed = IsPodFailed(pod) || startupFailure is not null;
         var state = failed
             ? SandboxObservedState.Failed
             : SandboxObservedState.Pending;
@@ -366,7 +372,8 @@ public sealed class AgentSandboxProvider : ISandboxProvider
             VerifiedNetworkGeneration: null,
             StartupPhases: phases,
             ProvisionOperationId: operationId,
-            ProvisionedResource: BuildProvisionedResource(request, descriptor, phases)).ValidateFor(request);
+            ProvisionedResource: BuildProvisionedResource(request, descriptor, phases),
+            StartupFailure: startupFailure).ValidateFor(request);
     }
 
     public async Task<IReadOnlyList<SandboxObservation>> ListOwnedAsync(
@@ -415,7 +422,8 @@ public sealed class AgentSandboxProvider : ISandboxProvider
                     request.Fence,
                     resource,
                     fencingGeneration,
-                    binding),
+                    binding,
+                    request.LeaseCreatedAt),
                 cancellationToken).ConfigureAwait(false));
         }
 
@@ -1670,17 +1678,88 @@ public sealed class AgentSandboxProvider : ISandboxProvider
         AgentSandboxRecoveryDescriptor descriptor,
         ImmutableArray<SandboxStartupPhaseObservation> phases,
         bool workspaceVerified,
-        bool isolationVerified) =>
-        new SandboxObservation(
+        bool isolationVerified)
+    {
+        var options = JsonSerializer.Deserialize<AgentSandboxOptions>(descriptor.OptionsSnapshot, JsonOptions)
+            ?? throw ProviderBindingMismatch();
+        var startupFailure = EvaluateStartupBudget(
+            request.LeaseCreatedAt,
+            phases,
+            options.StartupBudgets,
+            _timeProvider.GetUtcNow());
+        return new SandboxObservation(
             request.Resource,
-            SandboxObservedState.Pending,
+            startupFailure is null ? SandboxObservedState.Pending : SandboxObservedState.Failed,
             request.FencingGeneration,
             isolationVerified,
             workspaceVerified,
             null,
             phases,
             ProvisionOperationId: Guid.ParseExact(descriptor.OperationId, "N"),
-            ProvisionedResource: BuildProvisionedResource(request, descriptor, phases)).ValidateFor(request);
+            ProvisionedResource: BuildProvisionedResource(request, descriptor, phases),
+            StartupFailure: startupFailure).ValidateFor(request);
+    }
+
+    private static SandboxStartupBudgetFailure? EvaluateStartupBudget(
+        DateTimeOffset leaseCreatedAt,
+        ImmutableArray<SandboxStartupPhaseObservation> phases,
+        AgentSandboxStartupBudgets budgets,
+        DateTimeOffset now)
+    {
+        if (leaseCreatedAt > now)
+            throw new SandboxProviderException(
+                "sandbox_startup_evidence_invalid",
+                "The persisted Sandbox lease creation time is in the future.",
+                effectMayHaveApplied: false);
+
+        var observedPhases = phases.ToDictionary(phase => phase.Phase);
+        var failures = new List<SandboxStartupBudgetFailure>();
+        var previousAt = leaseCreatedAt;
+        foreach (var phase in Enum.GetValues<SandboxStartupPhase>())
+        {
+            var deadline = previousAt.AddSeconds(budgets.For(phase));
+            if (!observedPhases.TryGetValue(phase, out var observed))
+            {
+                if (now > deadline)
+                    failures.Add(new(
+                        SandboxStartupBudgetFailureKind.PhaseExceeded,
+                        phase,
+                        budgets.For(phase),
+                        deadline,
+                        now));
+                break;
+            }
+            if (observed.ObservedAt < previousAt || observed.ObservedAt > now)
+                throw new SandboxProviderException(
+                    "sandbox_startup_evidence_invalid",
+                    "Sandbox startup phase timestamps are not chronological or are in the future.",
+                    effectMayHaveApplied: false);
+            if (observed.ObservedAt > deadline)
+                failures.Add(new(
+                    SandboxStartupBudgetFailureKind.PhaseExceeded,
+                    phase,
+                    budgets.For(phase),
+                    deadline,
+                    observed.ObservedAt));
+            previousAt = observed.ObservedAt;
+        }
+
+        var totalDeadline = leaseCreatedAt.AddSeconds(budgets.TotalSeconds);
+        var totalObservedAt = observedPhases.TryGetValue(SandboxStartupPhase.Ready, out var ready)
+            ? ready.ObservedAt
+            : now;
+        if (totalObservedAt > totalDeadline)
+            failures.Add(new(
+                SandboxStartupBudgetFailureKind.TotalExceeded,
+                SandboxStartupPhase.Ready,
+                budgets.TotalSeconds,
+                totalDeadline,
+                totalObservedAt));
+
+        return failures
+            .OrderBy(failure => failure.Deadline)
+            .FirstOrDefault();
+    }
 
     private SandboxProvisionedResource BuildProvisionedResource(
         SandboxDescribeRequest request,
@@ -1913,35 +1992,103 @@ public sealed class AgentSandboxProvider : ISandboxProvider
         new SandboxPlacementReference(
             $"k8s-{Hash($"{clusterIdentity}\0{kubernetesNamespace}")[..32]}").Validate();
 
-    private ImmutableArray<SandboxStartupPhaseObservation> ReadStartupPhases(JsonElement pod)
+    private async Task<ImmutableArray<SandboxStartupPhaseObservation>> ReadStartupPhasesAsync(
+        JsonElement pod,
+        string kubernetesNamespace,
+        AgentSandboxOptions options,
+        CancellationToken cancellationToken)
     {
         var phases = ImmutableArray.CreateBuilder<SandboxStartupPhaseObservation>();
         if (HasTrueCondition(pod, "PodScheduled", out var scheduledAt))
             phases.Add(new SandboxStartupPhaseObservation(
                 SandboxStartupPhase.Scheduled,
                 1,
-                scheduledAt ?? _timeProvider.GetUtcNow()));
+                scheduledAt ?? throw new SandboxProviderException(
+                    "sandbox_startup_evidence_missing",
+                    "The scheduled placement condition has no transition timestamp.",
+                    effectMayHaveApplied: false)));
 
         var containerStatus = FindContainerStatus(pod, WorkspaceContainerName);
-        if (containerStatus is { } container &&
-            !string.IsNullOrWhiteSpace(ReadOptionalString(container, "imageID")))
-            phases.Add(new SandboxStartupPhaseObservation(
-                SandboxStartupPhase.ImageReady,
-                1,
-                _timeProvider.GetUtcNow()));
-
-        if (containerStatus is { } startedContainer &&
-            TryGetDateTime(startedContainer, "state", "running", "startedAt", out var startedAt))
+        var startedAt = DateTimeOffset.MinValue;
+        var selectedImageRunning = containerStatus is { } selectedContainer &&
+            IsSelectedImageRunning(pod, selectedContainer, options, out startedAt);
+        if (selectedImageRunning)
             phases.Add(new SandboxStartupPhaseObservation(
                 SandboxStartupPhase.Started,
                 1,
                 startedAt));
+
+        if (ReadOptionalString(pod, "metadata", "uid") is { } podUid &&
+            selectedImageRunning)
+        {
+            var events = await _client.ListAsync(
+                string.Empty,
+                "events",
+                kubernetesNamespace,
+                ImmutableDictionary<string, string>.Empty,
+                cancellationToken,
+                $"involvedObject.uid={podUid}").ConfigureAwait(false);
+            if (TryReadMatchingImagePullCompletedAt(
+                    events, podUid, options, out var imageReadyAt))
+                phases.Add(new SandboxStartupPhaseObservation(
+                    SandboxStartupPhase.ImageReady,
+                    1,
+                    imageReadyAt,
+                    options.ContainerImageDigest,
+                    options.ContainerImageCompressedPullBytes));
+        }
 
         return phases
             .GroupBy(phase => phase.Phase)
             .Select(group => group.OrderBy(phase => phase.ObservedAt).First())
             .OrderBy(phase => phase.Phase)
             .ToImmutableArray();
+    }
+
+    private static bool IsSelectedImageRunning(
+        JsonElement pod,
+        JsonElement container,
+        AgentSandboxOptions options,
+        out DateTimeOffset startedAt)
+    {
+        startedAt = default;
+        if (ReadOptionalString(container, "imageID") is not { } imageId ||
+            !imageId.EndsWith(options.ContainerImageDigest, StringComparison.Ordinal) ||
+            TryGetArray(TryGetObject(pod, "spec") ?? default, "containers") is not { } containers)
+            return false;
+
+        foreach (var spec in containers.EnumerateArray())
+        {
+            if (ReadOptionalString(spec, "name") == WorkspaceContainerName &&
+                ReadOptionalString(spec, "image") == options.ContainerImage &&
+                TryGetDateTime(container, "state", "running", "startedAt", out startedAt))
+                return true;
+        }
+        startedAt = default;
+        return false;
+    }
+
+    private static bool TryReadMatchingImagePullCompletedAt(
+        IReadOnlyList<JsonElement> events,
+        string podUid,
+        AgentSandboxOptions options,
+        out DateTimeOffset completedAt)
+    {
+        completedAt = default;
+        foreach (var item in events)
+        {
+            if (ReadOptionalString(item, "reason") != "Pulled" ||
+                ReadOptionalString(item, "involvedObject", "uid") != podUid ||
+                (ReadOptionalString(item, "message") ?? ReadOptionalString(item, "note")) is not { } message ||
+                !message.Contains(options.ContainerImageDigest, StringComparison.Ordinal) ||
+                message.Contains("already present", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (TryGetDateTime(item, "eventTime", out completedAt) ||
+                TryGetDateTime(item, "lastTimestamp", out completedAt) ||
+                TryGetDateTime(item, ["metadata", "creationTimestamp"], out completedAt))
+                return true;
+        }
+        return false;
     }
 
     private static bool HasTrueCondition(

@@ -29,6 +29,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
 
     public ConcurrentQueue<(string Method, JsonElement Parameters)> Requests { get; } = [];
     public string ModelId { get; set; } = "controlled-model";
+    public string SdkCredential { get; set; } = "external-sdk-credential";
     public string? EffectiveModelId { get; set; }
     public Action? BeforeEffectiveModelResponse { get; set; }
     public Func<CancellationToken, Task>? BeforeStatusResponse { get; set; }
@@ -101,7 +102,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                             result = new { ok = true, protocolVersion = 3, version = "controlled-runtime-v1" };
                             break;
                         case "models.list":
-                            Assert.Equal("external-sdk-credential", parameters.GetProperty("gitHubToken").GetString());
+                            Assert.Equal(SdkCredential, parameters.GetProperty("gitHubToken").GetString());
                             result = new
                             {
                                 models = new[]
@@ -123,7 +124,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                         case "session.create":
                             _sessionId = parameters.GetProperty("sessionId").GetString();
                             Assert.Equal(ModelId, parameters.GetProperty("model").GetString());
-                            Assert.Equal("external-sdk-credential", parameters.GetProperty("gitHubToken").GetString());
+                            Assert.Equal(SdkCredential, parameters.GetProperty("gitHubToken").GetString());
                             Assert.False(parameters.GetProperty("enableConfigDiscovery").GetBoolean());
                             Assert.False(parameters.GetProperty("enableSessionStore").GetBoolean());
                             Assert.Equal("off", parameters.GetProperty("remoteSession").GetString());

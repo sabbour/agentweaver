@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 
@@ -46,6 +47,8 @@ public static partial class CoordinationEndpoints
         if (workPlanItem is null || string.IsNullOrWhiteSpace(workPlanItem.AgentId) ||
             string.IsNullOrWhiteSpace(workPlanItem.ModelSelectionReference))
             throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+        var modelCredentialReference = ReadModelCredentialReference(
+            selection.Selection.Snapshot, workPlanItem.ModelSelectionReference);
         await RequireUnchangedAuthorizedSelectionAsync(
             context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
         var currentOwner = await store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)
@@ -72,6 +75,41 @@ public static partial class CoordinationEndpoints
             selection.Selection.ProjectRevision, selection.Selection.ProjectConfigurationRevision,
             selection.Selection.PlatformRuntimeRevision, selection.Selection.ContextRevision,
             owner.AcceptedSelectionHash.ToLowerInvariant(), owner.ExecutionFence, owner.LogicalTurnOrdinal,
-            owner.StateVersion, decision.StateVersion);
+            owner.StateVersion, decision.StateVersion)
+        {
+            ModelCredentialReference = modelCredentialReference
+        };
+    }
+
+    private static SecretRef? ReadModelCredentialReference(JsonElement snapshot, string expectedModelReference)
+    {
+        if (snapshot.ValueKind != JsonValueKind.Object ||
+            !snapshot.TryGetProperty("modelSelection", out var modelSelection) ||
+            modelSelection.ValueKind != JsonValueKind.Object ||
+            !modelSelection.TryGetProperty("reference", out var reference) ||
+            reference.ValueKind != JsonValueKind.String ||
+            !string.Equals(reference.GetString(), expectedModelReference, StringComparison.Ordinal))
+            throw new CoordinationException(
+                "runtime_owner_model_selection_unavailable", StatusCodes.Status409Conflict);
+
+        if (!modelSelection.TryGetProperty("credentialReference", out var credentialReference) ||
+            credentialReference.ValueKind == JsonValueKind.Null)
+            return null;
+        if (credentialReference.ValueKind != JsonValueKind.Object ||
+            !credentialReference.TryGetProperty("id", out var id) ||
+            id.ValueKind != JsonValueKind.String ||
+            !credentialReference.TryGetProperty("version", out var version) ||
+            version.ValueKind != JsonValueKind.String)
+            throw new CoordinationException(
+                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+        try
+        {
+            return new SecretRef(id.GetString()!, version.GetString()!);
+        }
+        catch (ArgumentException)
+        {
+            throw new CoordinationException(
+                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+        }
     }
 }

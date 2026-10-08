@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Agentweaver.Abstractions;
 
 public sealed record RuntimeOwnerContext(
@@ -19,4 +21,8 @@ public sealed record RuntimeOwnerContext(
     long ExecutionFence,
     long LogicalTurnOrdinal,
     long OwnerStateVersion,
-    long DecisionStateVersion);
+    long DecisionStateVersion)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SecretRef? ModelCredentialReference { get; init; }
+}

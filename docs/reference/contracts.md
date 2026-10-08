@@ -414,7 +414,7 @@ Identity verifies the separate purpose-bound nonce for those operations.
 
 | Method and path | Source contract |
 | --- | --- |
-| `POST /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations` | Accepts only `EnvironmentId` and `ProfileId`. Derives model, agent, turn, selection, fence, lease, provider, and endpoint pins from current owners. |
+| `POST /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations` | Accepts only `EnvironmentId` and `ProfileId`. Derives model, optional exact model `SecretRef`, agent, turn, selection, fence, lease, provider, and endpoint pins from current owners. |
 | `GET /internal/runtime/registrations/{runtimeInstanceId}` | Revalidates the active session/work item, accepted selection, current lease/profile, and registration revision. A raw storage read is not authorization. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Public Environment control read. Requires current `WriteProjects`; returns the exact active, unexpired, owner-fenced lease projection. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Internal run-bound placement read. Uses existing current `ReadRunSelection` for the exact signed run. Does not grant public write permission. |
@@ -452,7 +452,10 @@ The ledger preserves explicit `Estimate`, `Reconciled`, and `Unpriced` dispositi
 `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context`
 requires the authenticated current run owner and returns `Cache-Control: no-store`.
 The response contains the active child turn, accepted revisions and hash, and
-agent/model reference from its confirmed WorkPlan item. An unknown, unmapped,
+agent/model reference from its confirmed WorkPlan item. When the accepted effective
+model selection carries a credential reference, the response also carries that exact
+`SecretRef` only if the WorkPlan model matches the selected model. It is a reference,
+not a grant or credential value. An unknown, unmapped,
 inactive, stale, or non-dispatchable child is unavailable. Caller configure JSON
 cannot set these fields.
 
