@@ -1,5 +1,7 @@
+using Agentweaver.Abstractions;
 using Agentweaver.Mcp;
 using Agentweaver.Telemetry;
+using Microsoft.AspNetCore.Mvc;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 using OpenIddict.Validation.AspNetCore;
@@ -80,7 +82,9 @@ app.Use(async (context, next) =>
 });
 app.UseAuthentication();
 app.UseAuthorization();
-app.MapMcp("/mcp").RequireAuthorization();
+app.MapMcp("/mcp").RequireAuthorization()
+    .WithMetadata(new RequestSizeLimitAttribute(
+        KnowledgeRecordTransferContract.MaximumBytes + 64 * 1024));
 app.MapGet(options.ProtectedResourceMetadataPath, () => Results.Json(new
 {
     resource = options.IdentityAudience,

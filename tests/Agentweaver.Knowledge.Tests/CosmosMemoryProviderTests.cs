@@ -175,6 +175,43 @@ public sealed class CosmosMemoryProviderTests
     }
 
     [Fact]
+    public async Task DecisionSupersessionRejectsForeignAgentTargetsThroughoutTheChain()
+    {
+        var (provider, store, _) = CreateProvider();
+        async Task<KnowledgeRecord> CreateDecisionInAgentAsync(string agentId, string key)
+        {
+            var proposal = await provider.CreateAsync(
+                CreateInput("proposal", key) with { AgentId = agentId }, $"create-{key}");
+            var promoted = await PromoteAsync(provider, proposal.Record!.RecordId);
+            return promoted.Decision!;
+        }
+
+        var source = await CreateDecisionInAgentAsync("agent-a", "foreign-direct-source");
+        var foreignTarget = await CreateDecisionInAgentAsync("agent-b", "foreign-direct-target");
+        var direct = await provider.UpdateAsync(
+            DecisionUpdate(source, KnowledgeRecordState.Superseded, foreignTarget.RecordId),
+            "foreign-direct-replacement");
+        Assert.Equal(KnowledgeWriteStatus.InvalidReplacement, direct.Status);
+
+        var transitiveSource = await CreateDecisionInAgentAsync("agent-a", "foreign-chain-source");
+        var sameAgentTarget = await CreateDecisionInAgentAsync("agent-a", "foreign-chain-target");
+        var foreignDownstream = await CreateDecisionInAgentAsync("agent-b", "foreign-chain-downstream");
+        store.SetRecord(sameAgentTarget with
+        {
+            State = KnowledgeRecordState.Superseded,
+            SupersededByRecordId = foreignDownstream.RecordId
+        });
+
+        var transitive = await provider.UpdateAsync(
+            DecisionUpdate(transitiveSource, KnowledgeRecordState.Superseded, sameAgentTarget.RecordId),
+            "foreign-transitive-replacement");
+
+        Assert.Equal(KnowledgeWriteStatus.InvalidReplacement, transitive.Status);
+        Assert.Equal(KnowledgeRecordState.Active,
+            (await provider.ReadAsync("project-a", transitiveSource.RecordId))!.State);
+    }
+
+    [Fact]
     public async Task DecisionArchiveRestoreAndApprovalAppendAuditableRevisions()
     {
         var (provider, store, options) = CreateProvider();
@@ -900,6 +937,20 @@ public sealed class CosmosMemoryProviderTests
                         }
                     };
                 }
+            }
+        }
+
+        public void SetRecord(KnowledgeRecord record)
+        {
+            lock (_gate)
+            {
+                var key = (record.ProjectId, $"record:{record.RecordId:N}");
+                var stored = _documents[key];
+                _documents[key] = stored with
+                {
+                    Document = stored.Document with { Record = record },
+                    ETag = Interlocked.Increment(ref _etag).ToString()
+                };
             }
         }
 

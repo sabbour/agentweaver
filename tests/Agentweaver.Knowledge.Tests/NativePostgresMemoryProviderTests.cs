@@ -303,6 +303,154 @@ public sealed class NativePostgresMemoryProviderTests(KnowledgePostgresFixture p
     }
 
     [Fact]
+    public async Task DecisionSupersessionRejectsForeignAgentTargetsThroughoutTheChain()
+    {
+        await using var database = await KnowledgeDatabase.CreateAsync(postgres);
+
+        async Task<KnowledgeRecord> CreateDecisionInAgentAsync(string agentId, string key)
+        {
+            var proposal = await database.Provider.CreateAsync(
+                Record("project-a", agentId, KnowledgeRecordKind.Proposal, "architecture", key,
+                    sourceRunId: "run-a"),
+                $"create-{key}");
+            var promoted = await database.Provider.PromoteProposalAsync(
+                "project-a", "run-a", proposal.Record!.RecordId, 1, Actor,
+                Authorization("project-a", "run-a"), $"promote-{key}");
+            return promoted.Decision!;
+        }
+
+        var source = await CreateDecisionInAgentAsync("agent-a", "foreign-direct-source");
+        var foreignTarget = await CreateDecisionInAgentAsync("agent-b", "foreign-direct-target");
+        var direct = await database.Provider.UpdateAsync(
+            DecisionUpdate(source, KnowledgeRecordState.Superseded, foreignTarget.RecordId),
+            "foreign-direct-replacement");
+        Assert.Equal(KnowledgeWriteStatus.InvalidReplacement, direct.Status);
+
+        var transitiveSource = await CreateDecisionInAgentAsync("agent-a", "foreign-chain-source");
+        var sameAgentTarget = await CreateDecisionInAgentAsync("agent-a", "foreign-chain-target");
+        var foreignDownstream = await CreateDecisionInAgentAsync("agent-b", "foreign-chain-downstream");
+        await using (var connection = await postgres.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{database.Options.Schema}".knowledge_records
+            SET state = 'Superseded', superseded_by_record_id = @replacement
+            WHERE project_id = @project AND record_id = @record
+            """, connection))
+        {
+            command.Parameters.AddWithValue("replacement", foreignDownstream.RecordId);
+            command.Parameters.AddWithValue("project", "project-a");
+            command.Parameters.AddWithValue("record", sameAgentTarget.RecordId);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        var transitive = await database.Provider.UpdateAsync(
+            DecisionUpdate(transitiveSource, KnowledgeRecordState.Superseded, sameAgentTarget.RecordId),
+            "foreign-transitive-replacement");
+
+        Assert.Equal(KnowledgeWriteStatus.InvalidReplacement, transitive.Status);
+        Assert.Equal(KnowledgeRecordState.Active,
+            (await database.Provider.ReadAsync("project-a", transitiveSource.RecordId))!.State);
+    }
+
+    [Fact]
+    public async Task ConcurrentDecisionUpdateAndImportAcquireGraphBeforeIdempotencyReceipt()
+    {
+        await using var database = await KnowledgeDatabase.CreateAsync(postgres);
+        var proposal = await database.Provider.CreateAsync(
+            Record("project-a", "agent-a", KnowledgeRecordKind.Proposal, "architecture", "lock order",
+                sourceRunId: "run-a"),
+            "lock-order-proposal");
+        var promotion = await database.Provider.PromoteProposalAsync(
+            "project-a", "run-a", proposal.Record!.RecordId, 1, Actor,
+            Authorization("project-a", "run-a"), "lock-order-promotion");
+        var decision = promotion.Decision!;
+        var bundle = await database.Provider.ExportAsync("project-a", "agent-a");
+        const long pauseLockId = 1981040611;
+        const string sharedKey = "decision-graph-ordering";
+
+        await using (var setup = await postgres.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            CREATE FUNCTION "{database.Options.Schema}".pause_knowledge_write_receipt()
+            RETURNS trigger LANGUAGE plpgsql AS $body$
+            BEGIN
+                IF NEW.idempotency_key = '{sharedKey}' THEN
+                    PERFORM pg_advisory_xact_lock({pauseLockId}::bigint);
+                END IF;
+                RETURN NEW;
+            END
+            $body$;
+            CREATE TRIGGER pause_knowledge_write_receipt
+            AFTER INSERT ON "{database.Options.Schema}".knowledge_write_idempotency
+            FOR EACH ROW EXECUTE FUNCTION "{database.Options.Schema}".pause_knowledge_write_receipt();
+            """, setup))
+            await command.ExecuteNonQueryAsync();
+
+        await using var blocker = await postgres.DataSource.OpenConnectionAsync();
+        await using (var command = new NpgsqlCommand(
+                         "SELECT pg_advisory_lock(@lock_id)", blocker))
+        {
+            command.Parameters.AddWithValue("lock_id", NpgsqlTypes.NpgsqlDbType.Bigint, pauseLockId);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        Task<KnowledgeRecordWriteResult>? updateTask = null;
+        Task<KnowledgeRecordImportResult>? importTask = null;
+        var blockerReleased = false;
+        try
+        {
+            updateTask = database.Provider.UpdateAsync(
+                DecisionUpdate(decision, KnowledgeRecordState.Archived, null),
+                sharedKey);
+            await WaitForDecisionWriteLockWaitersAsync(postgres.DataSource, minimumWaiters: 1);
+            importTask = database.Provider.ImportAsync(
+                bundle, "run-import", Actor, sharedKey);
+            await WaitForDecisionWriteLockWaitersAsync(postgres.DataSource, minimumWaiters: 2);
+
+            await using (var command = new NpgsqlCommand(
+                             "SELECT pg_advisory_unlock(@lock_id)", blocker))
+            {
+                command.Parameters.AddWithValue("lock_id", NpgsqlTypes.NpgsqlDbType.Bigint, pauseLockId);
+                Assert.True((bool)(await command.ExecuteScalarAsync())!);
+            }
+            blockerReleased = true;
+
+            var updated = await updateTask.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(KnowledgeWriteStatus.Updated, updated.Status);
+            var conflict = await Assert.ThrowsAsync<KnowledgeApiException>(async () =>
+                await importTask.WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.Equal("idempotency_conflict", conflict.Code);
+            Assert.Equal(StatusCodes.Status409Conflict, conflict.StatusCode);
+        }
+        finally
+        {
+            if (!blockerReleased)
+            {
+                await using var command = new NpgsqlCommand(
+                    "SELECT pg_advisory_unlock(@lock_id)", blocker);
+                command.Parameters.AddWithValue("lock_id", NpgsqlTypes.NpgsqlDbType.Bigint, pauseLockId);
+                await command.ExecuteScalarAsync();
+            }
+
+            try
+            {
+                if (updateTask is { IsCompleted: false })
+                    await updateTask.WaitAsync(TimeSpan.FromSeconds(10));
+                if (importTask is { IsCompleted: false })
+                    await importTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            finally
+            {
+                await using var cleanup = await postgres.DataSource.OpenConnectionAsync();
+                await using var command = new NpgsqlCommand($"""
+                    DROP TRIGGER IF EXISTS pause_knowledge_write_receipt
+                        ON "{database.Options.Schema}".knowledge_write_idempotency;
+                    DROP FUNCTION IF EXISTS "{database.Options.Schema}".pause_knowledge_write_receipt();
+                    """, cleanup);
+                await command.ExecuteNonQueryAsync();
+            }
+        }
+    }
+
+    [Fact]
     public async Task ProposalPromotionAndRejectionPersistExpectedRecordsAndAcceptedOutboxEvent()
     {
         await using var database = await KnowledgeDatabase.CreateAsync(postgres);
@@ -475,6 +623,31 @@ public sealed class NativePostgresMemoryProviderTests(KnowledgePostgresFixture p
         Assert.DoesNotContain(candidates.Records, record =>
             record.RecordId == privateMemory.Record!.RecordId || record.Content == "other-run");
         Assert.All(candidates.Records, record => Assert.NotEqual(KnowledgeRecordKind.Proposal, record.Kind));
+    }
+
+    private static async Task WaitForDecisionWriteLockWaitersAsync(
+        NpgsqlDataSource dataSource,
+        int minimumWaiters)
+    {
+        for (var attempt = 0; attempt < 250; attempt++)
+        {
+            await using var connection = await dataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand("""
+                SELECT count(*)
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND pid <> pg_backend_pid()
+                  AND wait_event_type = 'Lock'
+                  AND (query LIKE '%knowledge_write_idempotency%'
+                       OR query LIKE '%agentweaver.knowledge.decision-graph%')
+                """, connection);
+            var count = Convert.ToInt32(await command.ExecuteScalarAsync());
+            if (count >= minimumWaiters)
+                return;
+            await Task.Delay(TimeSpan.FromMilliseconds(20));
+        }
+        throw new TimeoutException(
+            $"PostgreSQL did not expose {minimumWaiters} blocked decision-write operations in time.");
     }
 
     private const string Actor = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

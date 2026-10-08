@@ -180,6 +180,194 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task KnowledgeLifecycleAndTransferToolsPreserveGatewayContracts()
+    {
+        await InitializeProtocolAsync();
+        var list = await PostRpcAsync(new
+        {
+            jsonrpc = "2.0",
+            id = 2,
+            method = "tools/list",
+            @params = new { },
+        });
+        var tools = list.GetProperty("result").GetProperty("tools");
+        var expectedBodyFields = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["restoreKnowledgeRecord"] = ["expectedRevision", "revision"],
+            ["approveKnowledgeDecision"] = ["expectedRevision"],
+            ["importKnowledgeRecords"] = ["format", "schemaVersion", "projectId", "agentId", "records"],
+        };
+        foreach (var (operation, bodyFields) in expectedBodyFields)
+        {
+            var tool = Assert.Single(
+                tools.EnumerateArray(),
+                candidate => candidate.GetProperty("name").GetString() == $"agentweaver_{operation}");
+            var inputSchema = tool.GetProperty("inputSchema");
+            Assert.False(inputSchema.GetProperty("additionalProperties").GetBoolean());
+            var required = inputSchema.GetProperty("required")
+                .EnumerateArray().Select(value => value.GetString()).ToArray();
+            Assert.Contains("projectId", required);
+            Assert.Contains("runId", required);
+            Assert.Contains("agentId", required);
+            Assert.Contains("idempotencyKey", required);
+            Assert.Contains("body", required);
+            var bodySchema = inputSchema.GetProperty("properties").GetProperty("body");
+            Assert.Equal("object", bodySchema.GetProperty("type").GetString());
+            Assert.False(bodySchema.GetProperty("additionalProperties").GetBoolean());
+            Assert.DoesNotContain("$ref", bodySchema.GetRawText());
+            var bodyRequired = bodySchema.GetProperty("required")
+                .EnumerateArray().Select(value => value.GetString()).ToArray();
+            foreach (var field in bodyFields)
+                Assert.Contains(field, bodyRequired);
+        }
+
+        var exportTool = Assert.Single(
+            tools.EnumerateArray(),
+            candidate => candidate.GetProperty("name").GetString() == "agentweaver_exportKnowledgeRecords");
+        var exportSchema = exportTool.GetProperty("inputSchema");
+        Assert.False(exportSchema.GetProperty("properties").TryGetProperty("body", out _));
+        Assert.False(exportSchema.GetProperty("properties").TryGetProperty("idempotencyKey", out _));
+
+        async Task CallAsync(string operation, object arguments, int id)
+        {
+            var response = await PostRpcAsync(new
+            {
+                jsonrpc = "2.0",
+                id,
+                method = "tools/call",
+                @params = new
+                {
+                    name = $"agentweaver_{operation}",
+                    arguments,
+                },
+            });
+            Assert.False(response.GetProperty("result").GetProperty("isError").GetBoolean(),
+                JsonSerializer.Serialize(response));
+        }
+
+        const string decisionId = "11111111-1111-4111-8111-111111111111";
+        const string revisionId = "22222222-2222-4222-8222-222222222222";
+        const string timestamp = "2026-10-08T10:00:00Z";
+        var routeArguments = new
+        {
+            projectId = "project-a",
+            runId = "run-a",
+            agentId = "agent-a",
+        };
+        await CallAsync("restoreKnowledgeRecord", new
+        {
+            routeArguments.projectId,
+            routeArguments.runId,
+            routeArguments.agentId,
+            recordId = decisionId,
+            idempotencyKey = "mcp-restore",
+            body = new { expectedRevision = 2, revision = 1, reason = "restore decision" },
+        }, 3);
+        await CallAsync("approveKnowledgeDecision", new
+        {
+            routeArguments.projectId,
+            routeArguments.runId,
+            routeArguments.agentId,
+            recordId = decisionId,
+            idempotencyKey = "mcp-approve",
+            body = new { expectedRevision = 3, reason = "approve decision" },
+        }, 4);
+        await CallAsync("exportKnowledgeRecords", routeArguments, 5);
+        await CallAsync("importKnowledgeRecords", new
+        {
+            routeArguments.projectId,
+            routeArguments.runId,
+            routeArguments.agentId,
+            idempotencyKey = "mcp-import",
+            body = new
+            {
+                format = "agentweaver.knowledge-transfer.v1",
+                schemaVersion = 1,
+                projectId = "project-a",
+                agentId = "agent-a",
+                records = new[]
+                {
+                    new
+                    {
+                        record = new
+                        {
+                            recordId = decisionId,
+                            projectId = "project-a",
+                            agentId = "agent-a",
+                            kind = "decision",
+                            type = "architecture",
+                            title = "Imported decision",
+                            content = "Decision content",
+                            importance = "medium",
+                            tags = new[] { "mcp" },
+                            state = "active",
+                            trustState = "approved",
+                            revision = 1,
+                            revisionId,
+                            createdAt = timestamp,
+                            updatedAt = timestamp,
+                        },
+                        revisions = new[]
+                        {
+                            new
+                            {
+                                recordId = decisionId,
+                                revision = 1,
+                                revisionId,
+                                kind = "decision",
+                                type = "architecture",
+                                title = "Imported decision",
+                                content = "Decision content",
+                                importance = "medium",
+                                tags = new[] { "mcp" },
+                                state = "active",
+                                trustState = "approved",
+                                reason = "initial import",
+                                createdAt = timestamp,
+                            },
+                        },
+                    },
+                },
+            },
+        }, 6);
+
+        var requests = _gatewayFactory.KnowledgeRequests.ToArray();
+        Assert.Equal(4, requests.Length);
+        Assert.Equal(
+            new[] { "POST", "POST", "GET", "POST" },
+            requests.Select(request => request.Method));
+        Assert.Equal(
+            new[]
+            {
+                $"/api/projects/project-a/runs/run-a/agents/agent-a/records/{decisionId}/restore",
+                $"/api/projects/project-a/runs/run-a/agents/agent-a/records/{decisionId}/approve",
+                "/api/projects/project-a/runs/run-a/agents/agent-a/records/export",
+                "/api/projects/project-a/runs/run-a/agents/agent-a/records/import",
+            },
+            requests.Select(request => request.PathAndQuery));
+        Assert.Equal(
+            new string?[] { "mcp-restore", "mcp-approve", null, "mcp-import" },
+            requests.Select(request => request.IdempotencyKey));
+        using (var restoreBody = JsonDocument.Parse(Assert.IsType<string>(requests[0].Body)))
+        {
+            Assert.Equal(2, restoreBody.RootElement.GetProperty("expectedRevision").GetInt32());
+            Assert.Equal(1, restoreBody.RootElement.GetProperty("revision").GetInt32());
+        }
+        using (var approveBody = JsonDocument.Parse(Assert.IsType<string>(requests[1].Body)))
+            Assert.Equal(3, approveBody.RootElement.GetProperty("expectedRevision").GetInt32());
+        Assert.Null(requests[2].Body);
+        using (var importBody = JsonDocument.Parse(Assert.IsType<string>(requests[3].Body)))
+        {
+            Assert.Equal("agentweaver.knowledge-transfer.v1",
+                importBody.RootElement.GetProperty("format").GetString());
+            Assert.Equal(1, importBody.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(decisionId,
+                importBody.RootElement.GetProperty("records")[0].GetProperty("record")
+                    .GetProperty("recordId").GetString());
+        }
+    }
+
+    [Fact]
     public async Task AcceptedOnlySpawnPreservesOwnerAcceptanceWithoutClaimingCompletion()
     {
         await InitializeProtocolAsync();
@@ -857,6 +1045,7 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
 
         public ConcurrentQueue<string?> KnowledgeIdempotencyKeys { get; } = new();
         public ConcurrentQueue<string?> KnowledgeAuthorizationHeaders { get; } = new();
+        public ConcurrentQueue<ObservedKnowledgeRequest> KnowledgeRequests { get; } = new();
         public ConcurrentQueue<ObservedOrchestratorRequest> OrchestratorRequests { get; } = new();
         public bool KnowledgeUnavailable { get; set; }
 
@@ -882,25 +1071,32 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
             });
         }
 
-        private Task<HttpResponseMessage> HandleKnowledgeAsync(
+        private async Task<HttpResponseMessage> HandleKnowledgeAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            KnowledgeIdempotencyKeys.Enqueue(
-                request.Headers.TryGetValues("Idempotency-Key", out var values)
-                    ? Assert.Single(values)
-                    : null);
+            var idempotencyKey = request.Headers.TryGetValues("Idempotency-Key", out var values)
+                ? Assert.Single(values)
+                : null;
+            KnowledgeIdempotencyKeys.Enqueue(idempotencyKey);
             KnowledgeAuthorizationHeaders.Enqueue(request.Headers.Authorization?.ToString());
+            KnowledgeRequests.Enqueue(new ObservedKnowledgeRequest(
+                request.Method.Method,
+                request.RequestUri?.PathAndQuery ?? string.Empty,
+                request.Content is null
+                    ? null
+                    : await request.Content.ReadAsStringAsync(cancellationToken),
+                idempotencyKey));
             if (KnowledgeUnavailable)
                 throw new HttpRequestException("Simulated unavailable owner.");
 
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Created)
+            return new HttpResponseMessage(HttpStatusCode.Created)
             {
                 Content = new StringContent(
                     "{\"recordId\":\"record-a\",\"revision\":1}",
                     Encoding.UTF8,
                     "application/json"),
-            });
+            };
         }
 
         private async Task<HttpResponseMessage> HandleOrchestratorAsync(
@@ -939,6 +1135,11 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
                     builder => builder.PrimaryHandler = new OwnerHandler(handler)));
 
         public sealed record ObservedOrchestratorRequest(string Method, string PathAndQuery, string? Body);
+        public sealed record ObservedKnowledgeRequest(
+            string Method,
+            string PathAndQuery,
+            string? Body,
+            string? IdempotencyKey);
     }
 
     private static string CreateResourceToken(

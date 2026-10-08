@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Agentweaver.Abstractions;
 
 namespace Agentweaver.Gateway;
 
@@ -20,7 +21,8 @@ public sealed record GatewayRoute(
     ImmutableArray<string> QueryParameters,
     bool HasJsonBody = false,
     bool AcceptsOnly = false,
-    bool IsRunEventStream = false);
+    bool IsRunEventStream = false,
+    long? MaximumRequestBodyBytes = null);
 
 public static class GatewayRouteCatalog
 {
@@ -42,7 +44,8 @@ public static class GatewayRouteCatalog
             string[]? query = null,
             bool body = false,
             bool acceptsOnly = false,
-            bool eventStream = false) =>
+            bool eventStream = false,
+            long? maximumRequestBodyBytes = null) =>
             routes.Add(new GatewayRoute(
                 method,
                 VersionPrefix + publicSuffix,
@@ -53,7 +56,8 @@ public static class GatewayRouteCatalog
                 (query ?? []).ToImmutableArray(),
                 body,
                 acceptsOnly,
-                eventStream));
+                eventStream,
+                maximumRequestBodyBytes));
 
         Add("GET", GatewayOwner.Projects, "/projects", "/api/projects/",
             "listProjects", "List projects");
@@ -175,7 +179,8 @@ public static class GatewayRouteCatalog
             string operationId,
             string summary,
             string[]? query = null,
-            bool body = false) =>
+            bool body = false,
+            long? maximumRequestBodyBytes = null) =>
             Add(
                 method,
                 GatewayOwner.Knowledge,
@@ -184,7 +189,8 @@ public static class GatewayRouteCatalog
                 operationId,
                 summary,
                 query,
-                body);
+                body,
+                maximumRequestBodyBytes: maximumRequestBodyBytes);
 
         Knowledge("POST", "/records", "createKnowledgeRecord", "Create a Knowledge record", body: true);
         Knowledge("GET", "/records", "searchKnowledge", "Search Knowledge records",
@@ -192,6 +198,13 @@ public static class GatewayRouteCatalog
         Knowledge("GET", "/records/{recordId:guid}", "readKnowledgeRecord", "Read a Knowledge record");
         Knowledge("PUT", "/records/{recordId:guid}", "updateKnowledgeRecord",
             "Update a Knowledge record", body: true);
+        Knowledge("POST", "/records/{recordId:guid}/restore", "restoreKnowledgeRecord",
+            "Restore a Knowledge record revision", body: true);
+        Knowledge("POST", "/records/{recordId:guid}/approve", "approveKnowledgeDecision",
+            "Approve a Knowledge decision", body: true);
+        Knowledge("GET", "/records/export", "exportKnowledgeRecords", "Export Knowledge records");
+        Knowledge("POST", "/records/import", "importKnowledgeRecords", "Import Knowledge records",
+            body: true, maximumRequestBodyBytes: KnowledgeRecordTransferContract.MaximumBytes);
         Knowledge("GET", "/records/{recordId:guid}/revisions", "readKnowledgeRevisions",
             "Read Knowledge record revisions", ["page", "pageSize"]);
         Knowledge("POST", "/proposals/{proposalId:guid}/promote", "promoteKnowledgeProposal",

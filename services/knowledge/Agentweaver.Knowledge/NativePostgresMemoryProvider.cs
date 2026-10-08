@@ -330,6 +330,12 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 .ConfigureAwait(false);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
+            var candidate = await ReadRecordAsync(
+                connection, transaction, normalized.ProjectId, normalized.RecordId, cancellationToken)
+                .ConfigureAwait(false);
+            if (candidate?.Kind == KnowledgeRecordKind.Decision)
+                await AcquireDecisionGraphLockAsync(
+                    connection, transaction, normalized.ProjectId, cancellationToken).ConfigureAwait(false);
             var reservation = await ReserveWriteAsync(
                 connection, transaction, normalized.ProjectId, normalized.ActorFingerprint, idempotencyKey,
                 fingerprint, "record", normalized.RecordId, cancellationToken).ConfigureAwait(false);
@@ -348,9 +354,6 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             if (current.Revision != normalized.ExpectedRevision)
                 return new KnowledgeRecordWriteResult(
                     KnowledgeWriteStatus.Stale, null, CurrentRevision: current.Revision);
-            if (current.Kind == KnowledgeRecordKind.Decision)
-                await AcquireDecisionGraphLockAsync(
-                    connection, transaction, normalized.ProjectId, cancellationToken).ConfigureAwait(false);
             if (current.Kind is not (KnowledgeRecordKind.Memory or KnowledgeRecordKind.SessionContext or
                     KnowledgeRecordKind.Decision) ||
                 (current.Kind == KnowledgeRecordKind.Decision
@@ -377,7 +380,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 if (normalized.SupersededByRecordId is { } replacementId)
                 {
                     var replacementStatus = await ValidateDecisionReplacementAsync(
-                        connection, transaction, normalized.ProjectId, normalized.RecordId,
+                        connection, transaction, normalized.ProjectId, current.AgentId, normalized.RecordId,
                         replacementId, cancellationToken).ConfigureAwait(false);
                     if (replacementStatus is not null)
                         return new KnowledgeRecordWriteResult(replacementStatus.Value, null,
@@ -458,6 +461,12 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 .ConfigureAwait(false);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
+            var candidate = await ReadRecordAsync(
+                connection, transaction, input.ProjectId, input.RecordId, cancellationToken)
+                .ConfigureAwait(false);
+            if (candidate?.Kind == KnowledgeRecordKind.Decision)
+                await AcquireDecisionGraphLockAsync(
+                    connection, transaction, input.ProjectId, cancellationToken).ConfigureAwait(false);
             var reservation = await ReserveWriteAsync(
                 connection, transaction, input.ProjectId, input.ActorFingerprint, idempotencyKey,
                 fingerprint, "record", input.RecordId, cancellationToken).ConfigureAwait(false);
@@ -476,9 +485,6 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             if (current.Revision != input.ExpectedRevision)
                 return new KnowledgeRecordWriteResult(
                     KnowledgeWriteStatus.Stale, null, CurrentRevision: current.Revision);
-            if (current.Kind == KnowledgeRecordKind.Decision)
-                await AcquireDecisionGraphLockAsync(
-                    connection, transaction, input.ProjectId, cancellationToken).ConfigureAwait(false);
             if (current.Kind is not (KnowledgeRecordKind.Memory or KnowledgeRecordKind.Decision))
                 return new KnowledgeRecordWriteResult(
                     KnowledgeWriteStatus.InvalidState, null, CurrentRevision: current.Revision);
@@ -1283,6 +1289,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         string projectId,
+        string sourceAgentId,
         Guid sourceRecordId,
         Guid replacementRecordId,
         CancellationToken cancellationToken)
@@ -1295,7 +1302,8 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 return KnowledgeWriteStatus.ReplacementCycle;
             var current = await ReadRecordAsync(
                 connection, transaction, projectId, currentId, cancellationToken).ConfigureAwait(false);
-            if (current is null || current.Kind != KnowledgeRecordKind.Decision)
+            if (current is null || current.Kind != KnowledgeRecordKind.Decision ||
+                !string.Equals(current.AgentId, sourceAgentId, StringComparison.Ordinal))
                 return KnowledgeWriteStatus.InvalidReplacement;
             if (current.State == KnowledgeRecordState.Superseded)
             {

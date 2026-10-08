@@ -301,7 +301,8 @@ public sealed class CosmosMemoryProvider : IMemoryProvider
                     if (normalized.SupersededByRecordId is { } replacementId)
                     {
                         var replacementStatus = await ValidateDecisionReplacementAsync(
-                            normalized.ProjectId, normalized.RecordId, replacementId, cancellationToken)
+                            normalized.ProjectId, current.AgentId, normalized.RecordId, replacementId,
+                            cancellationToken)
                             .ConfigureAwait(false);
                         if (replacementStatus is not null)
                             return new KnowledgeRecordWriteResult(
@@ -1253,6 +1254,7 @@ public sealed class CosmosMemoryProvider : IMemoryProvider
 
     private async Task<KnowledgeWriteStatus?> ValidateDecisionReplacementAsync(
         string projectId,
+        string sourceAgentId,
         Guid sourceRecordId,
         Guid replacementRecordId,
         CancellationToken cancellationToken)
@@ -1265,7 +1267,8 @@ public sealed class CosmosMemoryProvider : IMemoryProvider
                 return KnowledgeWriteStatus.ReplacementCycle;
             var current = (await ReadRecordDocumentAsync(projectId, currentId, cancellationToken)
                     .ConfigureAwait(false))?.Document.Record;
-            if (current is null || current.Kind != KnowledgeRecordKind.Decision)
+            if (current is null || current.Kind != KnowledgeRecordKind.Decision ||
+                !string.Equals(current.AgentId, sourceAgentId, StringComparison.Ordinal))
                 return KnowledgeWriteStatus.InvalidReplacement;
             if (current.State == KnowledgeRecordState.Superseded)
             {

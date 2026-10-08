@@ -251,6 +251,9 @@
           "Polly.Core": "8.4.2"
         }
       },
+      "agentweaver.abstractions": {
+        "type": "Project"
+      },
       "agentweaver.telemetry": {
         "type": "Project",
         "dependencies": {
