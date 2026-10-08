@@ -14,6 +14,25 @@ test('Broker container includes the canonical embedded runtime grants before its
   assert.ok(!dockerfile.includes('COPY infra/ infra/'));
 });
 
+test('Broker container restores and copies the complete SourceControl project graph', () => {
+  const dockerfile = readFileSync('services/identity/Agentweaver.Identity.Broker/Dockerfile', 'utf8');
+  const restore = dockerfile.indexOf(
+    'RUN dotnet restore services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj --locked-mode');
+  const build = dockerfile.indexOf(
+    'RUN dotnet build services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj');
+  for (const project of ['Agentweaver.Providers', 'Agentweaver.SourceControl']) {
+    for (const file of [`${project}.csproj`, 'packages.lock.json']) {
+      const copy = `COPY packages/${project}/${file} packages/${project}/`;
+      assert.ok(dockerfile.includes(copy), `missing restore input ${copy}`);
+      assert.ok(dockerfile.indexOf(copy) < restore, `${copy} must precede restore`);
+    }
+    const copy = `COPY packages/${project}/ packages/${project}/`;
+    assert.ok(dockerfile.includes(copy), `missing source copy ${copy}`);
+    assert.ok(dockerfile.indexOf(copy) > restore && dockerfile.indexOf(copy) < build,
+      `${copy} must follow restore and precede build`);
+  }
+});
+
 test('Bicep compilation and Kustomize rendering require no credentials or live target', () => {
   const bicep = runAz(['bicep', 'build', '--file', 'infra/bicep/main.bicep', '--stdout']);
   const template = JSON.parse(bicep.stdout);

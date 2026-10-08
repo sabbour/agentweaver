@@ -15,14 +15,20 @@ COPY packages/Agentweaver.Abstractions/Agentweaver.Abstractions.csproj packages/
 COPY packages/Agentweaver.Abstractions/packages.lock.json packages/Agentweaver.Abstractions/
 COPY packages/Agentweaver.Identity/Agentweaver.Identity.csproj packages/Agentweaver.Identity/
 COPY packages/Agentweaver.Identity/packages.lock.json packages/Agentweaver.Identity/
+COPY packages/Agentweaver.Providers/Agentweaver.Providers.csproj packages/Agentweaver.Providers/
+COPY packages/Agentweaver.Providers/packages.lock.json packages/Agentweaver.Providers/
 COPY packages/Agentweaver.Secrets.AzureKeyVault/Agentweaver.Secrets.AzureKeyVault.csproj packages/Agentweaver.Secrets.AzureKeyVault/
 COPY packages/Agentweaver.Secrets.AzureKeyVault/packages.lock.json packages/Agentweaver.Secrets.AzureKeyVault/
+COPY packages/Agentweaver.SourceControl/Agentweaver.SourceControl.csproj packages/Agentweaver.SourceControl/
+COPY packages/Agentweaver.SourceControl/packages.lock.json packages/Agentweaver.SourceControl/
 RUN dotnet restore services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj --locked-mode
 
 COPY services/identity/Agentweaver.Identity.Broker/ services/identity/Agentweaver.Identity.Broker/
 COPY packages/Agentweaver.Abstractions/ packages/Agentweaver.Abstractions/
 COPY packages/Agentweaver.Identity/ packages/Agentweaver.Identity/
+COPY packages/Agentweaver.Providers/ packages/Agentweaver.Providers/
 COPY packages/Agentweaver.Secrets.AzureKeyVault/ packages/Agentweaver.Secrets.AzureKeyVault/
+COPY packages/Agentweaver.SourceControl/ packages/Agentweaver.SourceControl/
 COPY infra/bicep/postgres-identity-runtime-grants.sql infra/bicep/
 RUN dotnet build services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj \
     --configuration Release --no-restore
