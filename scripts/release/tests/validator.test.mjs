@@ -24,6 +24,10 @@ const projectReferences = new Map([
     '..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
   ]],
+  ['Agentweaver.AgentHost', [
+    '..\\..\\..\\packages\\Agentweaver.AgentRuntime\\Agentweaver.AgentRuntime.csproj',
+    '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
+  ]],
   ['Agentweaver.Telemetry.AzureMonitor', ['..\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj']],
   ['Agentweaver.ObjectStore.AzureBlob', ['..\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj']],
   ['Agentweaver.Identity.Broker', [
@@ -48,6 +52,7 @@ const projectReferences = new Map([
     '..\\..\\..\\packages\\Agentweaver.Identity\\Agentweaver.Identity.csproj',
     '..\\..\\..\\packages\\Agentweaver.Persistence.Postgres\\Agentweaver.Persistence.Postgres.csproj',
     '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
+    '..\\..\\..\\packages\\Agentweaver.ObjectStore.AzureBlob\\Agentweaver.ObjectStore.AzureBlob.csproj',
   ]],
   ['Agentweaver.Projects.Config', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
