@@ -587,11 +587,12 @@ A user action in a surface arrives as a typed message, not as an untracked UI co
   the native providers. The UI and MCP server read the same workflow state.
 - **P2 — Parity and cutover:** suspend/resume with manifest
   ([#1410](https://github.com/sabbour/agentweaver/issues/1410)), explicit Squad
-  import/export, surface messages, and the parity acceptance list from
+  import/export, Canvas surface messages, Cosmos and Redis Memory providers, and the parity acceptance list from
   [#1405](https://github.com/sabbour/agentweaver/issues/1405) are verified on an
   exact-SHA AKS deployment before cutover. VM snapshots are not required.
 - **P3 — After cutover:** consider a gated AKS guest-snapshot adapter and optional
-  agentsessions and Cosmos memory adapters. None changes the authoritative journal or
+  agentsessions capture mirror. Cosmos and Redis are P2 Memory work, not Sessions
+  providers. None changes the authoritative PostgreSQL journal or
   requires rewriting knowledge into repository files.
 
 ## Related risks

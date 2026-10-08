@@ -73,6 +73,21 @@ capabilities, project revision, configuration revision, and context revision. On
 later operations, a changed run selection or provider binding fails closed; there is
 no provider fallback.
 
+### Planned P2 adapters
+
+P2 adds Cosmos and Redis providers beside native PostgreSQL through the same
+exclusive `IMemoryProvider` boundary. Native PostgreSQL remains the default.
+Knowledge retains authorization, context composition, accepted selection checks, and
+immutable provider bindings. The selected adapter owns its memory records and revisions.
+The current source implements only the native PostgreSQL adapter.
+
+Both adapters must preserve durable records, revision checks, idempotent writes,
+proposal promotion, and project/agent isolation before enablement.
+Redis is a Memory backend, not merely a cache over native PostgreSQL.
+Its persistence and eviction configuration must not discard authoritative memory.
+Memory selection does not move the Sessions journal, authorization state, or
+service outboxes out of PostgreSQL.
+
 ## Records and revisions
 
 Record content is project/agent scoped. Each successful update appends a full immutable

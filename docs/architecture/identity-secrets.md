@@ -47,6 +47,73 @@ The adapter requests the exact Key Vault version. A returned credential expires 
 
 No secret-redemption grant-management HTTP endpoint exists. Read [contracts and endpoints](../reference/contracts) for the implemented route list and [configuration](../reference/contracts#identity-host-configuration) for host keys.
 
+## GitHub connections are separate integrations
+
+Core sign-in, GitHub Copilot credentials, and GitHub App repository credentials have
+different owners and purposes. Broker OAuth refresh does not refresh a GitHub Copilot
+credential. A GitHub App installation token cannot authenticate the Copilot SDK.
+
+| Integration | Current source boundary | Missing work |
+| --- | --- | --- |
+| Core sign-in | Broker OIDC, OAuth, consent, refresh, and purpose-bound secret redemption exist. | These contracts do not supply either GitHub connection lifecycle. |
+| GitHub Copilot | The SDK consumer and selected-secret bridge exist, but mode-specific wiring is incomplete. | Compatible account linking, owner-bound callbacks, credential-envelope handling, refresh rotation, and current binding checks: [#1906](https://github.com/sabbour/agentweaver/issues/1906). |
+| GitHub App | Source Control consumes temporary repository credentials. | Installation connection, repository selection, and exact-repository token production: [#1907](https://github.com/sabbour/agentweaver/issues/1907). |
+| Web and MCP | Existing core routes and tools are implemented. | Reachable retained settings and real GitHub connection/repository routes: [#1859](https://github.com/sabbour/agentweaver/issues/1859) and [#1908](https://github.com/sabbour/agentweaver/issues/1908). |
+
+The compatible 0.x Copilot flow binds browser state, PKCE, cookies, and a single-use
+callback to the current subject. Its refresh path serializes redemption, rotates
+refresh tokens, and uses version checks. Provider rejection can require reconnect;
+a transient failure must not fabricate that result.
+
+The compatible GitHub App producer reads its private key from the secret store,
+checks the exact installation and repository permissions, and requests a token for
+one repository with bounded permissions. GitHub supplies its expiry. An existing
+Vault secret and a consumer-side expiry limit do not prove this producer exists.
+
+These are tracked integration gaps, not completed flows or new login, App installation,
+permission, or paid-execution authority. Accepted narrow source contracts remain accepted.
+Automatic webhook delivery and workflow triggers also need a separate service-identity
+scope decision; the current human-authenticated relay does not prove that parity.
+
+### Minimum Copilot credential writer source scope
+
+The approved minimum source work in #1906 adds protected secret-version writes inside
+the existing Key Vault adapter and trusted Identity lifecycle. It returns opaque
+`SecretRef` metadata, not token values. Identity stores connection identity, credential
+kind, owner and revision, freshness, state, and the current secret-version reference.
+Tokens remain in the protected secret store and runtime memory, never raw PostgreSQL columns.
+
+The approved selection-contract repair uses explicit `SourceMode` and a stable
+`ConnectionId` for a hosted platform/project binding. The ID is a reference, not
+authority. Trusted Identity facts and the current Core selection must establish the
+owner, domain, credential kind, freshness, and revocation state under existing sharing
+rules. This adds no personal-provider precedence or blanket credential sharing.
+
+Each ModelSession receipt and redemption pins the current connection revision, exact
+secret version, grant revision, and credential kind. Normal token rotation advances
+those owner-controlled revisions without changing the accepted selection or its hash.
+Fresh proof is required after remote waits and before SDK consumption. Stale receipts
+deny or require legitimate current refresh; caches cannot supply authority. A change
+of owner, kind, scope, or GitHub identity requires an authorized new binding or selection.
+Legacy stored selections remain unchanged, and unsupported hosted selections require
+an explicit migration-required or unavailable result until a new selection is authorized.
+There is no automatic migration or hash rewrite. Exact `CredentialReference` remains BYOK-only.
+
+The owner claims refresh before upstream rotation. After writing a new secret version,
+it rechecks current authority and publishes the reference through its PostgreSQL revision
+compare-and-swap. Azure secret writes are not an atomic connection-state CAS.
+A failed write, revoked authority, or lost CAS must not report a new current credential.
+Interrupted rotation requires an explicit recovery outcome; unreferenced versions are
+not permission for automatic cloud cleanup.
+
+This source scope is not deployed writer authority. Existing P0 Key Vault Secrets User
+assignments remain read-only and unchanged. A deployed writer needs secret SET/new-version,
+exact-version GET, and metadata rights at the actual configured credential-store scope.
+The exact supported role or custom actions and bootstrap scope must be verified with
+the separately approved live proposal. Do not default to the broader Secrets Officer
+role or assume secret-prefix RBAC. Missing writer support or permissions must return
+an explicit unavailable or denied result before hosted SDK use, without raw token fallback.
+
 ## Separate runtime credential candidate
 
 Runtime configure and observe grants use a separate Identity-owned store. They

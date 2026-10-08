@@ -436,8 +436,11 @@ Ephemeral harness subagents do not become nodes in the session tree.
 - **P2 — Parity and cutover:** close the
   [#1405](https://github.com/sabbour/agentweaver/issues/1405) behavior-guarantee
   list, complete application `live`/`preview`/`published` stages and the publish
-  gate, enforce budgets and all required surface actions, and pass API, UI, and MCP
+  gate, enforce budgets and all required surface actions through the separate Canvas
+  boundary, and pass API, UI, and MCP
   harnesses on an exact-SHA AKS deployment.
+  A2UI and GitHub Canvas-compatible renderers do not replace MAF, validate plans,
+  or approve workflow actions.
 - **P3 — After cutover:** optional provider adapters can change backing systems,
   not the step catalog, confirmation gates, or coordinator's tool authority.
 
