@@ -84,8 +84,13 @@ public sealed class AcceptedEffectRelay(
                 new Uri(options.EventsBaseAddress, "/internal/project-facts/accepted-effects"))
             {
                 Content = JsonContent.Create(new AcceptedEffectDeliveryRequest(
-                    receipt.ReceiptId, receipt.ProjectId, receipt.RunId,
-                    receipt.SchemaVersion, receipt.EventVersion), options: JsonOptions)
+                    receipt.ReceiptId,
+                    receipt.SchemaVersion,
+                    receipt.EventVersion)
+                {
+                    ProjectId = receipt.ProjectId,
+                    RunId = receipt.RunId
+                }, options: JsonOptions)
             };
             request.Headers.Authorization = forwarded.EventsAuthorization;
             if (forwarded.KnowledgeAuthorization is not null)

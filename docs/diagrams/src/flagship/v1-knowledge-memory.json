@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Knowledge accepted project facts",
-  "alt": "Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and delivery intent together through the selected Memory provider: native PostgreSQL by default or an existing project-partitioned Cosmos container. It relays only receipt ID and versions to Events, which fetches the committed receipt and appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. The Knowledge run pin and Sessions journal remain in PostgreSQL.",
+  "alt": "Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and delivery intent together through the selected Memory provider: native PostgreSQL by default or an existing project-partitioned Cosmos container. Current relay requests include project/run scope and Events reads from the pinned provider; the original three-field N-1 request uses the legacy unscoped native PostgreSQL receipt route. Partial scope is rejected and scoped reads never fall back. Events appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. The Knowledge run pin and Sessions journal remain in PostgreSQL.",
   "autonumber": true,
   "participants": [
     {
@@ -76,7 +76,7 @@
       "type": "message",
       "from": "knowledge",
       "to": "events",
-      "label": "POST accepted-effects: receipt ID, versions, existing same-actor bearer(s)",
+      "label": "POST accepted-effects: receipt ID and versions; current request adds project/run scope, original N-1 request omits both",
       "line": "solid",
       "arrow": "filled"
     },
@@ -84,14 +84,14 @@
       "type": "message",
       "from": "events",
       "to": "knowledge",
-      "label": "GET /internal/accepted-effects/{receiptId} from fixed HTTPS origin; redirects disabled",
+      "label": "GET scoped pinned-Memory route for current request; legacy N-1 uses unscoped native-PostgreSQL route; redirects disabled",
       "line": "solid",
       "arrow": "filled"
     },
     {
       "type": "note",
       "over": ["knowledge", "events"],
-      "label": "Receipt GET requires original issuer/subject, matching bounds, no purpose token, fresh WriteProjects; response is no-store."
+      "label": "Both routes verify caller bounds and fresh WriteProjects; responses are no-store. Partial scope is invalid; scoped reads never fall back."
     },
     {
       "type": "message",

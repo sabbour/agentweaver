@@ -209,6 +209,21 @@ public sealed class CosmosMemoryProviderTests
             "project-a", "run-a", receiptId))!.IsDelivered);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.RequestTimeout)]
+    [InlineData(HttpStatusCode.RequestEntityTooLarge)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task BatchTimeoutLimitAndThrottleResponsesFailClosed(HttpStatusCode statusCode)
+    {
+        var (provider, store, _) = CreateProvider();
+        store.FailNextBatchStatus = statusCode;
+
+        await Assert.ThrowsAsync<KnowledgeStorageUnavailableException>(() =>
+            provider.CreateAsync(CreateInput("memory", "must not be stored"), "failed-batch"));
+
+        Assert.Empty((await provider.SearchAsync(new KnowledgeRecordQuery("project-a", "agent-a"))).Items);
+    }
+
     [Fact]
     public async Task DeliveryClaimsPreserveProjectRunOrder()
     {
@@ -378,6 +393,7 @@ public sealed class CosmosMemoryProviderTests
             HasRequiredSearchCompositeIndex: true);
 
         public bool FailNextBatch { get; set; }
+        public HttpStatusCode? FailNextBatchStatus { get; set; }
         public Task PausedRecordRead =>
             _pausedRecordRead?.Task ?? throw new InvalidOperationException("No record read is paused.");
 
@@ -546,6 +562,11 @@ public sealed class CosmosMemoryProviderTests
                 {
                     FailNextBatch = false;
                     return Task.FromResult(new CosmosMemoryBatchResult(HttpStatusCode.ServiceUnavailable));
+                }
+                if (FailNextBatchStatus is { } failureStatus)
+                {
+                    FailNextBatchStatus = null;
+                    return Task.FromResult(new CosmosMemoryBatchResult(failureStatus));
                 }
                 foreach (var operation in operations)
                 {
