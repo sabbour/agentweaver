@@ -1,0 +1,29 @@
+<svg id="uuid-5ab517fe-7ecb-4530-955d-8df7aa6e8c26" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-625fd693-a8a1-4856-a3e3-ccc2e5a94299" x1="-282.071" y1="860.516" x2="-270.331" y2="860.516" gradientTransform="translate(287 869.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#32bedd" />
+      <stop offset=".18" stop-color="#32caea" />
+      <stop offset=".41" stop-color="#32d2f2" />
+      <stop offset=".78" stop-color="#32d4f5" />
+    </linearGradient>
+  </defs>
+  <g id="uuid-10bc56f2-9819-4c72-adb8-ca480fc4d2af">
+    <path d="m16.669,13.787v3.73c0,.267-.216.483-.483.483H5.412c-.267,0-.483-.216-.483-.483v-3.73c0-.267.216-.483.483-.483h10.774c.267,0,.483.216.483.483Zm-.483-7.135H5.412c-.267,0-.483.216-.483.483v3.73c0,.267.216.483.483.483h10.774c.267,0,.483-.216.483-.483v-3.73c0-.267-.216-.483-.483-.483h0Zm0-6.652H5.412c-.267,0-.483.216-.483.483h0v3.73c0,.267.216.483.483.483h10.774c.267,0,.483-.216.483-.483V.483C16.669.216,16.453,0,16.186,0Z" fill="url(#uuid-625fd693-a8a1-4856-a3e3-ccc2e5a94299)" stroke-width="0" />
+    <path d="m4.931,15.026h-2.191c-.086,0-.156-.07-.156-.156h0v-5.244h2.347v-1.252h-2.347V3.13c0-.086.07-.156.156-.156h2.191v-1.252H1.958c-.346,0-.626.28-.627.626v13.3c0,.346.281.626.627.626h2.973v-1.248Z" fill="#0078d4" stroke-width="0" />
+    <g>
+      <circle cx="13.96" cy="15.652" r="1.138" fill="#0078d4" stroke-width="0" />
+      <circle cx="10.849" cy="15.652" r="1.138" fill="#0078d4" stroke-width="0" />
+      <circle cx="7.639" cy="15.652" r="1.138" fill="#0078d4" stroke-width="0" />
+    </g>
+    <g>
+      <circle cx="13.96" cy="8.998" r="1.138" fill="#0078d4" stroke-width="0" />
+      <circle cx="10.849" cy="8.998" r="1.138" fill="#0078d4" stroke-width="0" />
+      <circle cx="7.639" cy="8.998" r="1.138" fill="#0078d4" stroke-width="0" />
+    </g>
+    <g>
+      <circle cx="13.96" cy="2.348" r="1.138" fill="#0078d4" stroke-width="0" />
+      <circle cx="10.849" cy="2.348" r="1.138" fill="#0078d4" stroke-width="0" />
+      <circle cx="7.639" cy="2.348" r="1.138" fill="#0078d4" stroke-width="0" />
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,2634 @@
+export type ModelSource = 'github-copilot' | 'byok';
+export type AuthMode = 'entra';
+
+export interface EffectiveModelProvider {
+  state: 'resolved' | 'unavailable';
+  provider_kind:
+    | 'byok'
+    | 'project_github_copilot'
+    | 'platform_github_copilot'
+    | 'user_byok'
+    | 'user_github_copilot'
+    | 'unavailable';
+  resolution_scope: 'project' | 'platform' | 'user' | 'unknown';
+  provider_scope: 'project' | 'platform' | 'user' | 'none';
+  provider_type: string | null;
+  model_id: string | null;
+  provider_key: string | null;
+  unavailable_reason: string | null;
+}
+
+export interface AiExecutionContext {
+  ai_required: boolean;
+  operation: string;
+  phase: 'prepared' | 'active' | 'completed';
+  execution_key: string | null;
+  expires_at: string | null;
+  effective_model_provider: EffectiveModelProvider | null;
+}
+
+export interface ServerInfo {
+  data_directory: string;
+  workspace_auto_assigned?: boolean;
+  auth_mode?: AuthMode;
+  auth_mode_label?: string | null;
+  auth_mode_recommended?: boolean;
+  repo_app_install_url?: string | null;
+}
+
+export type RunStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'completed'
+  | 'failed'
+  | 'blocked'
+  | 'awaiting_review'
+  | 'merging'
+  | 'merged'
+  | 'declined'
+  | 'merge_failed'
+  | 'assemble_ready';
+
+export interface PendingApprovalDto {
+  root_run_id: string;
+  owning_run_id: string;
+  action_run_id: string;
+  request_id: string;
+  tool_name: string | null;
+  url: string | null;
+  command?: string | null;
+  message: string | null;
+  requested_at: string;
+  expires_at: string | null;
+  is_shell: boolean;
+}
+
+export interface PendingApprovalsResponse {
+  run_id: string;
+  count: number;
+  approvals: PendingApprovalDto[];
+}
+
+export interface RunSandboxInfo {
+  backend: string;
+  isRealIsolation: boolean;
+  /** Live SandboxClaim phase: "Pending" | "Bound" | "Lost". Null in non-k8s environments. */
+  phase?: string | null;
+  /** Live, post-configuration ownership proof; historical backend and pod fields are not current proof. */
+  current_binding?: {
+    state: 'verified' | 'unavailable' | 'conflict';
+    reason?: string | null;
+    run_id?: string | null;
+    provisioner?: string | null;
+    claim_name?: string | null;
+    claim_uid?: string | null;
+    pod_name?: string | null;
+    pod_uid?: string | null;
+    namespace?: string | null;
+    lifecycle_generation?: number | null;
+    assembly_attempt?: string | null;
+    source_repository?: string | null;
+    source_ref?: string | null;
+    source_base_commit?: string | null;
+    source_tree?: string | null;
+    source_worktree?: string | null;
+  } | null;
+}
+
+export interface SandboxPolicy {
+  repository_path: string;
+  shell_enabled: boolean;
+  direct: boolean;
+  network_enabled: boolean;
+  allowed_repository_roots: string[];
+  destructive_command_patterns: string[];
+}
+
+export interface EffectivePermissionInspection {
+  run_id: string;
+  binding: {
+    schema_version: number;
+    binding_id: string;
+    version: string;
+    source: string;
+    attempt: number;
+    scope: string;
+    parent_binding_id: string | null;
+    parent_version: string | null;
+    launch_binding_id: string | null;
+    launch_version: string | null;
+  };
+  configured_policy: EffectivePermissionPolicySummary;
+  effective_policy: EffectivePermissionPolicySummary;
+  overrides: {
+    is_narrowed: boolean;
+    removed_operations: string[];
+    tightened_controls: string[];
+    launch_ceiling_active: boolean;
+    parent_restriction_active: boolean;
+  };
+  current_revocation: {
+    active: boolean;
+    removed_since_launch: string[];
+    tightened_controls: string[];
+    shell_revoked: boolean;
+    network_revoked: boolean;
+    direct_execution_revoked: boolean;
+  };
+  coverage: Array<{
+    operation: string;
+    allowed: boolean;
+    tool_family: string;
+    enforcement_gate: string;
+  }>;
+  latest_denial: {
+    reason_code: string;
+    reason: string;
+    operation: string | null;
+    tool_name: string | null;
+    binding_id: string | null;
+    binding_version: string | null;
+    binding_source: string | null;
+    sequence: number;
+    timestamp_utc: string | null;
+  } | null;
+}
+
+export interface ExecutionIdentityProjection {
+  evidence_state: 'complete' | 'partial' | 'missing_legacy_descriptor';
+  descriptor: {
+    descriptor_id: string;
+    schema_version: number;
+    run_id: string;
+    attempt: number;
+    principal_ref: string;
+    executing_service: string;
+    agent_assignment_id: string;
+    agent_role: string | null;
+    agent_display_name: string | null;
+    parent_descriptor_id: string | null;
+    retry_of_descriptor_id: string | null;
+    workflow_run_id: string | null;
+    subtask_id: string | null;
+    approval_policy_snapshot_id: string | null;
+    executable_workflow_digest: string | null;
+    created_at: string;
+  } | null;
+  backend: {
+    kind: string;
+    sandbox_ref: string | null;
+    evidence_state: string;
+  } | null;
+  launch_permission_binding: {
+    binding_id: string;
+    version: string;
+    source: string;
+    attempt: number;
+  } | null;
+  permission_binding: {
+    binding_id: string;
+    version: string;
+    source: string;
+    attempt: number;
+  } | null;
+  decisions: Array<{
+    sequence: number;
+    tool_call_id: string | null;
+    tool_name: string | null;
+    gate: string;
+    outcome: string;
+    reason_code: string | null;
+    correlation_state: string;
+    timestamp_utc: string | null;
+  }>;
+}
+
+export interface EffectivePermissionPolicySummary {
+  version: string;
+  shell_enabled: boolean;
+  direct_execution: boolean;
+  network_enabled: boolean;
+  require_approval_for_all_shell: boolean;
+  redact_pii: boolean;
+  max_output_bytes: number;
+  allowed_repository_root_count: number;
+  destructive_command_pattern_count: number;
+  allowed_operations: string[];
+}
+
+export interface SubmitRunResponse {
+  run_id: string;
+  status: RunStatus;
+}
+
+export interface RetryRunResponse {
+  run_id: string;
+  retried_from: string | null;
+  status: string;
+  /** True when the failed coordinator resumed under the same run id. */
+  resumed?: boolean;
+}
+
+export interface RunDetail {
+  run_id: string;
+  project_id?: string | null;
+  status: RunStatus;
+  retried_from?: string | null;
+  model_source: ModelSource;
+  effective_model_provider?: EffectiveModelProvider | null;
+  started_at: string;
+  ended_at: string | null;
+  result: string | null;
+  diff: string | null;
+  step_count: number;
+  tree_hash: string | null;
+  lifecycle_generation?: number;
+  sandbox?: RunSandboxInfo | null;
+  worktree_branch?: string | null;
+  // Feature 008 — coordinator child runs. Non-null parent_run_id ⇒ this run is a
+  // dispatched CHILD of a coordinator (trimmed agent → RAI → assemble-ready pipeline).
+  parent_run_id?: string | null;
+  subtask_id?: string | null;
+  is_coordinator_plan?: boolean;
+  pending_request_kind?: string | null;
+  // GET /api/runs/{id} also carries the cast agent name for a child run (the list
+  // endpoint omits child runs entirely). Optional — absent on plain runs.
+  agent_name?: string | null;
+  // The workflow the coordinator selected/planned this run against. workflow_name is the
+  // human-friendly label; workflow_id is the fallback identifier. Optional — present only once
+  // the backend surfaces it on the run detail.
+  workflow_id?: string | null;
+  workflow_name?: string | null;
+  // Short human-readable explanation of why the coordinator selected the workflow it planned this
+  // run against (#167). Optional — null for runs with no captured reasoning.
+  workflow_selection_reason?: string | null;
+  // Feature 008 Phase 3 — orchestration lifecycle string surfaced on a coordinator
+  // run (dispatching | awaiting_assembly | assembling | in_review | complete | failed).
+  // Added by the backend concurrently; treat as optional and degrade gracefully.
+  coordinator_status?: string | null;
+  coordinator_status_reason?: string | null;
+  // Backend contract: true for coordinator runs that can accept steering/messages.
+  // Includes awaiting_review while the assembly human-review gate is parked.
+  coordinator_steerable?: boolean;
+  // Per-run options (live-toggleable). auto_approve_tools auto-grants non-dangerous tool HITLs;
+  // autopilot (coordinator only) auto-answers clarifying questions via the coordinator model.
+  // Both cascade to a coordinator's children. Optional — default false when absent.
+  auto_approve_tools?: boolean;
+  autopilot?: boolean;
+}
+
+export interface RunTerminalDiagnostic {
+  code: string;
+  message: string;
+  component: string;
+  timestamp: string;
+  retryable: boolean | null;
+  correlation_ids: Record<string, string>;
+  cause_chain: string[];
+  schema_version?: number;
+  attempt?: number | null;
+  observed_at?: string | null;
+  completeness?: 'complete' | 'partial' | 'unavailable';
+  evidence_sources?: DiagnosticEvidenceSource[];
+  evidence_references?: DiagnosticEvidenceReference[];
+  observed_facts?: DiagnosticStatement[];
+  supported_interpretations?: DiagnosticStatement[];
+  unknowns?: DiagnosticStatement[];
+  denial_gate?: DiagnosticDenialGate | null;
+  next_actions?: DiagnosticNextAction[];
+  execution_descriptor_id?: string | null;
+  execution_identity_evidence_state?: string | null;
+}
+
+export interface DiagnosticEvidenceSource {
+  name: string;
+  availability: string;
+  completeness: string;
+  observed_at: string;
+  detail?: string | null;
+}
+
+export interface DiagnosticEvidenceReference {
+  id: string;
+  source: string;
+  kind: string;
+  sequence?: number | null;
+  observed_at?: string | null;
+  tool_call_id?: string | null;
+  synthetic: boolean;
+}
+
+export interface DiagnosticStatement {
+  code: string;
+  summary: string;
+  evidence_reference_ids: string[];
+}
+
+export interface DiagnosticDenialGate {
+  gate: string;
+  outcome: string;
+  reason_code?: string | null;
+  tool_call_id?: string | null;
+  tool_name?: string | null;
+  capability?: string | null;
+  permission_binding_id?: string | null;
+  permission_binding_version?: string | null;
+  permission_binding_source?: string | null;
+  evidence_reference_id: string;
+}
+
+export interface DiagnosticNextAction {
+  kind: 'safe_retry' | 'authorization_or_configuration_repair' | 'investigate_unknown';
+  label: string;
+  preconditions: string[];
+  expected_effect: string;
+  mutating: false;
+}
+
+const TERMINAL_FAILURE_CODES = new Set([
+  'agent_turn_internal_error',
+  'a2a_transport_failure',
+  'agent_host_turn_incomplete',
+  'assembly_blocked',
+  'assembly_failed',
+  'coordinator_execution_failed',
+  'coordinator_direct_execution_failed',
+  'coordinator_startup_failed',
+  'github_copilot_auth_required',
+  'github_copilot_capability_snapshot_unavailable',
+  'github_copilot_model_unavailable',
+  'github_copilot_models_unavailable',
+  'github_copilot_provider_unavailable',
+  'github_copilot_rate_limited',
+  'github_copilot_runtime_not_configured',
+  'github_copilot_turn_stalled',
+  'github_copilot_turn_timeout',
+  'model_provider_changed',
+  'model_provider_connection_required',
+  'model_provider_snapshot_unavailable',
+  'model_provider_unavailable',
+  'model_provider_validation_unavailable',
+  'shell_execution_timeout',
+]);
+
+const TERMINAL_CAUSE_TYPES = new Set([
+  'AgentProviderException',
+  'ArgumentException',
+  'DirectoryNotFoundException',
+  'FileNotFoundException',
+  'HttpRequestException',
+  'IOException',
+  'InvalidOperationException',
+  'JsonException',
+  'ModelProviderConnectionRequiredException',
+  'NotSupportedException',
+  'OperationCanceledException',
+  'SocketException',
+  'TaskCanceledException',
+  'TimeoutException',
+  'UnauthorizedAccessException',
+  'WorkflowAgentInfrastructureException',
+]);
+
+const SAFE_TERMINAL_CAUSE = /^(?:code|phase|reason|step|tool):[A-Za-z0-9_.:-]{1,112}$/;
+
+export function isSafeTerminalCause(cause: string): boolean {
+  return cause.length <= 128
+    && (TERMINAL_CAUSE_TYPES.has(cause) || SAFE_TERMINAL_CAUSE.test(cause));
+}
+
+export function safeTerminalFailureMessage(_message: string, code: string, retryable: boolean | null): string {
+  const safeCode = TERMINAL_FAILURE_CODES.has(code) ? code : 'agent_turn_internal_error';
+  const retrySummary = retryable === true
+    ? ' Retry is available.'
+    : retryable === false
+      ? ' Retry is not available.'
+      : ' Retry availability is unknown.';
+  return `Run failed with code '${safeCode}'.${retrySummary}`;
+}
+
+// GET /api/runs/{id}/events — persisted append-only event log (FR-022). Used to seed
+// the execution timeline for terminal/parked runs whose live SSE stream is closed.
+// Shape mirrors the SSE frame: per-run sequence, event type, and JSON payload.
+export interface PersistedRunEventPayload extends Record<string, unknown> {
+  /** Server-stamped event time, when the persisted event did not carry its own time. */
+  timestamp_utc?: string;
+  timestampUtc?: string;
+  timestamp?: string;
+}
+
+export interface PersistedRunEvent {
+  sequence: number;
+  type: string;
+  /** The server-side UTC append time. Null only for legacy rows without a trustworthy time. */
+  timestamp_utc?: string | null;
+  /** Explicit only when the event payload recorded a non-negative duration. */
+  duration_ms?: number | null;
+  /** Event-type-derived state when its meaning is unambiguous; otherwise absent. */
+  status?: string | null;
+  payload: PersistedRunEventPayload;
+}
+
+export interface ReviewRequest {
+  approved: boolean;
+}
+
+export interface ReviewResponse {
+  run_id: string;
+  status: string;
+  merge_result: string | null;
+}
+
+export interface RetriableReviewErrorBody {
+  error: string;
+  status: string;
+}
+
+export interface OutputRevision {
+  revision_id: string;
+  schema_version: number;
+  lifecycle_generation: number;
+  workflow_digest: string | null;
+  manifest_incomplete: boolean;
+  tree_hash: string;
+  diff_sha256: string;
+  tree_content_sha256: string | null;
+  predecessor_revision_id: string | null;
+  output_kind: string | null;
+  merged_commit_hash: string | null;
+  accepted_no_change: boolean;
+  created_at: string;
+  diff?: string;
+  files?: Array<{ path: string; mode: number; size: number; sha256: string }> | null;
+}
+
+export interface OutputRevisionFile {
+  revision_id: string;
+  path: string;
+  mode: number;
+  sha256: string;
+  content_base64: string;
+}
+
+export interface OutputRevisionComparison {
+  before_revision_id: string;
+  after_revision_id: string;
+  changes: Array<{ path: string; before_sha256: string | null; after_sha256: string | null }>;
+}
+
+export interface WorkspaceFileEntry {
+  path: string;
+  status: 'added' | 'modified' | 'deleted';
+  scope: 'committed' | 'uncommitted' | 'merged';
+  added_lines: number;
+  removed_lines: number;
+}
+
+export interface WorkspaceFileContent {
+  path: string;
+  content: string | null;
+  is_binary: boolean;
+  language: string | null;
+}
+
+export interface WorkspaceFileDiff {
+  path: string;
+  diff: string | null;
+  status: 'added' | 'modified' | 'deleted';
+  is_binary: boolean;
+}
+
+export interface WorkspaceNode {
+  path: string;
+  is_folder: boolean;
+  status: 'added' | 'modified' | 'deleted' | null;
+}
+
+// Project Workspace browsing (read-only). A ref is either the project's base
+// branch or an active run's worktree branch, selectable in the Workspace page.
+export interface WorkspaceRef {
+  kind: 'base' | 'worktree' | 'assembly';
+  branch: string;
+  label: string;
+  run_id?: string;
+  run_status?: string;
+  originating_branch?: string;
+}
+
+export interface WorkspaceRefsResponse {
+  current_branch: string;
+  refs: WorkspaceRef[];
+}
+
+export interface CommitResponse {
+  run_id: string;
+  status: string;
+  merge_result: string | null;
+  conflicting_files: string[] | null;
+}
+
+export interface RequestChangesResponse {
+  run_id: string;
+  status: string;
+}
+
+// Projects
+export type ProjectOrigin = 'blank' | 'github';
+export type ProjectState = 'creating' | 'active' | 'failed' | 'deleting';
+
+export interface Project {
+  project_id: string;
+  name: string;
+  origin: ProjectOrigin;
+  source_repository: string | null;
+  working_directory: string;
+  default_branch: string;
+  owner: string;
+  default_provider: ModelSource;
+  default_model_github_copilot: string | null;
+  default_model_microsoft_foundry: string | null;
+  blueprint_generation_model: string | null;
+  workflow_generation_model: string | null;
+  outcome_spec_generation_model: string | null;
+  preview_approval_timeout_minutes?: number;
+  preview_lifetime_minutes?: number;
+  preview_dns_convergence_timeout_seconds?: number;
+  available: boolean;
+  state: ProjectState;
+  created_at: string;
+  updated_at: string;
+  source_blueprint_id?: string | null;
+  source_blueprint_type?: 'predefined' | 'inline' | 'custom' | null;
+  allowed_workflow_ids?: string[] | null;
+}
+
+export interface Blueprint {
+  id: string;
+  name: string;
+  description: string;
+  roster: string[];
+  // Legacy single workflow id: the blueprint's default (first entry of workflows).
+  // The API returns it for backward compatibility; prefer workflows for display.
+  workflow: string;
+  // The full set of workflow ids this blueprint bundles. A blueprint may ship one
+  // or many workflows; the first is the default. Always present in API responses.
+  workflows: string[];
+  review_policy: string;
+  sandbox_profile: string;
+  exportability?: {
+    status: 'exportable' | 'unavailable';
+    codes: string[];
+  };
+  skill_bindings?: BlueprintSkillBindingDto[];
+}
+
+export interface BlueprintSkillBindingDto {
+  role_id: string;
+  skills: string[];
+}
+
+export interface ListBlueprintsResponse {
+  blueprints: Blueprint[];
+}
+
+export interface GenerateBlueprintRequest {
+  description: string;
+  project_id?: string | null;
+  target_repository?: string | null;
+}
+
+export interface BlueprintGenerationProviderSnapshot {
+  provider_kind: string;
+  provider_type?: string | null;
+  provider_key: string;
+  provider_scope: string;
+  resolution_scope: string;
+  blueprint_model?: string | null;
+  workflow_model?: string | null;
+  credential_binding_version?: string | null;
+}
+
+export interface BlueprintGenerationArtifact {
+  artifact_id: string;
+  logical_id: string;
+  version: number;
+}
+
+export interface BlueprintGenerationFailure {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+export interface BlueprintGenerationJob {
+  job_id: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  attempt: number;
+  project_id?: string | null;
+  target_repository?: string | null;
+  provider_snapshot: BlueprintGenerationProviderSnapshot;
+  artifact?: BlueprintGenerationArtifact | null;
+  failure?: BlueprintGenerationFailure | null;
+  created_at: string;
+  updated_at: string;
+  status_url: string;
+  result_url: string;
+  cancel_url: string;
+  retry_url: string;
+  ai_execution_context?: AiExecutionContext | null;
+}
+
+export interface GenerateBlueprintResponse {
+  job_id: string;
+  artifact_id: string;
+  logical_id: string;
+  version: number;
+  blueprint: Blueprint;
+  generated_workflow_yaml?: string | null;
+  warnings: string[];
+}
+
+export interface SuggestBlueprintResponse {
+  recommended_blueprint?: Blueprint | null;
+  rationale?: string | null;
+  confidence: number;
+  signals: string[];
+  fallback: boolean;
+}
+
+export interface CreateProjectRequest {
+  name: string;
+  origin: ProjectOrigin;
+  repository_selection_code?: string;
+  working_directory: string;
+  default_provider?: ModelSource;
+  default_model_github_copilot?: string;
+  default_model_microsoft_foundry?: string;
+  blueprint_id?: string;
+  blueprint?: Blueprint;
+  generated_workflow_yaml?: string | null;
+}
+
+export interface UpdateProjectProviderSettingsRequest {
+  default_provider?: ModelSource;
+  default_model_github_copilot?: string | null;
+  default_model_microsoft_foundry?: string | null;
+  blueprint_generation_model?: string | null;
+  workflow_generation_model?: string | null;
+  outcome_spec_generation_model?: string | null;
+}
+
+export interface UpdateProjectPreviewSettingsRequest {
+  approval_timeout_minutes: number;
+  lifetime_minutes: number;
+  dns_convergence_timeout_seconds: number;
+}
+
+export interface ProjectPreviewSettingsResponse {
+  approval_timeout_minutes: number;
+  lifetime_minutes: number;
+  dns_convergence_timeout_seconds: number;
+}
+
+export interface CreateProjectRunRequest {
+  task: string;
+  model_source?: ModelSource;
+  model_id?: string;
+  base_branch?: string;
+}
+
+export interface ProjectRunSummary {
+  run_id: string;
+  status: string;
+  model_source: ModelSource;
+  model_id: string | null;
+  task: string | null;
+  started_at: string;
+  ended_at: string | null;
+}
+
+export interface WorkflowRunDto {
+  workflow_run_id: string;
+  execution_id: string;
+  task: string;
+  status: string;
+  result?: string;
+  agent_name?: string;
+  reviewed_by?: string;
+  started_at: string;
+  ended_at?: string;
+  model_id?: string;
+  total_tokens?: number | null;
+  total_nano_aiu?: number | null;
+  // Feature 008 Phase 3 — orchestration lifecycle for a coordinator run. Optional;
+  // present only once the backend adds it, so render the bare status as a fallback.
+  coordinator_status?: string;
+  coordinator_status_reason?: string;
+  archived_at?: string | null;
+}
+
+// Shared paging envelope returned by list endpoints per the pagination contract
+// (`.squad/decisions/inbox/niobe-pagination-contract.md`): `GET /api/projects`,
+// `GET /api/projects/{id}/runs`, `GET /api/projects/{id}/decisions`,
+// `GET /api/projects/{id}/decisions/inbox`, `GET /api/projects/{id}/memory`, and
+// `GET /api/projects/{id}/agents/{name}/memory`. Field names are snake_case to match
+// the rest of the API's JSON contract.
+export interface PagedResult<T> {
+  items: T[];
+  page: number;
+  page_size: number;
+  total_count: number;
+  total_pages: number;
+}
+
+/** Request options for paged list endpoints. `page` is 1-based; `pageSize` maps to the `page_size` query param. */
+export interface PagedRequestOptions {
+  page?: number;
+  pageSize?: number;
+  signal?: AbortSignal;
+}
+
+export interface DecisionDto {
+  id: string;
+  agent_name: string;
+  type: string;
+  status: string;
+  title: string;
+  content: string;
+  rationale?: string;
+  tags?: string;
+  revision: number;
+  current_revision_id: string;
+  superseded_by_id?: number | null;
+  trust_state?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DecisionInboxEntryDto {
+  id: string;
+  agent_name: string;
+  slug: string;
+  type: string;
+  title: string;
+  content: string;
+  rationale?: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AddressedMessageDto {
+  id: string;
+  projectId: string;
+  sender: string;
+  recipient: string;
+  sourceRunId: string | null;
+  targetRunId: string;
+  threadId: string;
+  replyToId: string | null;
+  referenceKind: string | null;
+  referenceId: string | null;
+  idempotencyKey: string;
+  content: string;
+  status: 'accepted' | 'claimed' | 'delivered' | 'acknowledged' | 'expired' | 'undeliverable';
+  createdAt: string;
+  expiresAt: string;
+  deliveredAt: string | null;
+  acknowledgedAt: string | null;
+  failureReason: string | null;
+}
+
+export interface AgentMemoryDto {
+  id: string;
+  agent_name: string;
+  type: string;
+  importance: string;
+  content: string;
+  tags?: string;
+  status: 'active' | 'superseded' | 'archived';
+  replaced_by_id?: number | null;
+  revision: number;
+  current_revision_id: string;
+  trust_state?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentMemoryRevisionDto {
+  revision_id: string;
+  memory_id: number;
+  revision: number;
+  previous_revision_id?: string | null;
+  actor: string;
+  source_run_id?: string | null;
+  reason: string;
+  agent_name: string;
+  type: string;
+  importance: string;
+  content: string;
+  tags?: string | null;
+  status: 'active' | 'superseded' | 'archived';
+  replaced_by_id?: number | null;
+  trust_state: string;
+  approved_at?: string | null;
+  created_at: string;
+}
+
+export interface DecisionRevisionDto {
+  revision_id: string;
+  decision_id: number;
+  revision: number;
+  previous_revision_id?: string | null;
+  actor: string;
+  source_run_id?: string | null;
+  reason: string;
+  agent_name: string;
+  type: string;
+  status: 'active' | 'superseded' | 'archived';
+  title: string;
+  content: string;
+  rationale?: string | null;
+  tags?: string | null;
+  superseded_by_id?: number | null;
+  trust_state: string;
+  approved_at?: string | null;
+  created_at: string;
+}
+
+export interface SessionHistoryDto {
+  id: string;
+  session_id: string;
+  focus_area?: string | null;
+  active_issues?: string | null;
+  summary?: string | null;
+  serialized_state?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+}
+
+export interface RunDto {
+  run_id: string;
+  status: string;
+  model_source: string;
+  model_id?: string;
+  agent_name?: string;
+  reviewed_by?: string;
+  task: string;
+  started_at: string;
+  ended_at?: string;
+  step_count?: number;
+  originating_branch?: string;
+  workflow_run_id?: string;
+}
+
+// --- Feature 008 Phase 3 — Dynamic graph descriptor ---
+// GET /api/runs/{id}/graph returns a descriptor that replaces hardcoded executor
+// lists. The client renders it as-is; node ids equal the logical
+// step keys already used by the status reducer (agent/rai/review/merge/scribe/assemble-ready).
+
+export type GraphNodeKind = 'live' | 'planned';
+export type GraphEdgeCardinality = 'direct' | 'fanout' | 'fanin';
+export type GraphVariant = 'full' | 'child' | 'coordinator';
+
+// node_type — self-declared structural category separate from `role` and `kind`.
+// Drives card shape and size in the generic renderer.
+export type GraphNodeType = 'agent' | 'action' | 'gate' | 'terminal' | 'subtask';
+
+export interface GraphNode {
+  id: string;              // logical step key; also the status reducer lookup key
+  label: string;           // display label shown on the card
+  role: string;            // drives icon + color: agent|rai|review|merge|scribe|coordinator|subtask|assembly
+  kind: GraphNodeKind;     // 'planned' nodes render dashed/muted; never show a pending spinner
+  node_type?: GraphNodeType; // drives card shape + size (agent=largest, action/gate=medium, terminal=small, subtask=expandable)
+  child_graph_ref?: string;  // coordinator subtask nodes: ref to child run graph, e.g. "run:{childRunId}"
+  // Optional display fields emitted by coordinator subtask nodes (may be flat fields OR nested in a `data` map —
+  // read defensively from both locations).
+  agent?: string;
+  model?: string;
+  phase?: string;
+  isolation?: string;
+  child_run_id?: string;
+  status?: string | null;
+  status_reason?: string | null;
+  terminal_stage?: string | null;
+  data?: Record<string, unknown>;
+}
+
+export interface GraphEdge {
+  from: string;
+  to: string;
+  cardinality: GraphEdgeCardinality;
+  loopback: boolean;       // true = back-edge excluded from dagre input, drawn as loopback arc
+}
+
+export interface GraphDescriptor {
+  graph_id: string;
+  variant: GraphVariant;
+  start_node_id: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface AuthSessionResponse {
+  authenticated: boolean;
+  auth_mode: AuthMode;
+  display_name: string | null;
+  email: string | null;
+  login: string | null;
+  avatar_url?: string | null;
+  entra_object_id?: string | null;
+  platform_roles: string[];
+  ai_configured: boolean;
+}
+
+export interface AuthConfigResponse {
+  mode: 'Entra';
+  entra: {
+    client_id: string | null;
+    tenant_id: string | null;
+    enterprise_app_object_id: string | null;
+    authority: string | null;
+  } | null;
+}
+
+export type ByokProviderType = 'openai' | 'azure' | 'anthropic';
+
+export interface ByokProviderConfig {
+  id: string;
+  name: string;
+  type: ByokProviderType;
+  base_url: string;
+  model: string;
+  wire_api: 'completions' | 'responses' | null;
+  azure_api_version: string | null;
+  headers: Record<string, string> | null;
+  has_api_key: boolean;
+  is_active: boolean;
+}
+
+export interface ByokProviderListResponse {
+  active_provider_id: string | null;
+  providers: ByokProviderConfig[];
+}
+
+export interface ByokProviderRequest {
+  name: string;
+  type: ByokProviderType;
+  base_url: string;
+  model: string;
+  /** Optional — omit/blank on an edit to keep the previously saved key unchanged. */
+  api_key?: string | null;
+  wire_api?: 'completions' | 'responses' | null;
+  headers?: Record<string, string> | null;
+  azure_api_version?: string | null;
+}
+
+export interface UserAiAccessStatus {
+  effective_source: 'platform_byok' | 'user_byok' | 'user_github_copilot' | 'none';
+  platform_byok: Pick<ByokProviderConfig, 'name' | 'type' | 'model'> | null;
+  preference: 'byok' | 'github_copilot';
+  personal_byok: Omit<ByokProviderConfig, 'is_active'> | null;
+  copilot: {
+    connected: boolean;
+    github_login: string | null;
+    reconnect_required: boolean;
+  };
+}
+
+export interface GitHubRepositorySelectionCandidate {
+  full_name: string;
+  owner_login: string;
+  private: boolean;
+  default_branch: string;
+  pushed_at: string | null;
+}
+
+export interface GitHubRepositoryInstallation {
+  account_login: string;
+  account_type: 'user' | 'organization';
+  repository_selection: 'all' | 'selected';
+  management_url: string;
+}
+
+export interface GitHubRepositorySelectionListResponse {
+  repositories: GitHubRepositorySelectionCandidate[];
+  installations: GitHubRepositoryInstallation[];
+}
+
+export interface GitHubRepositorySelectionCodeResponse {
+  selection_code: string;
+  expires_at: string;
+}
+
+/** One candidate owner for creating a new repository for a project (GET
+ * /api/projects/{id}/github/repository-owners). */
+export interface RepositoryOwner {
+  login: string;
+  type: 'user' | 'org';
+}
+
+export interface CreateProjectRepositoryRequest {
+  owner: string;
+  name?: string;
+  private?: boolean;
+}
+
+export interface ConnectProjectRepositoryRequest {
+  repository_selection_code: string;
+}
+
+export interface ConnectedRepository {
+  source_repository: string;
+  html_url: string;
+}
+
+export interface ProjectRoleAssignment {
+  assignment_id: string;
+  principal_id: string;
+  display_name: string | null;
+  email: string | null;
+  role: string;
+  scope: string;
+}
+
+export interface CreateProjectRoleAssignmentRequest {
+  principal_id: string;
+  role: string;
+  display_name?: string | null;
+  email?: string | null;
+}
+
+export interface ProjectAccessOverview {
+  auth_mode: AuthMode;
+  platform_roles: string[];
+  platform_roles_source?: string | null;
+  current_user_project_role?: string | null;
+  can_manage_role_assignments?: boolean;
+  can_manage_project_github_identity?: boolean;
+  project_role_assignments: ProjectRoleAssignment[];
+  /**
+   * The repository-access GitHub login effective for this project, when known. Currently always
+   * null — populating it requires reading Repo App installation identity, which is owned by a
+   * separate workstream.
+   */
+  effective_github_login?: string | null;
+}
+
+export interface UnattendedReadiness {
+  status: 'interactive_ready' | 'unattended_ready' | 'repository_ready' | 'reauthorization_required' | 'unavailable';
+  reason_code: string;
+  message: string;
+  interactive_ready: boolean;
+  unattended_ready: boolean;
+  repository_ready: boolean;
+  repo_app_installation_connected: boolean;
+  interactive?: {
+    status: 'interactive_ready' | 'reauthorization_required' | 'unavailable';
+    source: 'user' | 'user_byok' | 'byok' | 'none';
+    reason_code: 'interactive_ready' | 'interactive_model_provider_connection_required' | 'user_model_provider_reconnect_required';
+  };
+  model_provider?: {
+    status: 'unattended_ready' | 'reauthorization_required' | 'unavailable';
+    source: 'project' | 'platform_default' | 'byok' | 'none';
+    reason_code: 'unattended_ready' | 'model_provider_connection_required' | 'project_model_provider_reconnect_required';
+  };
+  repository?: {
+    required: boolean;
+    status: 'repository_ready' | 'not_ready' | 'not_required';
+    reason_code: 'repository_ready' | 'not_required' | 'repo_app_installation_required' | 'repo_app_repository_grant_required';
+    repo_app_installation_connected: boolean;
+  };
+}
+
+/**
+ * Owner-facing status of a project's schedule/event automation activation: whether it is
+ * currently live (able to fire), and which kind of model-provider authority backs it.
+ */
+export interface AutomationActivationStatus {
+  is_active: boolean;
+  model_provider_source?: 'byok' | 'github_copilot' | null;
+  activated_at?: string | null;
+}
+
+/**
+ * The safe, project-scoped view of the Copilot App binding. It deliberately
+ * excludes authorization transactions, provider permissions, and credentials.
+ */
+export interface ProjectCopilotConnection {
+  status: 'connected' | 'not_connected';
+  github_login: string | null;
+  effective_source?: 'project' | 'platform_default' | 'byok' | 'none';
+  platform_default_connected?: boolean;
+  byok_configured?: boolean;
+}
+
+export interface PlatformDefaultCopilotConnection {
+  connected: boolean;
+  github_login: string | null;
+}
+
+export interface RepoAppConnectionStatus {
+  connected: boolean;
+  github_login: string | null;
+}
+
+
+// --- Casting / Team types ---
+
+export interface TeamTemplateDto {
+  id: string;
+  title: string;
+  description: string;
+  roles: RoleDto[];
+}
+
+export interface RoleDto {
+  id: string;
+  title: string;
+  summary: string;
+  default_model: string;
+}
+
+export interface ProposedMemberDto {
+  proposed_name: string;
+  role: RoleDto;
+  charter_markdown: string;
+  is_named: boolean;
+  default_model: string;
+  justification: string | null;
+}
+
+export interface CastProposalDto {
+  proposal_id: string;
+  mode: 'scenario' | 'free_text' | 'analysis' | 'manual';
+  universe: string;
+  members: ProposedMemberDto[];
+  existing_team_present: boolean;
+  run_id: string | null;
+  warnings: string[];
+  rationale?: string;
+  ai_execution_context?: AiExecutionContext | null;
+}
+
+export interface CreateProposalRequest {
+  mode: 'scenario' | 'free_text' | 'analysis' | 'manual';
+  template_id?: string;
+  goal?: string;
+  universe?: string;
+  model_id?: string;
+  role_ids?: string[];
+  team_size?: number;
+}
+
+export interface AmendProposalRequest {
+  members?: ProposedMemberDto[];
+  universe?: string;
+}
+
+export interface ConfirmProposalRequest {
+  intent?: 'new' | 'augment' | 'recast';
+}
+
+export interface TeamMemberDto {
+  name: string;
+  role_title: string;
+  charter_path: string;
+  status: 'active' | 'retired';
+  default_model: string;
+  is_named: boolean;
+  is_built_in: boolean;
+  charter_created_at?: string | null;
+  charter_updated_at?: string | null;
+}
+
+export interface HistoryDto {
+  member_name: string;
+  content: string;
+}
+
+export interface TeamDto {
+  project_name: string;
+  universe: string;
+  members: TeamMemberDto[];
+  retired_members?: TeamMemberDto[];
+  layout: 'canonical' | 'legacy' | 'absent';
+  migration_available: boolean;
+}
+
+export interface CharterDto {
+  member_name: string;
+  content: string;
+}
+
+export interface AddMemberRequest {
+  role_id: string;
+  custom_role_title?: string;
+  model_id?: string;
+}
+
+export interface ReroleRequest {
+  new_role_id: string;
+  custom_role_title?: string;
+}
+
+export interface SyncChangeDto {
+  path: string;
+  kind: 'added' | 'modified' | 'removed';
+}
+
+export interface SyncStatusDto {
+  changes: SyncChangeDto[];
+  change_set_hash: string;
+  nothing_to_sync: boolean;
+}
+
+export interface SyncCommitRequest {
+  expected_change_set_hash: string;
+  message?: string;
+}
+
+export interface SyncCommitResponseDto {
+  commit_id: string;
+}
+
+// Feature 008 — Squad Coordinator Agent (orchestration / outcome spec)
+export type OutcomeSpecStatus = 'drafting' | 'awaiting_confirmation' | 'confirmed' | 'declined';
+
+// Server-authored outcome spec. Scope/assumptions/clarifyingQuestions may arrive
+// either as a single string or as a list depending on the coordinator's output;
+// the panel renders them defensively (Principle III — render server state as-is).
+export interface OutcomeSpec {
+  goal?: string;
+  desiredOutcome?: string;
+  scope?: string | string[];
+  assumptions?: string | string[];
+  clarifyingQuestions?: string[];
+  status: OutcomeSpecStatus;
+  confirmedBy?: string;
+  allowTaskPromotion?: boolean;
+}
+
+export type StartOrchestrationMode = 'define_outcome' | 'direct';
+
+export interface StartOrchestrationRequest {
+  goal: string;
+  start_mode?: StartOrchestrationMode;
+  auto_approve_tools?: boolean;
+  autopilot?: boolean;
+}
+
+export interface RunApprovalPolicy {
+  auto_approve_tools: boolean;
+  autopilot: boolean;
+}
+
+export interface StartOrchestrationResponse {
+  runId: string;
+}
+
+export interface NoTeamStartOrchestrationError {
+  error: 'no_team';
+  message: string;
+}
+
+export type RaiVerdictToken = 'green' | 'yellow' | 'red' | 'revise';
+
+export interface RaiVerdictEventPayload {
+  verdict: RaiVerdictToken;
+  runId?: string;
+  rationale?: string;
+}
+
+export interface ReviseOutcomeSpecRequest {
+  feedback: string;
+}
+
+// --- Feature 008 Phase 2 — Coordinator dynamic topology + steering ---
+// All of these mirror server event contracts. The client renders them as-is
+// (Principle III — thin client, no topology computation).
+
+export type SubtaskStatus =
+  | 'pending'
+  | 'dispatched'
+  | 'running'
+  | 'assemble_ready'
+  | 'rai_flagged'
+  | 'completed'
+  | 'failed'
+  | 'blocked'
+  | 'cancelled'
+  | 'pending_capacity';
+
+// coordinator.work_plan event payload.
+export interface WorkPlanSubtask {
+  id: string | number;
+  title: string;
+  assignedAgent?: string;
+  selectedModelId?: string;
+  phase?: string;
+  isolation?: string;
+  dependsOn?: number[];
+}
+
+export interface CoordinatorWorkPlan {
+  workPlanId: string;
+  status: string;
+  warnings?: string[];
+  subtasks: WorkPlanSubtask[];
+}
+
+export type TopologyNodeKind = 'coordinator' | 'subtask';
+
+// A node in the coordinator.topology graph (snapshot node or delta-changed node).
+export interface TopologyNode {
+  id: string;
+  kind: TopologyNodeKind;
+  title: string;
+  status: string;
+  assignedAgent?: string;
+  selectedModelId?: string;
+  childRunId?: string;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
+  /** Pod name for the execution environment of this specific node (spec-018). Null today — all agents share the API pod; set per-node after distributed phases. */
+  executionPodName?: string | null;
+}
+
+// Dependency edge: from = dependency, to = dependent. Edges never change.
+export interface TopologyEdge {
+  from: string;
+  to: string;
+}
+
+// coordinator.topology snapshot (seq 0).
+export interface TopologySnapshot {
+  version: number;
+  seq: number;
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+}
+
+// coordinator.topology delta (seq > 0) — changed nodes merged by id.
+export interface TopologyDelta {
+  version: number;
+  seq: number;
+  changed: TopologyNode[];
+}
+
+// subtask.* event payload.
+export interface SubtaskEvent {
+  subtaskId: string;
+  childRunId?: string;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
+  assignedAgent?: string;
+  selectedModelId?: string;
+  status: SubtaskStatus;
+}
+
+// GET /api/runs/{coordinatorRunId}/work-plan — the persisted plan (subtasks + dependency edges).
+// Used to seed the topology view on page load before SSE deltas arrive (snapshot-race fix).
+export interface WorkPlanSubtaskResponse {
+  subtaskId: number;
+  title: string;
+  scope: string;
+  assignedAgent: string;
+  selectedModelId: string;
+  phase: string;
+  isolation: string;
+  status: string;
+  childRunId?: string;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
+}
+
+export interface WorkPlanDependencyResponse {
+  subtaskId: number;
+  dependsOnSubtaskId: number;
+}
+
+export interface WorkPlanResponse {
+  workPlanId: number;
+  coordinatorRunId: string;
+  outcomeSpecId: number;
+  status: string;
+  parentRunId?: string | null;
+  parentWorkflowId?: string | null;
+  parentWorkflowNodeId?: string | null;
+  parentJoinNodeId?: string | null;
+  parentResumeRequestId?: string | null;
+  parentResumeState?: string | null;
+  joinedOutput?: string | null;
+  composedAssembly?: {
+    integrationBranch: string;
+    treeHash: string;
+    aggregateDiff: string;
+    includedChildRunIds: string[];
+  } | null;
+  statusReason?: string | null;
+  assemblyStage?: string | null;
+  assemblyTerminalStage?: string | null;
+  isolationSummary?: string;
+  subtasks: WorkPlanSubtaskResponse[];
+  dependencies: WorkPlanDependencyResponse[];
+}
+
+// GET /api/runs/{coordinatorRunId}/children — dispatched child runs paired with subtask status.
+export interface CoordinatorChildResponse {
+  subtaskId: number;
+  childRunId: string;
+  subtaskStatus: string;
+  assignedAgent: string;
+  selectedModelId: string;
+  childRunStatus?: string;
+  worktreeBranch?: string;
+  treeHash?: string;
+  stepCount: number;
+  workflowBranchNodeId?: string;
+  workflowBranchOrdinal?: number;
+  parentRunId?: string | null;
+  parentWorkflowId?: string | null;
+  parentWorkflowNodeId?: string | null;
+  parentJoinNodeId?: string | null;
+}
+
+export type SteerKind = 'send' | 'redirect' | 'amend' | 'stop';
+
+// POST /api/runs/{coordinatorRunId}/steer body.
+// kind "send"     {instruction}                         — informational; no re-plan, no subtask mutation.
+// kind "redirect" {instruction, target_child_run_id?}   — re-plans/re-arms; a forced target interruption is not child failure.
+// kind "amend"    {instruction}                          — additive; extends the outcome spec/plan; never discards in-flight work.
+// kind "stop"     {}                                     — stop the orchestration.
+export interface SteerCoordinatorRequest {
+  kind: SteerKind;
+  target_child_run_id?: string;
+  instruction?: string;
+}
+
+// POST /api/runs/{coordinatorRunId}/steer response body.
+// status:"queued"  — run was live; directive applies at the next turn boundary.
+// status:"applied" — run was parked/failed and has been recovered (subtasks reset, run resumed).
+export interface SteerCoordinatorResponse {
+  status: 'queued' | 'applied' | string;
+}
+
+// ─── Assistant (operator) run endpoints (#346) ──────────────────────────────
+// MCP-driven operator assistant types (#346).
+// POST /api/assistant/runs + POST /api/assistant/runs/{id}/messages.
+// The transcript streams over the existing run-stream endpoints (GET /api/runs/{id}/stream + /events).
+export interface CreateAssistantRunRequest {
+  /** Optional opening message used for the conversation title and, by default, the first turn. */
+  message?: string;
+  /** Create and return the run before executing `message`, so the caller can attach its stream first. */
+  defer_first_turn?: boolean;
+  /** Optional project scope for MCP tool calls that need a project context. */
+  project_id?: string;
+  /**
+   * Auto-seed a brand-new run's model context with a prior, genuinely-gone run's full
+   * conversation history so replies feel continuous. The referenced run is never modified —
+   * this always creates a new `run_id`. This is a fallback for runs that truly can't be
+   * continued (a foreign/nonexistent run id, or a sealed run.completed) — NOT for plain
+   * idle timeout, which now wakes the same run transparently with no client-side handling
+   * needed.
+   */
+  resume_from_run_id?: string | null;
+}
+
+export interface CreateAssistantRunResponse {
+  /** Run id — bind to the run-stream (SSE) transcript. */
+  run_id: string;
+  /** Always "in_progress" from the backend. */
+  status: 'in_progress' | string;
+  /** Assistant reply for the initial turn when a message was supplied; null otherwise. */
+  message?: string;
+  /** Names of MCP tools invoked on the initial turn, if any. */
+  tools_invoked?: string[];
+  effective_model_provider?: EffectiveModelProvider | null;
+}
+
+export interface SendAssistantMessageRequest {
+  message: string;
+}
+
+export interface SendAssistantMessageResponse {
+  run_id: string;
+  /** Always "assistant" from the backend. */
+  role: 'assistant' | string;
+  /** Assistant reply text — the transcript also streams the same turn on the SSE channel. */
+  message: string;
+  status: string;
+  tools_invoked?: string[];
+  effective_model_provider?: EffectiveModelProvider | null;
+}
+
+// GET /api/assistant/runs?limit=50 (#346 follow-up — Tank's caller-scoped list endpoint).
+// Newest-first; `title` is the first user message truncated to 80 chars by the backend.
+export interface AssistantRunSummary {
+  run_id: string;
+  status: string;
+  title?: string;
+  created_at: string;
+}
+
+export interface ListAssistantRunsResponse {
+  runs: AssistantRunSummary[];
+}
+
+// coordinator.steering event payload — steering directive state surfaced on a node.
+export interface SteeringDirective {
+  directiveId: string;
+  kind: SteerKind;
+  targetChildRunId?: string;
+  status: string;
+  instruction?: string;
+}
+
+// Friendly client decision verb for the collective human review UI.
+export type AssemblyReviewDecision = 'approve' | 'request_changes' | 'decline';
+
+// POST /api/runs/{coordinatorRunId}/assembly/review body — backend contract.
+export interface AssemblyReviewRequest {
+  approved: boolean;
+  request_changes?: boolean;
+  feedback?: string;
+  target_files?: string[];
+}
+
+export interface AssemblyReviewResponse {
+  runId: string;
+  accepted: boolean;
+  deferred?: boolean;
+  message?: string;
+}
+
+// POST /api/runs/{id}/questions/{requestId}/answer — answer a worker's bubbled question
+// (agent.question_asked). For a coordinator child question/approval the answer is routed to the
+// childRunId (the run that asked), not the coordinator run id.
+export interface AnswerQuestionResponse {
+  run_id: string;
+  request_id: string;
+  answered: boolean;
+}
+
+// POST /api/runs/{id}/auto-approve and /autopilot — live per-run option toggles.
+export interface AutoApproveResponse {
+  run_id: string;
+  auto_approve_tools: boolean;
+}
+
+export interface AutopilotResponse {
+  run_id: string;
+  autopilot: boolean;
+}
+
+// -----------------------------------------------------------------------
+// Feature 009 — Backlog & Workflow Kanban board. snake_case JSON DTOs,
+// mirroring apps/Agentweaver.Api/Contracts/Dtos.cs (the Web is a thin client).
+// -----------------------------------------------------------------------
+
+// Full backlog-task projection returned by capture/edit/move/reorder.
+export interface BacklogTaskDto {
+  task_id: string;
+  project_id: string;
+  title: string;
+  description: string | null;
+  state: string; // backlog | ready | claimed
+  order_key: string;
+  captured_by: string;
+  created_at: string;
+  committed_at?: string | null;
+  claimed_at?: string | null;
+  run_id?: string | null;
+  archived_at?: string | null;
+  workflow_override_id?: string | null;
+  external_id?: string | null;
+  parent_prd_run_id?: string | null;
+  promotion_key?: string | null;
+  promotion_reason?: string | null;
+  depends_on_task_ids?: string[];
+  dependents_task_ids?: string[];
+  prerequisites?: BlockingDependencyDto[];
+  graph_revision?: number;
+  claimed_graph_revision?: number | null;
+  claimed_prerequisites?: BacklogClaimedPrerequisite[] | null;
+  is_blocked?: boolean;
+  blocked_reason?: string | null;
+  is_ready_to_start?: boolean;
+  blocking_dependencies?: BlockingDependencyDto[];
+}
+
+export interface BlockingDependencyDto {
+  task_id: string;
+  title: string;
+  run_id?: string | null;
+  run_status?: string | null;
+  reason?: string;
+  is_satisfied?: boolean;
+}
+
+export interface BacklogClaimedPrerequisite {
+  TaskId: string;
+  RunId: string;
+  Outcome: string;
+  LifecycleGeneration: number;
+  MergedCommitHash: string | null;
+  TreeHash: string | null;
+  ExecutableWorkflowContentDigest: string | null;
+}
+
+export interface BacklogDependenciesResponse {
+  revision: number;
+  prerequisites: string[];
+  affected_task_ids: string[];
+  changed: boolean;
+}
+
+// A Backlog/Ready intake card (board column kind === "intake").
+export interface TaskCardDto {
+  kind: 'task';
+  task_id: string;
+  title: string;
+  description: string | null;
+  state: string; // backlog | ready
+  order_key: string;
+  captured_by: string;
+  created_at: string;
+  committed_at?: string | null;
+  workflow_override_id?: string | null;
+  archived_at?: string | null;
+  parent_prd_run_id?: string | null;
+  promotion_key?: string | null;
+  promotion_reason?: string | null;
+  depends_on_task_ids?: string[];
+  dependents_task_ids?: string[];
+  prerequisites?: BlockingDependencyDto[];
+  graph_revision?: number;
+  is_blocked?: boolean;
+  blocked_reason?: string | null;
+  is_ready_to_start?: boolean;
+  blocking_dependencies?: BlockingDependencyDto[];
+}
+
+// A coordinator-run card placed in a workflow column (read-only).
+export interface RunCardDto {
+  kind: 'run';
+  run_id: string;
+  workflow_run_id?: string | null;
+  backlog_task_id?: string | null;
+  task: string;
+  status: string;
+  retried_from?: string | null;
+  work_plan_status?: string | null;
+  assembly_stage?: string | null;
+  stage_id: string;
+  agent_name?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+  archived_at?: string | null;
+  has_pending_approval?: boolean;
+  total_tokens?: number | null;
+  total_nano_aiu?: number | null;
+}
+
+export type BoardCardDto = TaskCardDto | RunCardDto;
+
+// A board column with its cards. Columns are server-ordered; the Web never
+// hardcodes workflow stage names (FR-015) — it renders whatever the API returns.
+export interface BoardColumnDto {
+  id: string;
+  kind: 'intake' | 'workflow';
+  label: string;
+  cards: BoardCardDto[];
+  collapsed_count?: number;
+}
+
+// Per-agent load summary rolled up across all coordinator runs in the project.
+// Added by the backend as board.agent_queues (FR-phase2-rail).
+export interface AgentOrchestrationQueueDto {
+  run_id:        string;
+  title:         string | null;
+  active:        number;
+  queued:        number;
+  blocked:       number;
+  done:          number;
+  sample_titles: string[];   // up to 3 subtask titles for THIS orchestration
+}
+
+export interface AgentQueueDto {
+  agent_name:    string;
+  active:        number;
+  queued:        number;
+  blocked:       number;
+  done:          number;
+  run_ids:       string[];   // coordinator run ids with ≥1 subtask for this agent
+  sample_titles: string[];   // up to 3 subtask titles
+  orchestrations: AgentOrchestrationQueueDto[]; // per-orchestration breakdown of this agent's work
+}
+
+// Response body for GET /api/projects/{projectId}/board.
+export interface BoardDto {
+  project_id: string;
+  workflow_stages_available: boolean;
+  columns: BoardColumnDto[];
+  agent_queues?: AgentQueueDto[]; // optional — degrades gracefully if backend not yet deployed
+}
+
+// Per-project pickup settings (FR-008a).
+export interface BacklogSettingsDto {
+  max_ready_per_heartbeat: number;
+  pickup_autopilot: boolean;
+  pickup_auto_approve_tools: boolean;
+}
+
+// A single workflow-stage column descriptor.
+export interface WorkflowStageDto {
+  id: string;
+  label: string;
+}
+
+// Response body for GET /api/projects/{projectId}/workflow-stages.
+export interface WorkflowStagesResponse {
+  available: boolean;
+  stages: WorkflowStageDto[];
+}
+
+// GET /api/system/runtime — Kubernetes execution context for the running API pod.
+export interface RuntimeInfo {
+  kubernetes: boolean;
+  podName: string | null;
+}
+
+// A single executed diagnostic probe with its outcome (FR-016). snake_case wire.
+export interface DiagnosticsCheckDto {
+  name: string;
+  status: string; // "pass" | "warn" | "fail"
+  detail: string;
+  duration_ms: number;
+}
+
+// Detailed diagnostic check from GET /api/diagnostics/detailed (spec-018 capacity visibility).
+// Optional fields are populated only when relevant (e.g. quota checks emit used/limit/unit).
+export interface DetailedDiagnosticsCheckDto {
+  name: string;
+  status: 'healthy' | 'warning' | 'critical' | 'unknown';
+  message?: string;
+  latencyMs?: number;
+  used?: number;
+  limit?: number;
+  unit?: string;
+  pendingCount?: number;
+}
+
+// Detailed system diagnostics snapshot from GET /api/diagnostics/detailed.
+export interface DetailedSystemDiagnosticsDto {
+  generated_utc: string;
+  total_duration_ms: number;
+  checks: DetailedDiagnosticsCheckDto[];
+}
+
+// ── Cluster diagnostics (GET /api/diagnostics/cluster) ──────────────────────
+// ── Cluster diagnostics (GET /api/diagnostics/cluster) ─────────────────────
+export interface DetailedHealthCheckDto {
+  name: string;
+  status: string; // 'healthy' | 'degraded' | 'warning' | 'critical' | 'unknown'
+  message: string;
+  latencyMs: number;
+  used?: number | null;
+  limit?: number | null;
+  unit?: string | null;
+  pendingCount?: number | null;
+}
+
+export interface AgentPodInfoDto {
+  claim_name: string;
+  run_id?: string | null;
+  pod_name?: string | null;
+  status: string; // 'ready' | 'pending'
+  age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
+}
+
+export interface PendingCapacityRunDto {
+  subtask_id: number;
+  work_plan_id: number;
+  child_run_id?: string | null;
+  status: string;
+  reason?: string | null;
+  age_seconds: number;
+}
+
+export interface WarmPoolStatusDto {
+  name: string;
+  desired_replicas: number;
+  ready_replicas: number;
+  available_replicas: number;
+  status: string; // 'healthy' | 'warning' | 'critical'
+  instances?: WarmPoolInstanceDto[];
+  age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
+}
+
+export interface WarmPoolInstanceDto {
+  name: string;
+  status: string; // 'available' | 'claimed' | 'warming'
+  claimed: boolean;
+  claim_name?: string | null;
+  run_id?: string | null;
+  project_id?: string | null;
+  age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
+}
+
+export interface SandboxClaimObjectDto {
+  name: string;
+  phase: string; // 'bound' | 'pending' | 'unknown'
+  ready: boolean;
+  run_id?: string | null;
+  bound_sandbox?: string | null;
+  warm_pool?: string | null;
+  age_seconds?: number | null;
+  details?: TopologyResourceDetailsDto | null;
+}
+
+export interface TopologyResourceDetailsDto {
+  resource_id: string;
+  resource_type: 'cluster' | 'warm_pool' | 'warm_instance' | 'sandbox_claim' | 'agent_host_pod';
+  status: string;
+  summary: string;
+  attention_required: boolean;
+  reason?: string | null;
+  created_utc?: string | null;
+  last_transition_utc?: string | null;
+  ownership?: TopologyResourceOwnershipDto | null;
+  capacity?: TopologyResourceCapacityDto | null;
+  runtime?: TopologyResourceRuntimeDto | null;
+  deep_links?: TopologyResourceDeepLinksDto | null;
+}
+
+export interface TopologyResourceOwnershipDto {
+  run_id?: string | null;
+  project_id?: string | null;
+  run_status?: string | null;
+  agent_name?: string | null;
+  claim_name?: string | null;
+  run_started_utc?: string | null;
+  run_ended_utc?: string | null;
+}
+
+export interface TopologyResourceCapacityDto {
+  desired?: number | null;
+  ready?: number | null;
+  available?: number | null;
+  claimed?: number | null;
+  used?: number | null;
+  limit?: number | null;
+  unit?: string | null;
+}
+
+export interface TopologyResourceRuntimeDto {
+  pod_name?: string | null;
+  node_name?: string | null;
+  image?: string | null;
+  runtime_class?: string | null;
+}
+
+export interface TopologyResourceDeepLinksDto {
+  project_id?: string | null;
+  run_id?: string | null;
+  claim_name?: string | null;
+  warm_pool_name?: string | null;
+  pod_name?: string | null;
+}
+
+export interface ClusterDiagnosticsDto {
+  generated_utc: string;
+  total_duration_ms: number;
+  checks: DetailedHealthCheckDto[];
+  inventory_sources?: InventoryCollectionStatusDto[];
+  active_agent_pods: AgentPodInfoDto[];
+  orphaned_agent_pods: AgentPodInfoDto[];
+  pending_capacity_runs: PendingCapacityRunDto[];
+  warm_pools?: WarmPoolStatusDto[];
+  sandbox_claims?: SandboxClaimObjectDto[];
+  details?: TopologyResourceDetailsDto | null;
+}
+
+export interface InventoryCollectionStatusDto {
+  name: string;
+  outcome: 'available' | 'no_resources' | 'forbidden' | 'timeout' | 'unsupported' | 'malformed' | 'collection_error';
+  complete: boolean;
+  observed_at: string;
+  detail: string;
+}
+
+export type KubernetesTopologyLayer =
+  | 'runtime'
+  | 'networking'
+  | 'workloads'
+  | 'storage'
+  | 'autoscaling'
+  | 'availability';
+
+export interface KubernetesTopologyLayerDto {
+  name: KubernetesTopologyLayer;
+  status: 'available' | 'partial' | 'unavailable' | 'not_requested';
+  resource_count: number;
+  message: string;
+}
+
+export interface KubernetesTopologyNodeDto {
+  id: string;
+  layer: KubernetesTopologyLayer;
+  type: string;
+  api_version: string;
+  name: string;
+  namespace?: string | null;
+  health: 'healthy' | 'attention' | 'critical' | 'unknown';
+  summary: string;
+  details: Record<string, string>;
+}
+
+export interface KubernetesTopologyEdgeDto {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  inferred: boolean;
+  summary: string;
+}
+
+export interface KubernetesTopologyDto {
+  generated_utc: string;
+  namespace: string;
+  requested_layers: KubernetesTopologyLayer[];
+  layers: KubernetesTopologyLayerDto[];
+  nodes: KubernetesTopologyNodeDto[];
+  edges: KubernetesTopologyEdgeDto[];
+  truncated: boolean;
+}
+
+// Global system diagnostics snapshot (FR-016). All fields sourced from live state.
+export interface SystemDiagnosticsDto {
+  api_version: string;
+  process_started_utc: string;
+  uptime_seconds: number;
+  total_projects: number;
+  total_runs: number;
+  active_runs: number;
+  generated_utc: string;
+  total_duration_ms: number;
+  checks: DiagnosticsCheckDto[];
+}
+
+// Project-scoped diagnostics snapshot for one project's workspace/config (FR-016).
+export interface ProjectDiagnosticsDto {
+  project_id: string;
+  project_name: string;
+  generated_utc: string;
+  total_duration_ms: number;
+  checks: DiagnosticsCheckDto[];
+}
+
+// One heartbeat tick outcome in the ring buffer (FR-017).
+export interface HeartbeatTickDto {
+  timestamp_utc: string;
+  acted_count: number;
+  error_count: number;
+  duration_ms: number;
+  error: string | null;
+  automation_name: string;
+}
+
+// One real background automation running in the API process (FR-017).
+export interface HeartbeatAutomationDto {
+  name: string;
+  description: string;
+  cadence_seconds: number;
+  last_run_utc: string | null;
+  last_acted_count: number | null;
+  status: string;
+}
+
+// Read-only snapshot of the coordinator heartbeat service (FR-017).
+export interface HeartbeatStatusDto {
+  enabled: boolean;
+  interval_seconds: number;
+  last_tick_utc: string | null;
+  service_status: string;
+  last_error: string | null;
+  recent_activity: HeartbeatTickDto[];
+  automations: HeartbeatAutomationDto[];
+}
+
+// ── Workflow definitions (Spec 010, FR-039/041) ──────────────────────────────
+
+// Response body for GET raw YAML content of a project workflow file (US7).
+export interface WorkflowYamlResponse {
+  yaml: string;
+}
+
+export interface WorkflowGrammar {
+  grammar_version: string;
+  format: 'yaml';
+  root: {
+    required_fields: string[];
+    optional_fields: string[];
+    maximum_document_characters: number;
+    maximum_nodes: number;
+    maximum_edges: number;
+    maximum_triggers: number;
+  };
+  node_fields: {
+    required_fields: string[];
+    optional_fields: string[];
+    maximum_prompt_characters: number;
+    maximum_charter_characters: number;
+  };
+  node_types: Array<{
+    yaml_type: string;
+    api_type: string;
+    label: string;
+    authorable: boolean;
+    runtime_bindable: boolean;
+    runtime_kinds: string[];
+    required_fields: string[];
+    allowed_gate_kinds: string[];
+  }>;
+  edge: {
+    required_fields: string[];
+    optional_fields: string[];
+    conditions_are_case_sensitive: boolean;
+    transitions: Array<{
+      from_kind: string;
+      to_kind: string;
+      unconditional: boolean;
+      when: string[];
+    }>;
+  };
+  triggers: {
+    types: string[];
+    schedule_intervals: string[];
+    review_states: string[];
+    ref_match_modes: string[];
+    predicate_types: string[];
+  };
+  compatibility: {
+    legacy_loading_only: boolean;
+    check_gate_id_matching: string;
+    check_gate_id_fallbacks: Record<string, string>;
+  };
+}
+
+// A workflow in the project's list response: identity, validation.
+export interface WorkflowSummaryDto {
+  id: string | null;
+  name: string | null;
+  description: string | null;
+  source: string;
+  valid: boolean;
+  error: string | null;
+  is_built_in: boolean;
+  is_default: boolean;
+  /** Legacy first-trigger alias. */
+  trigger?: WorkflowTriggerDto | null;
+  triggers?: WorkflowTriggerDto[];
+}
+
+export interface WorkflowTriggerDto {
+  type: 'schedule' | 'event';
+  interval?: 'daily' | 'weekly' | 'monthly' | null;
+  day_of_week?: string | null;
+  day_of_month?: number | null;
+  time_of_day?: string | null;
+  event_name?: string | null;
+  // TODO(#641): replace this loose shape with Tank's dedicated event-predicate DTO once the backend ships it.
+  if?: Array<Record<string, unknown>> | null;
+}
+
+// Response body for GET/POST the project's workflows list.
+export interface WorkflowListResponse {
+  default_workflow_id: string;
+  workflows: WorkflowSummaryDto[];
+}
+
+// Response body for PUT a per-task workflow override (Feature 010, FR-042).
+export interface WorkflowOverrideResponse {
+  task_id: string;
+  workflow_override_id: string | null;
+}
+
+// A node in a workflow detail response.
+export interface WorkflowNodeDto {
+  id: string;
+  type: string;
+  label: string;
+  role?: string | null;
+  kind?: string | null;
+  gate_kind?: string | null;
+  agent?: string | null;
+  prompt?: string | null;
+  target?: string | null;
+  steps?: string[] | null;
+  branches?: string[] | null;
+  independent?: boolean | null;
+  declared_output_paths?: string[] | null;
+}
+
+// An edge in a workflow detail response.
+export interface WorkflowEdgeDto {
+  from: string;
+  to: string;
+  when?: string | null;
+}
+
+// Full definition for GET a single workflow.
+export interface WorkflowDetailDto {
+  id: string;
+  name: string;
+  description: string | null;
+  start: string;
+  source: string;
+  is_built_in: boolean;
+  is_default: boolean;
+  nodes: WorkflowNodeDto[];
+  edges: WorkflowEdgeDto[];
+  /** Legacy first-trigger alias. */
+  trigger?: WorkflowTriggerDto | null;
+  triggers?: WorkflowTriggerDto[];
+}
+
+// Workflow graph descriptor (US6). Matches GraphDescriptor shape for WorkflowGraphPanel.
+export interface WorkflowGraphNodeDto {
+  id: string;
+  label: string;
+  role: string;
+  kind: 'planned';
+  node_type?: GraphNodeType;
+}
+export interface WorkflowGraphEdgeDto {
+  from: string;
+  to: string;
+  cardinality: 'direct';
+  loopback: boolean;
+  label?: string | null;
+}
+export interface WorkflowGraphDto {
+  graph_id: string;
+  variant: string;
+  start_node_id: string;
+  nodes: WorkflowGraphNodeDto[];
+  edges: WorkflowGraphEdgeDto[];
+}
+
+// ── Metrics: Dashboard + Overview (web IA reorg) ─────────────────────────────
+// Mirrors Agentweaver.Api.Metrics DTOs (snake_case over the wire). All values are
+// sourced from live stores; cost and per-workflow health are intentionally absent.
+
+// Per-project dashboard headline counters.
+export interface DashboardSummaryDto {
+  runs_this_week: number;
+  runs_total: number;
+  active_runs: number;
+  active_agents: number;
+  tasks_done_this_week: number;
+}
+
+// One day in the 30-day throughput series.
+export interface ThroughputPointDto {
+  date: string;
+  created: number;
+  done: number;
+}
+
+// Per-agent activity + quality on a single project.
+export interface AgentLeaderboardEntryDto {
+  agentName: string;
+  role?: string | null;
+  runsThisWeek: number;
+  runsTotal: number;
+  successRate: number;
+  avgDurationMs: number | null;
+  costAic: number;
+}
+
+// Response body for GET /api/projects/{id}/dashboard.
+export interface ProjectDashboardDto {
+  project_id: string;
+  project_name: string;
+  generated_utc: string;
+  summary: DashboardSummaryDto;
+}
+
+// Response body for GET /api/projects/{id}/metrics.
+export interface ProjectMetricsDto {
+  throughput: ThroughputPointDto[];
+  leaderboard: AgentLeaderboardEntryDto[];
+  invocationTrend?: DailyInvocationPointDto[];
+  modelUsage?: ModelUsageBreakdownDto[];
+  responseDuration?: MetricPercentilesDto[];
+  timeToFirstToken?: MetricPercentilesDto[];
+  agentBreakdown?: AgentUsageBreakdownDto[];
+  aiCreditUsageTrend?: AiCreditUsagePointDto[];
+}
+
+export interface DailyInvocationPointDto {
+  date: string;
+  count: number;
+}
+
+export interface AiCreditUsagePointDto {
+  date: string;
+  totalNanoAiu: number;
+}
+
+export interface ModelUsageBreakdownDto {
+  model: string;
+  invocationCount: number;
+  totalNanoAiu: number;
+}
+
+export interface MetricPercentilesDto {
+  label: string;
+  p50Ms?: number | null;
+  p95Ms?: number | null;
+}
+
+export interface AgentUsageBreakdownDto {
+  agentName: string;
+  invocationCount: number;
+  totalTokens: number;
+  totalNanoAiu: number;
+}
+
+export interface RunAgentTokenBreakdownDto {
+  runId: string;
+  source: string;
+  hasAgentData: boolean;
+  totalTokens: number;
+  totalNanoAiu: number;
+  breakdown: AgentUsageBreakdownDto[];
+}
+
+export interface RunTraceSpanDto {
+  id: string;
+  parentId?: string | null;
+  name: string;
+  spanType?: string | null;
+  timestamp: string;
+  durationMs: number;
+  success: boolean;
+  resultCode?: string | null;
+  agentName?: string | null;
+  toolName?: string | null;
+  toolCallId?: string | null;
+  model?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalNanoAiu?: number | null;
+  operationName?: string | null;
+  attributes?: TraceSpanAttributesDto | null;
+}
+
+/** Fixed, privacy-safe trace attributes projected by the API. Null means not recorded. */
+export interface TraceSpanAttributesDto {
+  sessionId?: string | null;
+  runId?: string | null;
+  parentRunId?: string | null;
+  projectId?: string | null;
+  agentName?: string | null;
+  workflowRunId?: string | null;
+  operationName?: string | null;
+  modelId?: string | null;
+  providerSource?: string | null;
+  providerKind?: string | null;
+  providerType?: string | null;
+  providerScope?: string | null;
+  routingDecision?: string | null;
+  toolName?: string | null;
+  toolCallId?: string | null;
+  toolSuccess?: boolean | null;
+  toolInput?: string | null;
+  toolInputState?: 'captured' | 'not_captured' | 'truncated' | 'redacted' | string | null;
+  toolOutput?: string | null;
+  toolOutputState?: 'captured' | 'not_captured' | 'truncated' | 'redacted' | string | null;
+  policyDecision?: string | null;
+  authorizationDecision?: string | null;
+  policyShellEnabled?: boolean | null;
+  policyNetworkEnabled?: boolean | null;
+  policyAutoApproveTools?: boolean | null;
+  runStatus?: string | null;
+  sandboxBackend?: string | null;
+  sandboxIsolated?: boolean | null;
+  runtimePurpose?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens?: number | null;
+  totalNanoAiu?: number | null;
+  status?: string | null;
+  errorType?: string | null;
+  execution?: ExecutionDiagnosticsDto | null;
+}
+
+/** Fixed execution evidence; missing values are unavailable, not zero. */
+export interface ExecutionDiagnosticsDto {
+  queueEnteredAt?: string | null;
+  dispatchStartedAt?: string | null;
+  processStartedAt?: string | null;
+  processEndedAt?: string | null;
+  hostProcessCpuMs?: number | null;
+  hostProcessWorkingSetBytes?: number | null;
+  hostProcessPeakWorkingSetBytes?: number | null;
+}
+
+export interface RunTraceDto {
+  runId: string;
+  spans: RunTraceSpanDto[];
+  /** Present when Application Insights could not complete the trace query. */
+  queryError?: string | null;
+  /** Opaque continuation for the next chronologically ordered trace page. */
+  nextCursor?: string | null;
+  hasMore?: boolean;
+}
+
+// Global overview "at a glance" counters.
+export interface AtAGlanceDto {
+  in_flight: number;
+  queued_work: number;
+  done_today: number;
+  active_projects: number;
+  health: string;              // "healthy" | "degraded"
+}
+
+// An active run surfaced as a live session.
+export interface LiveSessionDto {
+  project_id: string;
+  project_name: string;
+  agent: string | null;
+  status: string;
+  started_utc: string;
+  last_activity_utc: string;
+}
+
+// An in-progress/pending orchestration run.
+export interface ActiveWorkflowRunDto {
+  project_id: string;
+  project_name: string;
+  trigger: string;
+  status: string;
+  started_utc: string;
+}
+
+// Per-project rollup of active + queued work.
+export interface ActiveProjectDto {
+  project_id: string;
+  project_name: string;
+  active_count: number;
+  queued_count: number;
+  last_activity_utc: string | null;
+}
+
+// A recent run/orchestration lifecycle event.
+export interface RecentActivityDto {
+  project_id: string;
+  project_name: string;
+  label: string;
+  kind: string;
+  timestamp_utc: string;
+}
+
+// Response body for GET /api/overview.
+export interface OverviewDto {
+  generated_utc: string;
+  at_a_glance: AtAGlanceDto;
+  live_sessions: LiveSessionDto[];
+  active_workflow_runs: ActiveWorkflowRunDto[];
+  active_projects: ActiveProjectDto[];
+  recent_activity: RecentActivityDto[];
+}
+
+// ── #247 — Global notification center ─────────────────────────────────────────
+// GET /api/notifications — the signed-in user's pending Human Review and Tool Approval requests
+// across every project/run they own. The server emits the exact CTA path to open, including
+// assistant-session approvals that must resume /assistant rather than a project orchestration page.
+export interface NotificationDto {
+  id: string;
+  // Widened with `(string & {})` so the union still autocompletes known values while
+  // remaining forward-compatible with any new/unrecognized type the backend may emit
+  // (see #319 — the UI must never break on an unknown value).
+  type: 'human_review' | 'tool_approval' | (string & {});
+  run_id: string;
+  project_id: string | null;
+  project_name: string | null;
+  agent_name: string | null;
+  title: string;
+  created_utc: string;
+  cta_path: string | null;
+}
+
+export interface NotificationsResponseDto {
+  generated_utc: string;
+  notifications: NotificationDto[];
+}
+
+// ── Feature 014 — Spec-to-Backlog decomposition ───────────────────────────────
+// GET /api/projects/{id}/workspace/files — scoped file tree for the project sandbox.
+export interface WorkspaceFileNode {
+  name: string;
+  relative_path: string;
+  is_directory: boolean;
+  children?: WorkspaceFileNode[];
+}
+
+// A single backlog item proposed by the decomposition agent.
+export interface ProposedBacklogItem {
+  title: string;
+  description?: string;
+  already_exists: boolean;
+}
+
+// POST /api/projects/{id}/backlog/decompose response.
+// When confirm=false: dry-run preview (no tasks created).
+// When confirm=true:  tasks are created; proposed_items reflects what was written.
+export interface DecomposeResponse {
+  proposed_items: ProposedBacklogItem[];
+  was_capped: boolean;
+  total_found: number;
+  ai_execution_context?: AiExecutionContext | null;
+}
+
+// ── Feature 017 — Sandbox preview port-forward ───────────────────────────────
+// POST /api/runs/{runId}/sandbox/port-forward
+export interface PortForwardSessionDto {
+  session_id: string;
+  local_port: number;
+  target_port: number;
+  pod_name: string;
+  preview_runner_session_id?: string | null;
+  started_at: string;
+  preview_url?: string | null;
+  previewUrl?: string | null;
+  keepalive_url?: string | null;
+  keepaliveUrl?: string | null;
+}
+
+// ── Issues #51/#56 — Per-project skill catalog + agent assignments ───────────
+export type SkillProvenance = 'built-in' | 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync' | 'marketplace';
+export type SkillStatus = 'active' | 'missing' | 'malformed';
+
+export function isSkillProvenance(value: unknown): value is SkillProvenance {
+  return value === 'built-in'
+    || value === 'repo-import'
+    || value === 'file-upload'
+    || value === 'manual'
+    || value === 'connected-repo-sync'
+    || value === 'marketplace';
+}
+
+// GET /api/projects/{id}/skills — one row per catalog skill (with assignments).
+export interface SkillDto {
+  id: string;
+  name: string;
+  description: string;
+  provenance: SkillProvenance;
+  source_repository?: string | null;
+  source_location?: string | null;
+  marketplace_name?: string | null;
+  status: SkillStatus;
+  content_hash: string;
+  resource_count: number;
+  assigned_agents: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SkillResourceDto {
+  relative_path: string;
+  content: string;
+}
+
+// GET /api/projects/{id}/skills/{skillId} — full skill incl. instructions + resources.
+export interface SkillDetailDto {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  resources: SkillResourceDto[];
+  provenance: SkillProvenance;
+  source_repository?: string | null;
+  source_location?: string | null;
+  marketplace_name?: string | null;
+  status: SkillStatus;
+  content_hash: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// A skill discovered in a repo during import preview (before it is imported).
+export interface SkillCandidateDto {
+  location: string;
+  name?: string | null;
+  description?: string | null;
+  valid: boolean;
+  resource_count: number;
+  errors: string[];
+}
+
+export interface SkillImportPreviewResponse {
+  candidates: SkillCandidateDto[];
+}
+
+export interface SkillMarketplaceDto {
+  name: string;
+  repository: string;
+  branch?: string | null;
+  subpath?: string | null;
+  layout_note?: string | null;
+  // Present on entries from GET /projects/{id}/skill-marketplaces (project-scoped list).
+  auto_detect?: boolean;
+  parse_strategy?: string | null;
+  // true = a user-added URL source for this project; false/absent = a built-in config source.
+  project_source?: boolean;
+}
+export interface SkillMarketplaceBrowseResponse { marketplace: string; candidates: SkillCandidateDto[]; total: number; page: number; page_size: number; has_more: boolean; ai_execution_context?: AiExecutionContext | null; }
+
+// POST /api/projects/{id}/skill-marketplaces/sources — add a marketplace source by GitHub URL or owner/repo.
+export interface AddSkillMarketplaceSourceRequest {
+  repository: string;
+  name?: string;
+  branch?: string;
+  subpath?: string;
+  parseStrategy?: 'auto' | 'skillmd' | 'llm';
+}
+
+export interface CreateSkillRequest {
+  name: string;
+  displayName?: string;
+  description?: string;
+  instructions: string;
+}
+
+export interface GeneratedSkillDraft {
+  name: string;
+  display_name?: string | null;
+  description: string;
+  instructions: string;
+  skill_markdown: string;
+  ai_execution_context?: AiExecutionContext | null;
+}
+
+// Per-skill outcome of a sync/import/upload operation.
+export interface SkillUpsertResultDto {
+  location?: string | null;
+  name?: string | null;
+  kind: 'Added' | 'Updated' | 'Unchanged' | 'Rejected' | 'added' | 'updated' | 'unchanged' | 'rejected';
+  skill_id?: string | null;
+  errors: string[];
+}
+
+// Aggregate result of a sync/import/upload operation.
+export interface SkillAcquisitionResponse {
+  results: SkillUpsertResultDto[];
+  marked_missing: string[];
+}
+
+// GET /api/projects/{id}/skills/assignments — flat list of skill→agent links.
+export interface SkillAssignmentDto {
+  skill_id: string;
+  skill_name: string;
+  agent_name: string;
+}
+
+// Blueprint default skills are deliberately previewed before they alter an
+// existing project's catalog or assignments. `digest` is an optimistic
+// concurrency token and must be returned unchanged by the apply request.
+export type BlueprintSkillDefaultAction = 'create' | 'reactivate' | 'assign' | 'blocked';
+
+export interface BlueprintSkillDefaultAssignmentDto {
+  role_id: string;
+  agent_name: string;
+  skill_name: string;
+  action: BlueprintSkillDefaultAction;
+}
+
+// POST /api/projects/{id}/skill-defaults/preview
+export interface BlueprintSkillDefaultsPreviewResponse {
+  blueprint_id: string;
+  blueprint_version: string;
+  digest: string;
+  can_apply: boolean;
+  errors: string[];
+  assignments: BlueprintSkillDefaultAssignmentDto[];
+}
+
+// POST /api/projects/{id}/skill-defaults/apply
+export interface ApplyBlueprintSkillDefaultsRequest {
+  blueprint_id: string;
+  digest: string;
+}
+
+export interface ApplyBlueprintSkillDefaultsResponse {
+  outcome: 'applied' | 'stale' | 'invalid';
+  errors: string[];
+  preview: BlueprintSkillDefaultsPreviewResponse | null;
+}

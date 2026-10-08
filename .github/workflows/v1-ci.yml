@@ -28,6 +28,14 @@ jobs:
         run: |
           mkdir -p artifacts/coverage
           node --input-type=module -e 'import fs from "node:fs"; fs.writeFileSync("artifacts/coverage/source.json", JSON.stringify({ testedSourceSha: process.env.GITHUB_SHA, headSha: process.env.PR_HEAD_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT }, null, 2) + "\n");'
+      - name: Install locked web dependencies
+        run: npm ci --prefix apps/web --no-audit --no-fund
+      - name: Test v1 web client with coverage
+        run: npm --prefix apps/web run coverage
+      - name: Build and lint v1 web client
+        run: |
+          npm --prefix apps/web run build
+          npm --prefix apps/web run lint
       - name: Validate release composition
         env:
           RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -74,6 +82,14 @@ jobs:
               echo '```'
             else
               echo "Node coverage report was not produced; inspect the preceding steps."
+            fi
+            echo "### v1 web client"
+            if [ -f artifacts/coverage/web/coverage-summary.json ]; then
+              echo '```json'
+              cat artifacts/coverage/web/coverage-summary.json
+              echo '```'
+            else
+              echo "Web coverage report was not produced; inspect the preceding steps."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

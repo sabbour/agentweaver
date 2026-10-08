@@ -1,0 +1,488 @@
+import {
+  apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import {
+  Badge,
+  Button,
+  Dropdown,
+  makeStyles,
+  Option,
+  Spinner,
+  Text,
+  tokens,
+} from '@fluentui/react-components';
+import { BranchRegular, TasksAppRegular } from '@fluentui/react-icons';
+import { FilesTabPanel } from '../components/ArtifactBrowser';
+import { DecomposePreviewDialog } from '../components/DecomposePreviewDialog';
+import { FileViewer } from '../components/FileViewer';
+import { PageHeader } from '../components/PageHeader';
+import { ErrorState } from '../components/ui';
+import { AiExecutionProviderHint, AiProviderChangeAnnouncement } from '../components/AiExecutionProviderHint';
+import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
+import type { Project, ProposedBacklogItem, WorkspaceNode, WorkspaceRef } from '../api/types';
+// Project-scoped, read-only Workspace browser (WORK section). Browses the project
+// repo at its current branch and lets the user switch to active run worktrees or
+// coordinator assembly branches
+// branch. The file tree and syntax-highlighted viewer are reused from the run
+// Files experience; there is no diff, commit, or review chrome here.
+
+const useStyles = makeStyles({
+  root: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalL,
+    height: '100%',
+    minHeight: 0,
+  },
+  breadcrumb: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground2,
+  },
+  breadcrumbLink: {
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+    textDecoration: 'none',
+  },
+  toolbar: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+  },
+  branchIndicator: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    color: tokens.colorNeutralForeground2,
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase300,
+  },
+  refDropdown: {
+    minWidth: '280px',
+  },
+  optionRow: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  commandSurface: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    flexShrink: 0,
+  },
+  statusPills: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap',
+  },
+  statusPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    minHeight: '28px',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    fontSize: tokens.fontSizeBase200,
+  },
+  panels: {
+    display: 'flex',
+    flexDirection: 'row',
+    gap: tokens.spacingHorizontalM,
+    flex: 1,
+    minHeight: 0,
+    overflow: 'hidden',
+  },
+  leftPanel: {
+    width: '320px',
+    flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    overflow: 'hidden',
+  },
+  leftPanelBody: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+  },
+  panelHeader: {
+    flexShrink: 0,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalM}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  rightPanel: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    overflow: 'hidden',
+  },
+  rightPanelEmpty: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: tokens.colorNeutralForeground3,
+    padding: tokens.spacingHorizontalXXL,
+    textAlign: 'center',
+  },
+  fileViewerWrapper: {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    minHeight: 0,
+  },
+  fileViewerToolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    flexShrink: 0,
+  },
+  spinnerWrapper: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: tokens.spacingVerticalXXL,
+  },
+});
+
+// Short, human-readable status badge color for a worktree's owning run.
+function runStatusColor(status: string | undefined): 'success' | 'danger' | 'warning' | 'subtle' {
+  if (status === 'completed' || status === 'merged') return 'success';
+  if (status === 'failed' || status === 'merge_failed') return 'danger';
+  if (status === 'blocked' || status === 'parked') return 'warning';
+  if (status === 'running' || status === 'dispatched') return 'subtle';
+  return 'subtle';
+}
+
+export function WorkspacePage() {
+  const styles = useStyles();
+  const { projectId } = useParams<{ projectId: string }>();
+  const providerContext = useAiExecutionContext('backlog_decomposition', projectId);
+  const [searchParams] = useSearchParams();
+  const requestedRef = searchParams.get('ref') ?? undefined;
+  const requestedRun = searchParams.get('run') ?? undefined;
+
+  const [refs, setRefs] = useState<WorkspaceRef[]>([]);
+  const [project, setProject] = useState<Project | null>(null);
+  const [currentBranch, setCurrentBranch] = useState<string>('');
+  const [selectedRef, setSelectedRef] = useState<string | undefined>(undefined);
+
+  const [nodes, setNodes] = useState<WorkspaceNode[]>([]);
+  const [nodesLoading, setNodesLoading] = useState(false);
+  const [nodesError, setNodesError] = useState<string | null>(null);
+  const [nodesReloadKey, setNodesReloadKey] = useState(0);
+
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+
+  const [decomposePreviewOpen, setDecomposePreviewOpen] = useState(false);
+  const [decomposeItems, setDecomposeItems] = useState<ProposedBacklogItem[]>([]);
+  const [decomposeWasCapped, setDecomposeWasCapped] = useState(false);
+  const [decomposeTotal, setDecomposeTotal] = useState(0);
+  const [decomposeLoading, setDecomposeLoading] = useState(false);
+  const [decomposeError, setDecomposeError] = useState<string | null>(null);
+
+  const handleImport = async () => {
+    if (!selectedPath || !projectId) return;
+    setDecomposeLoading(true);
+    setDecomposeError(null);
+    setDecomposeItems([]);
+    setDecomposePreviewOpen(true);
+    try {
+      const result = await apiClient.decomposeSpec(
+        projectId,
+        selectedPath,
+        false,
+        null,
+        selectedRef,
+        providerContext.providerKey,
+      );
+      providerContext.applyCompletedContext(result.ai_execution_context);
+      setDecomposeItems(result.proposed_items);
+      setDecomposeWasCapped(result.was_capped);
+      setDecomposeTotal(result.total_found);
+    } catch (err) {
+      setDecomposeError(providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and preview again.'
+        : err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+    } finally {
+      setDecomposeLoading(false);
+    }
+  };
+
+  const handleDecomposeConfirm = async () => {
+    if (!selectedPath || !projectId) return;
+    setDecomposeLoading(true);
+    setDecomposeError(null);
+    try {
+      const result = await apiClient.decomposeSpec(
+        projectId,
+        selectedPath,
+        true,
+        null,
+        selectedRef,
+        providerContext.providerKey,
+      );
+      providerContext.applyCompletedContext(result.ai_execution_context);
+      setDecomposeItems(result.proposed_items);
+      setDecomposeWasCapped(result.was_capped);
+      setDecomposeTotal(result.total_found);
+      setDecomposePreviewOpen(false);
+    } catch (err) {
+      setDecomposeError(providerContext.handleInvocationError(err)
+        ? 'The AI provider changed. Review the updated provider and create tasks again.'
+        : err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err));
+    } finally {
+      setDecomposeLoading(false);
+    }
+  };
+
+  // Load the available refs (base branch + active run worktrees) for the project.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    const loadRefs = async () => {
+      setProject(null);
+      void apiClient
+        .getProject(projectId)
+        .then((p) => {
+          if (!cancelled) setProject(p);
+        })
+        .catch(() => {});
+      try {
+        const res = await apiClient.getProjectWorkspaceRefs(projectId);
+        if (cancelled) return;
+        setRefs(res.refs);
+        setCurrentBranch(res.current_branch);
+        const queryRef =
+          (requestedRun ? res.refs.find((r) => r.run_id === requestedRun)?.branch : undefined) ??
+          (requestedRef && res.refs.some((r) => r.branch === requestedRef) ? requestedRef : undefined);
+        const base = res.refs.find((r) => r.kind === 'base')?.branch ?? res.current_branch;
+        setSelectedRef(queryRef ?? base);
+      } catch {
+        if (!cancelled) {
+          setRefs([]);
+          setCurrentBranch('');
+        }
+      }
+    };
+    void loadRefs();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, requestedRef, requestedRun]);
+
+  // Load the file tree for the selected ref. Switching refs clears any open file.
+  useEffect(() => {
+    if (!projectId || selectedRef === undefined) return;
+    let cancelled = false;
+    const loadNodes = async () => {
+      setNodesLoading(true);
+      setNodesError(null);
+      setSelectedPath(null);
+      try {
+        const list = await apiClient.getProjectWorkspace(projectId, selectedRef);
+        if (cancelled) return;
+        setNodes(list);
+      } catch (err: unknown) {
+        if (cancelled) return;
+        setNodes([]);
+        setNodesError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setNodesLoading(false);
+      }
+    };
+    void loadNodes();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, selectedRef, nodesReloadKey]);
+
+  const selectedRefObj = useMemo(
+    () => refs.find((r) => r.branch === selectedRef) ?? null,
+    [refs, selectedRef],
+  );
+
+  // Dropdown display text for the active selection.
+  const dropdownValue = selectedRefObj
+    ? selectedRefObj.label
+    : selectedRef ?? '';
+  const worktreeCount = refs.filter((ref) => ref.kind !== 'base').length;
+  const selectedKindLabel = selectedRefObj?.kind === 'base'
+    ? 'Base branch'
+    : selectedRefObj?.kind === 'assembly'
+      ? 'Assembly branch'
+      : selectedRefObj?.kind === 'worktree'
+        ? 'Run worktree'
+        : 'Workspace ref';
+
+  const getContent = useMemo(
+    () => (_id: string, path: string) =>
+      apiClient.getProjectWorkspaceFileContent(projectId!, path, selectedRef),
+    [projectId, selectedRef],
+  );
+
+  if (!projectId) return null;
+
+  return (
+    <div className={styles.root}>
+      <PageHeader
+        title="Workspace"
+        subtitle="Browse repository branches and run worktrees, read-only."
+        breadcrumb={
+          <nav className={styles.breadcrumb} aria-label="Breadcrumb">
+            <Link to="/" className={styles.breadcrumbLink}>Projects</Link>
+            <span>/</span>
+            <Link to={`/projects/${projectId}`} className={styles.breadcrumbLink}>
+              {project?.name ?? 'Project'}
+            </Link>
+            <span>/</span>
+            <span>Workspace</span>
+          </nav>
+        }
+        actions={
+          <div className={styles.toolbar}>
+            <span className={styles.branchIndicator} aria-label="Current branch">
+              <BranchRegular />
+              <Text className={styles.branchIndicator}>{currentBranch || '—'}</Text>
+            </span>
+            <Dropdown
+              className={styles.refDropdown}
+              aria-label="Branch or worktree"
+              value={dropdownValue}
+              selectedOptions={selectedRef ? [selectedRef] : []}
+              onOptionSelect={(_, data) => {
+                if (data.optionValue) setSelectedRef(data.optionValue);
+              }}
+            >
+              {refs.map((r) => (
+                <Option key={r.branch} value={r.branch} text={r.label}>
+                  <span className={styles.optionRow}>
+                    <Text>{r.label}</Text>
+                    {r.kind !== 'base' && r.run_status && (
+                      <Badge size="small" color={runStatusColor(r.run_status)} appearance="tint">
+                        {r.run_status}
+                      </Badge>
+                    )}
+                  </span>
+                </Option>
+              ))}
+            </Dropdown>
+          </div>
+        }
+      />
+
+      <section className={styles.commandSurface} aria-label="Workspace status">
+        <div className={styles.statusPills}>
+          <span className={styles.statusPill}>{selectedKindLabel}</span>
+          <span className={styles.statusPill}>{nodes.length} nodes</span>
+          <span className={styles.statusPill}>{worktreeCount} active refs</span>
+        </div>
+      </section>
+
+      <div className={styles.panels}>
+        <div className={styles.leftPanel}>
+          <div className={styles.panelHeader}>
+            <Text weight="semibold">{selectedRef ? `Files — ${selectedRef}` : 'Files'}</Text>
+          </div>
+          {nodesLoading ? (
+            <div className={styles.spinnerWrapper}>
+              <Spinner size="tiny" />
+            </div>
+          ) : nodesError ? (
+            <div className={styles.leftPanelBody}>
+              <ErrorState
+                title="Couldn't load files"
+                message={nodesError}
+                onRetry={() => { setNodesError(null); setNodesReloadKey(k => k + 1); }}
+              />
+            </div>
+          ) : (
+            <div className={styles.leftPanelBody}>
+              <FilesTabPanel
+                workspaceFiles={nodes}
+                workspaceLoading={false}
+                workspaceError={null}
+                selectedPath={selectedPath}
+                onFileClick={(path) => setSelectedPath(path)}
+              />
+            </div>
+          )}
+        </div>
+        <div className={styles.rightPanel}>
+          <div className={styles.panelHeader}>
+            <Text weight="semibold">{selectedPath ? selectedPath : 'Viewer'}</Text>
+          </div>
+          {selectedPath !== null ? (
+            <div className={styles.fileViewerWrapper}>
+              {selectedPath.endsWith('.md') && (
+                <div className={styles.fileViewerToolbar}>
+                  <AiExecutionProviderHint context={providerContext.context}>
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      icon={<TasksAppRegular />}
+                      disabled={providerContext.loading || !providerContext.available}
+                      onClick={() => void handleImport()}
+                    >
+                      Import to backlog
+                    </Button>
+                  </AiExecutionProviderHint>
+                </div>
+              )}
+              <FileViewer
+                runId={projectId}
+                filePath={selectedPath}
+                getContent={getContent}
+              />
+            </div>
+          ) : (
+            <div className={styles.rightPanelEmpty}>
+              <Text>
+                {nodes.length === 0 && !nodesLoading && !nodesError
+                  ? 'No files in this branch yet.'
+                  : 'Select a file to view its contents.'}
+              </Text>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <DecomposePreviewDialog
+        isOpen={decomposePreviewOpen}
+        onClose={() => setDecomposePreviewOpen(false)}
+        onConfirm={handleDecomposeConfirm}
+        proposedItems={decomposeItems}
+        wasCapped={decomposeWasCapped}
+        totalFound={decomposeTotal}
+        isLoading={decomposeLoading}
+        error={decomposeError}
+        executionContext={providerContext.context}
+        providerLoading={providerContext.loading || !providerContext.available}
+      />
+      <AiProviderChangeAnnouncement message={providerContext.announcement} />
+    </div>
+  );
+}
