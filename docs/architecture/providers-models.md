@@ -89,6 +89,32 @@ Application Hosting currently plans only the built-in AKS web runtime.
 Canvas owns A2UI and GitHub Canvas compatibility work. Elastic SAN is outside P2;
 Container Apps Sandboxes is a later Sandbox evaluation, not an application host.
 
+## GitHub Canvas research boundary
+
+Research [#1901](https://github.com/sabbour/agentweaver/issues/1901) inspected the
+experimental public SDK at commit
+[`2023ed29af3cae890b26f9e2a269a04d8ac7ba60`](https://github.com/github/copilot-sdk/tree/2023ed29af3cae890b26f9e2a269a04d8ac7ba60)
+and permitted local declarations. The source snapshot reports SDK `0.0.0-dev`,
+CLI `1.0.93-3`, and global wire protocol `3`; observed app discovery used
+runtime `1.0.93-1`. These are evidence baselines, not Canvas-format versions or
+a tested interoperable pair.
+
+The bounded target is declaration/action/lifecycle compatibility with trusted owned
+assets in Agentweaver's retained panel. No portable GitHub content format, rendering
+catalog, or generic browser bridge was established. No interoperability was executed;
+the historical reverse-engineering artifact is unavailable.
+
+Core retains current actor authorization, operation identity, workflow gates, and
+artifact ownership. An instance or URL is not an artifact or grant. Reconnect must
+preserve its binding and obtain a fresh location; successful close does not prove cleanup.
+The [detailed evidence, unknowns, and subset](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/applications-and-surfaces.md#github-canvas-evidence-and-versions)
+and [planned acceptance cases](../guide/testing.md#planned-github-canvas-adapter-acceptance)
+inform separate adapter [#1904](https://github.com/sabbour/agentweaver/issues/1904).
+Canvas remains unimplemented in the current source enum/resolver; research does not close
+that adapter issue or establish deployment/publication acceptance.
+
+## Existing model and provider integrations
+
 The host also registers `postgres.native-messaging` as the platform-singleton Messaging
 provider, with no project override. It negotiates the configured PostgreSQL resource
 and persists an immutable Messaging provider binding per run. The Orchestrator uses the
