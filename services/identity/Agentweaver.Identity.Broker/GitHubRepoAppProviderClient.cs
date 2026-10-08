@@ -58,7 +58,6 @@ internal sealed record GitHubRepoAppBrowseResult(
 internal sealed class GitHubRepoAppProviderClient
 {
     private const int PageSize = 100;
-    private const int MaximumPages = 2;
     private const int MaximumResponseBytes = 512 * 1024;
     private const string ApiVersion = "2022-11-28";
     private readonly HttpClient _oauthClient;
@@ -139,16 +138,12 @@ internal sealed class GitHubRepoAppProviderClient
     {
         ArgumentNullException.ThrowIfNull(accessToken);
         var installations = await ReadInstallationsAsync(accessToken, cancellationToken).ConfigureAwait(false);
-        var repositoriesByInstallation = new List<GitHubRepoAppRepository>[installations.Count];
         var hasNextPage = new bool[installations.Count];
         for (var index = 0; index < installations.Count; index++)
-        {
-            repositoriesByInstallation[index] = [];
             hasNextPage[index] = true;
-        }
 
         var uniqueRepositories = new Dictionary<long, GitHubRepoAppRepository>();
-        for (var page = 1; page <= MaximumPages && uniqueRepositories.Count < PageSize * MaximumPages; page++)
+        for (var page = 1; hasNextPage.Any(hasNext => hasNext); page++)
         {
             for (var index = 0; index < installations.Count; index++)
             {
@@ -162,23 +157,15 @@ internal sealed class GitHubRepoAppProviderClient
                 using var response = await SendApiRequestAsync(request, cancellationToken).ConfigureAwait(false);
                 using var document = await ReadDocumentAsync(response.Content, cancellationToken).ConfigureAwait(false);
                 var batch = ReadRepositoryBatch(document.RootElement, installation.InstallationId);
-                repositoriesByInstallation[index].AddRange(batch);
                 hasNextPage[index] = batch.Count == PageSize;
-            }
 
-            foreach (var candidates in repositoriesByInstallation)
-            {
-                foreach (var candidate in candidates)
+                foreach (var candidate in batch)
                 {
                     if (uniqueRepositories.TryGetValue(candidate.RepositoryId, out var existing) &&
                         existing.InstallationId != candidate.InstallationId)
                         throw InvalidResponse("GitHub returned a repository for multiple installations.");
                     uniqueRepositories[candidate.RepositoryId] = candidate;
-                    if (uniqueRepositories.Count == PageSize * MaximumPages)
-                        break;
                 }
-                if (uniqueRepositories.Count == PageSize * MaximumPages)
-                    break;
             }
         }
 
@@ -194,6 +181,8 @@ internal sealed class GitHubRepoAppProviderClient
         Dictionary<string, string> fields,
         CancellationToken cancellationToken)
     {
+        var isRefresh = fields.TryGetValue("grant_type", out var grantType) &&
+            string.Equals(grantType, "refresh_token", StringComparison.Ordinal);
         using var request = new HttpRequestMessage(HttpMethod.Post, "login/oauth/access_token")
         {
             Content = new FormUrlEncodedContent(fields)
@@ -233,6 +222,15 @@ internal sealed class GitHubRepoAppProviderClient
                 new SecretCredential(accessToken, accessExpiresAt, _timeProvider),
                 new SecretCredential(refreshToken, refreshExpiresAt, _timeProvider));
         }
+        catch (GitHubRepoAppProviderException error) when (
+            isRefresh && error.Failure == GitHubRepoAppProviderFailure.InvalidResponse)
+        {
+            throw new GitHubRepoAppProviderException(
+                GitHubRepoAppProviderFailure.OutcomeUncertain,
+                "GitHub returned an unusable Repo App refresh response.",
+                error.StatusCode,
+                error);
+        }
         catch (HttpRequestException exception)
         {
             throw new GitHubRepoAppProviderException(
@@ -255,7 +253,7 @@ internal sealed class GitHubRepoAppProviderClient
         CancellationToken cancellationToken)
     {
         var installations = new Dictionary<long, GitHubRepoAppInstallationMetadata>();
-        for (var page = 1; page <= MaximumPages; page++)
+        for (var page = 1; ; page++)
         {
             using var request = CreateApiRequest(
                 HttpMethod.Get,

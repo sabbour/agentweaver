@@ -213,6 +213,14 @@ internal sealed class SourceControlSecretRedemptionClient(
         {
             using var response = await httpClient.SendAsync(
                 request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            if (response.StatusCode != HttpStatusCode.OK)
+            {
+                var identityError = await ReadAppTokenErrorAsync(response.Content, cancellationToken)
+                    .ConfigureAwait(false);
+                if (identityError is not null &&
+                    TryMapIdentityAppTokenError(identityError, out var errorStatus))
+                    throw new CoordinationException(identityError, errorStatus);
+            }
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 throw new CoordinationException(
                     "source_control_secret_redemption_denied", StatusCodes.Status403Forbidden);
@@ -395,6 +403,56 @@ internal sealed class SourceControlSecretRedemptionClient(
 
         return JsonSerializer.Deserialize<GitHubAppInstallationTokenResponse>(
             buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)), JsonOptions);
+    }
+
+    private static async Task<string?> ReadAppTokenErrorAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is > MaximumResponseBytes)
+            throw new JsonException("Installation-token error response exceeded the permitted size.");
+
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[8192];
+        while (true)
+        {
+            var read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+                break;
+            if (buffer.Length + read > MaximumResponseBytes)
+                throw new JsonException("Installation-token error response exceeded the permitted size.");
+            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+        }
+
+        using var document = JsonDocument.Parse(
+            buffer.GetBuffer().AsMemory(0, checked((int)buffer.Length)));
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+            return null;
+        var properties = document.RootElement.EnumerateObject().ToArray();
+        return properties.Length == 1 &&
+            properties[0].NameEquals("error") &&
+            properties[0].Value.ValueKind == JsonValueKind.String
+                ? properties[0].Value.GetString()
+                : null;
+    }
+
+    private static bool TryMapIdentityAppTokenError(string error, out int statusCode)
+    {
+        statusCode = error switch
+        {
+            "caller_invalid" => StatusCodes.Status401Unauthorized,
+            "run_binding_invalid" => StatusCodes.Status403Forbidden,
+            "selection_invalid" or "request_invalid" => StatusCodes.Status400BadRequest,
+            "permissions_changed" or "connection_unavailable" or
+                "connection_revoked" or "rotation_uncertain" => StatusCodes.Status409Conflict,
+            "refresh_in_progress" => StatusCodes.Status503ServiceUnavailable,
+            "provider_unavailable" or "installation_token_unavailable" or
+                "app_key_unavailable" => StatusCodes.Status502BadGateway,
+            "repository_unavailable" => StatusCodes.Status404NotFound,
+            _ => 0
+        };
+        return statusCode != 0;
     }
 
     private static string HashSelectionCode(string value) =>

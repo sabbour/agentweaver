@@ -258,6 +258,60 @@ public sealed class SourceControlSecretRedemptionClientTests
     }
 
     [Theory]
+    [InlineData(HttpStatusCode.Conflict, "rotation_uncertain", StatusCodes.Status409Conflict)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "refresh_in_progress", StatusCodes.Status503ServiceUnavailable)]
+    [InlineData(HttpStatusCode.Conflict, "permissions_changed", StatusCodes.Status409Conflict)]
+    public async Task PreservesAllowListedIdentityInstallationTokenErrors(
+        HttpStatusCode responseStatus,
+        string errorCode,
+        int expectedStatus)
+    {
+        var handler = new AppTokenRecordingHandler(_ => Task.FromResult(new HttpResponseMessage(responseStatus)
+        {
+            Content = JsonContent(new { error = errorCode })
+        }));
+        using var httpClient = new HttpClient(handler);
+        var client = new SourceControlSecretRedemptionClient(httpClient, Options(), TimeProvider.System);
+
+        var exception = await Assert.ThrowsAsync<CoordinationException>(() =>
+            client.WithGitHubAppSelectionCredentialAsync(
+                CallerContext(includeBrokerAudience: true),
+                AcceptedRun(),
+                "connection-1",
+                new string('b', 64),
+                "octo/widget",
+                (_, _, _) => Task.FromResult(true),
+                CancellationToken.None));
+
+        Assert.Equal(errorCode, exception.Code);
+        Assert.Equal(expectedStatus, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task DoesNotForwardUnknownIdentityInstallationTokenError()
+    {
+        var handler = new AppTokenRecordingHandler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
+        {
+            Content = JsonContent(new { error = "internal-provider-detail" })
+        }));
+        using var httpClient = new HttpClient(handler);
+        var client = new SourceControlSecretRedemptionClient(httpClient, Options(), TimeProvider.System);
+
+        var exception = await Assert.ThrowsAsync<CoordinationException>(() =>
+            client.WithGitHubAppSelectionCredentialAsync(
+                CallerContext(includeBrokerAudience: true),
+                AcceptedRun(),
+                "connection-1",
+                new string('b', 64),
+                "octo/widget",
+                (_, _, _) => Task.FromResult(true),
+                CancellationToken.None));
+
+        Assert.Equal("source_control_installation_token_unavailable", exception.Code);
+        Assert.Equal(StatusCodes.Status502BadGateway, exception.StatusCode);
+    }
+
+    [Theory]
     [InlineData("http://broker.test.local")]
     [InlineData("https://broker.test.local/path")]
     [InlineData("https://user@broker.test.local")]

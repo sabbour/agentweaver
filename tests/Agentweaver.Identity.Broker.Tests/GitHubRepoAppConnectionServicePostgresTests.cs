@@ -496,10 +496,10 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
         var oauthHandler = new StubHandler((_, _) =>
         {
             refreshCalls++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    "{\"error\":\"private-provider-detail\"}", Encoding.UTF8, "application/json")
+                    "{malformed-refresh-response", Encoding.UTF8, "application/json")
             });
         });
         var apiHandler = new StubHandler((_, _) =>
@@ -542,7 +542,6 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
         var firstFailure = await Assert.ThrowsAsync<GitHubRepoAppConnectionException>(() =>
             service.ListRepositoriesAsync(ownerId, CancellationToken.None));
         Assert.Equal(GitHubRepoAppConnectionFailure.RotationUncertain, firstFailure.Failure);
-        Assert.DoesNotContain("private-provider-detail", firstFailure.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("old-refresh-secret", firstFailure.ToString(), StringComparison.Ordinal);
         var repeatedFailure = await Assert.ThrowsAsync<GitHubRepoAppConnectionException>(() =>
             service.ListRepositoriesAsync(ownerId, CancellationToken.None));

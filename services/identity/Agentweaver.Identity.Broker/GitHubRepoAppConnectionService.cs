@@ -26,6 +26,15 @@ internal sealed record GitHubRepoAppRepositoryBrowser(
     string GitHubLogin,
     IReadOnlyList<GitHubRepoAppRepositoryOption> Repositories);
 
+internal sealed record GitHubRepoAppConnectionStatus(
+    string State,
+    string LocalReadiness,
+    string? ConnectionId,
+    long? ConnectionRevision,
+    string? GitHubLogin,
+    DateTimeOffset? AccessTokenExpiresAt,
+    DateTimeOffset? UpdatedAt);
+
 internal sealed record GitHubRepoAppRepositorySelection(
     string Code,
     string ConnectionId,
@@ -62,6 +71,7 @@ internal enum GitHubRepoAppConnectionFailure
     Revoked,
     RefreshInProgress,
     RotationUncertain,
+    ConnectionRevisionConflict,
     ProviderUnavailable,
     RepositoryUnavailable,
     RunBindingInvalid,
@@ -273,6 +283,91 @@ internal sealed class GitHubRepoAppConnectionService
         {
             accessToken?.Invalidate();
         }
+    }
+
+    internal async Task<GitHubRepoAppConnectionStatus> GetStatusAsync(
+        Guid ownerId,
+        CancellationToken cancellationToken)
+    {
+        if (ownerId == Guid.Empty)
+            throw new ArgumentException("A broker user is required.", nameof(ownerId));
+
+        var connection = await _db.RepoAppConnections.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.OwnerId == ownerId, cancellationToken)
+            .ConfigureAwait(false);
+        return ToStatus(connection, _timeProvider.GetUtcNow());
+    }
+
+    internal async Task<GitHubRepoAppConnectionStatus> DisconnectAsync(
+        Guid ownerId,
+        string connectionId,
+        long expectedConnectionRevision,
+        CancellationToken cancellationToken)
+    {
+        if (ownerId == Guid.Empty)
+            throw new ArgumentException("A broker user is required.", nameof(ownerId));
+        if (string.IsNullOrWhiteSpace(connectionId) || connectionId.Length > 64 ||
+            expectedConnectionRevision < 1)
+            throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.AuthorizationInvalid);
+
+        await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var connection = await _db.RepoAppConnections.SingleOrDefaultAsync(item =>
+                item.OwnerId == ownerId,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (connection is null)
+            throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.NotConnected);
+        if (connection.ConnectionId != connectionId ||
+            connection.ConnectionRevision != expectedConnectionRevision)
+            throw new GitHubRepoAppConnectionException(
+                GitHubRepoAppConnectionFailure.ConnectionRevisionConflict);
+
+        var now = _timeProvider.GetUtcNow();
+        if (connection.State != RepoAppConnectionState.Revoked)
+        {
+            var updated = await _db.RepoAppConnections
+                .Where(item =>
+                    item.OwnerId == ownerId &&
+                    item.ConnectionId == connectionId &&
+                    item.ConnectionRevision == expectedConnectionRevision &&
+                    item.State != RepoAppConnectionState.Revoked)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.State, RepoAppConnectionState.Revoked)
+                    .SetProperty(item => item.CredentialRevision, item => item.CredentialRevision + 1)
+                    .SetProperty(item => item.RefreshLeaseId, (Guid?)null)
+                    .SetProperty(item => item.RefreshLeaseExpiresAt, (DateTimeOffset?)null)
+                    .SetProperty(item => item.UpdatedAt, now),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (updated != 1)
+            {
+                var latest = await _db.RepoAppConnections.AsNoTracking()
+                    .SingleOrDefaultAsync(item => item.OwnerId == ownerId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (latest is null ||
+                    latest.ConnectionId != connectionId ||
+                    latest.ConnectionRevision != expectedConnectionRevision ||
+                    latest.State != RepoAppConnectionState.Revoked)
+                    throw new GitHubRepoAppConnectionException(
+                        GitHubRepoAppConnectionFailure.ConnectionRevisionConflict);
+                connection = latest;
+            }
+            else
+            {
+                connection.State = RepoAppConnectionState.Revoked;
+                connection.RefreshLeaseId = null;
+                connection.RefreshLeaseExpiresAt = null;
+                connection.UpdatedAt = now;
+            }
+        }
+
+        await _db.RepoAppInstallations
+            .Where(item => item.ConnectionId == connectionId && item.RevokedAt == null)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.RevokedAt, now), cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return ToStatus(connection, now);
     }
 
     internal async Task<GitHubRepoAppRepositorySelection> CreateRepositorySelectionAsync(
@@ -953,6 +1048,42 @@ internal sealed class GitHubRepoAppConnectionService
             .SingleOrDefaultAsync(item => item.OwnerId == ownerId, cancellationToken)
             .ConfigureAwait(false)
         ?? throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.NotConnected);
+
+    private GitHubRepoAppConnectionStatus ToStatus(RepoAppConnectionRecord? connection, DateTimeOffset now)
+    {
+        if (connection is null)
+            return new("not_connected", "not_connected", null, null, null, null, null);
+
+        var state = connection.State switch
+        {
+            RepoAppConnectionState.Connected => "connected",
+            RepoAppConnectionState.Revoked => "revoked",
+            RepoAppConnectionState.RotationUncertain => "rotation_uncertain",
+            _ => throw new InvalidOperationException("The Repo App connection state is unsupported.")
+        };
+        var localReadiness = connection.State switch
+        {
+            RepoAppConnectionState.Revoked => "reauthorization_required",
+            RepoAppConnectionState.RotationUncertain => "rotation_uncertain",
+            RepoAppConnectionState.Connected when
+                connection.RefreshLeaseExpiresAt is { } leaseExpiresAt && leaseExpiresAt > now =>
+                "refresh_in_progress",
+            RepoAppConnectionState.Connected when
+                connection.AccessTokenExpiresAt > now.Add(AccessTokenRefreshWindow) =>
+                "access_token_available",
+            RepoAppConnectionState.Connected when connection.RefreshTokenExpiresAt > now =>
+                "refresh_required",
+            _ => "reauthorization_required"
+        };
+        return new(
+            state,
+            localReadiness,
+            connection.ConnectionId,
+            connection.ConnectionRevision,
+            connection.GitHubLogin,
+            connection.AccessTokenExpiresAt,
+            connection.UpdatedAt);
+    }
 
     private async Task<RepoAppConnectionRecord> ReloadConnectionAsync(
         string connectionId,
