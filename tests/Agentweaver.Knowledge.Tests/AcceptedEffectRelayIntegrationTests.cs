@@ -124,12 +124,12 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
                    HttpMethod.Post, "/internal/project-facts/accepted-effects")
                {
                    Content = JsonContent.Create(
-                       new AcceptedEffectDeliveryRequest(
+                       new
+                       {
                            receiptId,
-                           "project-a",
-                           "run-a",
-                           AcceptedEffectContractVersions.CurrentSchemaVersion,
-                           AcceptedEffectContractVersions.CurrentEventVersion),
+                           schemaVersion = AcceptedEffectContractVersions.CurrentSchemaVersion,
+                           eventVersion = AcceptedEffectContractVersions.CurrentEventVersion
+                       },
                        options: JsonOptions)
                })
         {
@@ -140,6 +140,26 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
             Assert.Equal(HttpStatusCode.OK, replayed.StatusCode);
             using var replayedAck = JsonDocument.Parse(await replayed.Content.ReadAsStringAsync());
             Assert.Equal(firstAcknowledgment.GetRawText(), replayedAck.RootElement.GetRawText());
+
+            using var repeatedLegacyReplay = new HttpRequestMessage(
+                HttpMethod.Post, "/internal/project-facts/accepted-effects")
+            {
+                Content = JsonContent.Create(
+                    new
+                    {
+                        receiptId,
+                        schemaVersion = AcceptedEffectContractVersions.CurrentSchemaVersion,
+                        eventVersion = AcceptedEffectContractVersions.CurrentEventVersion
+                    },
+                    options: JsonOptions)
+            };
+            repeatedLegacyReplay.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "caller-token");
+            repeatedLegacyReplay.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", "tenant-a");
+            using var repeated = await client.SendAsync(repeatedLegacyReplay);
+            Assert.Equal(HttpStatusCode.OK, repeated.StatusCode);
+            using var repeatedAck = JsonDocument.Parse(await repeated.Content.ReadAsStringAsync());
+            Assert.Equal(firstAcknowledgment.GetRawText(), repeatedAck.RootElement.GetRawText());
         }
 
         using var stableRetry = await PromoteAsync(knowledgeClient, proposalId);
@@ -305,6 +325,37 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
         }
         Assert.Equal(0, receiptHandler.Requests);
 
+        foreach (var partialScope in new object[]
+        {
+            new
+            {
+                receiptId,
+                projectId = "project-a",
+                schemaVersion = AcceptedEffectContractVersions.CurrentSchemaVersion,
+                eventVersion = AcceptedEffectContractVersions.CurrentEventVersion
+            },
+            new
+            {
+                receiptId,
+                runId = "run-a",
+                schemaVersion = AcceptedEffectContractVersions.CurrentSchemaVersion,
+                eventVersion = AcceptedEffectContractVersions.CurrentEventVersion
+            }
+        })
+        {
+            using var partialRequest = new HttpRequestMessage(
+                HttpMethod.Post, "/internal/project-facts/accepted-effects")
+            {
+                Content = JsonContent.Create(partialScope, options: JsonOptions)
+            };
+            partialRequest.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "caller-token");
+            using var partialResponse = await client.SendAsync(partialRequest);
+            Assert.Equal(HttpStatusCode.BadRequest, partialResponse.StatusCode);
+            Assert.Contains("invalid_request", await partialResponse.Content.ReadAsStringAsync());
+        }
+        Assert.Equal(0, receiptHandler.Requests);
+
         using var wrongActor = await SendEffectAsync(
             client, receiptId, token: "other-actor-token", knowledgeToken: "caller-token");
         using var wrongRun = await SendEffectAsync(
@@ -440,10 +491,12 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
         {
             Content = JsonContent.Create(new AcceptedEffectDeliveryRequest(
                 receiptId,
-                "project-a",
-                "run-a",
                 AcceptedEffectContractVersions.CurrentSchemaVersion,
-                AcceptedEffectContractVersions.CurrentEventVersion), options: JsonOptions)
+                AcceptedEffectContractVersions.CurrentEventVersion)
+            {
+                ProjectId = "project-a",
+                RunId = "run-a"
+            }, options: JsonOptions)
         };
         request.Headers.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);

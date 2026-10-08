@@ -202,10 +202,13 @@ public sealed record AcceptedEffectReceipt(
 
 public sealed record AcceptedEffectDeliveryRequest(
     Guid ReceiptId,
-    string ProjectId,
-    string RunId,
     int SchemaVersion,
-    int EventVersion);
+    int EventVersion)
+{
+    public string? ProjectId { get; init; }
+
+    public string? RunId { get; init; }
+}
 
 public sealed record AcceptedEffectDeliveryState(
     AcceptedEffectReceipt Receipt,

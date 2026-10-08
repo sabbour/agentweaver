@@ -120,9 +120,14 @@ content or credentials.
 `Cache-Control: no-store`. Knowledge requires the original issuer and subject, matching resource
 bindings, no purpose-bound token, and a fresh current `WriteProjects` authorization.
 It returns receipt metadata only; it does not expose the decision or proposal
-contents. The scoped route
-`GET /internal/projects/{projectId}/runs/{runId}/accepted-effects/{receiptId}` reads
-only from the already-pinned Memory provider and does not create a missing run binding.
+contents. This unscoped native-PostgreSQL route remains for the original N-1
+accepted-effect delivery request. Current deliveries include both project and run
+scope and use
+`GET /internal/projects/{projectId}/runs/{runId}/accepted-effects/{receiptId}`, which
+reads only from the already-pinned Memory provider and does not create a missing run
+binding.
+A partial scope is invalid, and a failed scoped read never falls back to the legacy
+unscoped route.
 
 After the commit, a caller-driven relay sends only the receipt ID and contract
 versions to the fixed HTTPS Events endpoint. It forwards the existing Knowledge

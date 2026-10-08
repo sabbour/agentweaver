@@ -200,15 +200,26 @@ public sealed class KnowledgeAcceptedEffectReceiptClient(
         string projectId,
         string runId,
         Guid receiptId,
+        CancellationToken cancellationToken) =>
+        await ReadAsync(
+            $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
+            $"/accepted-effects/{receiptId:D}",
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<AcceptedEffectReceipt> ReadAsync(
+        Guid receiptId,
+        CancellationToken cancellationToken) =>
+        await ReadAsync($"/internal/accepted-effects/{receiptId:D}", cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task<AcceptedEffectReceipt> ReadAsync(
+        string path,
         CancellationToken cancellationToken)
     {
         var headers = ForwardedHeaders.Read(contextAccessor.HttpContext, knowledgeReceiptOwner: true);
         if (headers.Error is not null)
             throw new ProjectFactApiException(headers.Error, StatusCodes.Status401Unauthorized);
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
-            $"/accepted-effects/{receiptId:D}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
         request.Headers.Authorization = headers.Authorization;
         if (headers.TenantSelector is not null)
             request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", headers.TenantSelector);
@@ -382,18 +393,23 @@ public sealed class AcceptedEffectApplicationService(
         CancellationToken cancellationToken)
     {
         if (request.ReceiptId == Guid.Empty ||
-            !ValidIdentifier(request.ProjectId) ||
-            !ValidIdentifier(request.RunId) ||
+            (request.ProjectId is null) != (request.RunId is null) ||
+            (request.ProjectId is not null && !ValidIdentifier(request.ProjectId)) ||
+            (request.RunId is not null && !ValidIdentifier(request.RunId)) ||
             request.SchemaVersion < 1 ||
             request.EventVersion < 1)
             throw new ProjectFactApiException("invalid_request", StatusCodes.Status400BadRequest);
         var caller = ValidateCaller(principal, options);
-        var receipt = await receipts.ReadAsync(
-            request.ProjectId, request.RunId, request.ReceiptId, cancellationToken);
+        var receipt = request.ProjectId is { } projectId && request.RunId is { } runId
+            ? await receipts.ReadAsync(projectId, runId, request.ReceiptId, cancellationToken)
+                .ConfigureAwait(false)
+            : await receipts.ReadAsync(request.ReceiptId, cancellationToken).ConfigureAwait(false);
         if (receipt.ReceiptId != request.ReceiptId)
             throw new ProjectFactConflictException();
-        if (!string.Equals(request.ProjectId, receipt.ProjectId, StringComparison.Ordinal) ||
-            !string.Equals(request.RunId, receipt.RunId, StringComparison.Ordinal) ||
+        if ((request.ProjectId is { } scopedProjectId &&
+                !string.Equals(scopedProjectId, receipt.ProjectId, StringComparison.Ordinal)) ||
+            (request.RunId is { } scopedRunId &&
+                !string.Equals(scopedRunId, receipt.RunId, StringComparison.Ordinal)) ||
             request.SchemaVersion != receipt.SchemaVersion ||
             request.EventVersion != receipt.EventVersion)
             throw new ProjectFactConflictException();

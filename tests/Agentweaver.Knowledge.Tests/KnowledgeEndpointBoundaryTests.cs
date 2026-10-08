@@ -320,21 +320,134 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         Assert.Equal(0L, (long)(await bindingCount.ExecuteScalarAsync())!);
     }
 
+    [Fact]
+    public async Task ScopedCosmosReceiptUsesPersistedPinAndNeverFallsBackWhenResourceChangesOrAdapterIsMissing()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var receiptId = Guid.NewGuid();
+        var receipt = CreateReceipt(receiptId);
+        var options = CosmosOptions("cosmos-resource-a");
+        var store = new ReceiptOnlyCosmosMemoryStore(options, receipt);
+        var cosmosProvider = new CosmosMemoryProvider(store, options);
+        var owner = new FakeProjectsOwnerHandler(
+            database.Options,
+            writeAllowed: true,
+            selectedMemoryDescriptor: cosmosProvider.Descriptor,
+            selectedOptionsSchemaVersion: options.OptionsSchemaVersion,
+            selectedOptionsRevision: options.OptionsRevision);
+
+        await using (var app = await CreateAppAsync(
+                         database, owner, cosmosProvider: cosmosProvider, cosmosOptions: options))
+        using (var client = app.GetTestClient())
+        {
+            using var search = new HttpRequestMessage(
+                HttpMethod.Get, "/api/projects/project-a/runs/run-a/agents/agent-a/records");
+            search.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+            using var searchResponse = await client.SendAsync(search);
+            Assert.Equal(HttpStatusCode.OK, searchResponse.StatusCode);
+
+            using var read = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/internal/projects/project-a/runs/run-a/accepted-effects/{receiptId:D}");
+            read.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+            using var readResponse = await client.SendAsync(read);
+            Assert.Equal(HttpStatusCode.OK, readResponse.StatusCode);
+            Assert.Equal("no-store", readResponse.Headers.CacheControl?.ToString());
+            Assert.Contains(receiptId.ToString("D"), await readResponse.Content.ReadAsStringAsync());
+            Assert.Equal(
+                (CosmosMemoryProvider.ProviderId, options.ResourceId),
+                await ReadMemoryBindingAsync(database));
+        }
+
+        var changedOptions = options with { ResourceId = "cosmos-resource-b" };
+        var changedProvider = new CosmosMemoryProvider(store, changedOptions);
+        var changedOwner = new FakeProjectsOwnerHandler(
+            database.Options,
+            writeAllowed: true,
+            selectedMemoryDescriptor: changedProvider.Descriptor,
+            selectedOptionsSchemaVersion: changedOptions.OptionsSchemaVersion,
+            selectedOptionsRevision: changedOptions.OptionsRevision);
+        await using (var changedApp = await CreateAppAsync(
+                         database,
+                         changedOwner,
+                         cosmosProvider: changedProvider,
+                         cosmosOptions: changedOptions))
+        using (var client = changedApp.GetTestClient())
+        using (var request = new HttpRequestMessage(
+                   HttpMethod.Get,
+                   $"/internal/projects/project-a/runs/run-a/accepted-effects/{receiptId:D}"))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("memory_provider_binding_conflict", await response.Content.ReadAsStringAsync());
+        }
+
+        var missingAdapterOwner = new FakeProjectsOwnerHandler(
+            database.Options,
+            writeAllowed: true,
+            selectedMemoryDescriptor: cosmosProvider.Descriptor,
+            selectedOptionsSchemaVersion: options.OptionsSchemaVersion,
+            selectedOptionsRevision: options.OptionsRevision);
+        await using (var missingAdapterApp = await CreateAppAsync(
+                         database,
+                         missingAdapterOwner,
+                         cosmosProvider: cosmosProvider,
+                         cosmosOptions: options,
+                         includeCosmosAdapter: false))
+        using (var client = missingAdapterApp.GetTestClient())
+        using (var request = new HttpRequestMessage(
+                   HttpMethod.Get,
+                   $"/internal/projects/project-a/runs/run-a/accepted-effects/{receiptId:D}"))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+            Assert.Contains("memory_provider_unavailable", await response.Content.ReadAsStringAsync());
+        }
+
+        Assert.Equal(
+            (CosmosMemoryProvider.ProviderId, options.ResourceId),
+            await ReadMemoryBindingAsync(database));
+    }
+
     private async Task<WebApplication> CreateAppAsync(
         NativePostgresMemoryProviderTests.KnowledgeDatabase database,
         FakeProjectsOwnerHandler owner,
-        HttpMessageHandler? eventsHandler = null)
+        HttpMessageHandler? eventsHandler = null,
+        CosmosMemoryProvider? cosmosProvider = null,
+        CosmosMemoryOptions? cosmosOptions = null,
+        bool includeCosmosAdapter = true)
     {
         var provider = database.Provider;
-        var registration = new ProviderRegistration(
+        var registrations = new List<ProviderRegistration>
+        {
+            new(
             provider.Descriptor,
             Enabled: true,
             database.Options.OptionsRevision,
-            database.Options.OptionsSchemaVersion);
+            database.Options.OptionsSchemaVersion)
+        };
+        var overridePermissions = new List<ProviderOverridePermission>
+        {
+            new(ProviderSeam.Memory, NativePostgresMemoryProvider.ProviderId)
+        };
+        if (cosmosProvider is not null)
+        {
+            if (cosmosOptions is null)
+                throw new ArgumentNullException(nameof(cosmosOptions));
+            registrations.Add(new ProviderRegistration(
+                cosmosProvider.Descriptor,
+                Enabled: true,
+                cosmosOptions.OptionsRevision,
+                cosmosOptions.OptionsSchemaVersion));
+            overridePermissions.Add(new ProviderOverridePermission(
+                ProviderSeam.Memory, CosmosMemoryProvider.ProviderId));
+        }
         var catalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
-            [registration],
+            registrations,
             [new ProviderSelection(ProviderSeam.Memory, NativePostgresMemoryProvider.ProviderId)],
-            [new ProviderOverridePermission(ProviderSeam.Memory, NativePostgresMemoryProvider.ProviderId)]).Value);
+            overridePermissions).Value);
         var runtimeOptions = new KnowledgeRuntimeOptions(
             new Uri("https://identity.test/"),
             "knowledge-tests",
@@ -359,11 +472,13 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         builder.Services.AddSingleton(new ProviderResolver(catalog));
         builder.Services.AddSingleton(provider);
         builder.Services.AddSingleton<IMemoryProvider>(provider);
-        builder.Services.AddSingleton<IReadOnlyDictionary<string, IMemoryProvider>>(
-            new Dictionary<string, IMemoryProvider>(StringComparer.Ordinal)
-            {
-                [NativePostgresMemoryProvider.ProviderId] = provider
-            });
+        var memoryProviders = new Dictionary<string, IMemoryProvider>(StringComparer.Ordinal)
+        {
+            [NativePostgresMemoryProvider.ProviderId] = provider
+        };
+        if (cosmosProvider is not null && includeCosmosAdapter)
+            memoryProviders.Add(CosmosMemoryProvider.ProviderId, cosmosProvider);
+        builder.Services.AddSingleton<IReadOnlyDictionary<string, IMemoryProvider>>(memoryProviders);
         builder.Services.AddSingleton<ProjectsConfigClient>(services => new ProjectsConfigClient(
             new HttpClient(owner) { BaseAddress = runtimeOptions.ProjectsConfigBaseAddress },
             services.GetRequiredService<IHttpContextAccessor>(),
@@ -387,10 +502,160 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         return app;
     }
 
+    private static CosmosMemoryOptions CosmosOptions(string resourceId) =>
+        new(
+            new Uri("https://memory.documents.azure.com/"),
+            "agentweaver",
+            "knowledge",
+            resourceId,
+            1,
+            "cosmos-options-v1",
+            CosmosMemoryOptions.CurrentOptionsSchemaVersion);
+
+    private static AcceptedEffectReceipt CreateReceipt(Guid receiptId) =>
+        new(
+            receiptId,
+            AcceptedEffectContractVersions.CurrentSchemaVersion,
+            AcceptedEffectContractVersions.CurrentEventVersion,
+            "project-a",
+            "run-a",
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            1,
+            TestIssuer,
+            "actor-a",
+            "tenant-a",
+            "project-a",
+            "run-a",
+            ProjectAuthorityResourceType.Project,
+            "project-a",
+            1,
+            1,
+            1,
+            1,
+            "context-v1",
+            DateTimeOffset.UtcNow);
+
+    private static async Task<(string ProviderId, string ResourceId)> ReadMemoryBindingAsync(
+        NativePostgresMemoryProviderTests.KnowledgeDatabase database)
+    {
+        await using var connection = await database.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT provider_id, resource_id
+            FROM "{database.Options.Schema}".memory_provider_bindings
+            WHERE project_id = 'project-a' AND run_id = 'run-a'
+            """, connection);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetString(0), reader.GetString(1));
+    }
+
+    private sealed class ReceiptOnlyCosmosMemoryStore(
+        CosmosMemoryOptions options,
+        AcceptedEffectReceipt receipt) : ICosmosMemoryDocumentStore
+    {
+        private readonly CosmosMemoryStoredDocument _stored = new(
+            new CosmosMemoryDocument(
+                $"accepted-effect:{receipt.ReceiptId:N}",
+                receipt.ProjectId,
+                "accepted-effect",
+                Receipt: receipt),
+            "test-etag");
+
+        public Task<CosmosMemoryContainerIdentity> ReadContainerIdentityAsync(
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new CosmosMemoryContainerIdentity(
+                options.DatabaseId,
+                options.ContainerId,
+                [CosmosMemoryOptions.PartitionKeyPath],
+                DefaultTimeToLiveSeconds: null,
+                HasRequiredSearchCompositeIndex: true));
+        }
+
+        public Task<CosmosMemoryStoredDocument?> ReadAsync(
+            string projectId,
+            string documentId,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<CosmosMemoryStoredDocument?>(
+                projectId == _stored.Document.ProjectId && documentId == _stored.Document.Id
+                    ? _stored
+                    : null);
+        }
+
+        public Task<IReadOnlyList<CosmosMemoryDocument>> FindAcceptedEffectAsync(
+            Guid receiptId,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            IReadOnlyList<CosmosMemoryDocument> documents = receiptId == receipt.ReceiptId
+                ? [_stored.Document]
+                : [];
+            return Task.FromResult(documents);
+        }
+
+        public Task<KnowledgeRecordPage> SearchAsync(
+            KnowledgeRecordQuery query,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new KnowledgeRecordPage(
+                ImmutableArray<KnowledgeRecord>.Empty, 0, query.Page, query.PageSize));
+        }
+
+        public Task<KnowledgeRecordRevisionPage> ReadRevisionsAsync(
+            string projectId,
+            Guid recordId,
+            int page,
+            int pageSize,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new KnowledgeRecordRevisionPage(
+                ImmutableArray<KnowledgeRecordRevision>.Empty, 0, page, pageSize));
+        }
+
+        public Task<IReadOnlyList<KnowledgeRecord>> ReadContextCandidatesAsync(
+            string projectId,
+            string agentId,
+            string runId,
+            int maximumRecords,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<KnowledgeRecord>>([]);
+        }
+
+        public Task<bool> HasUndeliveredPredecessorAsync(
+            string projectId,
+            string streamId,
+            long sequence,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(false);
+        }
+
+        public Task<CosmosMemoryBatchResult> ExecuteBatchAsync(
+            string projectId,
+            IReadOnlyList<CosmosMemoryBatchOperation> operations,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new CosmosMemoryBatchResult(HttpStatusCode.ServiceUnavailable));
+        }
+    }
+
     private sealed class FakeProjectsOwnerHandler(
         NativePostgresMemoryOptions options,
         bool writeAllowed,
-        bool bindCaller = true) : HttpMessageHandler
+        bool bindCaller = true,
+        ProviderDescriptor? selectedMemoryDescriptor = null,
+        int? selectedOptionsSchemaVersion = null,
+        string? selectedOptionsRevision = null) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<string> _paths = new();
         private readonly ConcurrentQueue<string?> _authorizationHeaders = new();
@@ -444,8 +709,16 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                     permissions.ToImmutable())]);
         }
 
-        private ProjectRunSelectionResponse Selection() =>
-            new(
+        private ProjectRunSelectionResponse Selection()
+        {
+            var descriptor = selectedMemoryDescriptor ?? new ProviderDescriptor(
+                ProviderSeam.Memory,
+                NativePostgresMemoryProvider.ProviderId,
+                NativePostgresMemoryProvider.AdapterVersion,
+                options.OptionsSchemaVersion,
+                ProviderHostingPattern.RemoteService,
+                MemoryProviderCapabilities.All);
+            return new ProjectRunSelectionResponse(
                 "project-a",
                 "run-a",
                 1,
@@ -457,14 +730,15 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                     ProviderSeam.Memory,
                     [new EffectiveProviderCandidate(
                         ProviderSeam.Memory,
-                        NativePostgresMemoryProvider.ProviderId,
-                        NativePostgresMemoryProvider.AdapterVersion.ToString(),
-                        options.OptionsSchemaVersion,
-                        options.OptionsRevision,
-                        ProviderHostingPattern.RemoteService,
-                        MemoryProviderCapabilities.All.ToImmutableArray(),
+                        descriptor.Id,
+                        descriptor.AdapterVersion.ToString(),
+                        selectedOptionsSchemaVersion ?? descriptor.OptionsSchemaVersion,
+                        selectedOptionsRevision ?? options.OptionsRevision,
+                        descriptor.Hosting,
+                        descriptor.AdvertisedCapabilities.ToImmutableArray(),
                         MemoryProviderCapabilities.All.ToImmutableArray())])],
                 new ProjectRunLimitSnapshot(1000));
+        }
     }
 
     private sealed class TestAuthenticationHandler(
