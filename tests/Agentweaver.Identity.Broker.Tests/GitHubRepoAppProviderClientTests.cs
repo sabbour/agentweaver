@@ -68,6 +68,24 @@ public sealed class GitHubRepoAppProviderClientTests
         Assert.Equal(Now.AddSeconds(86400), tokens.RefreshToken.ExpiresAt);
     }
 
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("null")]
+    public async Task RejectsNonObjectProviderResponsesAsSanitizedInvalidResponse(string body)
+    {
+        var client = CreateClient(
+            EmptyHandler(),
+            new StubHandler((_, _) => Task.FromResult(JsonResponse(body))));
+        var accessToken = new SecretCredential(
+            "user-access-token", Now.AddHours(1), new FrozenTimeProvider(Now));
+
+        var exception = await Assert.ThrowsAsync<GitHubRepoAppProviderException>(
+            () => client.ReadLoginAsync(accessToken, CancellationToken.None));
+
+        Assert.Equal(GitHubRepoAppProviderFailure.InvalidResponse, exception.Failure);
+        Assert.DoesNotContain(body, exception.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task DiscoveryBindsRepositoryToUserAuthorizedInstallationWithoutReturningCredentials()
     {

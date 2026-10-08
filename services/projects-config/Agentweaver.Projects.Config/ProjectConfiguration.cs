@@ -228,13 +228,11 @@ public static class ProjectConfigurationValidator
             (!usesAppConnection && !usesSecret) ||
             usesSecret &&
                 (!IsExactSecretReference(sourceControl.ApiSecretReference) ||
-                 sourceControl.IdentityConnectionId is not null ||
-                 sourceControl.IdentityRepositorySelectionCode is not null) ||
+                 sourceControl.IdentityConnectionId is not null) ||
             usesAppConnection &&
                 (sourceControl.ApiSecretReference is not null ||
                  sourceControl.CheckoutSecretReference is not null ||
-                 !IsExactIdentityConnectionId(sourceControl.IdentityConnectionId) ||
-                 !IsExactRepositorySelectionCode(sourceControl.IdentityRepositorySelectionCode)) ||
+                 !IsExactIdentityConnectionId(sourceControl.IdentityConnectionId)) ||
             sourceControl.CheckoutSecretReference is { } checkout &&
                 !IsExactSecretReference(checkout) ||
             sourceControl.WebhookSecretReference is { } webhook &&
@@ -265,10 +263,6 @@ public static class ProjectConfigurationValidator
         connectionId.Length <= 128 &&
         connectionId.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
-
-    private static bool IsExactRepositorySelectionCode(string? selectionCode) =>
-        selectionCode is { Length: 64 } &&
-        selectionCode.All(Uri.IsHexDigit);
 
     public static PlatformRuntimeDefaults Validate(PlatformRuntimeDefaults defaults)
     {

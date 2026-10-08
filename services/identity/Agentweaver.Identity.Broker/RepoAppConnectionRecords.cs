@@ -82,5 +82,6 @@ public sealed class RepoAppRepositorySelectionRecord
     public required DateTimeOffset ExpiresAt { get; set; }
     public string? ProjectId { get; set; }
     public string? PermissionDigest { get; set; }
+    public bool IssueWriteRequested { get; set; }
     public DateTimeOffset? ConsumedAt { get; set; }
 }

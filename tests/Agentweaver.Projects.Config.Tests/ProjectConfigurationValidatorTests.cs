@@ -222,8 +222,7 @@ public sealed class ProjectConfigurationValidatorTests
             new SourceControlRepositoryIdentity("octo", "repo"),
             apiSecretReference: null,
             authMode: SourceControlAuthMode.GitHubApp,
-            identityConnectionId: "app-conn_123",
-            identityRepositorySelectionCode: new string('a', 64));
+            identityConnectionId: "app-conn_123");
 
         var configuration = ProjectConfigurationValidator.Validate(new ProjectConfiguration
         {
@@ -234,14 +233,24 @@ public sealed class ProjectConfigurationValidatorTests
 
         Assert.Equal(SourceControlAuthMode.GitHubApp, restored.AuthMode);
         Assert.Equal("app-conn_123", restored.IdentityConnectionId);
-        Assert.Equal(new string('a', 64), restored.IdentityRepositorySelectionCode);
         Assert.Null(restored.ApiSecretReference);
         Assert.Null(restored.CheckoutSecretReference);
         Assert.Contains("\"authMode\":\"githubApp\"", json, StringComparison.Ordinal);
         Assert.Contains("\"identityConnectionId\":\"app-conn_123\"", json, StringComparison.Ordinal);
-        Assert.Contains($"\"identityRepositorySelectionCode\":\"{new string('a', 64)}\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("identityRepositorySelectionCode", json, StringComparison.Ordinal);
         Assert.DoesNotContain("apiSecretReference", json, StringComparison.Ordinal);
         Assert.DoesNotContain("checkoutSecretReference", json, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("""{"sourceControl":{"repository":{"owner":"octo","name":"repo"},"authMode":"githubApp","identityConnectionId":"app-conn_123","selectionCode":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}""")]
+    [InlineData("""{"sourceControl":{"repository":{"owner":"octo","name":"repo"},"authMode":"githubApp","identityConnectionId":"app-conn_123","identityRepositorySelectionCode":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}""")]
+    public void RejectsTransientSelectionCodeFromProjectConfiguration(string configuration)
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<ProjectConfiguration>(configuration, options));
     }
 
     [Fact]

@@ -60,6 +60,8 @@ public sealed class SourceControlProjectConfigurationResolverTests
     [InlineData("""{"projectConfiguration":{"sourceControl":{"repository":{"owner":"octo","name":"repo"},"apiSecretReference":{"id":"secret","version":"v1"},"token":"never"}}}""")]
     [InlineData("""{"projectConfiguration":{"sourceControl":{"repository":{"owner":"octo"},"apiSecretReference":{"id":"secret","version":"v1"}}}}""")]
     [InlineData("""{"projectConfiguration":{"sourceControl":"octo/repo"}}""")]
+    [InlineData("""{"projectConfiguration":{"sourceControl":{"repository":{"owner":"octo","name":"repo"},"authMode":"githubApp","identityConnectionId":"app-conn_123","identityRepositorySelectionCode":"never"}}}""")]
+    [InlineData("""{"projectConfiguration":{"sourceControl":{"repository":{"owner":"octo","name":"repo"},"authMode":"githubApp","identityConnectionId":"app-conn_123","selectionCode":"never"}}}""")]
     public void RejectsMalformedOrUnknownSourceControlSettings(string snapshot)
     {
         using var document = JsonDocument.Parse(snapshot);
@@ -166,19 +168,19 @@ public sealed class SourceControlProjectConfigurationResolverTests
     [Fact]
     public void NegotiatedGitHubAppPinUsesExactIdentityConnectionAndNoApiOrCheckoutSecret()
     {
+        var selectionCode = new string('a', 64);
         var settings = new SourceControlProjectSettings(
             new SourceControlRepositoryIdentity("octo", "repo"),
             apiSecretReference: null,
             webhookSecretReference: new SecretRef("github-webhook", "v1"),
             authMode: SourceControlAuthMode.GitHubApp,
-            identityConnectionId: "github-connection-1",
-            identityRepositorySelectionCode: new string('a', 64));
-        var snapshot = AcceptedSnapshot(settings);
+            identityConnectionId: "github-connection-1");
+        var snapshot = AcceptedSnapshot(settings, includeIssueWrite: true);
         var acceptedRun = AcceptedRun(snapshot);
-        var (catalog, resolver) = CreateCatalogAndResolver();
-        var negotiation = Negotiation(settings.Repository);
+        var (catalog, resolver) = CreateCatalogAndResolver(includeIssueWrite: true);
+        var negotiation = Negotiation(settings.Repository, includeIssueWrite: true);
         var selectionHash = Convert.ToHexStringLower(
-            SHA256.HashData(Encoding.ASCII.GetBytes(settings.IdentityRepositorySelectionCode!)));
+            SHA256.HashData(Encoding.ASCII.GetBytes(selectionCode)));
         var mismatchedBinding = new SourceControlGitHubAppBinding(
             "another-connection",
             4,
@@ -193,6 +195,7 @@ public sealed class SourceControlProjectConfigurationResolverTests
                 resolver,
                 acceptedRun,
                 "pin-1",
+                selectionCode,
                 negotiation,
                 mismatchedBinding,
                 DateTimeOffset.Parse("2026-10-07T08:00:00Z")));
@@ -203,13 +206,15 @@ public sealed class SourceControlProjectConfigurationResolverTests
             4,
             12345,
             new string('A', 64),
-            selectionHash);
+            selectionHash,
+            issueWriteGranted: true);
         var pin = SourceControlProjectConfigurationResolver.PinNegotiatedGitHubAppRepository(
             snapshot,
             catalog,
             resolver,
             acceptedRun,
             "pin-1",
+            selectionCode,
             negotiation,
             binding,
             DateTimeOffset.Parse("2026-10-07T08:00:00Z"));
@@ -224,6 +229,9 @@ public sealed class SourceControlProjectConfigurationResolverTests
         Assert.Equal(new string('a', 64), pin.GitHubAppBinding.PermissionDigest);
         Assert.Equal(selectionHash, pin.GitHubAppBinding.IdentityRepositorySelectionHash);
         Assert.Equal("github-webhook", pin.WebhookCredential!.Secret.Id);
+        Assert.Contains(
+            SourceControlCapabilities.IssueWrite,
+            pin.ProviderBinding.NegotiatedCapabilities);
     }
 
     [Fact]
@@ -246,8 +254,24 @@ public sealed class SourceControlProjectConfigurationResolverTests
                 DateTimeOffset.Parse("2026-10-07T08:00:00Z")));
     }
 
-    private static JsonElement AcceptedSnapshot(SourceControlProjectSettings settings)
+    private static JsonElement AcceptedSnapshot(
+        SourceControlProjectSettings settings,
+        bool includeIssueWrite = false)
     {
+        var capabilities = new List<string>
+        {
+            SourceControlCapabilities.RepositoryRead,
+            SourceControlCapabilities.Merge
+        };
+        if (includeIssueWrite)
+            capabilities.Add(SourceControlCapabilities.IssueWrite);
+        var requiredCapabilities = new List<string>
+        {
+            SourceControlCapabilities.RepositoryRead,
+            SourceControlCapabilities.Merge
+        };
+        if (includeIssueWrite)
+            requiredCapabilities.Add(SourceControlCapabilities.IssueWrite);
         var sourceSelection = new EffectiveProviderSelection(
             ProviderCardinality.Exclusive,
             ProviderSeam.SourceControl,
@@ -259,14 +283,8 @@ public sealed class SourceControlProjectConfigurationResolverTests
                     1,
                     "options-r1",
                     ProviderHostingPattern.InProcess,
-                    [
-                        SourceControlCapabilities.RepositoryRead,
-                        SourceControlCapabilities.Merge
-                    ],
-                    [
-                        SourceControlCapabilities.RepositoryRead,
-                        SourceControlCapabilities.Merge
-                    ])
+                    capabilities.ToImmutableArray(),
+                    requiredCapabilities.ToImmutableArray())
             ]);
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
@@ -306,25 +324,32 @@ public sealed class SourceControlProjectConfigurationResolverTests
             5);
 
     private static SourceControlRepositoryNegotiation Negotiation(
-        SourceControlRepositoryIdentity repository) =>
-        new(
+        SourceControlRepositoryIdentity repository,
+        bool includeIssueWrite = false)
+    {
+        var capabilities = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+        capabilities.Add(SourceControlCapabilities.RepositoryRead);
+        capabilities.Add(SourceControlCapabilities.Merge);
+        if (includeIssueWrite)
+            capabilities.Add(SourceControlCapabilities.IssueWrite);
+        return new SourceControlRepositoryNegotiation(
             repository,
             new ResourceNegotiation(
                 new ProviderResourceRef(ProviderSeam.SourceControl, "github", "repo:123", 9),
-                ImmutableHashSet.Create(
-                    StringComparer.Ordinal,
-                    SourceControlCapabilities.RepositoryRead,
-                    SourceControlCapabilities.Merge)),
+                capabilities.ToImmutable()),
             123,
             "main",
             IsPrivate: true);
+    }
 
-    private static (ProviderCatalog Catalog, ProviderResolver Resolver) CreateCatalogAndResolver()
+    private static (ProviderCatalog Catalog, ProviderResolver Resolver) CreateCatalogAndResolver(
+        bool includeIssueWrite = false)
     {
-        var capabilities = ImmutableHashSet.Create(
-            StringComparer.Ordinal,
-            SourceControlCapabilities.RepositoryRead,
-            SourceControlCapabilities.Merge);
+        var capabilities = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+        capabilities.Add(SourceControlCapabilities.RepositoryRead);
+        capabilities.Add(SourceControlCapabilities.Merge);
+        if (includeIssueWrite)
+            capabilities.Add(SourceControlCapabilities.IssueWrite);
         var registration = new ProviderRegistration(
             new ProviderDescriptor(
                 ProviderSeam.SourceControl,
@@ -332,7 +357,7 @@ public sealed class SourceControlProjectConfigurationResolverTests
                 new Version(1, 0, 0),
                 1,
                 ProviderHostingPattern.InProcess,
-                capabilities),
+                capabilities.ToImmutable()),
             true,
             "options-r1",
             1);

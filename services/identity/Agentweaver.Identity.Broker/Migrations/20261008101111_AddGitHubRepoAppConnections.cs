@@ -122,6 +122,7 @@ namespace Agentweaver.Identity.Broker.Migrations
                     expires_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
                     project_id = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
                     permission_digest = table.Column<string>(type: "character(64)", fixedLength: true, maxLength: 64, nullable: true),
+                    issue_write_requested = table.Column<bool>(type: "boolean", nullable: false, defaultValue: false),
                     consumed_at = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
                 },
                 constraints: table =>

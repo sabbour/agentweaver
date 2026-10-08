@@ -32,9 +32,13 @@ BEGIN
                  github_app_permission_digest IS NULL AND
                  github_app_selection_hash IS NULL) OR
                 (github_app_connection_id IS NOT NULL AND
+                 github_app_connection_revision IS NOT NULL AND
                  github_app_connection_revision > 0 AND
+                 github_app_installation_id IS NOT NULL AND
                  github_app_installation_id > 0 AND
+                 github_app_permission_digest IS NOT NULL AND
                  github_app_permission_digest ~ '^[0-9a-f]{64}$' AND
+                 github_app_selection_hash IS NOT NULL AND
                  github_app_selection_hash ~ '^[0-9a-f]{64}$')
             );
     END IF;

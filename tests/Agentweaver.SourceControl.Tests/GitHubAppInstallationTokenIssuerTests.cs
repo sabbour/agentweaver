@@ -42,26 +42,28 @@ public sealed class GitHubAppInstallationTokenIssuerTests
             Assert.Equal(new long[] { 789 }, requestBody.GetProperty("repository_ids").EnumerateArray()
                 .Select(value => value.GetInt64()).ToArray());
             var requestedPermissions = requestBody.GetProperty("permissions");
-            Assert.Equal(2, requestedPermissions.EnumerateObject().Count());
+            Assert.Equal(3, requestedPermissions.EnumerateObject().Count());
             Assert.Equal("write", requestedPermissions.GetProperty("contents").GetString());
+            Assert.Equal("write", requestedPermissions.GetProperty("issues").GetString());
             Assert.Equal("write", requestedPermissions.GetProperty("pull_requests").GetString());
 
             return JsonResponse(
                 "{\"token\":\"installation-token\",\"expires_at\":\"2026-10-08T09:47:00Z\"," +
-                "\"permissions\":{\"contents\":\"write\",\"metadata\":\"read\"," +
+                "\"permissions\":{\"contents\":\"write\",\"issues\":\"write\",\"metadata\":\"read\"," +
                 "\"pull_requests\":\"write\"}}");
         });
         var time = new FrozenTimeProvider(Now);
         var key = new SecretCredential(rsa.ExportPkcs8PrivateKeyPem(), Now.AddHours(1), time);
         var issuer = CreateIssuer(handler, time);
 
-        var issued = await issuer.MintAsync(456, 789, key, CancellationToken.None);
+        var issued = await issuer.MintAsync(456, 789, key, true, CancellationToken.None);
 
         Assert.Equal(Now.AddMinutes(47), issued.Credential.ExpiresAt);
         Assert.Equal("installation-token", issued.Credential.GetValue());
+        Assert.True(issued.IssueWriteGranted);
         Assert.Equal(
             Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
-                "github-app-permissions-v1\ncontents:write\nmetadata:read\npull_requests:write"))),
+                "github-app-permissions-v1\ncontents:write\nissues:write\nmetadata:read\npull_requests:write"))),
             issued.PermissionDigest);
         Assert.False(key.IsUsable());
         Assert.DoesNotContain("installation-token", issued.Credential.ToString());
@@ -79,11 +81,65 @@ public sealed class GitHubAppInstallationTokenIssuerTests
         var issuer = CreateIssuer(handler, time);
 
         var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
-            () => issuer.MintAsync(456, 789, key, CancellationToken.None));
+            () => issuer.MintAsync(456, 789, key, true, CancellationToken.None));
 
         Assert.Equal(SourceControlFailureCode.RemoteOutcomeUncertain, exception.Code);
         Assert.False(key.IsUsable());
         Assert.DoesNotContain("installation-token", exception.ToString());
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("{\"expires_at\":\"2026-10-08T09:47:00Z\",\"permissions\":{\"contents\":\"write\",\"pull_requests\":\"write\"}}")]
+    [InlineData("{\"token\":123,\"expires_at\":\"2026-10-08T09:47:00Z\",\"permissions\":{\"contents\":\"write\",\"pull_requests\":\"write\"}}")]
+    [InlineData("{\"token\":\"issued-secret\",\"permissions\":{\"contents\":\"write\",\"pull_requests\":\"write\"}}")]
+    [InlineData("{\"token\":\"issued-secret\",\"expires_at\":123,\"permissions\":{\"contents\":\"write\",\"pull_requests\":\"write\"}}")]
+    [InlineData("{\"token\":\"issued-secret\",\"expires_at\":\"not-an-expiry\",\"permissions\":{\"contents\":\"write\",\"pull_requests\":\"write\"}}")]
+    [InlineData("{\"token\":\"issued-secret\",\"expires_at\":\"2026-10-08T09:47:00Z\",\"permissions\":[]}")]
+    public async Task MapsMalformedMintResponsesToSanitizedUncertainWithoutRetry(string body)
+    {
+        var calls = 0;
+        var handler = new StubHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(JsonResponse(body));
+        });
+        var time = new FrozenTimeProvider(Now);
+        var key = NewKey(time);
+        var issuer = CreateIssuer(handler, time);
+
+        var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
+            () => issuer.MintAsync(456, 789, key, true, CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.RemoteOutcomeUncertain, exception.Code);
+        Assert.Equal(1, calls);
+        Assert.False(key.IsUsable());
+        Assert.DoesNotContain("issued-secret", exception.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BoundsMintResponseBeforeParsing()
+    {
+        var calls = 0;
+        var handler = new StubHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(JsonResponse(
+                "{\"token\":\"must-not-leak-secret\",\"padding\":\"" +
+                new string('x', 64 * 1024) + "\"}"));
+        });
+        var time = new FrozenTimeProvider(Now);
+        var key = NewKey(time);
+        var issuer = CreateIssuer(handler, time);
+
+        var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
+            () => issuer.MintAsync(456, 789, key, true, CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.RemoteOutcomeUncertain, exception.Code);
+        Assert.Equal(1, calls);
+        Assert.False(key.IsUsable());
+        Assert.DoesNotContain("must-not-leak-secret", exception.ToString(), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -104,7 +160,7 @@ public sealed class GitHubAppInstallationTokenIssuerTests
         var issuer = CreateIssuer(handler, time);
 
         var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
-            () => issuer.MintAsync(456, 789, key, CancellationToken.None));
+            () => issuer.MintAsync(456, 789, key, true, CancellationToken.None));
 
         Assert.Equal(expectedCode, exception.Code);
         Assert.Equal(1, calls);
@@ -125,10 +181,85 @@ public sealed class GitHubAppInstallationTokenIssuerTests
         var issuer = CreateIssuer(handler, time);
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
-            () => issuer.MintAsync(456, 0, key, CancellationToken.None));
+            () => issuer.MintAsync(456, 0, key, true, CancellationToken.None));
 
         Assert.Equal(0, calls);
         Assert.True(key.IsUsable());
+    }
+
+    [Fact]
+    public async Task RejectsMissingRequestedIssuePermissionWithoutRetry()
+    {
+        var calls = 0;
+        var handler = new StubHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(JsonResponse(
+                "{\"token\":\"issued-secret\",\"expires_at\":\"2026-10-08T09:47:00Z\"," +
+                "\"permissions\":{\"contents\":\"write\",\"metadata\":\"read\"," +
+                "\"pull_requests\":\"write\"}}"));
+        });
+        var time = new FrozenTimeProvider(Now);
+        var key = NewKey(time);
+        var issuer = CreateIssuer(handler, time);
+
+        var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
+            () => issuer.MintAsync(456, 789, key, true, CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.CapabilityUnavailable, exception.Code);
+        Assert.Equal(1, calls);
+        Assert.False(key.IsUsable());
+        Assert.DoesNotContain("issued-secret", exception.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DoesNotRetryARejectedIssuePermissionRequestWithNarrowerPermissions()
+    {
+        var calls = 0;
+        var handler = new StubHandler((_, _) =>
+        {
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.UnprocessableEntity));
+        });
+        var time = new FrozenTimeProvider(Now);
+        var key = NewKey(time);
+        var issuer = CreateIssuer(handler, time);
+
+        var exception = await Assert.ThrowsAsync<SourceControlOperationException>(
+            () => issuer.MintAsync(456, 789, key, true, CancellationToken.None));
+
+        Assert.Equal(SourceControlFailureCode.CapabilityUnavailable, exception.Code);
+        Assert.Equal(1, calls);
+        Assert.False(key.IsUsable());
+    }
+
+    [Fact]
+    public async Task MintsOnlyRequestedNarrowPermissionsWhenIssueWriteIsNotAccepted()
+    {
+        var handler = new StubHandler(async (request, _) =>
+        {
+            using var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            var permissions = document.RootElement.GetProperty("permissions");
+            Assert.Equal(2, permissions.EnumerateObject().Count());
+            Assert.False(permissions.TryGetProperty("issues", out var issues));
+            return JsonResponse(
+                "{\"token\":\"installation-token\",\"expires_at\":\"2026-10-08T09:47:00Z\"," +
+                "\"permissions\":{\"contents\":\"write\",\"metadata\":\"read\"," +
+                "\"pull_requests\":\"write\"}}");
+        });
+        var time = new FrozenTimeProvider(Now);
+        var key = NewKey(time);
+        var issuer = CreateIssuer(handler, time);
+
+        var issued = await issuer.MintAsync(456, 789, key, false, CancellationToken.None);
+
+        Assert.False(issued.IssueWriteGranted);
+        Assert.Equal(
+            Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+                "github-app-permissions-v1\ncontents:write\nmetadata:read\npull_requests:write"))),
+            issued.PermissionDigest);
+        Assert.Equal("installation-token", issued.Credential.GetValue());
+        issued.Credential.Invalidate();
     }
 
     private static GitHubAppInstallationTokenIssuer CreateIssuer(

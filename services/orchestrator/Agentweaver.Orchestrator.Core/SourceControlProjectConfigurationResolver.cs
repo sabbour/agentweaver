@@ -108,6 +108,7 @@ public static class SourceControlProjectConfigurationResolver
         ProviderResolver resolver,
         SourceControlAcceptedRunBinding acceptedRun,
         string pinId,
+        string identityRepositorySelectionCode,
         SourceControlRepositoryNegotiation negotiation,
         SourceControlGitHubAppBinding githubAppBinding,
         DateTimeOffset pinnedAt)
@@ -115,6 +116,11 @@ public static class SourceControlProjectConfigurationResolver
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(resolver);
         ArgumentNullException.ThrowIfNull(acceptedRun);
+        ArgumentException.ThrowIfNullOrWhiteSpace(identityRepositorySelectionCode);
+        if (identityRepositorySelectionCode.Length != 64 ||
+            identityRepositorySelectionCode.Any(character =>
+                character is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
+            throw Invalid("The Identity repository-selection code is malformed.");
         ArgumentNullException.ThrowIfNull(negotiation);
         ArgumentNullException.ThrowIfNull(githubAppBinding);
         ValidateSnapshotBinding(acceptedSelectionSnapshot, acceptedRun);
@@ -125,23 +131,35 @@ public static class SourceControlProjectConfigurationResolver
                 githubAppBinding.IdentityConnectionId,
                 StringComparison.Ordinal) ||
             !string.Equals(
-                HashRepositorySelectionCode(settings.IdentityRepositorySelectionCode!),
+                HashRepositorySelectionCode(identityRepositorySelectionCode),
                 githubAppBinding.IdentityRepositorySelectionHash,
                 StringComparison.Ordinal))
             throw Invalid(
-                "The GitHub App binding does not match the Identity connection in the accepted ProjectConfiguration.");
+                "The GitHub App binding does not match the Identity connection and pin request.");
         if (negotiation.Repository != settings.Repository)
             throw Invalid(
                 "The negotiated physical repository does not match the accepted ProjectConfiguration.");
 
         var selection = SourceControlProviderSelectionResolver.Resolve(
             acceptedSelectionSnapshot, catalog, resolver);
+        var appNegotiation = negotiation;
+        if (!githubAppBinding.IssueWriteGranted)
+        {
+            appNegotiation = negotiation with
+            {
+                Resource = negotiation.Resource with
+                {
+                    Capabilities = negotiation.Resource.Capabilities.Remove(
+                        SourceControlCapabilities.IssueWrite)
+                }
+            };
+        }
         return SourceControlProviderSelectionResolver.PinNegotiatedRepository(
             resolver,
             selection,
             acceptedRun,
             pinId,
-            negotiation,
+            appNegotiation,
             githubAppBinding,
             settings.WebhookSecretReference is { } webhook
                 ? new SourceControlCredentialReference(webhook, SourceControlSecretPurposes.Webhook)

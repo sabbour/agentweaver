@@ -1120,7 +1120,8 @@ internal sealed class SourceControlOwnerStore(
                     appBinding.IdentityConnectionRevision,
                     appBinding.InstallationId,
                     appBinding.PermissionDigest,
-                    appBinding.IdentityRepositorySelectionHash)
+                    appBinding.IdentityRepositorySelectionHash,
+                    appBinding.IssueWriteGranted)
                 : null,
             pin.ProviderRepositoryId,
             pin.DefaultBranch,
@@ -1200,7 +1201,8 @@ internal sealed class SourceControlOwnerStore(
                     appBinding.IdentityConnectionRevision,
                     appBinding.InstallationId,
                     appBinding.PermissionDigest,
-                    appBinding.IdentityRepositorySelectionHash)
+                    appBinding.IdentityRepositorySelectionHash,
+                    appBinding.IssueWriteGranted)
                 : null);
     }
 
@@ -1293,7 +1295,8 @@ internal sealed class SourceControlOwnerStore(
               left.IdentityConnectionRevision == right.IdentityConnectionRevision &&
               left.InstallationId == right.InstallationId &&
               left.PermissionDigest == right.PermissionDigest &&
-              left.IdentityRepositorySelectionHash == right.IdentityRepositorySelectionHash;
+              left.IdentityRepositorySelectionHash == right.IdentityRepositorySelectionHash &&
+              left.IssueWriteGranted == right.IssueWriteGranted;
 
     private static SourceControlMergeMethod ParseDatabaseMergeMethod(string value) =>
         value switch
@@ -1454,7 +1457,8 @@ internal sealed class SourceControlOwnerStore(
         long IdentityConnectionRevision,
         long InstallationId,
         string PermissionDigest,
-        string IdentityRepositorySelectionHash);
+        string IdentityRepositorySelectionHash,
+        bool IssueWriteGranted = false);
 
     private sealed record StoredCredentialReference(
         string SecretId,

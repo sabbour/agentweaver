@@ -51,6 +51,7 @@ internal sealed record GitHubRepoAppInstallationTokenRequest(
     long? InstallationId,
     long? RepositoryId,
     string? PermissionDigest,
+    bool IssueWriteRequested,
     string ExpectedRepositoryFullName);
 
 internal sealed record GitHubRepoAppInstallationTokenResult(
@@ -261,8 +262,9 @@ internal sealed class GitHubRepoAppConnectionService
             var browse = await _provider.BrowseAsync(accessToken, cancellationToken).ConfigureAwait(false);
             var current = await EnsureConnectionCurrentAsync(
                 connection, cancellationToken).ConfigureAwait(false);
-            await SynchronizeInstallationsAsync(current, browse.Installations, cancellationToken)
+            current = await SynchronizeInstallationsAsync(current, browse.Installations, cancellationToken)
                 .ConfigureAwait(false);
+            current = await EnsureConnectionCurrentAsync(current, cancellationToken).ConfigureAwait(false);
             var repositories = browse.Repositories.Select(repository => new GitHubRepoAppRepositoryOption(
                 repository.InstallationId,
                 repository.RepositoryId,
@@ -390,8 +392,9 @@ internal sealed class GitHubRepoAppConnectionService
             var browse = await _provider.BrowseAsync(accessToken, cancellationToken).ConfigureAwait(false);
             var current = await EnsureConnectionCurrentAsync(
                 connection, cancellationToken).ConfigureAwait(false);
-            await SynchronizeInstallationsAsync(current, browse.Installations, cancellationToken)
+            current = await SynchronizeInstallationsAsync(current, browse.Installations, cancellationToken)
                 .ConfigureAwait(false);
+            current = await EnsureConnectionCurrentAsync(current, cancellationToken).ConfigureAwait(false);
             var repository = browse.Repositories.SingleOrDefault(candidate =>
                 candidate.RepositoryId == repositoryId &&
                 candidate.InstallationId == installationId);
@@ -414,6 +417,7 @@ internal sealed class GitHubRepoAppConnectionService
                 ExpiresAt = now.Add(AuthorizationLifetime)
             });
             await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            current = await EnsureConnectionCurrentAsync(current, cancellationToken).ConfigureAwait(false);
             return new(code, connection.ConnectionId, connection.ConnectionRevision,
                 installationId, repositoryId, repository.FullName);
         }
@@ -493,7 +497,10 @@ internal sealed class GitHubRepoAppConnectionService
                 selection.ConnectionRevision != request.ConnectionRevision ||
                 selection.InstallationId != request.InstallationId ||
                 selection.RepositoryId != request.RepositoryId ||
-                !string.Equals(selection.PermissionDigest, request.PermissionDigest, StringComparison.Ordinal)))
+                !string.Equals(selection.PermissionDigest, request.PermissionDigest, StringComparison.Ordinal) ||
+                selection.IssueWriteRequested != request.IssueWriteRequested) ||
+            hasCode && selection.ProjectId is not null &&
+                selection.IssueWriteRequested != request.IssueWriteRequested)
             throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.RepositoryUnavailable);
 
         if (selection.ProjectId is null)
@@ -507,6 +514,7 @@ internal sealed class GitHubRepoAppConnectionService
                     item.ExpiresAt > now)
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(item => item.ProjectId, projectId)
+                    .SetProperty(item => item.IssueWriteRequested, request.IssueWriteRequested)
                     .SetProperty(item => item.ConsumedAt, now),
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -515,7 +523,8 @@ internal sealed class GitHubRepoAppConnectionService
                 var latest = await _db.RepoAppRepositorySelections.AsNoTracking()
                     .SingleOrDefaultAsync(item => item.CodeHash == selectionHash, cancellationToken)
                     .ConfigureAwait(false);
-                if (latest?.ProjectId != projectId)
+                if (latest?.ProjectId != projectId ||
+                    latest.IssueWriteRequested != request.IssueWriteRequested)
                     throw new GitHubRepoAppConnectionException(
                         GitHubRepoAppConnectionFailure.RepositoryUnavailable);
                 selection = latest;
@@ -558,7 +567,10 @@ internal sealed class GitHubRepoAppConnectionService
             var browse = await _provider.BrowseAsync(userAccessToken, cancellationToken).ConfigureAwait(false);
             var currentConnection = await EnsureConnectionCurrentAsync(connection, cancellationToken)
                 .ConfigureAwait(false);
-            await SynchronizeInstallationsAsync(currentConnection, browse.Installations, cancellationToken)
+            currentConnection = await SynchronizeInstallationsAsync(
+                currentConnection, browse.Installations, cancellationToken)
+                .ConfigureAwait(false);
+            currentConnection = await EnsureConnectionCurrentAsync(currentConnection, cancellationToken)
                 .ConfigureAwait(false);
             if (!await _db.RepoAppInstallations.AsNoTracking().AnyAsync(item =>
                     item.ConnectionId == currentConnection.ConnectionId &&
@@ -605,6 +617,7 @@ internal sealed class GitHubRepoAppConnectionService
                 selection.InstallationId,
                 selection.RepositoryId,
                 appPrivateKey,
+                request.IssueWriteRequested,
                 cancellationToken).ConfigureAwait(false);
 
             currentConnection = await EnsureConnectionCurrentAsync(currentConnection, cancellationToken)
@@ -807,8 +820,9 @@ internal sealed class GitHubRepoAppConnectionService
                     GitHubRepoAppConnectionFailure.RepositoryUnavailable);
             var current = await EnsureConnectionCurrentAsync(
                 connection, cancellationToken).ConfigureAwait(false);
-            await SynchronizeInstallationsAsync(current, browse.Installations, cancellationToken)
+            current = await SynchronizeInstallationsAsync(current, browse.Installations, cancellationToken)
                 .ConfigureAwait(false);
+            _ = await EnsureConnectionCurrentAsync(current, cancellationToken).ConfigureAwait(false);
         }
         catch (GitHubRepoAppProviderException error)
         {
@@ -994,11 +1008,29 @@ internal sealed class GitHubRepoAppConnectionService
             new SecretRedemptionRequest(new SecretRef(secretId, secretVersion), purpose, connectionId),
             cancellationToken).ConfigureAwait(false);
 
-    private async Task SynchronizeInstallationsAsync(
+    private async Task<RepoAppConnectionRecord> SynchronizeInstallationsAsync(
         RepoAppConnectionRecord connection,
         IReadOnlyList<GitHubRepoAppInstallationMetadata> installations,
         CancellationToken cancellationToken)
     {
+        await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var current = await _db.RepoAppConnections.FromSqlInterpolated($"""
+            SELECT * FROM identity_broker.repo_app_connections
+            WHERE connection_id = {connection.ConnectionId}
+            FOR UPDATE
+            """)
+            .AsNoTracking()
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (current is null)
+            throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.NotConnected);
+        if (current.OwnerId != connection.OwnerId ||
+            current.ConnectionRevision != connection.ConnectionRevision)
+            throw new GitHubRepoAppConnectionException(GitHubRepoAppConnectionFailure.RepositoryUnavailable);
+        if (current.State != RepoAppConnectionState.Connected)
+            throw FailureForState(current.State);
+
         var now = _timeProvider.GetUtcNow();
         var activeIds = installations.Select(installation => installation.InstallationId).ToHashSet();
         await _db.RepoAppInstallations
@@ -1039,6 +1071,8 @@ internal sealed class GitHubRepoAppConnectionService
         }
 
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return current;
     }
 
     private async Task<RepoAppConnectionRecord> GetConnectionAsync(

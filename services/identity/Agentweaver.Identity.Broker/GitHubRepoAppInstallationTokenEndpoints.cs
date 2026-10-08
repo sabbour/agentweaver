@@ -53,6 +53,13 @@ internal static class GitHubRepoAppInstallationTokenEndpoints
         GitHubRepoAppInstallationTokenResult? result = null;
         try
         {
+            if (input.IssueWriteRequested is null)
+            {
+                await DenyAsync(context, "request_invalid", StatusCodes.Status400BadRequest)
+                    .ConfigureAwait(false);
+                return;
+            }
+
             result = await connectionService.MintInstallationTokenAsync(
                 ownerId,
                 projectId,
@@ -65,6 +72,7 @@ internal static class GitHubRepoAppInstallationTokenEndpoints
                     input.InstallationId,
                     input.RepositoryId,
                     input.PermissionDigest,
+                    input.IssueWriteRequested.Value,
                     input.ExpectedRepositoryFullName ?? string.Empty),
                 grantAuthority,
                 tokenIssuer,
@@ -81,6 +89,7 @@ internal static class GitHubRepoAppInstallationTokenEndpoints
                 result.DefaultBranch,
                 result.IsPrivate,
                 result.Credential.PermissionDigest,
+                result.Credential.IssueWriteGranted,
                 result.SelectionHash)).ExecuteAsync(context).ConfigureAwait(false);
         }
         catch (GitHubRepoAppConnectionException error)
@@ -107,9 +116,16 @@ internal static class GitHubRepoAppInstallationTokenEndpoints
             };
             await DenyAsync(context, code, status).ConfigureAwait(false);
         }
-        catch (SourceControlOperationException)
+        catch (SourceControlOperationException error)
         {
-            await DenyAsync(context, "installation_token_unavailable", StatusCodes.Status502BadGateway)
+            var capabilityUnavailable =
+                error.Code == SourceControlFailureCode.CapabilityUnavailable;
+            await DenyAsync(
+                context,
+                capabilityUnavailable ? "capability_unavailable" : "installation_token_unavailable",
+                capabilityUnavailable
+                    ? StatusCodes.Status503ServiceUnavailable
+                    : StatusCodes.Status502BadGateway)
                 .ConfigureAwait(false);
         }
         catch (AzureKeyVaultSecretException)
@@ -152,6 +168,7 @@ internal sealed record GitHubRepoAppInstallationTokenInput(
     long? InstallationId,
     long? RepositoryId,
     string? PermissionDigest,
+    bool? IssueWriteRequested,
     string? ExpectedRepositoryFullName);
 
 internal sealed record GitHubRepoAppInstallationTokenResponse(
@@ -165,4 +182,5 @@ internal sealed record GitHubRepoAppInstallationTokenResponse(
     string DefaultBranch,
     bool IsPrivate,
     string PermissionDigest,
+    bool IssueWriteGranted,
     string SelectionHash);
