@@ -565,6 +565,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             Assert.Equal(HttpStatusCode.Accepted, pinResponse.StatusCode);
         }
+        using (var selectionCodeOnSecretPin = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   sourceControlBasePath + "/pin",
+                   runToken,
+                   new { selectionCode = new string('a', 64) }))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, selectionCodeOnSecretPin.StatusCode);
+        }
         Assert.Contains(
             sourceControlSecretBackend.Requests,
             request => request.Secret.Id == "github-api" &&

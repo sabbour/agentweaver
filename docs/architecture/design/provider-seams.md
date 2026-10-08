@@ -889,19 +889,25 @@ to merge execution; ordinary intent reads do not expose stale intents, and no me
 is sent.
 
 Projects stores one repository identity and either legacy API/checkout `SecretRef`s or
-`authMode: "githubApp"` with an Identity connection ID and short-lived repository-selection
-code; the optional webhook `SecretRef` remains separate. App mode has no API or checkout
-SecretRef. On the initial authorized pin, Orchestrator resolves the exact provider and
-negotiates the repository while Identity binds the selection code to that project and
-run. The durable Orchestrator pin contains only the Identity connection/revision,
-installation and repository IDs, selection hash, and permission digest. Legacy secret
-mode continues to redeem its API reference through Identity.Broker. In App mode, each
-GitHub API or checkout operation instead requests a fresh installation token from
-Identity, which rechecks the active run grant and exact repository binding. The token
-is limited to one repository with `contents:write` and `pull_requests:write`, uses
-GitHub's returned expiry, and is invalidated after the operation. The default
-Orchestrator audience remains unchanged; the internal Identity endpoint requires the
-validated run-bound Broker bearer.
+`authMode: "githubApp"` with an Identity connection ID; the optional webhook `SecretRef`
+remains separate. App mode has no API or checkout `SecretRef`. The short-lived
+repository-selection code is submitted only in the initial authorized Orchestrator
+`/pin` request; it is never persisted in project/run configuration or the durable pin.
+Identity binds the code's first use to that project and run, stores only its hash, and
+allows later mint requests for the same project using the hash. The durable Orchestrator
+pin contains only the Identity connection/revision, installation and repository IDs,
+selection hash, actual permission digest, and the verified `IssueWriteGranted` bit.
+Legacy secret mode continues to redeem its API reference through Identity.Broker. In
+App mode, each GitHub API or checkout operation instead requests a fresh installation
+token from Identity, which rechecks the active run grant and exact repository binding.
+The token is limited to one repository with `contents:write` and
+`pull_requests:write`; `issues:write` is requested only when required by the pinned
+provider and must be present in GitHub's returned permission map before IssueWrite is
+retained. A denied requested permission fails closed without a narrower retry. The
+digest is computed from the actual returned permissions, historical remints preserve
+the accepted scope, GitHub's expiry is honored, and the token is invalidated after the
+operation. The default Orchestrator audience remains unchanged; the internal Identity
+endpoint requires the validated run-bound Broker bearer.
 
 The authenticated run-scoped Orchestrator API exposes issue creation, exact-head/base pull-request
 create-or-reuse, review reads, workspace preparation/diff, typed merge intents, and the relay endpoint.
@@ -929,7 +935,7 @@ not a deployed service or public webhook endpoint.
 
 <p align="center">
   <a href="../../diagrams/flagship/v1-source-control-owner-flow.png">
-    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration selects exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository-selection code. Identity owns OAuth/install callbacks and run-bound exact-repository token mint; token and private-key values are not stored. Typed operations and checkout use the pinned provider binding. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay." />
+    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration selects exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. The short-lived selection code is sent only in the initial run-scoped pin request; the durable pin keeps its hash and actual permission digest. Identity owns OAuth/install callbacks and run-bound exact-repository token mint; token and private-key values are not stored. IssueWrite is retained only when the returned permission map confirms issues:write. Typed operations and checkout use the pinned provider binding. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay." />
   </a>
 </p>
 <p align="center" class="aw-diagram-links"><a href="../../diagrams/flagship/v1-source-control-owner-flow.png">Open full-size PNG</a> · <a href="../../diagrams/drawio/generated/flagship/v1-source-control-owner-flow.drawio">Open editable draw.io source</a></p>

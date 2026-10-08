@@ -8,6 +8,7 @@ using Agentweaver.Providers;
 using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace Agentweaver.Orchestrator;
 
@@ -26,7 +27,8 @@ internal static class SourceControlEndpoints
         var sourceControl = app.MapGroup(
                 "/api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}")
             .RequireAuthorization();
-        sourceControl.MapPost("/pin", PinRepositoryAsync);
+        sourceControl.MapPost("/pin", PinRepositoryAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(4096));
         sourceControl.MapPost("/issues", CreateIssueAsync);
         sourceControl.MapPost("/pull-requests", CreateOrReusePullRequestAsync);
         sourceControl.MapGet(
@@ -47,6 +49,7 @@ internal static class SourceControlEndpoints
         string projectId,
         string runId,
         string sessionId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] SourceControlPinRequest? pinRequest,
         HttpContext context,
         OrchestratorOptions options,
         ProjectsRunSelectionClient projects,
@@ -68,11 +71,28 @@ internal static class SourceControlEndpoints
             var current = await decisions.ReadCurrentAsync(
                 actor, identity, selection, cancellationToken).ConfigureAwait(false);
             var settings = SourceControlProjectConfigurationResolver.Resolve(selection.Selection.Snapshot);
+            var identitySelectionCode = pinRequest?.SelectionCode;
+            if (identitySelectionCode is not null &&
+                !IsExactIdentityRepositorySelectionCode(identitySelectionCode))
+                throw new CoordinationException(
+                    "source_control_pin_request_invalid", StatusCodes.Status400BadRequest);
+            if (settings.AuthMode != SourceControlAuthMode.GitHubApp &&
+                identitySelectionCode is not null)
+                throw new CoordinationException(
+                    "source_control_pin_request_invalid", StatusCodes.Status400BadRequest);
             var existing = await sourceControlOwner.FindRepositoryPinAsync(
                 actor, identity, selection, cancellationToken).ConfigureAwait(false);
             if (existing is not null)
             {
                 EnsurePinnedConfiguration(existing, settings);
+                if (identitySelectionCode is not null &&
+                    (existing.GitHubAppBinding is not { } existingBinding ||
+                     !string.Equals(
+                         HashIdentityRepositorySelectionCode(identitySelectionCode),
+                         existingBinding.IdentityRepositorySelectionHash,
+                         StringComparison.Ordinal)))
+                    throw new CoordinationException(
+                        "source_control_repository_already_pinned", StatusCodes.Status409Conflict);
                 return Results.Ok(ToPinView(existing));
             }
 
@@ -90,13 +110,18 @@ internal static class SourceControlEndpoints
                 if (providerSelection.Candidate.ProviderId != SourceControlProviderIds.GitHub)
                     throw new CoordinationException(
                         "source_control_github_app_requires_github_provider", StatusCodes.Status409Conflict);
+                if (identitySelectionCode is null)
+                    throw new CoordinationException(
+                        "source_control_github_app_selection_required", StatusCodes.Status409Conflict);
 
                 pin = await redemption.WithGitHubAppSelectionCredentialAsync(
                     context,
                     acceptedRun,
                     settings.IdentityConnectionId!,
-                    settings.IdentityRepositorySelectionCode!,
+                    identitySelectionCode,
                     settings.Repository.FullName,
+                    providerSelection.Candidate.RequiredCapabilities.Contains(
+                        SourceControlCapabilities.IssueWrite),
                     async (credential, appBinding, token) =>
                     {
                         var negotiation = await adapter.NegotiateRepositoryAsync(
@@ -123,13 +148,15 @@ internal static class SourceControlEndpoints
                             appBinding.ConnectionRevision,
                             appBinding.InstallationId,
                             appBinding.PermissionDigest,
-                            appBinding.SelectionHash);
+                            appBinding.SelectionHash,
+                            appBinding.IssueWriteGranted);
                         var repositoryPin = SourceControlProjectConfigurationResolver.PinNegotiatedGitHubAppRepository(
                             selection.Selection.Snapshot,
                             catalog,
                             resolver,
                             acceptedRun,
                             SourceControlOwnerStore.CreateRepositoryPinId(acceptedRun),
+                            identitySelectionCode,
                             negotiation,
                             binding,
                             timeProvider.GetUtcNow());
@@ -221,6 +248,7 @@ internal static class SourceControlEndpoints
                 cancellationToken).ConfigureAwait(false);
             EnsureAdapterMatchesPin(adapter, run.Pin);
             EnsureApiCredential(run.Pin);
+            EnsureIssueWriteCapability(run.Pin);
 
             var issue = await redemption.WithCredentialAsync(
                 context,
@@ -1590,6 +1618,16 @@ internal static class SourceControlEndpoints
                 "The pinned SourceControl provider does not support repository checkout.");
     }
 
+    private static void EnsureIssueWriteCapability(SourceControlRepositoryPin pin)
+    {
+        if (!pin.ProviderBinding.NegotiatedCapabilities.Contains(
+                SourceControlCapabilities.IssueWrite) ||
+            pin.GitHubAppBinding is { IssueWriteGranted: false })
+            throw new SourceControlOperationException(
+                SourceControlFailureCode.CapabilityUnavailable,
+                "The pinned SourceControl provider does not support issue creation.");
+    }
+
     private static void ValidateIssueRequest(SourceControlIssueRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1764,13 +1802,7 @@ internal static class SourceControlEndpoints
     {
         var appBindingMatches = pin.GitHubAppBinding is { } appBinding &&
             settings.AuthMode == SourceControlAuthMode.GitHubApp &&
-            settings.IdentityConnectionId == appBinding.IdentityConnectionId &&
-            settings.IdentityRepositorySelectionCode is { } selectionCode &&
-            string.Equals(
-                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
-                    System.Text.Encoding.ASCII.GetBytes(selectionCode))),
-                appBinding.IdentityRepositorySelectionHash,
-                StringComparison.Ordinal);
+            settings.IdentityConnectionId == appBinding.IdentityConnectionId;
         var secretBindingMatches = pin.GitHubAppBinding is null &&
             settings.AuthMode != SourceControlAuthMode.GitHubApp &&
             SameSecretReference(settings.ApiSecretReference, pin.ApiCredential?.Secret);
@@ -1786,6 +1818,15 @@ internal static class SourceControlEndpoints
         settings.ApiSecretReference
         ?? throw new CoordinationException(
             "source_control_github_app_selection_required", StatusCodes.Status409Conflict);
+
+    private static bool IsExactIdentityRepositorySelectionCode(string selectionCode) =>
+        selectionCode.Length == 64 &&
+        selectionCode.All(character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static string HashIdentityRepositorySelectionCode(string selectionCode) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.ASCII.GetBytes(selectionCode)));
 
     private static bool SameSecretReference(SecretRef? left, SecretRef? right) =>
         left is null
@@ -1900,6 +1941,9 @@ internal static class SourceControlEndpoints
             _ => "unavailable"
         };
 }
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record SourceControlPinRequest(string? SelectionCode);
 
 internal sealed record PrepareSourceControlMergeIntentRequest(
     string IdempotencyKey,

@@ -26,7 +26,8 @@ public sealed record SourceControlGitHubAppBinding
         long identityConnectionRevision,
         long installationId,
         string permissionDigest,
-        string identityRepositorySelectionHash)
+        string identityRepositorySelectionHash,
+        bool issueWriteGranted = false)
     {
         if (string.IsNullOrWhiteSpace(identityConnectionId) ||
             identityConnectionId.Length > 128 ||
@@ -53,6 +54,7 @@ public sealed record SourceControlGitHubAppBinding
         InstallationId = installationId;
         PermissionDigest = permissionDigest.ToLowerInvariant();
         IdentityRepositorySelectionHash = identityRepositorySelectionHash.ToLowerInvariant();
+        IssueWriteGranted = issueWriteGranted;
     }
 
     public string IdentityConnectionId { get; }
@@ -60,6 +62,7 @@ public sealed record SourceControlGitHubAppBinding
     public long InstallationId { get; }
     public string PermissionDigest { get; }
     public string IdentityRepositorySelectionHash { get; }
+    public bool IssueWriteGranted { get; }
 }
 
 public sealed record SourceControlAcceptedRunBinding

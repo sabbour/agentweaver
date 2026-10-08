@@ -69,17 +69,17 @@ The #1907 source candidate implements that GitHub App producer inside Identity. 
 authorization uses OAuth S256 PKCE, an owner-bound state and protected verifier, and a
 short-lived HttpOnly callback cookie. Installation setup uses its own owner-bound
 single-use callback. Identity discovers only installations and repositories visible to
-the connected user. A returned selection code is short-lived and appears only in the
-initial run-scoped Orchestrator `/pin` request, never in accepted configuration or the
-durable pin. Identity persists its hash, binds its first run-bound use to one owner and
-project, and permits reuse only for that same project.
+the connected user. A returned selection code is short-lived and is submitted only in
+the initial run-scoped Orchestrator `/pin` request, never in accepted Project/Run
+configuration or the durable pin. Identity stores only its hash, binds its first
+run-bound use to one owner and project, and permits later minting only for that same
+project using the hash.
 
 The Copilot source flow is not deployed login, writer permission, or paid-execution authority.
 The separate GitHub App and browser integrations retain their own delivery and acceptance boundaries.
 Accepted narrow source contracts remain accepted.
 Automatic webhook delivery and workflow triggers also need a separate service-identity
 scope decision; the current human-authenticated relay does not prove that parity.
-
 Identity stores rotating OAuth token references and provider expiry metadata, not token
 values. Refresh is serialized by a database lease and credential-revision compare-and-swap.
 Provider rejection marks the connection revoked; an uncertain rotation locks the
@@ -89,8 +89,11 @@ installation and repository, and current provider discovery. It redeems the exac
 GitHub App private-key SecretRef for the bound run, signs the App JWT in memory, and
 requests an installation token for exactly one repository with `contents:write` and
 `pull_requests:write`. It requests `issues:write` only when the pinned provider needs
-issue creation; the returned permission map is authoritative and unsupported requested
-permissions fail closed without a narrower retry.
+issue creation. `IssueWriteGranted` is true only when GitHub's returned permission map
+confirms `issues:write`; a requested but ungranted permission fails closed, including
+an explicit provider rejection, without a narrower retry. Permission digests derive
+from the actual returned map, remints preserve the immutable pinned scope, and GitHub's
+expiry and returned permission set are authoritative.
 The private key and installation token are never stored in PostgreSQL. The Orchestrator
 receives the token only for the current operation and invalidates it afterward; later
 operations repeat Identity's binding and permission checks.

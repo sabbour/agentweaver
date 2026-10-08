@@ -247,6 +247,8 @@ public sealed class IdentityBrokerDbContext : DbContext
                 .HasColumnName("project_id").HasMaxLength(256);
             entity.Property(selection => selection.PermissionDigest)
                 .HasColumnName("permission_digest").HasMaxLength(64).IsFixedLength();
+            entity.Property(selection => selection.IssueWriteRequested)
+                .HasColumnName("issue_write_requested").HasDefaultValue(false);
             entity.Property(selection => selection.ConsumedAt).HasColumnName("consumed_at");
             entity.HasIndex(selection => selection.ExpiresAt);
             entity.HasOne<BrokerUser>()

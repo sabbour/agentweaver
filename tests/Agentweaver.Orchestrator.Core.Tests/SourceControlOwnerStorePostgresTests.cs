@@ -75,6 +75,13 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
                 actor, identity, selection, saved.IntentId, CancellationToken.None);
             var acceptedPin = await sourceStore.ReadRepositoryPinAsync(
                 actor, identity, selection, CancellationToken.None);
+            await AssertGitHubAppPartialBindingsRejectedAsync(
+                fixture.DataSource,
+                schema,
+                identity.ProjectId,
+                acceptedRun.RunId);
+            acceptedPin = await sourceStore.ReadRepositoryPinAsync(
+                actor, identity, selection, CancellationToken.None);
 
             Assert.Equal("approval_pending", saved.State);
             Assert.Equal(saved.IntentId, replay.IntentId);
@@ -201,6 +208,52 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             Assert.Equal(1L, reader.GetInt64(2));
             Assert.Equal("approval_pending", reader.GetString(3));
             Assert.Equal(0L, reader.GetInt64(4));
+        }
+        finally
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var drop = new NpgsqlCommand(
+                $"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", connection);
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    public async Task PersistsGitHubAppIssueWriteGrantAcrossOwnerStoreReadback()
+    {
+        var schema = "source_control_app_" + Guid.NewGuid().ToString("N");
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, schema);
+        try
+        {
+            await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, schema);
+            var actor = new CoordinationActor("https://identity.example/", Guid.NewGuid().ToString("D"));
+            var selection = CreateSelection(actor);
+            var identity = new SessionIdentity(
+                selection.Selection.ProjectId, selection.Selection.RunId, "root");
+            var ownerStore = new CoordinationOwnerStore(fixture.DataSource, schema);
+            await ownerStore.AcceptRootAsync(actor, selection, identity.SessionId, CancellationToken.None);
+            var providerCatalog = CreateSourceControlCatalog();
+            var providerResolver = new ProviderResolver(providerCatalog);
+            var selectionContexts = new CoordinatorRunSelectionContextStore(
+                fixture.DataSource, schema, providerCatalog, providerResolver, []);
+            var decisions = new CoordinatorDecisionOwnerStore(
+                fixture.DataSource, schema, selectionContexts, TimeProvider.System);
+            var current = await decisions.InitializeRootAsync(
+                actor, identity, selection, CancellationToken.None);
+            var acceptedRun = CreateAcceptedRun(actor, identity, selection, current.State.Fence);
+            var pin = CreateGitHubAppPin(acceptedRun, providerResolver, issueWriteGranted: true);
+            var sourceStore = new SourceControlOwnerStore(
+                fixture.DataSource, schema, providerCatalog, providerResolver);
+
+            await sourceStore.PersistRepositoryPinAsync(
+                actor, identity, selection, pin, current.StateVersion, CancellationToken.None);
+            var restored = await sourceStore.ReadRepositoryPinAsync(
+                actor, identity, selection, CancellationToken.None);
+
+            Assert.Equal(pin.GitHubAppBinding, restored.GitHubAppBinding);
+            Assert.True(restored.GitHubAppBinding!.IssueWriteGranted);
+            Assert.Null(restored.ApiCredential);
+            Assert.Null(restored.CheckoutCredential);
         }
         finally
         {
@@ -366,6 +419,106 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             "main",
             isPrivate: false,
             DateTimeOffset.Parse("2026-10-07T08:00:00Z"));
+    }
+
+    private static SourceControlRepositoryPin CreateGitHubAppPin(
+        SourceControlAcceptedRunBinding acceptedRun,
+        ProviderResolver resolver,
+        bool issueWriteGranted)
+    {
+        var candidate = Assert.IsType<ProviderCandidate>(resolver.Resolve(new ProviderResolutionRequest(
+            ProviderSeam.SourceControl,
+            ProjectOverrideId: null,
+            new Version(1, 0, 0),
+            1,
+            ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal))).Value!.Candidate);
+        var capabilities = ImmutableHashSet.Create(
+            StringComparer.Ordinal,
+            SourceControlCapabilities.RepositoryRead,
+            SourceControlCapabilities.Merge);
+        var resource = new ProviderResourceRef(
+            ProviderSeam.SourceControl, SourceControlProviderIds.GitHub, "repository-123", 1);
+        var negotiation = new ResourceNegotiation(resource, capabilities);
+        var binding = Assert.IsType<PinnedProviderBinding>(
+            resolver.Pin(acceptedRun.RunId, candidate, resource.ResourceId, negotiation).Value);
+        var githubAppBinding = new SourceControlGitHubAppBinding(
+            "github-connection-1",
+            1,
+            456,
+            new string('a', 64),
+            new string('b', 64),
+            issueWriteGranted);
+        return new SourceControlRepositoryPin(
+            "source-pin-app-test",
+            acceptedRun,
+            binding,
+            new SourceControlRepositoryIdentity("octo", "repo"),
+            apiCredential: null,
+            checkoutCredential: null,
+            webhookCredential: null,
+            123,
+            "main",
+            isPrivate: false,
+            DateTimeOffset.Parse("2026-10-07T08:00:00Z"),
+            githubAppBinding);
+    }
+
+    private static async Task AssertGitHubAppPartialBindingsRejectedAsync(
+        NpgsqlDataSource dataSource,
+        string schema,
+        string projectId,
+        string runId)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync();
+        foreach (var nullColumn in new[]
+                 {
+                     "github_app_connection_id",
+                     "github_app_connection_revision",
+                     "github_app_installation_id",
+                     "github_app_permission_digest",
+                     "github_app_selection_hash"
+                 })
+        {
+            await using var transaction = await connection.BeginTransactionAsync();
+            await using (var disableImmutableTrigger = new NpgsqlCommand(
+                             $"ALTER TABLE \"{schema}\".source_control_repository_pins " +
+                             "DISABLE TRIGGER source_control_repository_pins_immutable",
+                             connection,
+                             transaction))
+            {
+                await disableImmutableTrigger.ExecuteNonQueryAsync();
+            }
+            await using (var completeBinding = new NpgsqlCommand($"""
+                UPDATE "{schema}".source_control_repository_pins
+                SET api_secret_id = NULL,
+                    api_secret_version = NULL,
+                    github_app_connection_id = 'test-app-connection',
+                    github_app_connection_revision = 1,
+                    github_app_installation_id = 456,
+                    github_app_permission_digest = repeat('a', 64),
+                    github_app_selection_hash = repeat('b', 64)
+                WHERE project_id = @project AND run_id = @run
+                """, connection, transaction))
+            {
+                completeBinding.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+                completeBinding.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
+                Assert.Equal(1, await completeBinding.ExecuteNonQueryAsync());
+            }
+
+            var nullAppConnectionId = nullColumn == "github_app_connection_id";
+            var violatingUpdate = new NpgsqlCommand($"""
+                UPDATE "{schema}".source_control_repository_pins
+                SET {(nullAppConnectionId ? "api_secret_id = 'legacy-api', api_secret_version = 'legacy-version', " : string.Empty)}
+                    {nullColumn} = NULL
+                WHERE project_id = @project AND run_id = @run
+                """, connection, transaction);
+            violatingUpdate.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+            violatingUpdate.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
+            var error = await Assert.ThrowsAsync<PostgresException>(
+                () => violatingUpdate.ExecuteNonQueryAsync());
+            Assert.Equal("ck_source_control_pin_app_binding_complete", error.ConstraintName);
+            await transaction.RollbackAsync();
+        }
     }
 
     private static (CoordinatorDecisionState State, CoordinatorAssemblyRequestSnapshot Assembly)

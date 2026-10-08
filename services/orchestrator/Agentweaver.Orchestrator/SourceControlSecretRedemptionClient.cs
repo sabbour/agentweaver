@@ -19,6 +19,7 @@ internal sealed record GitHubAppInstallationBindingMetadata(
     string DefaultBranch,
     bool IsPrivate,
     string PermissionDigest,
+    bool IssueWriteGranted,
     string SelectionHash);
 
 internal sealed class SourceControlSecretRedemptionOptions
@@ -135,6 +136,7 @@ internal sealed class SourceControlSecretRedemptionClient(
         string connectionId,
         string selectionCode,
         string expectedRepositoryFullName,
+        bool issueWriteRequested,
         Func<SecretCredential, GitHubAppInstallationBindingMetadata, CancellationToken, Task<T>> operation,
         CancellationToken cancellationToken) =>
         WithGitHubAppCredentialAsync(
@@ -144,6 +146,7 @@ internal sealed class SourceControlSecretRedemptionClient(
             selectionCode,
             binding: null,
             repositoryId: null,
+            issueWriteRequested,
             expectedRepositoryFullName,
             operation,
             cancellationToken);
@@ -167,6 +170,7 @@ internal sealed class SourceControlSecretRedemptionClient(
             selectionCode: null,
             binding,
             repositoryId,
+            binding.IssueWriteGranted,
             expectedRepositoryFullName,
             operation,
             cancellationToken);
@@ -179,6 +183,7 @@ internal sealed class SourceControlSecretRedemptionClient(
         string? selectionCode,
         SourceControlGitHubAppBinding? binding,
         long? repositoryId,
+        bool issueWriteRequested,
         string expectedRepositoryFullName,
         Func<SecretCredential, GitHubAppInstallationBindingMetadata, CancellationToken, Task<T>> operation,
         CancellationToken cancellationToken)
@@ -199,6 +204,7 @@ internal sealed class SourceControlSecretRedemptionClient(
             binding?.InstallationId,
             repositoryId,
             binding?.PermissionDigest,
+            issueWriteRequested,
             expectedRepositoryFullName);
         var bearer = CoordinationIdentity.RequireBearer(context);
         using var request = new HttpRequestMessage(
@@ -215,8 +221,18 @@ internal sealed class SourceControlSecretRedemptionClient(
                 request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             if (response.StatusCode != HttpStatusCode.OK)
             {
-                var identityError = await ReadAppTokenErrorAsync(response.Content, cancellationToken)
-                    .ConfigureAwait(false);
+                string? identityError;
+                try
+                {
+                    identityError = await ReadAppTokenErrorAsync(response.Content, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (JsonException) when (
+                    response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                {
+                    identityError = null;
+                }
+
                 if (identityError is not null &&
                     TryMapIdentityAppTokenError(identityError, out var errorStatus))
                     throw new CoordinationException(identityError, errorStatus);
@@ -244,12 +260,14 @@ internal sealed class SourceControlSecretRedemptionClient(
                     StringComparison.OrdinalIgnoreCase) ||
                 string.IsNullOrWhiteSpace(result.DefaultBranch) ||
                 !IsSha256Hash(result.PermissionDigest) ||
+                result.IssueWriteGranted != issueWriteRequested ||
                 !string.Equals(result.SelectionHash, selectionHash, StringComparison.Ordinal) ||
                 binding is not null &&
                     (result.ConnectionRevision != binding.IdentityConnectionRevision ||
                      result.InstallationId != binding.InstallationId ||
                      result.RepositoryId != repositoryId ||
-                     !string.Equals(result.PermissionDigest, binding.PermissionDigest, StringComparison.Ordinal)))
+                    result.IssueWriteGranted != binding.IssueWriteGranted ||
+                    !string.Equals(result.PermissionDigest, binding.PermissionDigest, StringComparison.Ordinal)))
                 throw new CoordinationException(
                     "source_control_installation_token_contract_invalid", StatusCodes.Status502BadGateway);
 
@@ -263,6 +281,7 @@ internal sealed class SourceControlSecretRedemptionClient(
                 result.DefaultBranch,
                 result.IsPrivate,
                 result.PermissionDigest,
+                result.IssueWriteGranted,
                 result.SelectionHash);
             ValidateCaller(context, acceptedRun);
             return await operation(credential, metadata, cancellationToken).ConfigureAwait(false);
@@ -447,6 +466,7 @@ internal sealed class SourceControlSecretRedemptionClient(
             "permissions_changed" or "connection_unavailable" or
                 "connection_revoked" or "rotation_uncertain" => StatusCodes.Status409Conflict,
             "refresh_in_progress" => StatusCodes.Status503ServiceUnavailable,
+            "capability_unavailable" => StatusCodes.Status503ServiceUnavailable,
             "provider_unavailable" or "installation_token_unavailable" or
                 "app_key_unavailable" => StatusCodes.Status502BadGateway,
             "repository_unavailable" => StatusCodes.Status404NotFound,
@@ -507,6 +527,7 @@ internal sealed class SourceControlSecretRedemptionClient(
         string DefaultBranch,
         bool IsPrivate,
         string PermissionDigest,
+        bool IssueWriteGranted,
         string SelectionHash);
 
     private sealed record GitHubAppInstallationTokenInput(
@@ -517,5 +538,6 @@ internal sealed class SourceControlSecretRedemptionClient(
         long? InstallationId,
         long? RepositoryId,
         string? PermissionDigest,
+        bool IssueWriteRequested,
         string ExpectedRepositoryFullName);
 }

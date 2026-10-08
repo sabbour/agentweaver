@@ -2,12 +2,14 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Data.Common;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
 using Xunit;
 
@@ -221,7 +223,7 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
             "project-one",
             "run-one",
             new GitHubRepoAppInstallationTokenRequest(
-                selection.Code, null, browser.ConnectionId, null, null, null, null, "octo/widget"),
+                selection.Code, null, browser.ConnectionId, null, null, null, null, false, "octo/widget"),
             grantAuthority,
             tokenIssuer,
             CancellationToken.None);
@@ -233,8 +235,10 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
         firstMint.Credential.Credential.Invalidate();
         var permissionDigest = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
             "github-app-permissions-v1\ncontents:write\nmetadata:read\npull_requests:write")));
-        Assert.Equal(permissionDigest, (await db.RepoAppRepositorySelections.AsNoTracking().SingleAsync())
-            .PermissionDigest);
+        var acceptedSelection = await db.RepoAppRepositorySelections.AsNoTracking().SingleAsync();
+        Assert.False(acceptedSelection.IssueWriteRequested);
+        Assert.False(firstMint.Credential.IssueWriteGranted);
+        Assert.Equal(permissionDigest, acceptedSelection.PermissionDigest);
 
         var crossProject = await Assert.ThrowsAsync<GitHubRepoAppConnectionException>(() =>
             service.MintInstallationTokenAsync(
@@ -249,11 +253,33 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
                     456,
                     789,
                     permissionDigest,
+                    false,
                     "octo/widget"),
                 grantAuthority,
                 tokenIssuer,
                 CancellationToken.None));
         Assert.Equal(GitHubRepoAppConnectionFailure.RepositoryUnavailable, crossProject.Failure);
+        Assert.Equal(1, appMintRequests);
+
+        var scopeExpansion = await Assert.ThrowsAsync<GitHubRepoAppConnectionException>(() =>
+            service.MintInstallationTokenAsync(
+                ownerId,
+                "project-one",
+                "run-one",
+                new GitHubRepoAppInstallationTokenRequest(
+                    null,
+                    selectionHash,
+                    browser.ConnectionId,
+                    browser.ConnectionRevision,
+                    456,
+                    789,
+                    permissionDigest,
+                    true,
+                    "octo/widget"),
+                grantAuthority,
+                tokenIssuer,
+                CancellationToken.None));
+        Assert.Equal(GitHubRepoAppConnectionFailure.RepositoryUnavailable, scopeExpansion.Failure);
         Assert.Equal(1, appMintRequests);
 
         var sameProjectMint = await service.MintInstallationTokenAsync(
@@ -268,6 +294,7 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
                 456,
                 789,
                 permissionDigest,
+                false,
                 "octo/widget"),
             grantAuthority,
             tokenIssuer,
@@ -290,6 +317,7 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
                     456,
                     789,
                     permissionDigest,
+                    false,
                     "octo/widget"),
                 grantAuthority,
                 tokenIssuer,
@@ -297,11 +325,45 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
         Assert.Equal(GitHubRepoAppConnectionFailure.PermissionsChanged, permissionChange.Failure);
         Assert.Equal(3, appMintRequests);
 
+        var expiredSelection = await service.CreateRepositorySelectionAsync(
+            ownerId, 456, 789, CancellationToken.None);
+        var expiredSelectionHash = Convert.ToHexStringLower(SHA256.HashData(
+            Encoding.UTF8.GetBytes(expiredSelection.Code)));
+        await db.RepoAppRepositorySelections
+            .Where(item => item.CodeHash == expiredSelectionHash)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.CreatedAt, Now.AddMinutes(-2))
+                .SetProperty(item => item.ExpiresAt, Now.AddTicks(-1)));
+        var expiredSelectionAttempt = await Assert.ThrowsAsync<GitHubRepoAppConnectionException>(() =>
+            service.MintInstallationTokenAsync(
+                ownerId,
+                "project-one",
+                "run-one",
+                new GitHubRepoAppInstallationTokenRequest(
+                    expiredSelection.Code,
+                    null,
+                    browser.ConnectionId,
+                    null,
+                    null,
+                    null,
+                    null,
+                    false,
+                    "octo/widget"),
+                grantAuthority,
+                tokenIssuer,
+                CancellationToken.None));
+        Assert.Equal(
+            GitHubRepoAppConnectionFailure.RepositoryUnavailable,
+            expiredSelectionAttempt.Failure);
+        Assert.Equal(3, appMintRequests);
+
         Assert.Equal(
             ["/user",
              "/user/installations?per_page=100&page=1",
              "/user/installations/456/repositories?per_page=100&page=1",
-            "/user/installations?per_page=100&page=1",
+             "/user/installations?per_page=100&page=1",
+             "/user/installations/456/repositories?per_page=100&page=1",
+             "/user/installations?per_page=100&page=1",
              "/user/installations/456/repositories?per_page=100&page=1",
              "/user/installations?per_page=100&page=1",
              "/user/installations/456/repositories?per_page=100&page=1",
@@ -322,6 +384,53 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
         Assert.Contains(("github-app-private-key", "key-version-1",
             SourceControlSecretPurposes.GitHubAppPrivateKey, "run-one"),
             secretRedemption.Requests);
+
+        var syncPause = new RepositorySyncPauseInterceptor();
+        var syncDbOptions = new DbContextOptionsBuilder<IdentityBrokerDbContext>()
+            .UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history", IdentityBrokerDbContext.Schema))
+            .AddInterceptors(syncPause)
+            .Options;
+        await using var syncDb = new IdentityBrokerDbContext(syncDbOptions);
+        var syncService = new GitHubRepoAppConnectionService(
+            syncDb,
+            options,
+            provider,
+            secretWriter,
+            secretRedemption,
+            new EphemeralDataProtectionProvider(),
+            time);
+        var browserTask = syncService.ListRepositoriesAsync(ownerId, CancellationToken.None);
+        try
+        {
+            await syncPause.PreSyncConnectionRead.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await using var disconnectDb = new IdentityBrokerDbContext(dbOptions);
+            var disconnectService = new GitHubRepoAppConnectionService(
+                disconnectDb,
+                options,
+                provider,
+                secretWriter,
+                secretRedemption,
+                new EphemeralDataProtectionProvider(),
+                time);
+            var disconnected = await disconnectService.DisconnectAsync(
+                ownerId, connection.ConnectionId, connection.ConnectionRevision, CancellationToken.None);
+            Assert.Equal("revoked", disconnected.State);
+        }
+        finally
+        {
+            syncPause.Resume.TrySetResult();
+        }
+
+        var synchronizationFailure = await Assert.ThrowsAsync<GitHubRepoAppConnectionException>(
+            () => browserTask);
+        Assert.Equal(GitHubRepoAppConnectionFailure.Revoked, synchronizationFailure.Failure);
+        await using var verifyDb = new IdentityBrokerDbContext(dbOptions);
+        Assert.Equal(
+            RepoAppConnectionState.Revoked,
+            (await verifyDb.RepoAppConnections.AsNoTracking().SingleAsync()).State);
+        var revokedInstallation = await verifyDb.RepoAppInstallations.AsNoTracking().SingleAsync();
+        Assert.NotNull(revokedInstallation.RevokedAt);
     }
 
     [Fact]
@@ -455,8 +564,11 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
         Assert.Equal(2, finalConnection.CredentialRevision);
     }
 
-    [Fact]
-    public async Task UncertainRefreshOutcomeLocksConnectionWithoutRetryingRotation()
+    [Theory]
+    [InlineData("{malformed-refresh-response")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    public async Task UncertainRefreshOutcomeLocksConnectionWithoutRetryingRotation(string refreshResponse)
     {
         var connectionString = await postgres.CreateMigratedDatabaseAsync();
         await using var dataSource = NpgsqlDataSource.Create(connectionString);
@@ -499,7 +611,7 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
-                    "{malformed-refresh-response", Encoding.UTF8, "application/json")
+                    refreshResponse, Encoding.UTF8, "application/json")
             });
         });
         var apiHandler = new StubHandler((_, _) =>
@@ -628,6 +740,35 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
             HttpRequestMessage request,
             CancellationToken cancellationToken) =>
             send(request, cancellationToken);
+    }
+
+    private sealed class RepositorySyncPauseInterceptor : DbCommandInterceptor
+    {
+        private int _paused;
+
+        public TaskCompletionSource PreSyncConnectionRead { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Resume { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<DbDataReader> ReaderExecutedAsync(
+            DbCommand command,
+            CommandExecutedEventData eventData,
+            DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (command.CommandText.Contains("repo_app_connections", StringComparison.Ordinal) &&
+                command.CommandText.Contains("connection_id", StringComparison.Ordinal) &&
+                !command.CommandText.Contains("FOR UPDATE", StringComparison.Ordinal) &&
+                Interlocked.CompareExchange(ref _paused, 1, 0) == 0)
+            {
+                PreSyncConnectionRead.TrySetResult();
+                await Resume.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            return result;
+        }
     }
 
     private sealed class FrozenTimeProvider(DateTimeOffset now) : TimeProvider

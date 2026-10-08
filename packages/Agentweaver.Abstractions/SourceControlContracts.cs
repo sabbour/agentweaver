@@ -103,8 +103,7 @@ public sealed record SourceControlProjectSettings
         SecretRef? checkoutSecretReference = null,
         SecretRef? webhookSecretReference = null,
         SourceControlAuthMode? authMode = null,
-        string? identityConnectionId = null,
-        string? identityRepositorySelectionCode = null)
+        string? identityConnectionId = null)
     {
         Repository = repository ?? throw new ArgumentNullException(nameof(repository));
         if (authMode is not null and not (SourceControlAuthMode.Secret or SourceControlAuthMode.GitHubApp))
@@ -112,8 +111,6 @@ public sealed record SourceControlProjectSettings
         AuthMode = authMode;
         IdentityConnectionId = ValidateConnectionBinding(
             authMode, apiSecretReference, checkoutSecretReference, identityConnectionId);
-        IdentityRepositorySelectionCode = ValidateRepositorySelectionCode(
-            authMode, identityRepositorySelectionCode);
         ApiSecretReference = apiSecretReference;
         CheckoutSecretReference = checkoutSecretReference;
         WebhookSecretReference = webhookSecretReference;
@@ -126,9 +123,6 @@ public sealed record SourceControlProjectSettings
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IdentityConnectionId { get; }
-
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? IdentityRepositorySelectionCode { get; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SecretRef? ApiSecretReference { get; }
@@ -170,27 +164,6 @@ public sealed record SourceControlProjectSettings
         return null;
     }
 
-    private static string? ValidateRepositorySelectionCode(
-        SourceControlAuthMode? authMode,
-        string? selectionCode)
-    {
-        if (authMode == SourceControlAuthMode.GitHubApp)
-        {
-            if (selectionCode is null ||
-                selectionCode.Length != 64 ||
-                !selectionCode.All(Uri.IsHexDigit))
-                throw new ArgumentException(
-                    "GitHub App settings require an exact Identity repository-selection code.",
-                    nameof(selectionCode));
-            return selectionCode.ToLowerInvariant();
-        }
-
-        if (selectionCode is not null)
-            throw new ArgumentException(
-                "Identity repository-selection codes are valid only for GitHub App SourceControl settings.",
-                nameof(selectionCode));
-        return null;
-    }
 }
 
 public sealed record SourceControlRepositoryNegotiation(

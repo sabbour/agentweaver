@@ -180,7 +180,7 @@ caller cannot submit a resource pin or override the durable binding.
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/propose_outcome_spec` | Propose a schema-validated outcome specification. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/select_workflow` | Select a workflow from the authorized catalog or submit a generated definition for confirmation. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/actions/propose_work_plan` | Validate a plan against the selected workflow, current role/model eligibility, and the accepted Sandbox binding before opening its confirmation gate. |
-| `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/pin` | Resolve the exact Source Control provider and repository from the accepted selection, redeem its API SecretRef, then persist the immutable resource pin after fresh Projects/Core checks. |
+| `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/pin` | Legacy secret mode accepts the existing bodyless request and redeems its API SecretRef. GitHub App mode accepts only `{"selectionCode":"<64 lowercase hex>"}`; it consumes the code for the initial run-bound pin and persists only its hash, never the code in project/run configuration or the pin response. First pin returns `202` with `SourceControlRepositoryPinView`; an exact existing pin returns `200`. Both paths recheck fresh Projects/Core authority. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents` | Read current PR facts from the pinned provider, persist an immutable merge request, then open typed Approval for that exact intent and accepted Merge step. |
 | `GET /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}` | Read an owner-bound merge intent without exposing credential values or transferable authority. |
 | `POST /api/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents/{intentId}/execute` | Execute only through the current source-specific grant and existing action guard, under a repository-scoped lock and exact-head/check preflight. The expected base is a fresh preflight, not an atomic compare-and-swap. |
@@ -379,13 +379,22 @@ These routes belong to the unpublished Identity broker candidate. They are servi
 | `POST /secrets/redeem` | Validated bearer and exact secret ID, version, purpose, and run ID. |
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL connectivity. |
-| `GET /auth/github/repo-app/csrf` | Return a no-store antiforgery token for the local-cookie GitHub Repo App connection routes. |
+| `GET /auth/github/repo-app/csrf` | Return no-store `{"csrf_token":"…"}` and set the antiforgery cookie for local-cookie Repo App routes. JSON POSTs send the token in `X-CSRF-TOKEN` with credentials included; same-origin form POSTs use the default `__RequestVerificationToken` field. |
 | `POST /auth/github/repo-app/connect` | Require the local Identity cookie and antiforgery token, create owner-bound PKCE state, set the callback cookie, and redirect to GitHub OAuth. |
 | `POST /auth/github/repo-app/install` | Require the local Identity cookie and antiforgery token, then start an owner-bound GitHub App installation callback. |
-| `GET /auth/github/repo-app/callback` | Complete the single-use user OAuth or installation callback using the local owner, state, and callback cookie; responses are no-store. |
-| `GET /auth/github/repo-app/repositories` | Discover installations and repositories available to the connected GitHub user; response is no-store. |
-| `POST /auth/github/repo-app/selection` | Require local-cookie owner and antiforgery validation; return a short-lived, one-time repository-selection code for the selected installation/repository. |
-| `POST /internal/source-control/github-app/installations/token` | Validate the run-bound Broker bearer and active grant, recheck current connection, installation, repository and permission binding, and return an ephemeral exact-repository token to Orchestrator. Response is no-store. |
+| `GET /auth/github/repo-app/callback?state=…&code=…[&installation_id=…][&setup_action=…]` | Complete the single-use user OAuth or installation callback using the local owner, state, and callback cookie; clear the cookie and redirect to the settings page on success. Responses are no-store. |
+| `GET /auth/github/repo-app/status` | Return no-store status `{state,localReadiness,connectionId,connectionRevision,githubLogin,accessTokenExpiresAt,updatedAt}`. `state`: `not_connected`, `connected`, `revoked`, `rotation_uncertain`; `localReadiness`: `not_connected`, `access_token_available`, `refresh_required`, `refresh_in_progress`, `reauthorization_required`, `rotation_uncertain`. Status reads persisted state and does not probe GitHub. |
+| `POST /auth/github/repo-app/disconnect` | Require local-cookie owner and antiforgery; body `{"connectionId":"…","expectedConnectionRevision":1}`. Returns the status DTO after revoking the local connection and cached installation records; it does not uninstall the GitHub App remotely. |
+| `GET /auth/github/repo-app/repositories` | Discover installations and repositories available to the connected GitHub user; no-store response `{connectionId,connectionRevision,githubLogin,repositories:[{installationId,repositoryId,fullName,ownerLogin,isPrivate,defaultBranch}]}`. |
+| `POST /auth/github/repo-app/selection` | Require local-cookie owner and antiforgery; body `{"installationId":123,"repositoryId":456}`. Return no-store `{code,connectionId,connectionRevision,installationId,repositoryId,repositoryFullName}` with a short-lived, one-time code for that exact repository. |
+| `POST /internal/source-control/github-app/installations/token` | Validate the run-bound Broker bearer and active grant, recheck current connection, installation, repository, selection and permission binding, and return a no-store ephemeral exact-repository token to Orchestrator. Its permission digest is derived from GitHub's actual response; `IssueWriteGranted` is true only when the response confirms `issues:write`. A requested but ungranted `issues:write` fails closed; a 422 never causes a narrower retry, and remints preserve the accepted scope/digest. |
+
+`connectionRevision`, `installationId`, and `repositoryId` are positive signed Int64
+values; the selection route rejects nonpositive installation and repository IDs.
+`connectionId` is a string. The durable Source Control pin exposes `pinId`,
+`repository`, `providerId`, `resourceId`, `resourceGeneration`,
+`providerRepositoryId`, `defaultBranch`, `isPrivate`, and `pinnedAt`; it does not
+expose the selection code or any credential value.
 
 The service has no secret-grant administration HTTP endpoint. The browser consent UI is not implemented.
 The Repo App routes are mapped only when the optional `IdentityBroker:GitHubRepoApp`

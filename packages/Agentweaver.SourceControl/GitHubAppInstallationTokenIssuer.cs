@@ -12,11 +12,13 @@ namespace Agentweaver.SourceControl;
 
 public sealed record GitHubAppInstallationCredential(
     SecretCredential Credential,
-    string PermissionDigest);
+    string PermissionDigest,
+    bool IssueWriteGranted);
 
 public sealed class GitHubAppInstallationTokenIssuer
 {
     private const string GitHubApiVersion = "2022-11-28";
+    private const int MaximumResponseBytes = 64 * 1024;
     private readonly HttpClient _httpClient;
     private readonly long _appId;
     private readonly TimeProvider _timeProvider;
@@ -40,10 +42,92 @@ public sealed class GitHubAppInstallationTokenIssuer
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    private async Task<HttpResponseMessage> SendTokenRequestAsync(
+        long installationId,
+        long repositoryId,
+        string appJwt,
+        bool issueWriteRequested,
+        CancellationToken cancellationToken)
+    {
+        var permissions = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["contents"] = "write",
+            ["pull_requests"] = "write"
+        };
+        if (issueWriteRequested)
+            permissions["issues"] = "write";
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"app/installations/{installationId.ToString(CultureInfo.InvariantCulture)}/access_tokens");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", appJwt);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        request.Headers.Add("X-GitHub-Api-Version", GitHubApiVersion);
+        request.Content = JsonContent.Create(new
+        {
+            repository_ids = new[] { repositoryId },
+            permissions
+        });
+        return await _httpClient.SendAsync(
+            request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<GitHubAppInstallationCredential> ReadCredentialAsync(
+        HttpResponseMessage response,
+        bool issueWriteRequested,
+        CancellationToken cancellationToken)
+    {
+        if (!response.IsSuccessStatusCode)
+            throw CreateResponseException(response.StatusCode, issueWriteRequested);
+
+        try
+        {
+            using var document = await ReadDocumentAsync(response.Content, cancellationToken)
+                .ConfigureAwait(false);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("token", out var tokenElement) ||
+                tokenElement.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(tokenElement.GetString()) ||
+                !root.TryGetProperty("expires_at", out var expiryElement) ||
+                expiryElement.ValueKind != JsonValueKind.String ||
+                !expiryElement.TryGetDateTimeOffset(out var expiresAt) ||
+                !root.TryGetProperty("permissions", out var permissionsElement))
+                throw new JsonException("The GitHub installation-token response was incomplete or invalid.");
+            var permissions = ReadPermissions(permissionsElement, issueWriteRequested);
+            if (expiresAt <= _timeProvider.GetUtcNow())
+                throw new JsonException("The GitHub installation-token response was expired.");
+
+            var issueWriteGranted =
+                permissions.TryGetValue("issues", out var issuePermission) && issuePermission == "write";
+            var credential = new SecretCredential(tokenElement.GetString()!, expiresAt, _timeProvider);
+            if (issueWriteRequested && !issueWriteGranted)
+            {
+                credential.Invalidate();
+                throw new SourceControlOperationException(
+                    SourceControlFailureCode.CapabilityUnavailable,
+                    "GitHub did not grant the requested issues:write permission.",
+                    response.StatusCode);
+            }
+
+            return new GitHubAppInstallationCredential(
+                credential, ComputePermissionDigest(permissions), issueWriteGranted);
+        }
+        catch (JsonException exception)
+        {
+            throw new SourceControlOperationException(
+                SourceControlFailureCode.RemoteOutcomeUncertain,
+                "GitHub may have minted an installation token, but its response was unusable.",
+                response.StatusCode,
+                exception);
+        }
+    }
+
     public async Task<GitHubAppInstallationCredential> MintAsync(
         long installationId,
         long repositoryId,
         SecretCredential appPrivateKey,
+        bool issueWriteRequested,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(appPrivateKey);
@@ -55,52 +139,11 @@ public sealed class GitHubAppInstallationTokenIssuer
         try
         {
             var appJwt = CreateAppJwt(appPrivateKey);
-            using var request = new HttpRequestMessage(
-                HttpMethod.Post,
-                $"app/installations/{installationId.ToString(CultureInfo.InvariantCulture)}/access_tokens");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", appJwt);
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-            request.Headers.Add("X-GitHub-Api-Version", GitHubApiVersion);
-            request.Content = JsonContent.Create(new
-            {
-                repository_ids = new[] { repositoryId },
-                permissions = new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["contents"] = "write",
-                    ["pull_requests"] = "write"
-                }
-            });
-
-            using var response = await _httpClient.SendAsync(
-                request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
-                throw CreateResponseException(response.StatusCode);
-
-            try
-            {
-                await using var content = await response.Content.ReadAsStreamAsync(cancellationToken)
-                    .ConfigureAwait(false);
-                using var document = await JsonDocument.ParseAsync(
-                    content, cancellationToken: cancellationToken).ConfigureAwait(false);
-                var root = document.RootElement;
-                var token = root.GetProperty("token").GetString();
-                var expiresAt = root.GetProperty("expires_at").GetDateTimeOffset();
-                var permissions = ReadPermissions(root.GetProperty("permissions"));
-                if (string.IsNullOrEmpty(token) || expiresAt <= _timeProvider.GetUtcNow())
-                    throw new JsonException("The GitHub response omitted a usable token or expiry.");
-
-                return new GitHubAppInstallationCredential(
-                    new SecretCredential(token, expiresAt, _timeProvider),
-                    ComputePermissionDigest(permissions));
-            }
-            catch (JsonException exception)
-            {
-                throw new SourceControlOperationException(
-                    SourceControlFailureCode.RemoteOutcomeUncertain,
-                    "GitHub may have minted an installation token, but its response was unusable.",
-                    response.StatusCode,
-                    exception);
-            }
+            using var response = await SendTokenRequestAsync(
+                installationId, repositoryId, appJwt, issueWriteRequested, cancellationToken)
+                .ConfigureAwait(false);
+            return await ReadCredentialAsync(
+                response, issueWriteRequested, cancellationToken).ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
         {
@@ -121,6 +164,33 @@ public sealed class GitHubAppInstallationTokenIssuer
         {
             appPrivateKey.Invalidate();
         }
+    }
+
+    private static async Task<JsonDocument> ReadDocumentAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        if (content.Headers.ContentLength is > MaximumResponseBytes)
+            throw new JsonException("The GitHub installation-token response exceeded the permitted size.");
+
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[8192];
+        while (true)
+        {
+            var read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+                break;
+            if (buffer.Length + read > MaximumResponseBytes)
+                throw new JsonException("The GitHub installation-token response exceeded the permitted size.");
+            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+        }
+
+        var document = JsonDocument.Parse(buffer.GetBuffer().AsMemory(0, checked((int)buffer.Length)));
+        if (document.RootElement.ValueKind == JsonValueKind.Object)
+            return document;
+        document.Dispose();
+        throw new JsonException("The GitHub installation-token response was not a JSON object.");
     }
 
     private string CreateAppJwt(SecretCredential appPrivateKey)
@@ -160,7 +230,9 @@ public sealed class GitHubAppInstallationTokenIssuer
         }
     }
 
-    private static ImmutableSortedDictionary<string, string> ReadPermissions(JsonElement permissionsElement)
+    private static ImmutableSortedDictionary<string, string> ReadPermissions(
+        JsonElement permissionsElement,
+        bool issueWriteRequested)
     {
         if (permissionsElement.ValueKind != JsonValueKind.Object)
             throw new JsonException("The GitHub response permissions were invalid.");
@@ -174,6 +246,7 @@ public sealed class GitHubAppInstallationTokenIssuer
             var permittedLevel = permission.Name switch
             {
                 "contents" or "pull_requests" => level is "read" or "write",
+                "issues" => issueWriteRequested && (level is "read" or "write"),
                 "metadata" => level == "read",
                 _ => false
             };
@@ -195,9 +268,16 @@ public sealed class GitHubAppInstallationTokenIssuer
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
-    private static SourceControlOperationException CreateResponseException(HttpStatusCode statusCode) =>
+    private static SourceControlOperationException CreateResponseException(
+        HttpStatusCode statusCode,
+        bool issueWriteRequested) =>
         statusCode switch
         {
+            HttpStatusCode.UnprocessableEntity when issueWriteRequested =>
+                new SourceControlOperationException(
+                    SourceControlFailureCode.CapabilityUnavailable,
+                    "GitHub rejected the requested issues:write permission.",
+                    statusCode),
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
                 new SourceControlOperationException(
                     SourceControlFailureCode.PermissionDenied,

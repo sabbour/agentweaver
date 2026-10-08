@@ -479,6 +479,12 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("installation_id");
 
+                    b.Property<bool>("IssueWriteRequested")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("issue_write_requested");
+
                     b.Property<Guid>("OwnerId")
                         .HasColumnType("uuid")
                         .HasColumnName("owner_id");

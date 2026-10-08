@@ -448,7 +448,14 @@ internal sealed class GitHubRepoAppProviderClient
 
         try
         {
-            return JsonDocument.Parse(bounded.GetBuffer().AsMemory(0, checked((int)bounded.Length)));
+            var document = JsonDocument.Parse(bounded.GetBuffer().AsMemory(0, checked((int)bounded.Length)));
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                document.Dispose();
+                throw InvalidResponse("GitHub returned a response that was not a JSON object.");
+            }
+
+            return document;
         }
         catch (JsonException exception)
         {

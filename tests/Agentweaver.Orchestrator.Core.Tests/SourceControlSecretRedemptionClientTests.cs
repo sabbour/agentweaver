@@ -160,6 +160,7 @@ public sealed class SourceControlSecretRedemptionClientTests
                     defaultBranch = "main",
                     isPrivate = true,
                     permissionDigest,
+                    issueWriteGranted = true,
                     selectionHash
                 })
             };
@@ -177,6 +178,7 @@ public sealed class SourceControlSecretRedemptionClientTests
             "connection-1",
             selectionCode,
             "octo/widget",
+            issueWriteRequested: true,
             (credential, binding, _) =>
             {
                 selectionCredential = credential;
@@ -205,7 +207,8 @@ public sealed class SourceControlSecretRedemptionClientTests
             selected.ConnectionRevision,
             selected.InstallationId,
             selected.PermissionDigest,
-            selected.SelectionHash);
+            selected.SelectionHash,
+            selected.IssueWriteGranted);
         SecretCredential? apiCredential = null;
         var apiResult = await client.WithGitHubAppCredentialAsync(
             CallerContext(includeBrokerAudience: true),
@@ -254,6 +257,7 @@ public sealed class SourceControlSecretRedemptionClientTests
             Assert.Equal(456L, pinnedRequest.GetProperty("installationId").GetInt64());
             Assert.Equal(789L, pinnedRequest.GetProperty("repositoryId").GetInt64());
             Assert.Equal(permissionDigest, pinnedRequest.GetProperty("permissionDigest").GetString());
+            Assert.True(pinnedRequest.GetProperty("issueWriteRequested").GetBoolean());
         }
     }
 
@@ -266,6 +270,7 @@ public sealed class SourceControlSecretRedemptionClientTests
         string errorCode,
         int expectedStatus)
     {
+        var operationCalled = false;
         var handler = new AppTokenRecordingHandler(_ => Task.FromResult(new HttpResponseMessage(responseStatus)
         {
             Content = JsonContent(new { error = errorCode })
@@ -280,11 +285,55 @@ public sealed class SourceControlSecretRedemptionClientTests
                 "connection-1",
                 new string('b', 64),
                 "octo/widget",
-                (_, _, _) => Task.FromResult(true),
+                issueWriteRequested: false,
+                (_, _, _) =>
+                {
+                    operationCalled = true;
+                    return Task.FromResult(true);
+                },
                 CancellationToken.None));
 
         Assert.Equal(errorCode, exception.Code);
         Assert.Equal(expectedStatus, exception.StatusCode);
+        Assert.False(operationCalled);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, "")]
+    [InlineData(HttpStatusCode.Unauthorized, "<html>unauthorized</html>")]
+    [InlineData(HttpStatusCode.Forbidden, "")]
+    [InlineData(HttpStatusCode.Forbidden, "<html>forbidden</html>")]
+    public async Task PreservesNativeIdentityDenialWhenBodyIsNotAnAllowListedError(
+        HttpStatusCode responseStatus,
+        string body)
+    {
+        var operationCalled = false;
+        var handler = new AppTokenRecordingHandler(_ => Task.FromResult(
+            new HttpResponseMessage(responseStatus)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "text/html")
+            }));
+        using var httpClient = new HttpClient(handler);
+        var client = new SourceControlSecretRedemptionClient(httpClient, Options(), TimeProvider.System);
+
+        var exception = await Assert.ThrowsAsync<CoordinationException>(() =>
+            client.WithGitHubAppSelectionCredentialAsync(
+                CallerContext(includeBrokerAudience: true),
+                AcceptedRun(),
+                "connection-1",
+                new string('b', 64),
+                "octo/widget",
+                issueWriteRequested: false,
+                (_, _, _) =>
+                {
+                    operationCalled = true;
+                    return Task.FromResult(true);
+                },
+                CancellationToken.None));
+
+        Assert.Equal("source_control_secret_redemption_denied", exception.Code);
+        Assert.Equal(StatusCodes.Status403Forbidden, exception.StatusCode);
+        Assert.False(operationCalled);
     }
 
     [Fact]
@@ -304,6 +353,7 @@ public sealed class SourceControlSecretRedemptionClientTests
                 "connection-1",
                 new string('b', 64),
                 "octo/widget",
+                issueWriteRequested: false,
                 (_, _, _) => Task.FromResult(true),
                 CancellationToken.None));
 
