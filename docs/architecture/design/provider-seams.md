@@ -925,6 +925,27 @@ workspace routes. If it is absent, those routes return unavailable rather than u
 directory. Workspace diffs are bounded; absolute workspace paths are returned only to the authenticated
 run-scoped caller and are not persisted in owner records.
 
+Produced-run output capture is also owned by Source Control. The authenticated caller captures an
+existing bound workspace as one sealed Git tree: the requested base is `HEAD`, and tracked edits and
+untracked files in the resulting tree are included. The canonical manifest binds each safe relative
+path, Git mode, SHA-256 digest, and byte length; the bounded diff and packed file bytes are hashed as
+well. Limits are 10,000 files, 16 MiB per file, 64 MiB total file content, a 32 MiB manifest, and an
+8 MiB diff. This is a sealed tree capture, not an atomic filesystem snapshot.
+
+Source Control persists the capture proof as pending before sending the package to Events & Sessions.
+Events verifies the proof and package, stores the immutable package in Object Store, and appends the
+typed capture event to the session journal. The journal event ID and position are the provenance for
+the bytes; Source Control makes its owner record readable only after the exact acknowledgement is
+admitted. Replays must match the original proof and journal entry. A pending or unadmitted capture is
+not visible, and there is no fallback to the live workspace or a caller-supplied event ID.
+
+Capture is allowed only while the run is active, idle, or blocked. Authorized history reads recheck
+current Projects authority and accepted selection and fetch file bytes by the journal event ID,
+verifying journal position, package digest, manifest, and file digest before returning them. Completed
+runs remain readable; failed or indeterminate runs and pending captures are withheld as not found.
+The paged history and detail/diff/file routes support later retained-UI browsing; they do not add a
+browser UI or change the current UI surface.
+
 The authenticated run-bound webhook relay accepts raw payloads up to 1 MiB plus GitHub delivery, event,
 and signature headers. It verifies HMAC over those exact bytes, matches the repository name and provider ID
 to the immutable pin, refreshes Projects/Core authority, and records a durable repository-scoped delivery
@@ -934,12 +955,12 @@ delivery only; it does not start a workflow. The public GitHub POST path is deni
 because the base has no trusted relay identity; deployment and direct GitHub delivery remain unavailable
 until such a relay is separately approved and deployed.
 
-The pin, webhook, and merge owner flow is summarized below. It describes the unpublished source candidate,
-not a deployed service or public webhook endpoint.
+The pin, webhook, merge, and produced-output capture owner flow is summarized below. It describes the
+unpublished source candidate, not a deployed service or public webhook endpoint.
 
 <p align="center">
   <a href="../../diagrams/flagship/v1-source-control-owner-flow.png">
-    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration selects exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. The short-lived selection code is sent only in the initial run-scoped pin request; the durable pin keeps its hash and actual permission digest. Identity owns OAuth/install callbacks and run-bound exact-repository token mint; token and private-key values are not stored. IssueWrite is retained only when the returned permission map confirms issues:write. Typed operations and checkout use the pinned provider binding. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay." />
+    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration selects exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. The short-lived selection code is sent only in the initial run-scoped pin request; the durable pin keeps its hash and actual permission digest. Identity owns OAuth/install callbacks and run-bound exact-repository token mint; token and private-key values are not stored. IssueWrite is retained only when the returned permission map confirms issues:write. Typed operations and checkout use the pinned provider binding. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay. Produced-run output is sealed by Source Control, committed as a typed Events journal entry with package bytes in Object Store, and readable only through current-authority checks and journal-backed verification; completed-run history is retained while failed, indeterminate, and pending captures are withheld." />
   </a>
 </p>
 <p align="center" class="aw-diagram-links"><a href="../../diagrams/flagship/v1-source-control-owner-flow.png">Open full-size PNG</a> · <a href="../../diagrams/drawio/generated/flagship/v1-source-control-owner-flow.drawio">Open editable draw.io source</a></p>

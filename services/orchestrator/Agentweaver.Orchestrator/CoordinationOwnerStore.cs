@@ -1294,6 +1294,30 @@ internal sealed partial class CoordinationOwnerStore
             run.ExecutionReference);
     }
 
+    internal async Task<string> ReadCurrentExecutionStateAsync(
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        CoordinationIdentity.ValidateIdentity(projectId, nameof(projectId));
+        CoordinationIdentity.ValidateIdentity(runId, nameof(runId));
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            SELECT execution_state
+            FROM {_runs}
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        AddRunScope(command, projectId, runId);
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (value is not string state)
+            throw new CoordinationException(
+                "run_status_unavailable", StatusCodes.Status404NotFound);
+        if (state is not ("idle" or "active" or "blocked" or "completed" or "failed" or "indeterminate"))
+            throw new CoordinationException(
+                "run_status_unavailable", StatusCodes.Status503ServiceUnavailable);
+        return state;
+    }
+
     public async Task<SessionRuntimeOwnerState> ReadRuntimeOwnerStateAsync(
         CoordinationActor actor,
         SessionIdentity identity,

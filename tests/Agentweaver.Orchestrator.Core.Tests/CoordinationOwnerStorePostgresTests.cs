@@ -72,6 +72,9 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     [Fact]
     public async Task RootAndChildRegistrationsAreIdempotentAndWriterBound()
     {
+        Assert.Equal("idle", await _store.ReadCurrentExecutionStateAsync(
+            _root.ProjectId, _root.RunId, CancellationToken.None));
+
         var replay = await _store.AcceptRootAsync(
             _actor, _selection, _root.SessionId, CancellationToken.None);
         Assert.Equal(_acceptedRoot, replay);

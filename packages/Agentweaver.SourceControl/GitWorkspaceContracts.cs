@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 
 namespace Agentweaver.SourceControl;
@@ -10,7 +11,9 @@ public enum GitWorkspaceFailureCode
     CorruptWorkspace,
     GitUnavailable,
     GitFailed,
-    DiffTooLarge
+    DiffTooLarge,
+    CaptureTooLarge,
+    WorkspaceUnavailable
 }
 
 public sealed class GitWorkspaceException(
@@ -30,6 +33,13 @@ public sealed record GitWorkspaceRequest(
     string BaseSha,
     string BranchName);
 
+public sealed record GitWorkspaceCaptureRequest(
+    PinnedProviderBinding Binding,
+    SourceControlRepositoryIdentity Repository,
+    string WorkspaceId,
+    string BaseSha,
+    string BranchName);
+
 public sealed record GitWorkspace(
     string WorkspaceId,
     string RunId,
@@ -37,7 +47,8 @@ public sealed record GitWorkspace(
     long ResourceGeneration,
     string BaseSha,
     string BranchName,
-    string Path);
+    string Path,
+    Guid WorkspaceIncarnationId);
 
 public sealed record GitWorkspaceDiff(
     string WorkspaceId,
@@ -45,6 +56,24 @@ public sealed record GitWorkspaceDiff(
     string HeadSha,
     string Status,
     string Patch);
+
+public sealed record GitWorkspaceCapturedFile(
+    string Path,
+    string Mode,
+    string Sha256,
+    long ByteLength,
+    ImmutableArray<byte> Content);
+
+public sealed record GitWorkspaceCapture(
+    string WorkspaceId,
+    string RunId,
+    string RepositoryId,
+    long ResourceGeneration,
+    Guid WorkspaceIncarnationId,
+    string BaseSha,
+    string OutputTreeSha,
+    string Patch,
+    ImmutableArray<GitWorkspaceCapturedFile> Files);
 
 internal interface IGitRepositoryRemote
 {

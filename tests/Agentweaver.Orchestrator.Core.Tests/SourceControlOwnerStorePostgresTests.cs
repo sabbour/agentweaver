@@ -18,6 +18,111 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFixture fixture)
 {
     [Fact]
+    public async Task ProducedOutputCaptureRemainsPendingUntilExactJournalAdmission()
+    {
+        var schema = "source_capture_" + Guid.NewGuid().ToString("N");
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, schema);
+        try
+        {
+            var actor = new CoordinationActor("https://identity.example/", Guid.NewGuid().ToString("D"));
+            var selection = CreateSelection(actor);
+            var identity = new SessionIdentity(
+                selection.Selection.ProjectId, selection.Selection.RunId, "root");
+            var coordination = new CoordinationOwnerStore(fixture.DataSource, schema);
+            var acceptedRoot = await coordination.AcceptRootAsync(
+                actor, selection, identity.SessionId, CancellationToken.None);
+            var catalog = CreateSourceControlCatalog();
+            var resolver = new ProviderResolver(catalog);
+            var contexts = new CoordinatorRunSelectionContextStore(
+                fixture.DataSource, schema, catalog, resolver, []);
+            var decisions = new CoordinatorDecisionOwnerStore(
+                fixture.DataSource, schema, contexts, TimeProvider.System);
+            var current = await decisions.InitializeRootAsync(
+                actor, identity, selection, CancellationToken.None);
+            var pin = CreatePin(
+                CreateAcceptedRun(actor, identity, selection, current.State.Fence), resolver);
+            var sourceControl = new SourceControlOwnerStore(
+                fixture.DataSource, schema, catalog, resolver);
+            await sourceControl.PersistRepositoryPinAsync(
+                actor, identity, selection, pin, current.StateVersion, CancellationToken.None);
+
+            var document = CreateCaptureDocument(identity, pin);
+            var pending = await sourceControl.RegisterOutputCaptureAsync(
+                actor, identity, selection, pin, current.StateVersion, document, CancellationToken.None);
+            var selectionHash = SourceControlOwnerStore.HashSelection(selection.Selection);
+            Assert.Equal("pending", pending.State);
+            Assert.Null(pending.ObjectKey);
+            Assert.Null(pending.EventPosition);
+            Assert.Empty(await sourceControl.ReadOutputCapturePageAsync(
+                identity, selectionHash, null, null, 10, CancellationToken.None));
+            Assert.Equal(pending.Proof, await sourceControl.ReadOutputCaptureProofForEventsAsync(
+                identity, pending.Proof.CaptureId, selectionHash, "tenant-1", CancellationToken.None));
+
+            var journalEntry = new ProducedRunCaptureJournalEntry(pending.Proof, 19);
+            var admitted = await sourceControl.AdmitOutputCaptureAsync(
+                identity, pending.Proof.CaptureId, journalEntry, CancellationToken.None);
+            var replay = await sourceControl.AdmitOutputCaptureAsync(
+                identity, pending.Proof.CaptureId, journalEntry, CancellationToken.None);
+            var loaded = await sourceControl.ReadOutputCaptureAsync(
+                identity, pending.Proof.CaptureId, selectionHash, CancellationToken.None);
+
+            Assert.Equal("admitted", admitted.State);
+            Assert.Equal(19, admitted.EventPosition);
+            Assert.Equal(
+                ProducedRunCaptureContractValidation.CreatePackageReference(pending.Proof).Key.Value,
+                admitted.ObjectKey);
+            Assert.Equal(admitted.Proof, replay.Proof);
+            Assert.Equal(admitted.State, replay.State);
+            Assert.Equal(admitted.EventPosition, replay.EventPosition);
+            Assert.Equal(admitted.Proof, loaded!.Proof);
+            Assert.Equal(admitted.State, loaded.State);
+            var secondDocument = CreateCaptureDocument(identity, pin, "second output", new string('c', 40));
+            var secondPending = await sourceControl.RegisterOutputCaptureAsync(
+                actor,
+                identity,
+                selection,
+                pin,
+                current.StateVersion,
+                secondDocument,
+                CancellationToken.None);
+            await sourceControl.AdmitOutputCaptureAsync(
+                identity,
+                secondPending.Proof.CaptureId,
+                new ProducedRunCaptureJournalEntry(secondPending.Proof, 20),
+                CancellationToken.None);
+            var page = await sourceControl.ReadOutputCapturePageAsync(
+                identity, selectionHash, null, null, 1, CancellationToken.None);
+            Assert.Single(page);
+            var nextPage = await sourceControl.ReadOutputCapturePageAsync(
+                identity,
+                selectionHash,
+                page[0].Proof.CapturedAt,
+                page[0].Proof.CaptureId,
+                1,
+                CancellationToken.None);
+            Assert.Single(nextPage);
+            Assert.NotEqual(page[0].Proof.CaptureId, nextPage[0].Proof.CaptureId);
+            Assert.Null(await sourceControl.ReadOutputCaptureAsync(
+                identity, pending.Proof.CaptureId, new string('f', 64), CancellationToken.None));
+
+            var wrongPosition = await Assert.ThrowsAsync<CoordinationException>(() =>
+                sourceControl.AdmitOutputCaptureAsync(
+                    identity,
+                    pending.Proof.CaptureId,
+                    journalEntry with { Position = 20 },
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status409Conflict, wrongPosition.StatusCode);
+        }
+        finally
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand(
+                $"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", connection);
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
     public async Task PersistsImmutablePinAndPreApprovalIntentIdempotently()
     {
         var schema = "source_control_" + Guid.NewGuid().ToString("N");
@@ -358,6 +463,31 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             selection.Selection.PlatformRuntimeRevision,
             selection.Selection.ContextRevision,
             fence);
+
+    private static GitWorkspaceCaptureDocument CreateCaptureDocument(
+        SessionIdentity identity,
+        SourceControlRepositoryPin pin,
+        string output = "captured output",
+        string outputTreeSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+    {
+        var content = Encoding.UTF8.GetBytes(output);
+        var capture = new GitWorkspaceCapture(
+            "workspace-1",
+            identity.RunId,
+            pin.ProviderBinding.Resource.ResourceId,
+            pin.ProviderBinding.Resource.Generation,
+            Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            new string('a', 40),
+            outputTreeSha,
+            "diff --git a/output.txt b/output.txt\n",
+            ImmutableArray.Create(new GitWorkspaceCapturedFile(
+                "output.txt",
+                "100644",
+                GitWorkspaceCapturePackage.Hash(content),
+                content.LongLength,
+                ImmutableArray.CreateRange(content))));
+        return GitWorkspaceCapturePackage.Create(capture);
+    }
 
     private static ProviderCatalog CreateSourceControlCatalog()
     {
