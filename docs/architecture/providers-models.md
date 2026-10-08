@@ -2,6 +2,10 @@
 
 `Agentweaver.Abstractions` names 15 provider seams. A seam defines a contract boundary. It does not prove that an adapter or running service exists.
 
+The [platform design](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0001-platform-architecture.md#provider-seams)
+now plans 16 seams. Canvas is new P2 work, not a current enum member or implemented
+resolver path. It separates A2UI and GitHub Canvas compatibility from Application Hosting.
+
 `ProviderDescriptor` records the seam, provider ID, adapter version, options-schema version, hosting pattern, and advertised capabilities. It contains no option values or credentials.
 
 `ProviderCatalog.Create` validates registrations, defaults, allowed overrides, ordered sets, network-policy layers, and meter-keyed Cost selections. `ProviderResolver` checks cardinality, versions, options schemas, and capabilities.
@@ -22,6 +26,7 @@
 | Layered | Network Policy | `ResolveNetworkPolicy` and `PinNetworkPolicy` support required L3/L4 and optional L7 layers. Pinning requires a matching applied intent generation. |
 | Keyed by meter source | Cost | `ResolveCost` selects one enabled provider per explicit source. `PinCost` and `VerifyCost` validate immutable Cost bindings. Projects persists candidates only. |
 | Per application | Application Hosting | Not implemented. |
+| Per canvas | Canvas (planned P2) | Not implemented in the current enum or resolver. |
 
 Pinning records provider identity, adapter version, options revision, resource generation, and negotiated capabilities. It does not provision a resource or enforce policy.
 
@@ -74,6 +79,16 @@ adapter implements the read, write, search, revision, proposal-promotion, and co
 composition capabilities. See [Knowledge and Memory](knowledge-memory.md) for the
 service and its integration limits.
 
+P2 adds Cosmos and Redis adapters behind that same exclusive Memory contract.
+Native PostgreSQL remains the default, and the selected adapter must preserve durable
+records, revisions, scope isolation, idempotency, and proposal semantics.
+These are Memory backends, not replacements for the PostgreSQL Sessions journal.
+The current source contains neither adapter.
+
+Application Hosting currently plans only the built-in AKS web runtime.
+Canvas owns A2UI and GitHub Canvas compatibility work. Elastic SAN is outside P2;
+Container Apps Sandboxes is a later Sandbox evaluation, not an application host.
+
 The host also registers `postgres.native-messaging` as the platform-singleton Messaging
 provider, with no project override. It negotiates the configured PostgreSQL resource
 and persists an immutable Messaging provider binding per run. The Orchestrator uses the
@@ -88,6 +103,41 @@ Model is not a provider seam. The v1 source contains no AgentHost executable or
 general model resolver. The runtime library maps accepted references to actual SDK
 models through a registered connection and SDK catalog.
 This source does not declare deployed model-vendor support.
+
+GitHub Copilot and BYOK remain distinct SDK modes. A selected `SecretRef` is not
+proof of the credential's format, current ownership, refresh, or SDK purpose.
+Copilot requires its supported GitHub credential path; BYOK requires an explicit
+SDK `Provider` configuration. A provider key, credential envelope, or GitHub App
+installation token must not be passed as an interchangeable Copilot `GitHubToken`.
+
+The approved source repair adds an explicit `SourceMode` to platform/project model
+settings. Hosted mode selects a stable Identity-owned `ConnectionId`; BYOK selects
+an exact `CredentialReference`. Empty or unknown modes, invalid connection references,
+and mixed hosted/BYOK settings fail with standard errors. These contracts are planned
+source work, not an implemented or deployed connection lifecycle.
+
+The accepted hosted selection and its hash remain immutable during normal token
+rotation. Each ModelSession receipt pins the current connection revision, exact secret
+version, grant revision, and credential kind. Identity and the current Core binding
+authorize use; a submitted connection ID alone gives no authority. Consumption rechecks
+current proof after remote waits and before SDK use. Stale receipts fail closed.
+Changes to the connection's owner, kind, scope, or GitHub identity require an authorized
+new binding or selection, not silent reassignment of the same ID.
+
+Legacy omitted or null fields, stored JSON, and accepted hashes must remain unchanged.
+An accepted secret-pinned hosted selection cannot become a connection reference through
+a compatibility default or automatic migration. It returns an explicit migration-required
+or unavailable result until a new selection is authorized. BYOK retains its exact secret
+reference and SDK Provider configuration, without hosted fallback.
+
+The AgentHost mode repair remains in
+[#1856](https://github.com/sabbour/agentweaver/issues/1856). The missing Copilot connection
+and refresh lifecycle is tracked in [#1906](https://github.com/sabbour/agentweaver/issues/1906);
+repository App credentials are separate [#1907](https://github.com/sabbour/agentweaver/issues/1907).
+Platform/project model selection remains the documented scope. GitHub-user account linking
+can authenticate a deliberately selected Copilot binding; it does not add personal BYOK
+settings or personal model-provider preference or fallback.
+Controlled SDK catalog and usage fixtures do not prove live user entitlement.
 
 A Cost source key and an opaque model-selection reference are not trusted SDK
 provenance. The native Projects run-selection routes retain the source key,

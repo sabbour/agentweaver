@@ -4,12 +4,13 @@
 
 ## Summary
 
-- Agentweaver 1.0 exposes 15 provider seams through versioned .NET contracts; the core retains orchestration, authorization, fencing, and enforcement.
+- Agentweaver 1.0 plans 16 provider seams through versioned .NET contracts; the core retains orchestration, authorization, fencing, and enforcement.
 - Providers are in-repository adapters. Azure-backed adapters are the defaults, and optional providers must meet the same contracts and isolation requirements.
 - Selection is not uniformly one-provider-per-run: seams are exclusive, ordered, platform-singleton, layered, keyed by meter source, or per application.
 - A run pins provider identity, options revision, compatible resources, and negotiated capabilities. It never pins a credential or an authorization decision.
 - A sandbox executes AgentHost; Storage holds the agent's workspace, while Object Store holds platform artifacts. Snapshots are optional and never substitute for a consistent run manifest.
 - Network egress is generated from narrowing intent; cost accounting uses a durable usage ledger rather than telemetry counters.
+- Canvas is a P2 rendering seam beside Application Hosting. The current source catalog still names 15 seams; Canvas is not implemented.
 
 ## Today in 0.x
 
@@ -73,6 +74,7 @@ cannot substitute another provider mid-flight because an endpoint is slow or una
 | Layered | Network Policy | One platform provider per enforcement layer: required L3/L4 and optional L7. Projects narrow egress intent, never select a provider. Pin the applied intent generation per run. |
 | Keyed by meter source | Cost | The pinned model binding determines the pricing provider; unpriced usage remains recorded. |
 | Per application | Application Hosting | Owner chooses a platform-enabled provider; pin it to each deployed revision, not to an agent run. |
+| Per canvas | Canvas (P2) | Choose an enabled renderer and pin its adapter, format version, and catalog to the canvas revision. Core retains surface lifecycle and action authorization. |
 
 The model resolver remains a separate existing concern. Its effective Copilot or bring-your-own-key (BYOK)
 binding is pinned with the run and selects the Cost provider, but Model is not a new seam. A new run may
@@ -256,14 +258,15 @@ other services.
 | --- | --- | --- | --- | --- | --- |
 | Sessions | Journal, playback, and optional capture | Events & Sessions | Native Postgres journal | agentsessions capture sidecar | Exclusive authority, with optional capture mirror |
 | Snapshots | Capture and explicitly restore environments | Environment manager | `None` at cutover; gated AKS Blob-backed pod snapshots | OpenSandbox-native; managed-runtime snapshots after Azure support | Exclusive, paired |
-| Sandbox | Provision, observe, fence, and release AgentHost environments | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof | Exclusive |
-| Storage | Durable agent workspace volumes and bindings | Environment manager | Azure Files CSI | Azure Elastic SAN CSI; future agent filesystem providers | Exclusive |
-| Memory | Authoritative knowledge records and retrieval | Knowledge | Native Postgres | Cosmos memory service adapter | Exclusive |
+| Sandbox | Provision, observe, fence, and release AgentHost environments | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; Container Apps Sandboxes (P3 evaluation) | Exclusive |
+| Storage | Durable agent workspace volumes and bindings | Environment manager | Azure Files CSI | Elastic SAN deferred outside P2; future agent filesystem providers | Exclusive |
+| Memory | Authoritative knowledge records and retrieval | Knowledge | Native Postgres | Cosmos and Redis providers (P2) | Exclusive |
 | Policy | Decide permitted actions through AGT | Orchestrator | AGT .NET kernel, YAML rules | —; other rule languages configure AGT, not another adapter | Platform-singleton |
 | Guardrails | Classify untrusted model inputs/results/output | Orchestrator | Azure AI Content Safety Prompt Shields for supported checks | Purview DLP; Llama Guard/Prompt Guard; NeMo Guardrails | Ordered composite |
 | Network Policy | Materialize and verify egress intent | Environment manager | Cilium L3/L4/FQDN; own Tool & MCP gateway L7 | Plain Kubernetes NetworkPolicy where sufficient; agentgateway L7 | Layered |
 | Cost | Price durable usage by meter source | Events & Sessions | Copilot AI-credit pricing; Azure BYOK pricing by P2 | Other source-specific rate cards | Keyed by meter source |
-| Application Hosting | Serve durable preview and published revisions | Environment manager | AKS web runtime; Agentweaver shell for A2UI | Image-backed/owner-managed providers; Azure Container Apps | Per application |
+| Application Hosting | Serve durable web preview and published revisions | Environment manager | Built-in AKS web runtime (P2) | No other implementations in the current plan | Per application |
+| Canvas | Render interactive content and supply a typed host bridge | Web frontend / Applications | A2UI renderer (P2) | GitHub Canvas compatibility research and reverse engineering (P2) | Per canvas |
 | Secrets | Resolve credential references for trusted callers | Identity | Azure Key Vault with workload identity | None required for cutover | Platform-singleton |
 | Source Control | Repository access, changes, PRs, and merge | Source Control & Merge | GitHub | Other Git repository and review systems | Exclusive |
 | Telemetry | Export traces, metrics, and logs | Cross-service; Events & Sessions integration | OpenTelemetry to Azure Monitor | Other OTLP exporters | Ordered composite |
@@ -284,7 +287,7 @@ Adding a provider interface would duplicate a boundary without a second viable i
 | MCP Servers | MCP itself is the adapter protocol. The catalog accepts a configured MCP Registry API URL; enablement, OAuth, record-before-transmit, and gateway enforcement remain core-owned. |
 | Image Registry | OCI Distribution is the protocol. An approved registry URL and credential reference are configuration; publication is a control-plane operation, not agent access. |
 | State Store | Azure Database for PostgreSQL is fixed. Relational transactions, fencing, and the outbox are required; tests can use disposable Postgres containers. Large bytes go to Object Store. |
-| Surfaces | A2UI and MCP Apps are open surface formats; Agentweaver owns the action contract and its own UI, not a renderer-provider market. |
+| Surfaces | Core owns surface identity, lifecycle, and action authority. Canvas is the separate renderer seam; MCP Apps remains an open protocol, not another seam. |
 
 ## Sessions
 
@@ -439,6 +442,13 @@ present per-environment volumes do not satisfy shared RWX or existing-PVC attach
 reject those pairings. AKS availability of required certificate APIs and nested virtualization remains an
 adoption test, not an assumption.
 
+Container Apps Sandboxes is another P3 evaluation under the existing Sandbox contract,
+not an Application Hosting implementation. Before enablement, its adapter must prove
+the selected isolation, authenticated AgentHost configure/refresh and A2A channels,
+compatible workspace attachment, egress enforcement, leases, fencing, and release.
+Unsupported capabilities fail explicitly. This plan does not claim that the service
+already meets those requirements or authorize provisioning it.
+
 ## Storage
 
 ### Workspace volumes and ownership
@@ -533,8 +543,9 @@ durable flush.](../../diagrams/flagship/v1-storage-volume-provisioning.png)
 
 ### Defaults, optional features, and limits
 
-The cutover Azure provider uses Azure Files CSI for RWO or RWX workspaces. Azure Elastic SAN CSI joins in P2
-for `environment` volumes only: it is RWO, never a substitute for a shared volume
+The cutover Azure provider uses Azure Files CSI for RWO or RWX workspaces.
+Elastic SAN is deferred outside P2 and is not a cutover requirement. If reconsidered,
+its RWO constraint limits it to `environment` volumes, never a substitute for a shared volume
 ([R15](../decisions/0001-platform-architecture.md#risk-register)). Future Blob-backed agent filesystem
 providers can implement the same volume contract after product readiness. A managed sandbox can bind its own
 durable volume if it satisfies the selected mode; otherwise the run must choose a compatible Sandbox/Storage
@@ -555,12 +566,19 @@ contract absorbs changes to future volume APIs
 
 ## Memory
 
-**Owner:** Knowledge. **Cardinality:** exclusive. Native Postgres records are authoritative for agent
-memory, decisions, session context, and revisions. The contract reads, writes, searches, and versions
-records within project and agent authorization; the Knowledge service composes prompt context. A later
-Cosmos-based memory toolkit can run behind a remote Python service, but cannot own the session journal or
-decisions in repository files. Read-only workspace projections are views, not another writable store. The
-optional adapter is post-cutover because its upstream is not a cutover dependency
+**Owner:** Knowledge. **Cardinality:** exclusive. Native Postgres remains the default.
+Cosmos and Redis providers join in P2 behind the same Memory contract. Each selected
+provider owns its authoritative memory records, decisions, session context, and revisions;
+Knowledge keeps the authorization, context composition, and provider-binding boundary.
+The Sessions journal and transactional control-plane state remain in PostgreSQL.
+
+The contract reads, writes, searches, and versions records within project and agent
+authorization. Every adapter must preserve revision checks, idempotency, proposal
+promotion, scope isolation, and durable retention before enablement. Redis is a Memory
+provider, not merely a cache in front of PostgreSQL; its persistence and eviction policy
+must not discard authoritative records. No run silently switches providers after a failure.
+Read-only workspace projections remain views, not another writable store. No particular
+preview toolkit or remote Python service is required
 ([R7](../decisions/0001-platform-architecture.md#risk-register)).
 
 ## Policy
@@ -737,15 +755,35 @@ flowchart LR
 
 **Owner:** Environment manager. **Cardinality:** chosen per application, pinned per deployed revision. A
 live preview runs in the agent sandbox and has no hosting provider. Durable `preview` and `published` stages
-serve an immutable, tested revision through a platform-enabled provider: the built-in AKS web runtime or
-Agentweaver's shell for declarative A2UI. Image-backed AKS and owner-managed external providers join under
-the same deployment contract when they meet the parity gate; Azure Container Apps is evaluated after
-cutover. Publishing an image uses a control-plane registry credential, never one given to the agent.
+serve an immutable, tested web revision through the built-in AKS runtime. It is the only
+Application Hosting implementation in the current plan. Image-backed, owner-managed,
+and Container Apps hosting adapters are removed from this plan for now.
+A2UI rendering belongs to Canvas, not Application Hosting. Publishing an image uses
+a control-plane registry credential, never one given to the agent.
 
 The complete application lifecycle, viewer authorization at the Gateway/Identity edge, deployment
 operations, and surface panel are specified in [Applications and
 surfaces](applications-and-surfaces.md#application-hosting). Application Hosting runs the **agent's output**
 beyond its run; Sandbox runs **the agent**. Agentweaver keeps its own UI.
+
+## Canvas
+
+**Owner:** Web frontend / Applications. **Cardinality:** selected per canvas and pinned
+per canvas revision. This P2 seam is separate from Application Hosting: it renders
+interactive content within Agentweaver's surface panel rather than operating an
+application server or an agent sandbox.
+
+The planned adapters are A2UI and a GitHub Canvas-compatible adapter. P2 includes
+research and reverse engineering of the GitHub Canvas protocol behind this boundary.
+Compatibility is not claimed until the adapter has evidence. Both adapters use
+versioned content and action schemas, negotiated rendering capabilities, and a pinned
+renderer version. A2UI also pins its component catalog.
+
+Core owns surface instances, viewer authorization, workflow gates, and typed
+`surface_*` actions. A renderer cannot authorize work or mint credentials.
+The [Canvas design](applications-and-surfaces.md#canvas-provider) defines the host
+bridge and the relationship to applications, A2UI, and MCP Apps.
+The current source enum and resolver do not yet implement this sixteenth seam.
 
 ## Secrets
 
@@ -923,6 +961,13 @@ platform-owned container. Missing blobs return null/false; conflicts and service
 propagate. Postgres still owns references and retention; this library does not schedule
 deletion or grant agent access to its container.
 
+Events stores journal entries and artifact references in PostgreSQL; the Object Store
+adapter stores the referenced bytes in Blob. A trusted owner writes bytes before
+committing a reference and serves authorized reads without granting AgentHost direct
+container access. These are separate operations, not one Blob/PostgreSQL transaction.
+See [Events and Blob have different jobs](../persistence-objects.md#events-and-blob-have-different-jobs)
+for the planned flow and the current missing service composition.
+
 ## Not ported (cloud-only)
 
 The 1.0 runtime does not port the 0.x local executor factory or its `MxcSandboxExecutor`,
@@ -949,8 +994,8 @@ volumes and Postgres-backed state, not by retaining dual local/cloud code paths.
 | --- | --- |
 | P0 Foundation | DI contracts, catalog/resolvers/pinning, conformance kit, Postgres schemas and outbox, Blob Object Store, Key Vault/workload identity, OpenTelemetry/Azure Monitor. |
 | P1 Core and defaults | Native Sessions/Memory, agent-sandbox, Azure Files, Cilium intent, AGT, GitHub, Copilot cost ledger; AgentHost startup phases, retention, reclaim, and run fencing. |
-| P2 Parity and cutover | Manifest-based suspend/resume, Guardrails, permission metadata, own Tool & MCP gateway and MCP catalog, Elastic SAN, Azure BYOK pricing/budgets, application stages/hosting, context ordering and cache telemetry; exact-SHA AKS persona harnesses and parity-map acceptance. |
-| P3 After cutover | Gated AKS snapshot/restore; OpenSandbox and Agent Substrate proofs; agentsessions and Cosmos memory; agent filesystem providers; agentgateway and Azure Container Apps experiments. |
+| P2 Parity and cutover | Manifest-based suspend/resume, Guardrails, permission metadata, own Tool & MCP gateway and MCP catalog, Cosmos and Redis Memory providers, Azure BYOK pricing/budgets, built-in AKS Application Hosting, [Canvas and A2UI #1878](https://github.com/sabbour/agentweaver/issues/1878) with planned [GitHub Canvas research #1901](https://github.com/sabbour/agentweaver/issues/1901), context ordering and cache telemetry; exact-SHA AKS persona harnesses and parity-map acceptance. No Elastic SAN or additional hosting adapters. |
+| P3 After cutover | Gated AKS snapshot/restore; OpenSandbox, Agent Substrate, and Container Apps Sandboxes evaluation; agentsessions; agent filesystem providers; agentgateway. Elastic SAN has no committed delivery phase. |
 
 No P2 requirement depends on an optional P3 provider. The active 0.x line supplies behavioral parity
 evidence until cutover.
@@ -963,11 +1008,11 @@ evidence until cutover.
 - [R4](../decisions/0001-platform-architecture.md#risk-register): the consistency manifest accounts for volume data outside snapshots.
 - [R5](../decisions/0001-platform-architecture.md#risk-register): BYOK resolution stops at platform and project scope.
 - [R6](../decisions/0001-platform-architecture.md#risk-register): AGT's .NET YAML kernel is the baseline until other rule languages reach parity.
-- [R7](../decisions/0001-platform-architecture.md#risk-register): preview memory and session adapters are optional after cutover.
+- [R7](../decisions/0001-platform-architecture.md#risk-register): Cosmos and Redis Memory providers target P2; optional preview libraries are not prerequisites, and agentsessions remains P3.
 - [R8](../decisions/0001-platform-architecture.md#risk-register): the managed-runtime adapter needs an AKS VM-isolation proof and Azure snapshot durability.
 - [R9](../decisions/0001-platform-architecture.md#risk-register): messaging uses at-least-once delivery, idempotency, and sequence numbers.
 - [R14](../decisions/0001-platform-architecture.md#risk-register): neutral volume contracts absorb upstream API changes.
-- [R15](../decisions/0001-platform-architecture.md#risk-register): Elastic SAN attaches only to single-environment volumes.
+- [R15](../decisions/0001-platform-architecture.md#risk-register): Elastic SAN is deferred outside P2 and cannot substitute for shared workspace volumes.
 - [R16](../decisions/0001-platform-architecture.md#risk-register): Cilium's public HTTPS/FQDN limit requires a separate L7 gate.
 - [R17](../decisions/0001-platform-architecture.md#risk-register): the own Tool & MCP gateway is the default; agentgateway is optional.
 - [R18](../decisions/0001-platform-architecture.md#risk-register): versioned credit rates preserve historical cost interpretations.

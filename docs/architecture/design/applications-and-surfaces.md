@@ -8,16 +8,16 @@
   `published` are deployment stages, not separate application products.
 - A live preview runs in the agent sandbox. At run end, a runnable output is captured into a durable
   preview so the sandbox can be released rather than retained for viewers.
-- The Application Hosting provider serves durable `preview` and `published` revisions. The default
-  web provider runs on Agentweaver-managed Azure Kubernetes Service (AKS) capacity; declarative A2UI
-  (Agent-to-User Interface) renders in the Agentweaver
-  shell.
+- Application Hosting serves durable web `preview` and `published` revisions through
+  the built-in Azure Kubernetes Service (AKS) runtime. No other hosting adapters are planned for now.
+- The separate Canvas provider renders interactive content. P2 includes A2UI
+  (Agent-to-User Interface) and GitHub Canvas compatibility research and reverse engineering.
 - Publication is an owner-authorized workflow gate for an exact verified revision. Viewers
   authenticate at the Gateway/Identity edge, regardless of the hosting provider.
 - Agentweaver keeps its own user interface. Its canvas-like surface panel hosts applications, A2UI,
   Model Context Protocol (MCP) Apps, and built-in views.
-- Agents control surfaces through Agentweaver-defined `surface_*` MCP tools. A2UI and MCP Apps
-  supply rendering protocols, not a copied canvas API or a new provider seam.
+- Agents control surfaces through Agentweaver-defined `surface_*` MCP tools. Canvas
+  adapters do not replace the core action contract, authorization, or Agentweaver's own UI.
 
 ## Today in 0.x
 
@@ -32,10 +32,11 @@ The active 0.x roadmap also describes workflow publication with web and declarat
 ([#665](https://github.com/sabbour/agentweaver/issues/665)), and audience, route, and
 workflow-action authorization ([#668](https://github.com/sabbour/agentweaver/issues/668)).
 Image-backed hosting ([#666](https://github.com/sabbour/agentweaver/issues/666)), owner-managed
-hosting ([#667](https://github.com/sabbour/agentweaver/issues/667)), isolated image publication
-([#761](https://github.com/sabbour/agentweaver/issues/761)), and project-owned preview deployments
-([#1494](https://github.com/sabbour/agentweaver/issues/1494)) have explicit 1.0 owners. These are
-roadmap requirements, not claims that every capability already ships in 0.x.
+hosting ([#667](https://github.com/sabbour/agentweaver/issues/667)) remain historical parity inputs,
+but their additional hosting adapters are deferred from the current plan.
+Isolated image publication ([#761](https://github.com/sabbour/agentweaver/issues/761))
+and project-owned preview deployments ([#1494](https://github.com/sabbour/agentweaver/issues/1494))
+remain in scope. These are roadmap requirements, not claims that every capability already ships in 0.x.
 
 ## One application, three stages
 
@@ -47,23 +48,26 @@ to that run. Application owners decide which verified revision can be published.
 
 A **Revision** is an immutable, content-addressed candidate produced by a workflow Build/Test step.
 Its record identifies the source run, workflow identity, workflow version and digest, output digest,
-and test evidence. The output is a source tree or artifact digest for a web profile, an image digest
-receipt for an image profile, or an A2UI package for the declarative profile. A change to the output
+and test evidence. The output is a source tree, artifact digest, or approved image digest
+for web output, or a versioned Canvas package for declarative output. A change to the output
 creates another revision; it does not mutate a published revision.
 
-A **Deployment** binds an application revision to a stage and a serving endpoint. Its provider and
+A web **Deployment** binds an application revision to a stage and a serving endpoint. Its provider and
 effective options are selected from the platform-enabled catalog at the application boundary and
 pinned per deployed revision. Stage, revision, health, and route are visible to owners and viewers
 with appropriate permissions. The run and deployment remain linked for audit without making the
 deployment depend on the run's sandbox.
+Declarative revisions instead pin a Canvas provider and content version. They share
+the application approval and retention model without an Application Hosting deployment.
 
 | Stage | Owner and lifetime | Serving path | Transition |
 | --- | --- | --- | --- |
-| `live` | Run environment and sandbox lease | Sandbox endpoint descriptor through the authenticated app router; no Application Hosting provider | Working output can be viewed while the run is active. At run end, a runnable candidate is captured as a revision. |
-| `preview` | Project-owned, revision-pinned, private, with bounded retention | Application Hosting provider through the app router | A verified candidate may be promoted through the publish gate; retention or an owner action may retire it. |
-| `published` | Project-owned stable authenticated route | Application Hosting provider through the app router | The owner-approved exact revision remains served until a later approved revision, rollback, or retirement. |
+| `live` | Run-owned working output; a web endpoint follows the sandbox lease | Sandbox endpoint through the app router for web output; Canvas for declarative output | At run end, a verified candidate is captured as a revision. |
+| `preview` | Project-owned, revision-pinned, private, with bounded retention | Built-in AKS Application Hosting for web output; Canvas for declarative output | A verified candidate can pass the publish gate; retention or an owner action can retire it. |
+| `published` | Project-owned stable authenticated view | Application Hosting web route or revision-pinned Canvas content | The owner-approved exact revision remains available until approved replacement, rollback, or retirement. |
 
-The app router uses one route, authentication, network-intent, and audit model for all three stages.
+The app router uses one route, authentication, network-intent, and audit model for web stages.
+Canvas content and actions use the same core viewer permissions and publish gates.
 A live capability URL does not become a published route. The same application can have a live
 working view and one or more durable revision views; stage names describe what is being served, not
 three unrelated records.
@@ -73,7 +77,9 @@ three unrelated records.
 The environment manager inspects live output at run end. When the output meets the runnable
 contract, the platform captures the verified artifact and its evidence as an immutable revision,
 deploys it at `preview`, and releases the sandbox. The durable preview then serves from application
-capacity, not from a retained AgentHost. This is the primary design response to the capacity failure
+capacity, not from a retained AgentHost. Declarative output preserves its verified Canvas
+package and renderer binding instead of starting an application server.
+This is the primary design response to the capacity failure
 behind [#1688](https://github.com/sabbour/agentweaver/issues/1688), alongside the Sandbox seam's
 retention and reclaim rules.
 
@@ -100,7 +106,7 @@ revision on the owner's behalf; see [Orchestration](orchestration.md).
 A published route never inherits a preview capability URL or the producing run's credentials.
 Viewers authenticate and are authorized for the application, route, and workflow actions at the
 Gateway/Identity edge under [#668](https://github.com/sabbour/agentweaver/issues/668). Promotion
-keeps the pinned revision and hosting decision. Rollback serves a previously approved immutable
+keeps the pinned revision and its hosting or Canvas binding. Rollback serves a previously approved immutable
 revision at the stable authenticated route; it is not an edit to the current artifact.
 
 The declarative A2UI profile invokes one typed form action bound to its approved workflow
@@ -113,9 +119,9 @@ This lifecycle keeps serving outside the agent's sandbox after a run completes.
 ```mermaid
 stateDiagram-v2
     direction LR
-    state "live (sandbox)" as Live
-    state "preview (durable)" as Preview
-    state "published (durable)" as Published
+    state "live (Sandbox or Canvas)" as Live
+    state "preview (AKS or Canvas)" as Preview
+    state "published (AKS or Canvas)" as Published
     state "retired" as Retired
     [*] --> Live
     Live --> Preview: run ends; capture runnable revision
@@ -125,8 +131,8 @@ stateDiagram-v2
     Published --> Published: rollback to approved revision
     Published --> Retired: owner retires route
     note right of Preview
-        Agentweaver's surface panel can embed each stage
-        through the authenticated app router.
+        Agentweaver's surface panel uses authenticated
+        web routes or revision-pinned Canvas content.
     end note
 ```
 
@@ -153,30 +159,28 @@ immediate readiness.
 | `Rollback(revision)` | Serve an earlier approved revision without modifying it. |
 | `Retire(deployment)` | Stop serving the deployment and apply its retention policy. |
 
-Capabilities advertise supported output profiles (web source, image, declarative), externally
-operated capacity, scale to zero, retention enforcement, and health or drift reporting. A platform
+Capabilities advertise supported web artifacts, retention enforcement, and health or drift reporting. A platform
 default can be narrowed by a project choice from enabled providers. The selected provider and
 compatible options are pinned per deployed revision; promotion is not an implicit migration to
 another host. Provider-specific placement and route mechanics stay inside the adapter.
 
 The Application Hosting seam follows the general [provider selection and
 cardinality](provider-seams.md#selection-and-cardinality) rules. Image Registry is configuration,
-not a separate provider seam. Surfaces are renderers and protocols, not hosting providers.
+not a separate provider seam. Canvas renders content; it does not operate web hosting capacity.
 
 ### Provider profiles
 
 | Provider | Profile and responsibility | Phase |
 | --- | --- | --- |
-| Agentweaver shell | Default declarative A2UI provider. Agentweaver web renders the package using a pinned component catalog; no separate application server is required. Its actions call the approved workflow. | P2 |
 | Built-in AKS serving runtime | Default generated-web provider. It runs the verified artifact on Agentweaver-managed capacity, separate from the AgentHost pool, under fixed launch, readiness, deadline, resource, isolation, and network policies. | P2 |
-| Image-backed AKS | Serves an approved image-digest receipt instead of starting from source; [#666](https://github.com/sabbour/agentweaver/issues/666). | P2 if shipped in 0.x; otherwise backlog |
-| Owner-managed external | Connects a deployment operated by the application owner without transferring edge authorization to it; [#667](https://github.com/sabbour/agentweaver/issues/667). | P2 if shipped in 0.x; otherwise backlog |
-| Azure Container Apps | A later hosting option evaluated against the same contract; not needed for cutover. | P3 evaluation |
 
-The web and declarative profiles express the “one publication, two profiles” goal of
-[#662](https://github.com/sabbour/agentweaver/issues/662). Additional enabled providers do not
-create separate application products. A provider that cannot meet required audience, routing,
-network, isolation, or health conditions cannot be selected for that deployment.
+This is the only Application Hosting implementation in the current plan.
+Image-backed, owner-managed external, and Container Apps hosting adapters are removed
+for now. A web image remains an artifact format, not a separate hosting provider.
+Container Apps Sandboxes belongs to the later [Sandbox evaluation](provider-seams.md#managed-runtime-contract-check).
+The web and declarative profiles still share the application identity and publish
+model of [#662](https://github.com/sabbour/agentweaver/issues/662), but use different
+Hosting and Canvas contracts.
 
 ### Image publication and trust
 
@@ -188,9 +192,8 @@ identifies what the hosting provider serves.
 
 Applications do not receive run credentials, agent credentials, or the AgentHost's purpose-bound
 tokens. Gateway and Identity authenticate viewers and enforce the configured audience and route
-rules before traffic reaches any provider. This holds equally for shell-rendered, built-in,
-image-backed, and externally operated applications
-([#668](https://github.com/sabbour/agentweaver/issues/668)). External operation does not move the
+rules before traffic reaches the built-in hosting runtime or Canvas content
+([#668](https://github.com/sabbour/agentweaver/issues/668)). Neither provider owns the
 authorization boundary.
 
 Application ingress and egress compile through the [Network
@@ -201,14 +204,50 @@ exposes deployments only through the authenticated edge. Hosting operations, rou
 publication decisions are auditable domain events; exporter availability does not replace that
 record.
 
+## Canvas provider
+
+Canvas is a separate P2 provider seam beside Application Hosting.
+Application Hosting runs web output on serving capacity. Canvas renders versioned
+interactive content inside Agentweaver's existing surface panel.
+It does not run AgentHost or require a separate application server.
+
+The Applications domain owns canvas identity, content revisions, and action bindings.
+The web frontend integrates the selected renderer and host bridge.
+Selection chooses one platform-enabled provider per canvas and pins its adapter
+version, format version, and negotiated capabilities to the content revision.
+Changing the renderer requires an explicit new binding, not an outage fallback.
+The current source catalog does not yet implement this contract.
+
+| Canvas adapter | Responsibility | Phase |
+| --- | --- | --- |
+| A2UI | Render declarative packages using a pinned specification and component catalog. Forward typed actions to the existing core gates. | P2 |
+| GitHub Canvas-compatible | Research and reverse engineer GitHub Canvas content and host interactions behind an adapter. Declare only compatibility supported by evidence. | P2 |
+
+GitHub Canvas is not a public standard. Compatibility work belongs inside its adapter,
+not in Agentweaver's core action protocol or a replacement UI.
+Both adapters validate content and action schemas. Neither content nor renderer
+metadata can approve a workflow, grant permissions, or supply credentials.
+MCP Apps remains a protocol for server-provided UI and uses the existing core action
+and outbound boundaries; it is not an additional Application Hosting adapter.
+
+```mermaid
+flowchart LR
+    Revision["Verified application or canvas revision"] --> Hosting["Application Hosting: built-in AKS web runtime"]
+    Revision --> Canvas["Canvas provider: A2UI or GitHub Canvas-compatible"]
+    Hosting --> Route["Authenticated application route"]
+    Canvas --> Panel["Agentweaver surface panel"]
+    Panel --> Actions["Typed surface actions"]
+    Actions --> Core["Core authorization, workflow and policy gates"]
+```
+
 ## Surface panel
 
 ### Place in the Agentweaver interface
 
 Agentweaver retains its own run page, topology, approvals, and chat. Beside a run or chat it adds a
 canvas-like **surface panel**: an instance of a typed view that a user or agent may open and act
-upon. “Canvas-like” describes placement and interaction, not adoption of the Copilot application's
-UI or its canvas API. The contract for surface actions is Agentweaver's own and is exposed over MCP.
+upon. Canvas adapters provide rendering and host compatibility without replacing the
+existing UI. The contract for surface actions remains Agentweaver's own and is exposed over MCP.
 
 A surface instance has a kind, instance ID, open input, and a set of typed actions. The panel
 displays context without granting more authority than the actor has in the associated session. A
@@ -221,14 +260,15 @@ same core enforcement gates.
 | Kind | Presentation | Action boundary |
 | --- | --- | --- |
 | Application | Sandboxed iframe for `live`, `preview`, or `published`, showing stage and exact revision ([#665](https://github.com/sabbour/agentweaver/issues/665)). | Authenticated app-router route and application permissions. |
-| A2UI | Declarative agent-generated forms, tables, charts, and approval cards rendered natively from a versioned component catalog. | Typed action bound to the specified workflow or gate; content alone cannot authorize it. |
+| Canvas | A2UI packages or GitHub Canvas-compatible content rendered by the selected Canvas adapter. | Typed action bound to the specified workflow or gate; content alone cannot authorize it. |
 | MCP App | Sandboxed iframe for an MCP server's `ui://` resource. | UI-initiated tool calls pass core tool authorization, audit, and outbound controls. |
 | Built-in | Diff/review, Markdown document editor, read-only logs/terminal, and workflow graph. | Each built-in declares its allowed actions; a read-only view remains read-only. |
 
-The application kind embeds the app at any stage; the A2UI kind renders declarative surface content
-without deploying an application. An A2UI **application** is a project-owned revision with
-deployment and publication controls. An A2UI **surface** is a session-facing view. The renderer can
-be shared without conflating those lifecycles.
+The application kind embeds web output at any stage. The Canvas kind renders
+interactive content without an Application Hosting deployment.
+A declarative **application** is a project-owned revision with publication controls.
+A session **surface** is a view with its own instance lifetime.
+Both can use the same Canvas adapter without conflating those lifecycles.
 
 ### Agent-facing MCP contract
 
@@ -249,7 +289,7 @@ canvas API is standardized.
 
 ### Protocol versions and host bridge
 
-A2UI provides the declarative rendering protocol. The renderer pins a specification version and a
+A2UI supplies one Canvas adapter's rendering protocol. The renderer pins a specification version and a
 versioned component catalog per release: v0.9.1 is stable; v1.0 remains a release candidate until
 finalized. A 1.0 final renderer is adopted only when the specification is final and the catalog is
 compatible. A2UI content does not bypass workflow authorization.
@@ -260,9 +300,10 @@ same policy and audit path as agent calls. In P3, the first-party MCP server can
 run and application surfaces as MCP Apps resources for other compliant hosts. It does not require
 Agentweaver to replace its own UX.
 
-These are standards where standards exist. Surface instances, input and action schemas, and MCP
-`surface_*` tools remain Agentweaver-defined. Renderers and component catalogs are configuration and
-protocol implementations, not provider seams.
+These are standards where standards exist. GitHub Canvas reverse engineering does not
+turn its protocol into a standard. Surface instances, input and action schemas, and
+MCP `surface_*` tools remain Agentweaver-defined.
+Canvas is the renderer seam; format versions and component catalogs are its pinned configuration.
 
 ## Ownership
 
@@ -271,7 +312,7 @@ protocol implementations, not provider seams.
 | Environment manager | Sandbox-to-preview handoff, `live` environment lifecycle, Application Hosting adapters, retention, reclaim, and app-router deployment state. |
 | Orchestrator | Build/Test evidence, workflow publish step, exact-revision approval and AGT gate. |
 | Gateway/BFF and Identity | Viewer authentication and application, route, audience, and workflow-action authorization. |
-| Web frontend | Agentweaver surface panel, A2UI renderer, MCP Apps host bridge, stage and revision presentation. |
+| Applications domain and web frontend | Canvas identity and revisions, Canvas adapter selection and host bridge, Agentweaver surface panel, MCP Apps integration, and stage presentation. |
 | First-party MCP server | Surface discovery and `surface_*` tools, subject to the same core authorization. |
 | Events & Sessions | Durable journal, audit linkage, and typed session messages for surface actions. |
 
@@ -286,9 +327,9 @@ agent environment.
 | Retain every sandbox to preserve a preview | Couples viewer lifetime to expensive isolation capacity and leaves abandoned leases; durable capture plus reclaim addresses [#1688](https://github.com/sabbour/agentweaver/issues/1688). |
 | Maintain separate preview and published product models | Duplicates project ownership, routes, auth, evidence, and revision tracking; stages are sufficient. |
 | Make each hosting provider authenticate viewers | Moves audience and route authorization to inconsistent provider-specific edges; Gateway/Identity owns that decision. |
-| Use the Copilot application's canvas API as the surface standard | It is not a public standard. Agentweaver keeps its own UX and defines an MCP-exposed action contract. |
+| Make the reverse-engineered GitHub Canvas protocol the core surface contract | Keep compatibility inside the Canvas adapter. Core retains Agentweaver's typed actions, authorization, and existing UI. |
 | Require an application server for declarative A2UI | The Agentweaver shell can render declarative packages without separate compute. |
-| Make Azure Container Apps a cutover dependency | The built-in AKS and shell providers cover the required profiles; Container Apps remains a P3 evaluation. |
+| Add more Application Hosting implementations now | Built-in AKS serves web output; Canvas handles declarative output. Other hosting implementations are outside the current plan. |
 
 ## Phasing
 
@@ -300,23 +341,25 @@ agent environment.
   [#1688](https://github.com/sabbour/agentweaver/issues/1688) and
   [#1257](https://github.com/sabbour/agentweaver/issues/1257). At the end of P1, persona harnesses
   start against exact-SHA AKS deployments.
-- **P2 — parity and cutover:** Deliver `live`/`preview`/`published`, the built-in AKS and shell
-  providers, verified publish gate, image publication
+- **P2 — parity and cutover:** Deliver `live`/`preview`/`published`, built-in AKS
+  Application Hosting, Canvas with A2UI and GitHub Canvas compatibility research and
+  reverse engineering, verified publish gate, image publication
   ([#761](https://github.com/sabbour/agentweaver/issues/761)), project-owned previews
   ([#1494](https://github.com/sabbour/agentweaver/issues/1494)), and the application/A2UI/MCP
-  App/built-in surface panel. Bring [#666](https://github.com/sabbour/agentweaver/issues/666) and
-  [#667](https://github.com/sabbour/agentweaver/issues/667) adapters only if they shipped in 0.x
-  before the parity cut line; otherwise track them in the 1.0 backlog.
-- **P3 — after cutover:** Evaluate Azure Container Apps under the same hosting contract and expose
-  first-party Agentweaver surfaces as MCP Apps resources for external hosts.
+  App/built-in surface panel. Additional hosting adapters
+  [#666](https://github.com/sabbour/agentweaver/issues/666) and
+  [#667](https://github.com/sabbour/agentweaver/issues/667) remain explicitly deferred.
+- **P3 — after cutover:** Expose first-party Agentweaver surfaces as MCP Apps resources
+  for external hosts. Container Apps Sandboxes is separate Sandbox work, not a hosting adapter.
 
 ## Related risks
 
 - [R24](../decisions/0001-platform-architecture.md#risk-register): Viewer authorization stays at
-  Gateway/Identity; Container Apps is evaluated after cutover; image-backed and owner-managed timing
-  follows the parity rule.
+  Gateway/Identity. Built-in AKS is the only planned hosting implementation;
+  Container Apps Sandboxes is evaluated later under Sandbox.
 - [R25](../decisions/0001-platform-architecture.md#risk-register): Pin A2UI v0.9.1 and a versioned
-  catalog until v1.0 is final; use MCP Apps for custom UI, not the nonstandard canvas API.
+  catalog until v1.0 is final. Keep GitHub Canvas compatibility work behind the
+  separate Canvas adapter and retain core action authorization.
 - [R16](../decisions/0001-platform-architecture.md#risk-register): The L7 gateway covers model, MCP,
   and agent-to-agent egress that Cilium FQDN controls cannot fully constrain.
 - [R17](../decisions/0001-platform-architecture.md#risk-register): Agentweaver's Tool & MCP gateway is the

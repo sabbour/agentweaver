@@ -68,13 +68,14 @@ than moving those cross-module dependencies between processes.
 | Contracts | Version canonical .NET dependency-injection contracts in `Agentweaver.Abstractions`; keep adapters in-repo, wrapping HTTP, gRPC, or Kubernetes custom resources where needed. |
 | Selection | Resolve platform defaults and allowed project overrides; pin effective bindings per run, with seam-specific cardinality. |
 | Harness and model | Use the Copilot SDK as the only harness. Keep Copilot/BYOK model choice in the existing resolver, not a new provider seam. |
-| Provider seams | Sessions, Snapshots, Sandbox, Storage, Memory, Policy, Guardrails, Network Policy, Cost, Application Hosting, Secrets, Source Control, Telemetry, Messaging, Object Store: 15 total. |
+| Provider seams | Sessions, Snapshots, Sandbox, Storage, Memory, Policy, Guardrails, Network Policy, Cost, Application Hosting, Canvas, Secrets, Source Control, Telemetry, Messaging, Object Store: 16 planned. |
 | Not seams | Model, Context, Tools, Skills, Model Context Protocol (MCP) Servers, Image Registry, State Store (Postgres), and Surfaces are configuration, protocols, or core logic. |
 | Core domains | Coordination (sessions and messages), Orchestration (MAF workflows and work planning), and Applications & surfaces remain product logic. |
 | UX | Keep Agentweaver's run page, topology, approvals, and chat; add a canvas-like surface panel without adopting the Copilot app's UI. |
 | Orchestration | Require step catalogs and step-snapped WorkPlans; typed coordinator proposals undergo schema, policy, and workflow validation. |
-| Applications | One application model has `live`, `preview`, and `published` stages; Application Hosting serves durable stages. |
-| Surfaces | Render application, Agent-to-User Interface (A2UI), MCP App, and built-in surfaces; agents use typed `surface_*` tools. |
+| Applications | One application model has `live`, `preview`, and `published` stages. Application Hosting serves web applications through the built-in AKS runtime only for now. |
+| Canvas | A separate provider seam renders interactive content. P2 includes Agent-to-User Interface (A2UI) and GitHub Canvas compatibility research and reverse engineering. |
+| Surfaces | Core owns surface identity, lifecycle, and typed `surface_*` actions. Canvas adapters render declarative content without owning workflow or viewer authorization. |
 | Neutrality | Use Agentweaver vocabulary in contracts. Include a concept only when two providers need it; Azure is a default, not a contractual assumption. |
 | Services and release | Use roughly ten coarse services, owned Postgres schemas, gRPC/HTTP, and an outbox. Release per-service semver versions as one tested manifest with N-1 compatibility (the preceding contract version). |
 
@@ -106,6 +107,8 @@ durable workflow transitions:
 - Events & Sessions owns the run journal, message delivery, usage ledger,
   and replay streams. The MCP server and web frontend expose these domains
   through Agentweaver's own user experience.
+- The web frontend integrates Canvas adapters. A2UI and GitHub Canvas compatibility
+  belong here, not in Application Hosting or a replacement Agentweaver UI.
 
 The **data plane** runs the GitHub Copilot SDK AgentHost **inside** a Sandbox
 environment, with execution tools and core enforcement gates. A Tool & MCP
@@ -128,7 +131,7 @@ keyed by meter source, or per application. Pin implementation identity and
 compatible capabilities, never credentials; fail if a pinned provider disappears.
 Core gates enforce authorization and AGT policy regardless of adapter choice.
 
-This map groups all 15 seams by primary owning service; it also shows core
+This map groups all 16 planned seams by primary owning service; it also shows core
 domains and the categories reviewed but not made into provider seams.
 
 ```mermaid
@@ -141,9 +144,12 @@ flowchart TB
     subgraph Environment["Environment manager"]
         Sandbox["Sandbox: agent-sandbox"]
         Snapshots["Snapshots: none until gated"]
-        Storage["Storage: Azure Files and Elastic SAN"]
+        Storage["Storage: Azure Files"]
         Network["Network Policy: Cilium"]
-        Hosting["Application Hosting: AKS and A2UI shell"]
+        Hosting["Application Hosting: built-in AKS"]
+    end
+    subgraph Presentation["Web frontend / Applications"]
+        Canvas["Canvas: A2UI and GitHub Canvas compatibility (P2)"]
     end
     subgraph Engine["Orchestrator and core enforcement"]
         Policy["Policy: AGT"]
@@ -153,7 +159,7 @@ flowchart TB
         Secrets["Secrets: Azure Key Vault"]
     end
     subgraph Knowledge["Knowledge"]
-        Memory["Memory: native Postgres"]
+        Memory["Memory: native Postgres; Cosmos and Redis in P2"]
     end
     subgraph Events["Events and Sessions"]
         Sessions["Sessions: native Postgres journal"]
@@ -176,20 +182,23 @@ flowchart TB
     Orchestration --> Policy
     Orchestration --> Sandbox
     Applications --> Hosting
+    Applications --> Canvas
+    Sessions -->|"references, not large bytes"| Objects
 ```
 
 | Seam | Primary owner | Azure-first default | Later or additional adapters |
 | --- | --- | --- | --- |
 | Sessions | Events & Sessions | Native Postgres journal | agentsessions capture sidecar (P3) |
 | Snapshots | Environment manager | None until gated Azure Blob-backed AKS pod snapshot/restore capability | Compatible sandbox-native snapshots |
-| Sandbox | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof |
-| Storage | Environment manager | Azure Files | Elastic SAN for environment volumes (P2); filesystem providers for agents when ready |
-| Memory | Knowledge | Native Postgres | Cosmos memory service (P3) |
+| Sandbox | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; Container Apps Sandboxes evaluation (P3) |
+| Storage | Environment manager | Azure Files | Elastic SAN deferred outside P2; filesystem providers for agents when ready |
+| Memory | Knowledge | Native Postgres | Cosmos and Redis providers (P2), behind the same Memory contract |
 | Policy | Orchestrator/core enforcement | AGT .NET kernel with YAML rules | No second decision kernel planned |
 | Guardrails | Orchestrator/core enforcement | Azure AI Content Safety Prompt Shields (P2) | Purview DLP; other classifiers |
 | Network Policy | Environment manager | Cilium L3/L4; Agentweaver Tool & MCP gateway for L7 | Kubernetes NetworkPolicy where applicable; agentgateway (P3) |
 | Cost | Events & Sessions | Copilot AI-credit pricing | Azure BYOK (P2); priced third-party meter sources |
-| Application Hosting | Environment manager | Built-in AKS web runtime; Agentweaver A2UI shell (P2) | Image-backed and owner-managed providers if shipped in 0.x; Azure Container Apps evaluation (P3) |
+| Application Hosting | Environment manager | Built-in AKS web runtime (P2) | No other implementation providers in the current plan |
+| Canvas | Web frontend / Applications | A2UI renderer (P2) | GitHub Canvas-compatible adapter research and reverse engineering (P2) |
 | Secrets | Identity | Azure Key Vault with workload identity | None planned |
 | Source Control | Source Control & Merge | GitHub | Other source-control adapters if justified |
 | Telemetry | Platform-wide | OpenTelemetry to Azure Monitor | Other OpenTelemetry Protocol (OTLP) exporters |
@@ -202,11 +211,19 @@ already defines a plug-in protocol; Postgres remains the fixed transactional
 state store. The [provider-seam design](../design/provider-seams.md) defines
 cardinality, contracts, pinning, conformance, and enforcement in detail.
 
+Canvas is the new rendering boundary; Surfaces remain core product logic.
+The current source catalog still names 15 seams. The P2 Canvas contract and adapters
+are planned work, not implemented or deployed providers.
+Elastic SAN is not a P2 or cutover requirement. Cosmos and Redis join the exclusive
+Memory seam in P2 without replacing the PostgreSQL session journal.
+See [PostgreSQL and Blob](../persistence-objects.md#events-and-blob-have-different-jobs)
+for the distinction between journal records and large object bytes.
+
 ## Design documents
 
 | Document | Scope |
 | --- | --- |
-| [Provider seams](../design/provider-seams.md) | Provider contracts, 15 seams, adapter selection, capabilities, security invariants, and conformance. |
+| [Provider seams](../design/provider-seams.md) | Provider contracts, 16 planned seams, adapter selection, capabilities, security invariants, and conformance. |
 | [Sessions and coordination](../design/sessions-and-coordination.md) | Journal and Copilot session state, suspend/resume consistency, nested sessions, messages, and knowledge records. |
 | [Orchestration](../design/orchestration.md) | Thin coordinator, typed decisions, step catalogs, step-snapped plans, and deterministic MAF gates. |
 | [Applications and surfaces](../design/applications-and-surfaces.md) | The `live`/`preview`/`published` application lifecycle, hosting, and surface panel. |
@@ -286,16 +303,16 @@ line enter the 1.0 backlog under the listed owner.
 | v0.35 | Remote MCP [#1229](https://github.com/sabbour/agentweaver/issues/1229) ([#1230](https://github.com/sabbour/agentweaver/issues/1230), [#1231](https://github.com/sabbour/agentweaver/issues/1231), [#1232](https://github.com/sabbour/agentweaver/issues/1232), [#1233](https://github.com/sabbour/agentweaver/issues/1233), [#1234](https://github.com/sabbour/agentweaver/issues/1234), [#1235](https://github.com/sabbour/agentweaver/issues/1235)); MCP surface [#1407](https://github.com/sabbour/agentweaver/issues/1407), [#1427](https://github.com/sabbour/agentweaver/issues/1427), [#1428](https://github.com/sabbour/agentweaver/issues/1428) | MCP catalog and Tool & MCP gateway ([Provider seams](../design/provider-seams.md)). |
 | v0.35 | Tracked addressed messages [#1406](https://github.com/sabbour/agentweaver/issues/1406); run state and recovery effects [#1402](https://github.com/sabbour/agentweaver/issues/1402) | Message primitive and status snapshot ([Sessions and coordination](../design/sessions-and-coordination.md)). |
 | v0.35 | Preview retention and abandoned-sandbox reclaim [#1688](https://github.com/sabbour/agentweaver/issues/1688) | Sandbox lifecycle and `live`-to-`preview` capture ([Provider seams](../design/provider-seams.md), [Applications](../design/applications-and-surfaces.md)). |
-| v0.35 | Workflow applications [#662](https://github.com/sabbour/agentweaver/issues/662), canvas/A2UI renderer [#665](https://github.com/sabbour/agentweaver/issues/665), authorization [#668](https://github.com/sabbour/agentweaver/issues/668) | Applications and surfaces, including web and A2UI profiles. |
+| v0.35 | Workflow applications [#662](https://github.com/sabbour/agentweaver/issues/662), canvas/A2UI renderer [#665](https://github.com/sabbour/agentweaver/issues/665), authorization [#668](https://github.com/sabbour/agentweaver/issues/668) | Built-in AKS Application Hosting and the separate Canvas seam for A2UI; core owns authorization. |
 | v0.35 | Verified behavior guarantees [#1405](https://github.com/sabbour/agentweaver/issues/1405) | Parity-map acceptance list once published. |
-| v0.36 | Image-backed [#666](https://github.com/sabbour/agentweaver/issues/666) and owner-managed [#667](https://github.com/sabbour/agentweaver/issues/667) app providers; image publication [#761](https://github.com/sabbour/agentweaver/issues/761) | Application Hosting adapters and control-plane registry publication. |
-| v0.37 | Suspend/resume [#1410](https://github.com/sabbour/agentweaver/issues/1410); AgentHost startup [#1257](https://github.com/sabbour/agentweaver/issues/1257) | Snapshots and consistency manifest; Sandbox startup phases and size budget. |
+| v0.36 | Image-backed [#666](https://github.com/sabbour/agentweaver/issues/666) and owner-managed [#667](https://github.com/sabbour/agentweaver/issues/667) app providers; image publication [#761](https://github.com/sabbour/agentweaver/issues/761) | Additional hosting providers are deferred from the current plan; control-plane image publication remains. |
+| v0.37 | Suspend/resume [#1410](https://github.com/sabbour/agentweaver/issues/1410); AgentHost startup [#1257](https://github.com/sabbour/agentweaver/issues/1257) | Snapshots and consistency manifest; measured image pull size, download optimization, and startup-time budgets, with no hard image-size ceiling. |
 | v0.38 | Delivery simplification [#1429](https://github.com/sabbour/agentweaver/issues/1429), [#1430](https://github.com/sabbour/agentweaver/issues/1430) | Fresh 1.0 release tooling ([Services and release](../design/services-and-release.md)). |
 | v0.39 | Project-owned durable previews [#1494](https://github.com/sabbour/agentweaver/issues/1494) | Application `preview` stage. |
 
 ## Phases
 
-**Progress (2026-10-02):** Merged foundations below are libraries and validation
+**Historical foundation snapshot (2026-10-02):** Merged foundations below are libraries and validation
 tooling, not a running or released platform. The workload-identity composition
 from [#1771](https://github.com/sabbour/agentweaver/pull/1771) (issue
 [#1766](https://github.com/sabbour/agentweaver/issues/1766)) is merged, but
@@ -324,10 +341,18 @@ The [#1779 broker candidate](../../specs/1779-identity-broker.md) adds the nativ
 It includes locked image builds, but no publication or deployed Azure evidence.
 Run-grant redemption composition (#1783) and Azure proof (#1790) remain separate dependencies.
 
+**Current acceptance (2026-10-08):** P0 shipment and live acceptance are complete
+under [#1801](https://github.com/sabbour/agentweaver/issues/1801). Its recorded
+publication, AKS installation, authentication, Key Vault, Blob, PostgreSQL, telemetry,
+and owned-cleanup results supersede the historical snapshot above.
+This does not prove the unfinished P1 runtime, GitHub lifecycles, or integrated journeys.
+Their current source acceptance remains under
+[#1841](https://github.com/sabbour/agentweaver/issues/1841).
+
 | Phase | Status and evidence | Remaining before phase completion |
 | --- | --- | --- |
-| P0 — Foundation | **In progress.** Merged provider descriptors/resolution/pinning [#1735](https://github.com/sabbour/agentweaver/pull/1735), Postgres schemas/outbox [#1738](https://github.com/sabbour/agentweaver/pull/1738), coverage [#1741](https://github.com/sabbour/agentweaver/pull/1741), Secrets/Key Vault [#1752](https://github.com/sabbour/agentweaver/pull/1752)/[#1756](https://github.com/sabbour/agentweaver/pull/1756), OpenTelemetry/Azure Monitor [#1753](https://github.com/sabbour/agentweaver/pull/1753)/[#1758](https://github.com/sabbour/agentweaver/pull/1758), Blob [#1760](https://github.com/sabbour/agentweaver/pull/1760)/[#1763](https://github.com/sabbour/agentweaver/pull/1763), consumer inbox [#1772](https://github.com/sabbour/agentweaver/pull/1772) (issue [#1768](https://github.com/sabbour/agentweaver/issues/1768)), ordered/layered provider composition [#1770](https://github.com/sabbour/agentweaver/pull/1770) (issue [#1767](https://github.com/sabbour/agentweaver/issues/1767)), and AKS workload-identity host composition [#1771](https://github.com/sabbour/agentweaver/pull/1771) (issue [#1766](https://github.com/sabbour/agentweaver/issues/1766)). | Identity service authorization/redemption and broker; service wiring/runtime/cloud layout; deployment and per-service compatibility proof; dedicated Azure integration environment with exact-SHA evidence. Component records and intent validation are implemented by [#1773](https://github.com/sabbour/agentweaver/issues/1773). The #1778 candidate supplies version preparation and manual artifact publication tooling, not actual publication or deployed acceptance. The manifest is still a draft. |
-| P1 — Core and defaults | **Not delivered.** The project issue workflow [#1743](https://github.com/sabbour/agentweaver/pull/1743) and workflow canvas [#1755](https://github.com/sabbour/agentweaver/pull/1755)/[#1757](https://github.com/sabbour/agentweaver/pull/1757)/[#1762](https://github.com/sabbour/agentweaver/pull/1762) are delivery tooling, not product P1. | Core services, default adapters, and exact-SHA AKS harness journeys described below. |
+| P0 — Foundation | **Accepted.** Source and initial artifacts are shipped under [#1801](https://github.com/sabbour/agentweaver/issues/1801). The AKS installation [#1812](https://github.com/sabbour/agentweaver/issues/1812) and exact-source live acceptance [#1814](https://github.com/sabbour/agentweaver/issues/1814) are complete, including owned cleanup. | None for the accepted P0 scope. Obsolete package deletion [#1825](https://github.com/sabbour/agentweaver/issues/1825) is explicitly deferred and does not block acceptance. New P1 credential-writer deployment rights are not included in P0's read-only secret access. |
+| P1 — Core and defaults | **Incomplete.** Accepted source and remaining delivery are tracked under [#1841](https://github.com/sabbour/agentweaver/issues/1841). The project issue workflow [#1743](https://github.com/sabbour/agentweaver/pull/1743) and workflow canvas [#1755](https://github.com/sabbour/agentweaver/pull/1755)/[#1757](https://github.com/sabbour/agentweaver/pull/1757)/[#1762](https://github.com/sabbour/agentweaver/pull/1762) are delivery tooling, not product acceptance. | Remaining core source and separately authorized exact-SHA AKS harness journeys described below. |
 | P2 — Parity and cutover | **Not delivered.** | Parity, application/surface capabilities, acceptance and cutover described below. |
 | P3 — After cutover | **Deferred and optional.** | Evaluate gated adapters only after cutover; none blocks it. |
 
@@ -341,16 +366,30 @@ Run-grant redemption composition (#1783) and Azure proof (#1790) remain separate
   server, and budgeted AgentHost startup. Supply native Sessions/Memory,
   agent-sandbox with retention/reclaim, Azure Files, Cilium egress intent,
   AGT, GitHub, and Copilot cost. Start exact-SHA AKS harness runs at the end of P1.
+  Canonical work remains [MAF execution and joins #1855](https://github.com/sabbour/agentweaver/issues/1855),
+  [AgentHost #1856](https://github.com/sabbour/agentweaver/issues/1856),
+  [first-party MCP #1858](https://github.com/sabbour/agentweaver/issues/1858),
+  [retained web UI #1859](https://github.com/sabbour/agentweaver/issues/1859), and
+  [integrated acceptance #1860](https://github.com/sabbour/agentweaver/issues/1860).
+  These links do not imply that all source or live acceptance is complete.
 - **P2 — Parity and cutover.** Add suspend/resume with a consistency manifest,
   Guardrails and tool permission metadata, remote MCP catalog and gateway,
-  Elastic SAN, Azure BYOK cost and budgets, prompt ordering and cache telemetry,
-  Squad import/export, and `live`/`preview`/`published` applications. Add
-  image publication, publish gate, and application/A2UI/MCP App/built-in
-  surfaces. Include image-backed and owner-managed app adapters if shipped
-  in 0.x. Close parity, pass API/UI/MCP harnesses, and cut over.
+  [Cosmos #1902](https://github.com/sabbour/agentweaver/issues/1902) and
+  [Redis #1898](https://github.com/sabbour/agentweaver/issues/1898) Memory providers,
+  Azure BYOK cost and budgets, prompt ordering
+  and cache telemetry, Squad import/export, and `live`/`preview`/`published`
+  applications through [built-in AKS hosting #1900](https://github.com/sabbour/agentweaver/issues/1900).
+  Add the separate [Canvas seam and A2UI renderer #1878](https://github.com/sabbour/agentweaver/issues/1878),
+  [GitHub Canvas research #1901](https://github.com/sabbour/agentweaver/issues/1901),
+  image publication, publish gate, and application/MCP App/built-in surfaces.
+  Research is planned, not performed; the [supported adapter #1904](https://github.com/sabbour/agentweaver/issues/1904)
+  depends on that research and the Canvas contract.
+  Elastic SAN and additional Application Hosting providers are outside this scope.
+  Close parity against these explicit dispositions, pass API/UI/MCP harnesses, and cut over.
 - **P3 — After cutover.** Consider gated AKS pod snapshot/restore, OpenSandbox,
-  Agent Substrate, Cosmos memory, agentsessions, filesystem providers for agents,
-  agentgateway, Azure Container Apps hosting, and Agentweaver surfaces exposed
+  Agent Substrate, [Container Apps Sandboxes #1899](https://github.com/sabbour/agentweaver/issues/1899),
+  agentsessions, filesystem providers for agents,
+  agentgateway, and Agentweaver surfaces exposed
   as MCP Apps. None of these optional adapters blocks cutover.
 
 ## Risk register
@@ -362,12 +401,12 @@ the design contains the failure mode.
 | ID | Risk | Type | Resolution |
 | --- | --- | --- | --- |
 | R1 | agentsessions adds little while the Copilot SDK owns calls. | Decided | P3 capture-only mirror of the journal with hash verification and playback; no re-execution promise. Drop it if the native journal suffices. |
-| R2 | Filesystem providers for agents are pre-product. | Decided | Keep them off the 1.0 path; use Azure Files and Elastic SAN behind the volume contract and negotiate optional capabilities later. |
+| R2 | Filesystem providers for agents are pre-product. | Decided | Keep them off the 1.0 path; use Azure Files behind the volume contract. Elastic SAN is deferred outside P2. |
 | R3 | AKS pod snapshot/restore is pre-preview; Blob end-to-end, Kata virtual machine (VM) v2, node pinning, warm-pool restore, and latency are unproven. | Gated | Suspend works without snapshots. Adopt only after public preview, Azure Blob end-to-end success, warm-pool claim restore, and capture/restore within the AgentHost startup budget; switch to Kata v2 then. |
 | R4 | Pod snapshots exclude workspace volume data. | Mitigated | Record and validate storage generation separately in a consistency manifest. |
 | R5 | User-level BYOK expands the credential boundary. | Decided | Keep platform and project settings only in 1.0. |
 | R6 | AGT 5.0 policy language support lacks .NET parity. | Decided | Use the AGT .NET kernel with YAML rules as in 0.x; consider Rego/Cedar later without changing contracts. |
-| R7 | AgentMemoryToolkit and agentsessions are previews. | Decided | Native implementations are defaults; optional adapters wait until P3. |
+| R7 | Optional upstream memory and session libraries are previews. | Decided | Native implementations remain defaults. Cosmos and Redis Memory providers ship in P2 behind conformance gates; agentsessions stays optional in P3. No preview library is mandatory. |
 | R8 | Agent Substrate has beta APIs, uncertain AKS viability, and no Blob snapshot store. | Gated | P3 conformance and an AKS proof of VM-level isolation ([#553](https://github.com/sabbour/agentweaver/issues/553)); leave snapshots off until Azure Blob support. |
 | R9 | Messages cross service boundaries and may duplicate. | Decided | At-least-once outbox, idempotency keys, consumer deduplication, per-thread sequence numbers. |
 | R10 | Operator chat may need to spawn runs. | Decided | Permit spawn under run-start authorization; record the run as the chat's child. |
@@ -375,7 +414,7 @@ the design contains the failure mode.
 | R12 | WorkPlans change mid-run. | Decided | Permit bounded revisions within steps; confirm additions/removals of steps or wider scope. |
 | R13 | Strict step snapping can reject exploratory work. | Decided | Reject unmapped work unless an open step permits it; built-in workflows include an open implementation step. |
 | R14 | A proposed agent volume API may change. | Mitigated | Use Agentweaver vocabulary in contracts; let the adapter absorb provider renames. |
-| R15 | Elastic SAN is read-write-once only. | Decided | Use it only for `environment` volumes; use Azure Files for shared volumes. |
+| R15 | Elastic SAN is read-write-once only. | Decided | Defer the adapter outside P2. If reconsidered, limit it to `environment` volumes; Azure Files remains the workspace default. |
 | R16 | Cilium cannot guarantee FQDN-only HTTPS egress to public IPs. | Mitigated | Route model, MCP, and agent-to-agent traffic through the L7 gateway; document remaining limits. |
 | R17 | agentgateway per-environment policy is not the default. | Decided | Default to Agentweaver's own Tool & MCP gateway; consider agentgateway in P3. |
 | R18 | Copilot AI-credit pricing changes. | Mitigated | Version the rate card and persist its version with each cost record. |
@@ -384,8 +423,8 @@ the design contains the failure mode.
 | R21 | Cutover could discard 0.x history or require a force push. | Decided | Tag final 0.x on `dev`, keep `release/0.x` for patches, merge old `dev` into `v1` with `--allow-unrelated-histories -s ours`, and fast-forward `dev` to `v1`. |
 | R22 | An active 0.x line keeps moving the parity target. | Decided | Set a cut line once the map is complete; later changes enter the 1.0 backlog rather than blocking cutover. |
 | R23 | Persona harness coverage could arrive too late. | Decided | Run API/UI/MCP harnesses on exact-SHA AKS deployments from the end of P1; require all green at cutover. |
-| R24 | Container Apps, viewer auth, and app-provider timing need ownership. | Decided | Evaluate Container Apps in P3; authenticate viewers at Gateway/Identity under [#668](https://github.com/sabbour/agentweaver/issues/668), never at a provider; [#666](https://github.com/sabbour/agentweaver/issues/666)/[#667](https://github.com/sabbour/agentweaver/issues/667) follow parity. |
-| R25 | A2UI 1.0 is unfinished and the Copilot canvas API is not a standard. | Mitigated | Pin renderer spec version (v0.9.1 stable, v1.0 when final) and component catalog; MCP Apps handles custom UI; Agentweaver's own surface actions use MCP. |
+| R24 | Sandbox options, viewer auth, and application hosting can be confused. | Decided | Keep only built-in AKS Application Hosting for now. Evaluate Container Apps Sandboxes under the Sandbox seam in P3. Gateway/Identity retains viewer authorization. Defer [#666](https://github.com/sabbour/agentweaver/issues/666)/[#667](https://github.com/sabbour/agentweaver/issues/667) hosting adapters. |
+| R25 | A2UI versions and the nonstandard GitHub Canvas protocol can change. | Mitigated | Isolate A2UI and GitHub Canvas compatibility behind the P2 Canvas seam. Pin renderer versions and catalogs; reverse engineering does not grant action authority or claim compatibility before evidence exists. |
 
 ## Consequences
 

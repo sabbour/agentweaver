@@ -91,6 +91,7 @@ flowchart LR
         Knowledge["Knowledge"]
         Events["Events & Sessions"]
         Mcp["First-party MCP server"]
+        Canvas["Canvas adapters (P2)"]
     end
     subgraph Data["Data plane"]
         Host["AgentHost in Sandbox"]
@@ -100,9 +101,11 @@ flowchart LR
         Sidecars["Provider sidecars / services"]
     end
     Db["Postgres (schema per service)"]
+    Objects["Object Store adapter"]
     Blob["Azure Blob object store"]
     Browser -->|"HTTP"| Web
     Web -->|"HTTP and SSE"| Bff
+    Web -->|"render interactive content"| Canvas
     Cli -->|"HTTP"| Bff
     Cli -->|"MCP"| Mcp
     Mcp -->|"HTTP with the validated Broker bearer"| Bff
@@ -115,7 +118,9 @@ flowchart LR
     Orch -->|"outbox events"| Events
     Events -->|"events and SSE"| Bff
     Control -->|"owned schemas"| Db
-    Events -->|"artifact references"| Blob
+    Events -->|"journal and object references"| Db
+    Events -->|"authorized object operations"| Objects
+    Objects -->|"opaque bytes"| Blob
     Env -->|"provision and configure"| Host
     Env -->|"deployment"| Apps
     Host -->|"gated egress"| Tool
@@ -135,10 +140,10 @@ flowchart LR
 | Orchestrator | Runs, Microsoft Agent Framework (MAF) workflows, session tree and coordination verbs, typed coordinator decisions, OutcomeSpec and WorkPlan, approval and question gates, immutable accepted-run Sandbox and Source Control owner bindings, source-specific merge intents and narrow action grants, checkpoints, recovery, consistency manifest, run-limit budget enforcement, and the current session/work-item/turn context and runtime-registration source. | The run journal's storage, Sandbox resource provisioning, direct cross-schema updates, complete runtime delivery, or usage accounting. |
 | Environment manager | Sandbox, Snapshots, Storage, Network Policy, and Application Hosting adapters; leases and fencing; egress verification; startup phases; retention, reclaim, application deployments, and control-plane image publication. | Viewer authentication or a workflow's publish decision. |
 | Source Control & Merge | Git workspace preparation, diff and assembly, merge locks, pull requests, webhooks, backlog intake, and the Source Control provider seam. | Platform-wide project identity. |
-| Knowledge | Memory and session-context records, decisions and proposals, prompt composition, and Memory adapters. | Repository files as an authoritative memory database. |
+| Knowledge | Memory and session-context records, decisions and proposals, prompt composition, and Memory adapters: native PostgreSQL by default, with Cosmos and Redis in P2. | Repository files as an authoritative memory database or the Sessions journal. |
 | Events & Sessions | Run journal, message contents and delivery state, SSE fan-out, Sessions adapters, durable usage ledger, and Cost adapters. | Orchestrator workflow transitions or approval policy. |
 | First-party MCP server | Native MCP tools sourced from the Gateway's finite OpenAPI catalog; validates Broker tokens and forwards the same bearer to Gateway. | Independent authorization, caller-supplied actor identity, or a second orchestration state machine. |
-| Web frontend | Agentweaver's own run/chat interface and surface panel, A2UI renderer, and MCP Apps host bridge. | Durable backend authority or a copied Copilot application UX. |
+| Web frontend / Applications | Agentweaver's own run/chat interface, surface panel, Canvas adapters and host bridge, including A2UI and GitHub Canvas compatibility work in P2, plus MCP Apps integration. | Workflow authority, agent execution, web serving capacity, or a replacement Copilot application UX. |
 
 Projects & Config owns a PostgreSQL schema for configuration and authorization. It resolves the validated issuer and local subject to an active membership and current resource roles; tokens and checked tenant selectors do not grant roles. Runtime database credentials can read authority records but cannot mutate them. A separate privileged source path provisions memberships and roles and revokes them with revision checks, immutable audit, and a last-Owner invariant. Privileged resource services obtain fresh, effective caller permissions from `GET /api/authorization/context` for each operation; they do not maintain separate membership/role records, caches, or authorization pins. The Orchestrator supplies a trusted, revisioned run-selection context; the service checks project and platform revisions, resolves project model settings before platform defaults without fallback from an unavailable explicit setting, resolves provider candidates through the provider catalog contract, and enforces egress and run-limit narrowing. The returned immutable snapshot records candidates and selection revisions, not provisioned resources or authorization. Consumers pin final resource identity and negotiated capabilities only after provisioning.
 
@@ -214,12 +219,14 @@ requires an explicit user request.
 | AgentHost environment | The sole Copilot SDK harness runs in a Sandbox environment with tools, core enforcement gates, and an execution sidecar. Its image and binding are pinned per run. Authenticated, versioned `/configure`, refresh, and agent-to-agent (A2A) contracts carry run identity and only the credentials needed for that purpose. |
 | Tool & MCP gateway | The default L7 Network Policy implementation mediates outbound model, MCP, and A2A traffic; it applies permitted routes, rate limits, audit, scoped credential injection, and token metrics. It does not replace core Agent Governance Toolkit (AGT) decisions or record-before-transmit gates. |
 | Application router | An authenticated route model reaches `live` applications in a sandbox and durable `preview` and `published` applications from hosting providers. It is an edge component, not a reason to retain an AgentHost. |
-| Hosted applications | Immutable verified previews and published revisions run in Application Hosting capacity outside the AgentHost sandbox; declarative A2UI renders in the Agentweaver shell. |
+| Hosted applications | Immutable verified web previews and published revisions use the built-in AKS Application Hosting runtime outside the AgentHost sandbox. Canvas renders declarative content in the existing web surface panel without an application server. |
 | Provider sidecars/services | Optional provider integrations such as a session-capture host or Python memory service, plus BuildKit as an isolated image builder. Sandbox backends themselves remain external implementations. |
 
 AgentHost startup emits the `scheduled`, `image ready`, `started`, `configured`, and `ready` phases
-with a size and time budget, making [#1257](https://github.com/sabbour/agentweaver/issues/1257)
-visible instead of hiding it in one timeout. The Environment manager does not mark the environment
+with configured time budgets. It measures compressed pull bytes for the selected platform image
+and optimizes download time without a hard image-size ceiling, making
+[#1257](https://github.com/sabbour/agentweaver/issues/1257) visible instead of hiding it in one timeout.
+The Environment manager does not mark the environment
 ready before egress intent has been applied and verified. The selected
 [Sandbox](provider-seams.md#sandbox), [Storage](provider-seams.md#storage), and [Network
 Policy](provider-seams.md#network-policy) adapters must agree on attach and placement capabilities
@@ -240,10 +247,11 @@ enforcement](provider-seams.md#enforcement-and-readiness).
 
 ## Run lifecycle across services
 
-The Orchestrator is the durable run leader. It resolves platform defaults and project overrides,
-checks provider capabilities and compatibility, and pins effective bindings before dispatch. The
-Environment manager turns those bindings into an environment, attaches its workspace, and verifies
-the exact egress generation. The Knowledge service composes context; the AgentHost then runs turns
+The Orchestrator is the durable run leader. It resolves platform defaults and project overrides
+into candidates and checks advertised capabilities and compatibility.
+The Environment manager provisions resources, attaches the workspace, and verifies
+the exact egress generation. The Orchestrator then pins negotiated resource bindings before dispatch.
+The Knowledge service composes context; the AgentHost then runs turns
 behind core gates. The journal and usage ledger are domain records rather than a best-effort
 telemetry side effect.
 
@@ -265,10 +273,12 @@ sequenceDiagram
     User->>Bff: Start an authorized run
     Bff->>Orch: Create run with actor and project
     Orch->>Config: Resolve provider, model, and project settings
-    Config-->>Orch: Compatible, pinned bindings
+    Config-->>Orch: Compatible candidates and configuration revisions
     Orch->>Env: Provision environment with fencing generation
     Env->>Env: Apply and verify egress intent
     Env->>Env: Bind and attach pinned Storage reference
+    Env-->>Orch: Resource identities and negotiated capabilities
+    Orch->>Orch: Pin effective resource bindings before dispatch
     Env->>Id: Obtain purpose-bound configure credentials
     Id-->>Env: Scoped configure material
     Env->>Host: Authenticated versioned configure
@@ -295,6 +305,16 @@ decisions, Build/Test, review, publication, and merge gates are defined in
 [Orchestration](orchestration.md). A run need not publish an application; when it does, capture and
 publication follow [Applications and
 surfaces](applications-and-surfaces.md#one-application-three-stages).
+
+Events and Blob have different jobs. Events commits ordered journal entries,
+usage, and run artifact references in its PostgreSQL schema.
+The shared Object Store adapter writes and reads large opaque bytes in Azure Blob.
+Blob does not store the authoritative journal or authorize callers.
+The planned trusted-owner content path connects the two without giving AgentHost
+direct container access. That content API and Events Blob composition are not
+implemented in the current source.
+See [PostgreSQL and Blob](../persistence-objects.md#events-and-blob-have-different-jobs)
+for upload ordering, authorized reads, and the current boundary.
 
 ### Configuration and credential boundary
 
@@ -529,14 +549,15 @@ without data migration.
   P1, start persona harnesses against exact-SHA AKS deployments.
 - **P2 — parity and cutover:** Complete suspend/resume, guardrails, the Tool & MCP gateway, MCP
   catalog and remote MCP ([#1229](https://github.com/sabbour/agentweaver/issues/1229)), Azure BYOK
-  pricing and budgets, provider
-  options, image publication ([#761](https://github.com/sabbour/agentweaver/issues/761)),
-  applications and surfaces, release tooling informed by
+  pricing and budgets, Cosmos and Redis Memory providers, provider options,
+  image publication ([#761](https://github.com/sabbour/agentweaver/issues/761)),
+  built-in AKS Application Hosting, Canvas with A2UI and GitHub Canvas compatibility
+  research and reverse engineering, applications and surfaces, release tooling informed by
   [#1429](https://github.com/sabbour/agentweaver/issues/1429) and
   [#1430](https://github.com/sabbour/agentweaver/issues/1430), the parity map, and all three
-  harnesses before cutover.
+  harnesses before cutover. Elastic SAN and additional hosting adapters are outside this scope.
 - **P3 — after cutover:** Evaluate optional providers and data-plane alternatives, including an
-  alternative L7 gateway and Azure Container Apps hosting, against the existing service contracts
+  alternative L7 gateway and Container Apps Sandboxes, against the existing service contracts
   rather than adding a second core.
 
 ## Related risks
@@ -554,4 +575,5 @@ without data migration.
 - [R23](../decisions/0001-platform-architecture.md#risk-register): Exact-SHA AKS API/UI/MCP harness
   validation begins by the end of P1 and gates cutover.
 - [R24](../decisions/0001-platform-architecture.md#risk-register): Hosting providers never replace
-  Gateway/Identity viewer authorization, and Azure Container Apps is not a cutover dependency.
+  Gateway/Identity viewer authorization. Built-in AKS is the only planned hosting implementation;
+  Container Apps Sandboxes is later Sandbox work.
