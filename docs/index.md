@@ -38,6 +38,21 @@ This site documents code and procedures that exist in the `v1` source. Proposed 
 | [Component releases](./reference/releases) | Draft manifest, changesets, and release commands. |
 | [Diagram authoring](./diagrams/README) | Editable sources, rendered figures, and validation commands. |
 
+## Proposed extensions
+
+The [installed agent application specification](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/agent-application-bundles.md)
+defines portable bundles and installation through existing owners.
+The [canonical plan](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0001-platform-architecture.md#installed-agent-applications---planned-post-core-extension)
+places this extension after its applicable core prerequisites.
+These source-only designs do not describe an implemented installer or deployed capability.
+They do not change P1 completion.
+
+The [Canvas contract and delivery plan](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/applications-and-surfaces.md#canvas-provider-contract-and-adapters)
+preserves the separate planned Canvas seam, A2UI, bounded GitHub compatibility,
+MCP Apps protocol integration, and bundle declarations.
+[#1878](https://github.com/sabbour/agentweaver/issues/1878) tracks the B1-B5/C1-C5 criteria in `v1.0.0` P2.
+Documentation admission does not implement those criteria.
+
 ## Version boundary
 
 Agentweaver 0.x remains an active product line on `dev`. Read the [0.x documentation](https://sabbour.github.io/agentweaver/) for that product.

@@ -74,6 +74,7 @@ than moving those cross-module dependencies between processes.
 | UX | Keep Agentweaver's run page, topology, approvals, and chat; add a canvas-like surface panel without adopting the Copilot app's UI. |
 | Orchestration | Require step catalogs and step-snapped WorkPlans; typed coordinator proposals undergo schema, policy, and workflow validation. |
 | Applications | One application model has `live`, `preview`, and `published` stages. Application Hosting serves web applications through the built-in AKS runtime only for now. |
+| Installed agent applications | Planned P2 extension: distribute digest-pinned OCI bundles and bind them through existing owners. Installation references are not resource-bound run pins. No new service or seam beyond the separately planned Canvas seam. |
 | Canvas | A separate provider seam renders interactive content. P2 includes Agent-to-User Interface (A2UI) and GitHub Canvas compatibility research and reverse engineering. |
 | Surfaces | Core owns surface identity, lifecycle, and typed `surface_*` actions. Canvas adapters render declarative content without owning workflow or viewer authorization. |
 | Neutrality | Use Agentweaver vocabulary in contracts. Include a concept only when two providers need it; Azure is a default, not a contractual assumption. |
@@ -227,6 +228,7 @@ for the distinction between journal records and large object bytes.
 | [Sessions and coordination](../design/sessions-and-coordination.md) | Journal and Copilot session state, suspend/resume consistency, nested sessions, messages, and knowledge records. |
 | [Orchestration](../design/orchestration.md) | Thin coordinator, typed decisions, step catalogs, step-snapped plans, and deterministic MAF gates. |
 | [Applications and surfaces](../design/applications-and-surfaces.md) | The `live`/`preview`/`published` application lifecycle, hosting, and surface panel. |
+| [Installed agent applications](../design/agent-application-bundles.md) | Proposed portable bundles, installations, activation, real-run binding, upgrade/uninstall, OCI distribution, and B1-B5/C1-C5 acceptance. |
 | [Services and release](../design/services-and-release.md) | Control/data-plane decomposition, owned schemas, versioning, manifests, and delivery. |
 
 ## Delivery strategy
@@ -394,6 +396,41 @@ Their current source acceptance remains under
   agentsessions, filesystem providers for agents,
   agentgateway, and Agentweaver surfaces exposed
   as MCP Apps. None of these optional adapters blocks cutover.
+
+### Installed agent applications - planned post-core extension
+
+Agentweaver will host [installed agent applications](../design/agent-application-bundles.md),
+not only configured agents/workflows or generated application outputs.
+The specification defines portable bundles and the existing-owner host boundary.
+It does not describe an implemented installer or deployed capability.
+
+This P2 extension follows its applicable core prerequisites.
+It leaves P1's nineteen-item scope, counts, acceptance criteria, and completion gates unchanged.
+It does not widen #1848 or #1851 or add a P1 prerequisite.
+[#1878](https://github.com/sabbour/agentweaver/issues/1878) tracks B1-B5 and C1-C5
+in milestone `v1.0.0` (18).
+The [Canvas contract](../design/applications-and-surfaces.md#canvas-provider-contract-and-adapters)
+uses the separately planned sixteenth seam; current source still implements fifteen.
+A2UI and bounded GitHub compatibility are planned adapters.
+MCP Apps is a protocol integration, not another provider or authorization system.
+
+| Slice | Existing owners and prerequisites | Acceptance gate |
+| --- | --- | --- |
+| B1: Contract and inert validation | Projects, Core, trusted composition; existing configuration, selection, workflow validation, and outboxes. | Versioned manifest, exact digests, dependency lock, trust/schema/archive checks, explicit incompatibility, and no install-time execution or fabricated resource pins |
+| B2: Durable installation and activation | Projects authority/active head, Core lifecycle operations, Object Store callers; typed gates and current authorization. | Missing-input states, denied activation, idempotency/conflicts, restart/reconciliation, fenced concurrency, isolated staging, and active-head CAS |
+| B3: Accepted runs and components | Core, AgentHost, Environment, Policy/Identity, Tool & MCP gateway; real grants, content delivery, and negotiation. | Actual host-readable immutable bytes, genuine run/resource pins, unavailable producers, first-use gates, current revocation, credential redaction, and Canvas isolation |
+| B4: Upgrade, rollback, uninstall | Projects, Core, Environment, Identity, retention owners; B2/B3 and exact owner receipts. | Old-run affinity, fresh new-run authority, pending-gate continuity, honest migration/rollback limits, drain, user-data retention, and exact cleanup or pending state |
+| B5: Interoperability and approved live acceptance | Registry/release configuration, Gateway/MCP/web, acceptance coordinator; separate target-specific authority. | OCI referrers/404-only fallback, tag mutation, evidence/copy/auth failures, and exact-SHA AKS API/UI/MCP lifecycle journeys |
+
+Installation freezes bundle/configuration/selected-provider references without provisioning Sandbox, Network, or Storage for compatibility.
+Real runs negotiate resources and persist genuine immutable pins through existing owners.
+The [integration matrix](../design/agent-application-bundles.md#required-integration-scenarios)
+preserves lifecycle, failure, authorization, affinity, and ownership-safe cleanup requirements.
+The [C1-C5 plan](../design/applications-and-surfaces.md#canvas-provider-delivery-and-milestone-placement)
+retains Core state, native/A2UI views, MCP Apps, bundle integration, and live acceptance.
+Documentation admission is not C1/source acceptance; #1878 remains open until its actual criteria are met.
+GitHub adapter #1904 remains separately scoped after its applicable C1/web/Core/MCP prerequisites.
+No additional hosting adapter, Elastic SAN, generic installer service, or permission framework is added.
 
 ## Risk register
 
