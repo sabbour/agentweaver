@@ -9,13 +9,57 @@ public sealed record SourceControlCredentialReference
         Secret = secret ?? throw new ArgumentNullException(nameof(secret));
         if (purpose is not (SourceControlSecretPurposes.Api or
             SourceControlSecretPurposes.Checkout or
-            SourceControlSecretPurposes.Webhook))
+            SourceControlSecretPurposes.Webhook or
+            SourceControlSecretPurposes.GitHubAppPrivateKey))
             throw new ArgumentException("Unsupported SourceControl secret purpose.", nameof(purpose));
         Purpose = purpose;
     }
 
     public SecretRef Secret { get; }
     public string Purpose { get; }
+}
+
+public sealed record SourceControlGitHubAppBinding
+{
+    public SourceControlGitHubAppBinding(
+        string identityConnectionId,
+        long identityConnectionRevision,
+        long installationId,
+        string permissionDigest,
+        string identityRepositorySelectionHash)
+    {
+        if (string.IsNullOrWhiteSpace(identityConnectionId) ||
+            identityConnectionId.Length > 128 ||
+            identityConnectionId.Any(character =>
+                !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
+            throw new ArgumentException("A stable Identity connection ID is required.", nameof(identityConnectionId));
+        if (identityConnectionRevision < 1)
+            throw new ArgumentOutOfRangeException(nameof(identityConnectionRevision));
+        if (installationId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(installationId));
+        if (permissionDigest is null ||
+            permissionDigest.Length != 64 ||
+            !permissionDigest.All(Uri.IsHexDigit))
+            throw new ArgumentException("GitHub App permission digest must be a SHA-256 hex digest.",
+                nameof(permissionDigest));
+        if (identityRepositorySelectionHash is null ||
+            identityRepositorySelectionHash.Length != 64 ||
+            !identityRepositorySelectionHash.All(Uri.IsHexDigit))
+            throw new ArgumentException("Identity repository-selection hash must be a SHA-256 hex digest.",
+                nameof(identityRepositorySelectionHash));
+
+        IdentityConnectionId = identityConnectionId;
+        IdentityConnectionRevision = identityConnectionRevision;
+        InstallationId = installationId;
+        PermissionDigest = permissionDigest.ToLowerInvariant();
+        IdentityRepositorySelectionHash = identityRepositorySelectionHash.ToLowerInvariant();
+    }
+
+    public string IdentityConnectionId { get; }
+    public long IdentityConnectionRevision { get; }
+    public long InstallationId { get; }
+    public string PermissionDigest { get; }
+    public string IdentityRepositorySelectionHash { get; }
 }
 
 public sealed record SourceControlAcceptedRunBinding
@@ -85,30 +129,37 @@ public sealed record SourceControlRepositoryPin
         SourceControlAcceptedRunBinding acceptedRun,
         PinnedProviderBinding providerBinding,
         SourceControlRepositoryIdentity repository,
-        SourceControlCredentialReference apiCredential,
+        SourceControlCredentialReference? apiCredential,
         SourceControlCredentialReference? checkoutCredential,
         SourceControlCredentialReference? webhookCredential,
         long providerRepositoryId,
         string defaultBranch,
         bool isPrivate,
-        DateTimeOffset pinnedAt)
+        DateTimeOffset pinnedAt,
+        SourceControlGitHubAppBinding? githubAppBinding = null)
     {
         if (!WorkflowValidationSupport.IsStableId(pinId))
             throw new ArgumentException("Pin ID must be a stable identifier.", nameof(pinId));
         AcceptedRun = acceptedRun ?? throw new ArgumentNullException(nameof(acceptedRun));
         ProviderBinding = providerBinding ?? throw new ArgumentNullException(nameof(providerBinding));
         Repository = repository ?? throw new ArgumentNullException(nameof(repository));
-        ApiCredential = apiCredential ?? throw new ArgumentNullException(nameof(apiCredential));
+        ApiCredential = apiCredential;
         CheckoutCredential = checkoutCredential;
         WebhookCredential = webhookCredential;
-        if (apiCredential.Purpose != SourceControlSecretPurposes.Api ||
+        GitHubAppBinding = githubAppBinding;
+        if (githubAppBinding is null &&
+            (apiCredential is null || apiCredential.Purpose != SourceControlSecretPurposes.Api ||
             checkoutCredential is not null &&
             checkoutCredential.Purpose != SourceControlSecretPurposes.Checkout ||
+            isPrivate && checkoutCredential is null) ||
+            githubAppBinding is not null &&
+            (apiCredential is not null ||
+             checkoutCredential is not null ||
+             githubAppBinding.IdentityConnectionRevision < 1) ||
             webhookCredential is not null &&
-            webhookCredential.Purpose != SourceControlSecretPurposes.Webhook ||
-            isPrivate && checkoutCredential is null)
+            webhookCredential.Purpose != SourceControlSecretPurposes.Webhook)
             throw new ArgumentException(
-                "Repository pins require an API secret, a checkout secret for private repositories, and purpose-matched optional references.",
+                "Repository pins require either legacy API/checkout secrets or an exact GitHub App binding.",
                 nameof(apiCredential));
         if (providerBinding.RunId != acceptedRun.RunId ||
             providerBinding.Seam != ProviderSeam.SourceControl ||
@@ -139,9 +190,10 @@ public sealed record SourceControlRepositoryPin
     public SourceControlAcceptedRunBinding AcceptedRun { get; }
     public PinnedProviderBinding ProviderBinding { get; }
     public SourceControlRepositoryIdentity Repository { get; }
-    public SourceControlCredentialReference ApiCredential { get; }
+    public SourceControlCredentialReference? ApiCredential { get; }
     public SourceControlCredentialReference? CheckoutCredential { get; }
     public SourceControlCredentialReference? WebhookCredential { get; }
+    public SourceControlGitHubAppBinding? GitHubAppBinding { get; }
     public long ProviderRepositoryId { get; }
     public string DefaultBranch { get; }
     public bool IsPrivate { get; }

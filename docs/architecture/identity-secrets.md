@@ -57,7 +57,7 @@ credential. A GitHub App installation token cannot authenticate the Copilot SDK.
 | --- | --- | --- |
 | Core sign-in | Broker OIDC, OAuth, consent, refresh, and purpose-bound secret redemption exist. | These contracts do not supply either GitHub connection lifecycle. |
 | GitHub Copilot | Identity implements owner-bound account linking, PKCE/cookie callbacks, exact-version writes, refresh rotation, and current binding checks in source. The SDK consumes only the current user access token. | Deployed OAuth, writer permissions, and live entitlement remain outside [#1906](https://github.com/sabbour/agentweaver/issues/1906) source evidence. |
-| GitHub App | Source Control consumes temporary repository credentials. | Installation connection, repository selection, and exact-repository token production: [#1907](https://github.com/sabbour/agentweaver/issues/1907). |
+| GitHub App | Identity owns the Repo App user connection, installation/repository selection, refresh, and run-bound exact-repository token mint used by Source Control. | Reachable settings UI and deployment are not included in this source slice; the relevant Web/MCP work remains [#1859](https://github.com/sabbour/agentweaver/issues/1859) and [#1908](https://github.com/sabbour/agentweaver/issues/1908). |
 | Web and MCP | Existing core routes and tools are implemented. | Reachable retained settings and real GitHub connection/repository routes: [#1859](https://github.com/sabbour/agentweaver/issues/1859) and [#1908](https://github.com/sabbour/agentweaver/issues/1908). |
 
 The compatible 0.x Copilot flow binds browser state, PKCE, cookies, and a single-use
@@ -65,16 +65,42 @@ callback to the current subject. Its refresh path serializes redemption, rotates
 refresh tokens, and uses version checks. Provider rejection can require reconnect;
 a transient failure must not fabricate that result.
 
-The compatible GitHub App producer reads its private key from the secret store,
-checks the exact installation and repository permissions, and requests a token for
-one repository with bounded permissions. GitHub supplies its expiry. An existing
-Vault secret and a consumer-side expiry limit do not prove this producer exists.
+The #1907 source candidate implements that GitHub App producer inside Identity. User
+authorization uses OAuth S256 PKCE, an owner-bound state and protected verifier, and a
+short-lived HttpOnly callback cookie. Installation setup uses its own owner-bound
+single-use callback. Identity discovers only installations and repositories visible to
+the connected user. A returned selection code is short-lived and appears only in the
+initial run-scoped Orchestrator `/pin` request, never in accepted configuration or the
+durable pin. Identity persists its hash, binds its first run-bound use to one owner and
+project, and permits reuse only for that same project.
 
 The Copilot source flow is not deployed login, writer permission, or paid-execution authority.
 The separate GitHub App and browser integrations retain their own delivery and acceptance boundaries.
 Accepted narrow source contracts remain accepted.
 Automatic webhook delivery and workflow triggers also need a separate service-identity
 scope decision; the current human-authenticated relay does not prove that parity.
+
+Identity stores rotating OAuth token references and provider expiry metadata, not token
+values. Refresh is serialized by a database lease and credential-revision compare-and-swap.
+Provider rejection marks the connection revoked; an uncertain rotation locks the
+connection instead of retrying a possibly consumed refresh token. Before token mint,
+Identity rechecks the active actor/project/run grant, exact connection revision,
+installation and repository, and current provider discovery. It redeems the exact
+GitHub App private-key SecretRef for the bound run, signs the App JWT in memory, and
+requests an installation token for exactly one repository with `contents:write` and
+`pull_requests:write`. It requests `issues:write` only when the pinned provider needs
+issue creation; the returned permission map is authoritative and unsupported requested
+permissions fail closed without a narrower retry.
+The private key and installation token are never stored in PostgreSQL. The Orchestrator
+receives the token only for the current operation and invalidates it afterward; later
+operations repeat Identity's binding and permission checks.
+
+These source routes and tests do not mean that the Broker, settings surface, GitHub
+App, Key Vault writer permissions, or any cloud service have been deployed. The
+connection does not create a Projects role, broaden OAuth authority, or enable paid
+execution. Automatic public webhook delivery and workflow triggers still require a
+separate service-identity scope decision; the current human-authenticated relay does
+not provide that authority.
 
 ### Minimum Copilot credential writer source scope
 

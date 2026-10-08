@@ -106,7 +106,7 @@ public sealed class SourceControlProviderSelectionResolverTests
         Assert.Equal(91, pin.ProviderBinding.Resource.Generation);
         Assert.Equal(negotiation.Repository, pin.Repository);
         Assert.Equal(negotiation.ProviderRepositoryId, pin.ProviderRepositoryId);
-        Assert.Equal("github-api", pin.ApiCredential.Secret.Id);
+        Assert.Equal("github-api", pin.ApiCredential!.Secret.Id);
         Assert.Equal("version-3", pin.CheckoutCredential!.Secret.Version);
         Assert.Equal("github-webhook", pin.WebhookCredential!.Secret.Id);
     }

@@ -34,8 +34,8 @@ public sealed class SourceControlProjectConfigurationResolverTests
         var settings = SourceControlProjectConfigurationResolver.Resolve(document.RootElement);
 
         Assert.Equal("octo/repo", settings.Repository.FullName);
-        Assert.Equal("github-api", settings.ApiSecretReference.Id);
-        Assert.Equal("v3", settings.ApiSecretReference.Version);
+        Assert.Equal("github-api", settings.ApiSecretReference!.Id);
+        Assert.Equal("v3", settings.ApiSecretReference!.Version);
         Assert.Equal("github-checkout", settings.CheckoutSecretReference!.Id);
         Assert.Equal("v2", settings.CheckoutSecretReference.Version);
         Assert.Equal("github-webhook", settings.WebhookSecretReference!.Id);
@@ -124,7 +124,7 @@ public sealed class SourceControlProjectConfigurationResolverTests
 
         Assert.Equal(acceptedRun, pin.AcceptedRun);
         Assert.Equal(settings.Repository, pin.Repository);
-        Assert.Equal("github-api", pin.ApiCredential.Secret.Id);
+        Assert.Equal("github-api", pin.ApiCredential!.Secret.Id);
         Assert.Equal(SourceControlSecretPurposes.Api, pin.ApiCredential.Purpose);
         Assert.Equal("github-checkout", pin.CheckoutCredential!.Secret.Id);
         Assert.Equal(SourceControlSecretPurposes.Checkout, pin.CheckoutCredential.Purpose);
@@ -161,6 +161,69 @@ public sealed class SourceControlProjectConfigurationResolverTests
                 Negotiation(new SourceControlRepositoryIdentity("octo", "another")),
                 DateTimeOffset.Parse("2026-10-07T08:00:00Z")));
         Assert.Equal(SourceControlProjectConfigurationFailure.Invalid, mismatchedRepository.Failure);
+    }
+
+    [Fact]
+    public void NegotiatedGitHubAppPinUsesExactIdentityConnectionAndNoApiOrCheckoutSecret()
+    {
+        var settings = new SourceControlProjectSettings(
+            new SourceControlRepositoryIdentity("octo", "repo"),
+            apiSecretReference: null,
+            webhookSecretReference: new SecretRef("github-webhook", "v1"),
+            authMode: SourceControlAuthMode.GitHubApp,
+            identityConnectionId: "github-connection-1",
+            identityRepositorySelectionCode: new string('a', 64));
+        var snapshot = AcceptedSnapshot(settings);
+        var acceptedRun = AcceptedRun(snapshot);
+        var (catalog, resolver) = CreateCatalogAndResolver();
+        var negotiation = Negotiation(settings.Repository);
+        var selectionHash = Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.ASCII.GetBytes(settings.IdentityRepositorySelectionCode!)));
+        var mismatchedBinding = new SourceControlGitHubAppBinding(
+            "another-connection",
+            4,
+            12345,
+            new string('A', 64),
+            selectionHash);
+
+        var mismatch = Assert.Throws<SourceControlProjectConfigurationException>(() =>
+            SourceControlProjectConfigurationResolver.PinNegotiatedGitHubAppRepository(
+                snapshot,
+                catalog,
+                resolver,
+                acceptedRun,
+                "pin-1",
+                negotiation,
+                mismatchedBinding,
+                DateTimeOffset.Parse("2026-10-07T08:00:00Z")));
+        Assert.Equal(SourceControlProjectConfigurationFailure.Invalid, mismatch.Failure);
+
+        var binding = new SourceControlGitHubAppBinding(
+            "github-connection-1",
+            4,
+            12345,
+            new string('A', 64),
+            selectionHash);
+        var pin = SourceControlProjectConfigurationResolver.PinNegotiatedGitHubAppRepository(
+            snapshot,
+            catalog,
+            resolver,
+            acceptedRun,
+            "pin-1",
+            negotiation,
+            binding,
+            DateTimeOffset.Parse("2026-10-07T08:00:00Z"));
+
+        Assert.Equal(acceptedRun, pin.AcceptedRun);
+        Assert.Equal(settings.Repository, pin.Repository);
+        Assert.Null(pin.ApiCredential);
+        Assert.Null(pin.CheckoutCredential);
+        Assert.Equal(binding, pin.GitHubAppBinding);
+        Assert.Equal("github-connection-1", pin.GitHubAppBinding!.IdentityConnectionId);
+        Assert.Equal(12345, pin.GitHubAppBinding.InstallationId);
+        Assert.Equal(new string('a', 64), pin.GitHubAppBinding.PermissionDigest);
+        Assert.Equal(selectionHash, pin.GitHubAppBinding.IdentityRepositorySelectionHash);
+        Assert.Equal("github-webhook", pin.WebhookCredential!.Secret.Id);
     }
 
     [Fact]

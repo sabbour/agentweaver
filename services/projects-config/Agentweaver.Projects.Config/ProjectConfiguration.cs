@@ -222,14 +222,25 @@ public static class ProjectConfigurationValidator
     {
         if (sourceControl is null)
             return;
+        var usesAppConnection = sourceControl.AuthMode == SourceControlAuthMode.GitHubApp;
+        var usesSecret = sourceControl.AuthMode is null or SourceControlAuthMode.Secret;
         if (sourceControl.Repository is null ||
-            !IsExactSecretReference(sourceControl.ApiSecretReference) ||
+            (!usesAppConnection && !usesSecret) ||
+            usesSecret &&
+                (!IsExactSecretReference(sourceControl.ApiSecretReference) ||
+                 sourceControl.IdentityConnectionId is not null ||
+                 sourceControl.IdentityRepositorySelectionCode is not null) ||
+            usesAppConnection &&
+                (sourceControl.ApiSecretReference is not null ||
+                 sourceControl.CheckoutSecretReference is not null ||
+                 !IsExactIdentityConnectionId(sourceControl.IdentityConnectionId) ||
+                 !IsExactRepositorySelectionCode(sourceControl.IdentityRepositorySelectionCode)) ||
             sourceControl.CheckoutSecretReference is { } checkout &&
                 !IsExactSecretReference(checkout) ||
             sourceControl.WebhookSecretReference is { } webhook &&
                 !IsExactSecretReference(webhook))
             throw Invalid(
-                "SourceControl settings require one repository identity and exact API, checkout, or webhook secret references.");
+                "SourceControl settings require one repository and either exact secret authentication or a GitHub App connection.");
     }
 
     private static bool IsExactSecretReference(SecretRef? secret) =>
@@ -248,6 +259,16 @@ public static class ProjectConfigurationValidator
             model.SourceMode == ModelSourceMode.Byok && model.CredentialReference is null)
             throw Invalid("Hosted Copilot requires one connection ID; BYOK requires one exact credential reference.");
     }
+
+    private static bool IsExactIdentityConnectionId(string? connectionId) =>
+        !string.IsNullOrWhiteSpace(connectionId) &&
+        connectionId.Length <= 128 &&
+        connectionId.All(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+
+    private static bool IsExactRepositorySelectionCode(string? selectionCode) =>
+        selectionCode is { Length: 64 } &&
+        selectionCode.All(Uri.IsHexDigit);
 
     public static PlatformRuntimeDefaults Validate(PlatformRuntimeDefaults defaults)
     {

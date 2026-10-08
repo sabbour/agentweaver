@@ -83,3 +83,23 @@ SELECT format(
 SELECT format(
   'GRANT SELECT, INSERT ON TABLE %I.%I TO %I',
   'identity_broker', 'copilot_connection_revisions', :'runtime_role') \gexec
+SELECT format(
+  'REVOKE ALL ON TABLE %I.%I, %I.%I, %I.%I, %I.%I FROM PUBLIC',
+  'identity_broker', 'repo_app_authorization_transactions',
+  'identity_broker', 'repo_app_connections',
+  'identity_broker', 'repo_app_installations',
+  'identity_broker', 'repo_app_repository_selections') \gexec
+SELECT format(
+  'REVOKE ALL ON TABLE %I.%I, %I.%I, %I.%I, %I.%I FROM %I',
+  'identity_broker', 'repo_app_authorization_transactions',
+  'identity_broker', 'repo_app_connections',
+  'identity_broker', 'repo_app_installations',
+  'identity_broker', 'repo_app_repository_selections',
+  :'runtime_role') \gexec
+SELECT format(
+  'GRANT SELECT, INSERT, UPDATE ON TABLE %I.%I, %I.%I, %I.%I, %I.%I TO %I',
+  'identity_broker', 'repo_app_authorization_transactions',
+  'identity_broker', 'repo_app_connections',
+  'identity_broker', 'repo_app_installations',
+  'identity_broker', 'repo_app_repository_selections',
+  :'runtime_role') \gexec

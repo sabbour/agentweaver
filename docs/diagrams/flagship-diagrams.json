@@ -14,7 +14,7 @@
     },
     {
       "name": "v1-source-control-owner-flow",
-      "concept": "Accepted-run Source Control pinning, webhook relay admission, and approved merge",
+      "concept": "GitHub App connection and per-request token mint, Source Control pinning, webhook relay admission, and approved merge",
       "docs": ["docs/architecture/design/provider-seams.md"]
     },
     {

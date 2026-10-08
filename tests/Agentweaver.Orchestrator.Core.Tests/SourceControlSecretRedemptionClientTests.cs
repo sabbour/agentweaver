@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
@@ -127,6 +128,135 @@ public sealed class SourceControlSecretRedemptionClientTests
         Assert.Equal(1, handler.RequestCount);
     }
 
+    [Fact]
+    public async Task UsesSelectionCodeOnceThenReusablePinnedBindingForApiAndCheckoutOperations()
+    {
+        var now = DateTimeOffset.Parse("2026-10-08T10:00:00Z");
+        var time = new FrozenTimeProvider(now);
+        var selectionCode = new string('b', 64);
+        var selectionHash = Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.ASCII.GetBytes(selectionCode)));
+        var permissionDigest = new string('a', 64);
+        var requestBodies = new List<JsonElement>();
+        var handler = new AppTokenRecordingHandler(async request =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(
+                "/internal/source-control/github-app/installations/token",
+                request.RequestUri!.AbsolutePath);
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            requestBodies.Add(body.RootElement.Clone());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent(new
+                {
+                    accessToken = "ephemeral-installation-token",
+                    expiresAt = now.AddMinutes(47),
+                    connectionId = "connection-1",
+                    connectionRevision = 4,
+                    installationId = 456,
+                    repositoryId = 789,
+                    repositoryFullName = "octo/widget",
+                    defaultBranch = "main",
+                    isPrivate = true,
+                    permissionDigest,
+                    selectionHash
+                })
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new SourceControlSecretRedemptionClient(
+            httpClient, Options(), time);
+        var acceptedRun = AcceptedRun();
+        GitHubAppInstallationBindingMetadata? selectedBinding = null;
+        SecretCredential? selectionCredential = null;
+
+        var negotiated = await client.WithGitHubAppSelectionCredentialAsync(
+            CallerContext(includeBrokerAudience: true),
+            acceptedRun,
+            "connection-1",
+            selectionCode,
+            "octo/widget",
+            (credential, binding, _) =>
+            {
+                selectionCredential = credential;
+                selectedBinding = binding;
+                Assert.Equal("ephemeral-installation-token", credential.GetValue());
+                Assert.Equal(selectionHash, binding.SelectionHash);
+                Assert.Equal(456, binding.InstallationId);
+                return Task.FromResult("repository-negotiated");
+            },
+            CancellationToken.None);
+
+        Assert.Equal("repository-negotiated", negotiated);
+        Assert.NotNull(selectionCredential);
+        Assert.Throws<InvalidOperationException>(() => selectionCredential.GetValue());
+        var selected = Assert.IsType<GitHubAppInstallationBindingMetadata>(selectedBinding);
+        var selectionRequest = requestBodies[0];
+        Assert.Equal(selectionCode, selectionRequest.GetProperty("selectionCode").GetString());
+        Assert.Null(selectionRequest.GetProperty("selectionHash").GetString());
+        Assert.Equal("connection-1", selectionRequest.GetProperty("connectionId").GetString());
+        Assert.Equal(JsonValueKind.Null, selectionRequest.GetProperty("connectionRevision").ValueKind);
+        Assert.Equal(JsonValueKind.Null, selectionRequest.GetProperty("repositoryId").ValueKind);
+        Assert.DoesNotContain("ephemeral-installation-token", selectionRequest.GetRawText(), StringComparison.Ordinal);
+
+        var binding = new SourceControlGitHubAppBinding(
+            selected.ConnectionId,
+            selected.ConnectionRevision,
+            selected.InstallationId,
+            selected.PermissionDigest,
+            selected.SelectionHash);
+        SecretCredential? apiCredential = null;
+        var apiResult = await client.WithGitHubAppCredentialAsync(
+            CallerContext(includeBrokerAudience: true),
+            acceptedRun,
+            binding,
+            789,
+            "octo/widget",
+            (credential, metadata, _) =>
+            {
+                apiCredential = credential;
+                Assert.Equal("ephemeral-installation-token", credential.GetValue());
+                Assert.Equal("main", metadata.DefaultBranch);
+                return Task.FromResult("api-request-complete");
+            },
+            CancellationToken.None);
+        Assert.Equal("api-request-complete", apiResult);
+        Assert.NotNull(apiCredential);
+        Assert.Throws<InvalidOperationException>(() => apiCredential.GetValue());
+
+        SecretCredential? checkoutCredential = null;
+        var checkoutResult = await client.WithGitHubAppCredentialAsync(
+            CallerContext(includeBrokerAudience: true),
+            acceptedRun,
+            binding,
+            789,
+            "octo/widget",
+            (credential, metadata, _) =>
+            {
+                checkoutCredential = credential;
+                Assert.Equal("ephemeral-installation-token", credential.GetValue());
+                Assert.Equal(789, metadata.RepositoryId);
+                return Task.FromResult("checkout-complete");
+            },
+            CancellationToken.None);
+        Assert.Equal("checkout-complete", checkoutResult);
+        Assert.NotNull(checkoutCredential);
+        Assert.Throws<InvalidOperationException>(() => checkoutCredential.GetValue());
+
+        Assert.Equal(3, requestBodies.Count);
+        foreach (var pinnedRequest in requestBodies.Skip(1))
+        {
+            Assert.Null(pinnedRequest.GetProperty("selectionCode").GetString());
+            Assert.Equal(selectionHash, pinnedRequest.GetProperty("selectionHash").GetString());
+            Assert.Equal("connection-1", pinnedRequest.GetProperty("connectionId").GetString());
+            Assert.Equal(4L, pinnedRequest.GetProperty("connectionRevision").GetInt64());
+            Assert.Equal(456L, pinnedRequest.GetProperty("installationId").GetInt64());
+            Assert.Equal(789L, pinnedRequest.GetProperty("repositoryId").GetInt64());
+            Assert.Equal(permissionDigest, pinnedRequest.GetProperty("permissionDigest").GetString());
+        }
+    }
+
     [Theory]
     [InlineData("http://broker.test.local")]
     [InlineData("https://broker.test.local/path")]
@@ -207,5 +337,20 @@ public sealed class SourceControlSecretRedemptionClientTests
             }
             return respond(request);
         }
+
+    }
+
+    private sealed class AppTokenRecordingHandler(
+        Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            respond(request);
+    }
+
+    private sealed class FrozenTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 }

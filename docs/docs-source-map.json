@@ -165,7 +165,7 @@
       ]
     },
     {
-      "name": "Source Control pin, webhook, and merge",
+      "name": "Source Control App auth, pin, webhook, and merge",
       "sourcePrefixes": [
         "packages/Agentweaver.Abstractions/SourceControlContracts.cs",
         "packages/Agentweaver.SourceControl/",
@@ -176,8 +176,11 @@
         "services/orchestrator/Agentweaver.Orchestrator/ExecutableActionGrantOwnerStore.cs",
         "services/orchestrator/Agentweaver.Orchestrator/CoordinationOwnerMigrator.cs",
         "services/orchestrator/Agentweaver.Orchestrator/Migrations/004_source_control_owner.sql",
+        "services/identity/Agentweaver.Identity.Broker/GitHubRepoApp",
         "tests/Agentweaver.SourceControl.Tests/",
         "tests/Agentweaver.Orchestrator.Core.Tests/SourceControl",
+        "tests/Agentweaver.Identity.Broker.Tests/GitHubRepoAppConnectionServicePostgresTests.cs",
+        "tests/Agentweaver.Orchestrator.Core.Tests/SourceControlSecretRedemptionClientTests.cs",
         "tests/Agentweaver.Identity.Broker.Tests/IdentitySecretRedemptionEndpointTests.cs",
         "tests/Agentweaver.Identity.Broker.Tests/CoordinationMessageIntegrationTests.cs",
         "tests/Agentweaver.Projects.Config.Tests/ProjectConfigurationValidatorTests.cs",
@@ -188,6 +191,8 @@
         "docs/architecture/design/orchestration.md",
         "docs/architecture/design/services-and-release.md",
         "docs/architecture/projects-config.md",
+        "docs/architecture/identity-secrets.md",
+        "docs/reference/contracts.md",
         "docs/guide/testing.md",
         "docs/diagrams/src/flagship/v1-source-control-owner-flow.json"
       ]

@@ -39,7 +39,7 @@ public sealed class SourceControlMergeContractsTests
         Assert.Equal("merge", intent.WorkflowStepId);
         Assert.Equal(receipt, intent.ApprovalReceipt);
         Assert.Equal(pin.Repository, intent.Repository);
-        Assert.Equal("github-api-v1", pin.ApiCredential.Secret.Id);
+        Assert.Equal("github-api-v1", pin.ApiCredential!.Secret.Id);
         Assert.Equal(SourceControlSecretPurposes.Api, pin.ApiCredential.Purpose);
         Assert.Equal("github-checkout-v1", pin.CheckoutCredential!.Secret.Id);
         Assert.Equal(SourceControlSecretPurposes.Checkout, pin.CheckoutCredential.Purpose);

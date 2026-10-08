@@ -80,7 +80,7 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             Assert.Equal(saved.IntentId, replay.IntentId);
             Assert.Equal(saved.IntentId, read.IntentId);
             Assert.Equal(pin.PinId, read.Pin.PinId);
-            Assert.Equal(pin.ApiCredential.Secret.Id, read.Pin.ApiCredential.Secret.Id);
+            Assert.Equal(pin.ApiCredential!.Secret.Id, read.Pin.ApiCredential!.Secret.Id);
             Assert.Equal(pin.ApiCredential.Secret.Version, read.Pin.ApiCredential.Secret.Version);
             Assert.Equal(pin.WebhookCredential!.Secret.Id, acceptedPin.WebhookCredential!.Secret.Id);
             Assert.Equal(pin.WebhookCredential.Secret.Version, acceptedPin.WebhookCredential.Secret.Version);

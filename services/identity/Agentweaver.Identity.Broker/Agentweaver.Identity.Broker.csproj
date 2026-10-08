@@ -22,6 +22,7 @@
     <PackageReference Include="OpenIddict.Validation.ServerIntegration" Version="7.7.1" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.0" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Identity\Agentweaver.Identity.csproj" />
+    <ProjectReference Include="..\..\..\packages\Agentweaver.SourceControl\Agentweaver.SourceControl.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Secrets.AzureKeyVault\Agentweaver.Secrets.AzureKeyVault.csproj" />
   </ItemGroup>
   <ItemGroup>

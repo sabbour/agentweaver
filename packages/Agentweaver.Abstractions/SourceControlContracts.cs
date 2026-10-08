@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
@@ -8,6 +9,44 @@ public static class SourceControlSecretPurposes
     public const string Api = "source-control.api";
     public const string Checkout = "source-control.checkout";
     public const string Webhook = "source-control.webhook";
+    public const string GitHubAppPrivateKey = "source-control.github-app.private-key";
+}
+
+[JsonConverter(typeof(SourceControlAuthModeJsonConverter))]
+public enum SourceControlAuthMode
+{
+    Secret,
+    GitHubApp
+}
+
+public sealed class SourceControlAuthModeJsonConverter : JsonConverter<SourceControlAuthMode>
+{
+    public override SourceControlAuthMode Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options) =>
+        reader.TokenType == JsonTokenType.String
+            ? reader.GetString() switch
+            {
+                "secret" => SourceControlAuthMode.Secret,
+                "githubApp" => SourceControlAuthMode.GitHubApp,
+                "gitHubApp" => SourceControlAuthMode.GitHubApp,
+                _ => throw new JsonException("The SourceControl auth mode is unsupported.")
+            }
+            : throw new JsonException("The SourceControl auth mode must be a string.");
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        SourceControlAuthMode value,
+        JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value switch
+        {
+            SourceControlAuthMode.Secret => "secret",
+            SourceControlAuthMode.GitHubApp => "githubApp",
+            _ => throw new JsonException("The SourceControl auth mode is unsupported.")
+        });
+    }
 }
 
 public static class SourceControlCapabilities
@@ -60,25 +99,98 @@ public sealed record SourceControlProjectSettings
     [JsonConstructor]
     public SourceControlProjectSettings(
         SourceControlRepositoryIdentity repository,
-        SecretRef apiSecretReference,
+        SecretRef? apiSecretReference,
         SecretRef? checkoutSecretReference = null,
-        SecretRef? webhookSecretReference = null)
+        SecretRef? webhookSecretReference = null,
+        SourceControlAuthMode? authMode = null,
+        string? identityConnectionId = null,
+        string? identityRepositorySelectionCode = null)
     {
         Repository = repository ?? throw new ArgumentNullException(nameof(repository));
-        ApiSecretReference = apiSecretReference ??
-            throw new ArgumentNullException(nameof(apiSecretReference));
+        if (authMode is not null and not (SourceControlAuthMode.Secret or SourceControlAuthMode.GitHubApp))
+            throw new ArgumentOutOfRangeException(nameof(authMode));
+        AuthMode = authMode;
+        IdentityConnectionId = ValidateConnectionBinding(
+            authMode, apiSecretReference, checkoutSecretReference, identityConnectionId);
+        IdentityRepositorySelectionCode = ValidateRepositorySelectionCode(
+            authMode, identityRepositorySelectionCode);
+        ApiSecretReference = apiSecretReference;
         CheckoutSecretReference = checkoutSecretReference;
         WebhookSecretReference = webhookSecretReference;
     }
 
     public SourceControlRepositoryIdentity Repository { get; }
-    public SecretRef ApiSecretReference { get; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SourceControlAuthMode? AuthMode { get; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IdentityConnectionId { get; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IdentityRepositorySelectionCode { get; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SecretRef? ApiSecretReference { get; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SecretRef? CheckoutSecretReference { get; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SecretRef? WebhookSecretReference { get; }
+
+    private static string? ValidateConnectionBinding(
+        SourceControlAuthMode? authMode,
+        SecretRef? apiSecretReference,
+        SecretRef? checkoutSecretReference,
+        string? identityConnectionId)
+    {
+        if (authMode == SourceControlAuthMode.GitHubApp)
+        {
+            if (apiSecretReference is not null ||
+                checkoutSecretReference is not null ||
+                string.IsNullOrWhiteSpace(identityConnectionId) ||
+                identityConnectionId.Length > 128 ||
+                identityConnectionId.Any(character =>
+                    !char.IsAsciiLetterOrDigit(character) && character is not '-' and not '_'))
+                throw new ArgumentException(
+                    "GitHub App settings require one Identity connection ID and cannot include API or checkout secrets.",
+                    nameof(identityConnectionId));
+            return identityConnectionId;
+        }
+
+        if (apiSecretReference is null)
+            throw new ArgumentException(
+                "Secret-authenticated SourceControl settings require an exact API secret reference.",
+                nameof(apiSecretReference));
+        if (identityConnectionId is not null)
+            throw new ArgumentException(
+                "Identity connection IDs are valid only for GitHub App SourceControl settings.",
+                nameof(identityConnectionId));
+        return null;
+    }
+
+    private static string? ValidateRepositorySelectionCode(
+        SourceControlAuthMode? authMode,
+        string? selectionCode)
+    {
+        if (authMode == SourceControlAuthMode.GitHubApp)
+        {
+            if (selectionCode is null ||
+                selectionCode.Length != 64 ||
+                !selectionCode.All(Uri.IsHexDigit))
+                throw new ArgumentException(
+                    "GitHub App settings require an exact Identity repository-selection code.",
+                    nameof(selectionCode));
+            return selectionCode.ToLowerInvariant();
+        }
+
+        if (selectionCode is not null)
+            throw new ArgumentException(
+                "Identity repository-selection codes are valid only for GitHub App SourceControl settings.",
+                nameof(selectionCode));
+        return null;
+    }
 }
 
 public sealed record SourceControlRepositoryNegotiation(

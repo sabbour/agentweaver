@@ -820,7 +820,10 @@ internal sealed class SourceControlOwnerStore(
                  provider_id, provider_resource_id, provider_resource_generation,
                  repository_owner, repository_name, provider_repository_id,
                  api_secret_id, api_secret_version, checkout_secret_id, checkout_secret_version,
-                 webhook_secret_id, webhook_secret_version, pin, created_at)
+                 webhook_secret_id, webhook_secret_version,
+                 github_app_connection_id, github_app_connection_revision,
+                 github_app_installation_id, github_app_permission_digest, github_app_selection_hash,
+                 pin, created_at)
             VALUES
                 (@project, @run, @pin, @session, @issuer, @actor, @tenant,
                  @selectionHash, @projectRevision, @configurationRevision,
@@ -828,7 +831,10 @@ internal sealed class SourceControlOwnerStore(
                  @provider, @resource, @generation,
                  @owner, @repository, @repositoryId,
                  @apiSecretId, @apiSecretVersion, @checkoutSecretId, @checkoutSecretVersion,
-                 @webhookSecretId, @webhookSecretVersion, @pinJson, @createdAt)
+                 @webhookSecretId, @webhookSecretVersion,
+                 @githubAppConnectionId, @githubAppConnectionRevision,
+                 @githubAppInstallationId, @githubAppPermissionDigest, @githubAppSelectionHash,
+                 @pinJson, @createdAt)
             ON CONFLICT (project_id, run_id, accepted_selection_hash) DO NOTHING
             """, connection, transaction);
         AddScope(insert, identity);
@@ -843,9 +849,10 @@ internal sealed class SourceControlOwnerStore(
         insert.Parameters.AddWithValue("owner", NpgsqlDbType.Varchar, pin.Repository.Owner);
         insert.Parameters.AddWithValue("repository", NpgsqlDbType.Varchar, pin.Repository.Name);
         insert.Parameters.AddWithValue("repositoryId", NpgsqlDbType.Bigint, pin.ProviderRepositoryId);
-        AddSecretReference(insert, "api", pin.ApiCredential.Secret);
+        AddOptionalSecretReference(insert, "api", pin.ApiCredential?.Secret);
         AddOptionalSecretReference(insert, "checkout", pin.CheckoutCredential?.Secret);
         AddOptionalSecretReference(insert, "webhook", pin.WebhookCredential?.Secret);
+        AddOptionalAppBinding(insert, pin.GitHubAppBinding);
         insert.Parameters.AddWithValue("pinJson", NpgsqlDbType.Jsonb, pinJson);
         insert.Parameters.AddWithValue("createdAt", NpgsqlDbType.TimestampTz, pin.PinnedAt);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -1104,9 +1111,17 @@ internal sealed class SourceControlOwnerStore(
             pin.ProviderBinding.NegotiatedCapabilities.Order(StringComparer.Ordinal).ToArray(),
             pin.Repository.Owner,
             pin.Repository.Name,
-            CaptureRequiredCredential(pin.ApiCredential),
+            CaptureOptionalCredential(pin.ApiCredential),
             CaptureOptionalCredential(pin.CheckoutCredential),
             CaptureOptionalCredential(pin.WebhookCredential),
+            pin.GitHubAppBinding is { } appBinding
+                ? new StoredGitHubAppBinding(
+                    appBinding.IdentityConnectionId,
+                    appBinding.IdentityConnectionRevision,
+                    appBinding.InstallationId,
+                    appBinding.PermissionDigest,
+                    appBinding.IdentityRepositorySelectionHash)
+                : null,
             pin.ProviderRepositoryId,
             pin.DefaultBranch,
             pin.IsPrivate,
@@ -1172,18 +1187,22 @@ internal sealed class SourceControlOwnerStore(
             stored.AcceptedRun,
             binding,
             new SourceControlRepositoryIdentity(stored.RepositoryOwner, stored.RepositoryName),
-            RestoreCredential(stored.ApiCredential),
+            stored.ApiCredential is null ? null : RestoreCredential(stored.ApiCredential),
             stored.CheckoutCredential is null ? null : RestoreCredential(stored.CheckoutCredential),
             stored.WebhookCredential is null ? null : RestoreCredential(stored.WebhookCredential),
             stored.ProviderRepositoryId,
             stored.DefaultBranch,
             stored.IsPrivate,
-            stored.PinnedAt);
+            stored.PinnedAt,
+            stored.GitHubAppBinding is { } appBinding
+                ? new SourceControlGitHubAppBinding(
+                    appBinding.IdentityConnectionId,
+                    appBinding.IdentityConnectionRevision,
+                    appBinding.InstallationId,
+                    appBinding.PermissionDigest,
+                    appBinding.IdentityRepositorySelectionHash)
+                : null);
     }
-
-    private static StoredCredentialReference CaptureRequiredCredential(
-        SourceControlCredentialReference credential) =>
-        new(credential.Secret.Id, credential.Secret.Version, credential.Purpose);
 
     private static StoredCredentialReference? CaptureOptionalCredential(
         SourceControlCredentialReference? credential) =>
@@ -1229,6 +1248,7 @@ internal sealed class SourceControlOwnerStore(
         SameCredential(stored.ApiCredential, proposed.ApiCredential) &&
         SameCredential(stored.CheckoutCredential, proposed.CheckoutCredential) &&
         SameCredential(stored.WebhookCredential, proposed.WebhookCredential) &&
+        SameGitHubAppBinding(stored.GitHubAppBinding, proposed.GitHubAppBinding) &&
         stored.ProviderRepositoryId == proposed.ProviderRepositoryId &&
         stored.DefaultBranch == proposed.DefaultBranch &&
         stored.IsPrivate == proposed.IsPrivate &&
@@ -1262,6 +1282,18 @@ internal sealed class SourceControlOwnerStore(
               left.Purpose == right.Purpose &&
               left.Secret.Id == right.Secret.Id &&
               left.Secret.Version == right.Secret.Version;
+
+    private static bool SameGitHubAppBinding(
+        SourceControlGitHubAppBinding? left,
+        SourceControlGitHubAppBinding? right) =>
+        left is null
+            ? right is null
+            : right is not null &&
+              left.IdentityConnectionId == right.IdentityConnectionId &&
+              left.IdentityConnectionRevision == right.IdentityConnectionRevision &&
+              left.InstallationId == right.InstallationId &&
+              left.PermissionDigest == right.PermissionDigest &&
+              left.IdentityRepositorySelectionHash == right.IdentityRepositorySelectionHash;
 
     private static SourceControlMergeMethod ParseDatabaseMergeMethod(string value) =>
         value switch
@@ -1325,6 +1357,32 @@ internal sealed class SourceControlOwnerStore(
             prefix + "SecretVersion", NpgsqlDbType.Varchar, (object?)secret?.Version ?? DBNull.Value);
     }
 
+    private static void AddOptionalAppBinding(
+        NpgsqlCommand command,
+        SourceControlGitHubAppBinding? binding)
+    {
+        command.Parameters.AddWithValue(
+            "githubAppConnectionId",
+            NpgsqlDbType.Varchar,
+            (object?)binding?.IdentityConnectionId ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "githubAppConnectionRevision",
+            NpgsqlDbType.Bigint,
+            (object?)binding?.IdentityConnectionRevision ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "githubAppInstallationId",
+            NpgsqlDbType.Bigint,
+            (object?)binding?.InstallationId ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "githubAppPermissionDigest",
+            NpgsqlDbType.Char,
+            (object?)binding?.PermissionDigest ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "githubAppSelectionHash",
+            NpgsqlDbType.Char,
+            (object?)binding?.IdentityRepositorySelectionHash ?? DBNull.Value);
+    }
+
     private static string HashSelection(EffectiveRunSelection selection) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(selection.Snapshot.GetRawText())));
 
@@ -1382,13 +1440,21 @@ internal sealed class SourceControlOwnerStore(
         string[] NegotiatedCapabilities,
         string RepositoryOwner,
         string RepositoryName,
-        StoredCredentialReference ApiCredential,
+        StoredCredentialReference? ApiCredential,
         StoredCredentialReference? CheckoutCredential,
         StoredCredentialReference? WebhookCredential,
+        StoredGitHubAppBinding? GitHubAppBinding,
         long ProviderRepositoryId,
         string DefaultBranch,
         bool IsPrivate,
         DateTimeOffset PinnedAt);
+
+    private sealed record StoredGitHubAppBinding(
+        string IdentityConnectionId,
+        long IdentityConnectionRevision,
+        long InstallationId,
+        string PermissionDigest,
+        string IdentityRepositorySelectionHash);
 
     private sealed record StoredCredentialReference(
         string SecretId,

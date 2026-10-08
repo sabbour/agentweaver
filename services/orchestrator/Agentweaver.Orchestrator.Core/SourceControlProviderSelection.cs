@@ -197,6 +197,39 @@ public static class SourceControlProviderSelectionResolver
             pinnedAt);
     }
 
+    public static SourceControlRepositoryPin PinNegotiatedRepository(
+        ProviderResolver resolver,
+        SourceControlProviderSelection selection,
+        SourceControlAcceptedRunBinding acceptedRun,
+        string pinId,
+        SourceControlRepositoryNegotiation negotiation,
+        SourceControlGitHubAppBinding githubAppBinding,
+        SourceControlCredentialReference? webhookCredential,
+        DateTimeOffset pinnedAt)
+    {
+        ArgumentNullException.ThrowIfNull(acceptedRun);
+        ArgumentNullException.ThrowIfNull(negotiation);
+        ArgumentNullException.ThrowIfNull(githubAppBinding);
+        var providerBinding = PinNegotiatedResource(
+            resolver,
+            selection,
+            acceptedRun.RunId,
+            negotiation.Resource);
+        return new SourceControlRepositoryPin(
+            pinId,
+            acceptedRun,
+            providerBinding,
+            negotiation.Repository,
+            apiCredential: null,
+            checkoutCredential: null,
+            webhookCredential,
+            negotiation.ProviderRepositoryId,
+            negotiation.DefaultBranch,
+            negotiation.IsPrivate,
+            pinnedAt,
+            githubAppBinding);
+    }
+
     private static bool ValidCapabilities(ImmutableArray<string> capabilities) =>
         !capabilities.IsDefault &&
         capabilities.All(IsStableIdentifier) &&

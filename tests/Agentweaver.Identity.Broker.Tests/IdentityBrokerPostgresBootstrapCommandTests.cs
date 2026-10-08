@@ -190,6 +190,8 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             "OpenIddictScopes", "OpenIddictTokens", "__ef_migrations_history",
             "runtime_grant_heads", "runtime_grant_revisions", "runtime_grant_operations",
             "runtime_grant_operation_receipts", "copilot_connections", "copilot_connection_revisions",
+            "repo_app_authorization_transactions",
+            "repo_app_connections", "repo_app_installations", "repo_app_repository_selections",
         };
         foreach (var table in tables)
         {
@@ -217,6 +219,14 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             INSERT INTO identity_broker.copilot_connections VALUES (1);
             UPDATE identity_broker.copilot_connections SET id = 2;
             INSERT INTO identity_broker.copilot_connection_revisions VALUES (1);
+            INSERT INTO identity_broker.repo_app_authorization_transactions VALUES (1);
+            UPDATE identity_broker.repo_app_authorization_transactions SET id = 2;
+            INSERT INTO identity_broker.repo_app_connections VALUES (1);
+            UPDATE identity_broker.repo_app_connections SET id = 2;
+            INSERT INTO identity_broker.repo_app_installations VALUES (1);
+            UPDATE identity_broker.repo_app_installations SET id = 2;
+            INSERT INTO identity_broker.repo_app_repository_selections VALUES (1);
+            UPDATE identity_broker.repo_app_repository_selections SET id = 2;
             """, connection))
             await permitted.ExecuteNonQueryAsync();
         await using (var forbidden = new NpgsqlCommand(
@@ -235,6 +245,19 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
                 $"TRUNCATE identity_broker.{QuoteIdentifier(table)}",
             }.Concat(table is "runtime_grant_heads" or "copilot_connections" ? [] :
                 new[] { $"UPDATE identity_broker.{QuoteIdentifier(table)} SET id = 2" }))
+            {
+                await using var forbidden = new NpgsqlCommand(statement, connection);
+                var error = await Assert.ThrowsAsync<PostgresException>(() => forbidden.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, error.SqlState);
+            }
+        }
+        foreach (var table in tables.Where(table => table.StartsWith("repo_app_", StringComparison.Ordinal)))
+        {
+            foreach (var statement in new[]
+            {
+                $"DELETE FROM identity_broker.{QuoteIdentifier(table)}",
+                $"TRUNCATE identity_broker.{QuoteIdentifier(table)}",
+            })
             {
                 await using var forbidden = new NpgsqlCommand(statement, connection);
                 var error = await Assert.ThrowsAsync<PostgresException>(() => forbidden.ExecuteNonQueryAsync());
