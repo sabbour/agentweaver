@@ -62,7 +62,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         if (_actions is null)
             throw new RuntimeAuthorizationException("runtime_action_authority_unavailable");
         if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > AddressedMessageValidation.MaximumTextLength ||
-            prompt.Any(char.IsControl))
+            RuntimeCopilotSession.HasUnsupportedPromptControls(prompt))
             throw new ArgumentException("A bounded text prompt is required.", nameof(prompt));
         await _executionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try

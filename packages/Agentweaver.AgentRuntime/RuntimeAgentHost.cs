@@ -169,7 +169,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             message.MessageId == Guid.Empty || message.Metadata is null ||
             !Enum.IsDefined(message.Metadata.DeliveryMode) || message.Parts.IsDefault ||
             message.Parts.Length != 1 || message.Parts[0] is not { Kind: "text", Text: { Length: > 0 } } part ||
-            part.Text.Length > AddressedMessageValidation.MaximumTextLength || part.Text.Any(char.IsControl))
+            part.Text.Length > AddressedMessageValidation.MaximumTextLength ||
+            RuntimeCopilotSession.HasUnsupportedPromptControls(part.Text))
             throw new RuntimeAuthorizationException("runtime_a2a_message_invalid");
         var session = await RequireSessionAsync(message.Metadata.Runtime, actor, token).ConfigureAwait(false);
         if (message.ContextId != session.Facts.SdkSessionId)
