@@ -698,8 +698,11 @@ app.MapPost("/api/projects/{id}/role-assignments", async (
 {
     if (!ProjectId.TryParse(id, out var projectId))
         return Results.BadRequest(new { error = "Invalid project id." });
-    if (string.IsNullOrWhiteSpace(request.PrincipalId))
-        return Results.BadRequest(new { error = "principal_id is required." });
+    if (!Guid.TryParse(request.PrincipalId?.Trim(), out var entraObjectId))
+        return Results.BadRequest(new
+        {
+            error = "principal_id must be the Entra user's object ID (UUID), not an email address.",
+        });
     if (!ProjectRoleExtensions.TryParse(request.Role, out var role))
         return Results.BadRequest(new { error = "role must be Owner, Contributor, or Viewer." });
 
@@ -710,7 +713,7 @@ app.MapPost("/api/projects/{id}/role-assignments", async (
     var caller = httpContext.GetCaller();
     var result = await roleAssignments.UpsertAsync(
         projectId,
-        request.PrincipalId.Trim(),
+        entraObjectId.ToString("D"),
         role,
         caller.EntraObjectId ?? caller.User,
         ct);
@@ -725,7 +728,7 @@ app.MapPost("/api/projects/{id}/role-assignments", async (
     .WithTags("Projects")
     .AddOpenApiOperationTransformer((operation, _, _) =>
     {
-        operation.Description ??= "Grants or updates a Tier-2 project role assignment. Only project Owners or platform admins may call this.";
+        operation.Description ??= "Grants or updates a Tier-2 project role assignment. principal_id must be the user's Entra object ID (UUID), not an email address. Only project Owners or platform admins may call this.";
         return Task.CompletedTask;
     });
 

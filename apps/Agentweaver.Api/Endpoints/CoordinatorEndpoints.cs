@@ -127,17 +127,18 @@ app.MapPost("/api/runs/{coordinatorRunId}/assembly/review", SubmitAssemblyReview
         condition: "when approved or request_changes is set");
 
 // GET /api/runs/{id}/assembly/files — the COLLECTIVE changed-file set for a coordinator run.
-// The coordinator owns no worktree; the assembled output lives on the integration branch
-// (agentweaver/integration/{id}). Once the collective review gate is armed, the coordinator run
-// persists the aggregate diff as an immutable review artifact; after approval/merge the originating
-// branch may advance to INCLUDE those same commits, so recomputing a live branch-vs-branch diff can
-// collapse to empty even though the assembled workspace is still populated (#320). Prefer the
-// persisted aggregate diff when it exists, and only fall back to a live diff before assembly has
-// produced one. Returns [] (never 409) before assembly has built the integration branch.
+// The coordinator owns no worktree; the assembled output lives on the integration branch persisted
+// with its work plan (including attempt-specific branches). Once the collective review gate is armed,
+// the coordinator run persists the aggregate diff as an immutable review artifact; after approval/merge
+// the originating branch may advance to INCLUDE those same commits, so recomputing a live branch-vs-
+// branch diff can collapse to empty even though the assembled workspace is still populated (#320).
+// Prefer the persisted aggregate diff when it exists, and only fall back to a live diff before assembly
+// has produced one. Returns [] (never 409) before assembly has built the integration branch.
 app.MapGet("/api/runs/{id}/assembly/files", async (
     HttpContext httpContext,
     string id,
     IRunStore runStore,
+    CoordinatorRunService coordinator,
     WorktreeManager worktreeManager,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -160,7 +161,8 @@ app.MapGet("/api/runs/{id}/assembly/files", async (
     string? aggregateDiff;
     try
     {
-        aggregateDiff = ResolveAssemblyDiff(run, worktreeManager);
+        var integrationBranch = await ResolveAssemblyIntegrationBranchAsync(coordinator, runId.ToString(), ct);
+        aggregateDiff = ResolveAssemblyDiff(run, worktreeManager, integrationBranch);
     }
     catch (Exception ex)
     {
@@ -178,6 +180,7 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
     string id,
     string path,
     IRunStore runStore,
+    CoordinatorRunService coordinator,
     WorktreeManager worktreeManager,
     ILogger<Program> logger,
     CancellationToken ct) =>
@@ -204,7 +207,8 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
     string? aggregateDiff;
     try
     {
-        aggregateDiff = ResolveAssemblyDiff(run, worktreeManager);
+        var integrationBranch = await ResolveAssemblyIntegrationBranchAsync(coordinator, runId.ToString(), ct);
+        aggregateDiff = ResolveAssemblyDiff(run, worktreeManager, integrationBranch);
     }
     catch (Exception ex)
     {
@@ -231,15 +235,15 @@ app.MapGet("/api/runs/{id}/assembly/files/{**path}", async (
     });
 });
 
-// GET /api/runs/{id}/assembly/workspace — full file tree of the collective integration branch
-// (agentweaver/integration/{id}) HEAD, so the Files tab can browse the assembled filesystem from a
-// git perspective (every tracked file, not just the changed set). The coordinator owns no worktree,
-// so we read the branch tip's commit tree directly. Returns [] (never 409) before assembly has built
-// the integration branch.
+// GET /api/runs/{id}/assembly/workspace — full file tree of the collective integration branch HEAD,
+// so the Files tab can browse the assembled filesystem from a git perspective (every tracked file,
+// not just the changed set). The coordinator owns no worktree, so we read the branch tip's commit
+// tree directly. Returns [] (never 409) before assembly has built the integration branch.
 app.MapGet("/api/runs/{id}/assembly/workspace", async (
     HttpContext httpContext,
     string id,
     IRunStore runStore,
+    CoordinatorRunService coordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -261,9 +265,9 @@ app.MapGet("/api/runs/{id}/assembly/workspace", async (
     if (string.IsNullOrEmpty(run.RepositoryPath))
         return Results.Json(Array.Empty<WorkspaceNode>());
 
-    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
     try
     {
+        var integrationBranch = await ResolveAssemblyIntegrationBranchAsync(coordinator, runId.ToString(), ct);
         using var repo = new Repository(run.RepositoryPath);
         var commit = repo.Branches[integrationBranch]?.Tip
                      ?? repo.Branches[$"refs/heads/{integrationBranch}"]?.Tip;
@@ -286,8 +290,8 @@ app.MapGet("/api/runs/{id}/assembly/workspace", async (
 });
 
 // GET /api/runs/{id}/assembly/content/{**path} — per-file CONTENT of the collective integration
-// branch (agentweaver/integration/{id}) tip, so the review modal's Preview/source tab can render an
-// assembled file. The coordinator owns NO worktree (its changes live on the integration branch), so
+// branch tip, so the review modal's Preview/source tab can render an assembled file. The coordinator
+// owns NO worktree (its changes live on the integration branch), so
 // the worktree-backed /workspace/files/{**path}/content endpoint 409s for coordinator runs; this
 // reads the blob from the branch tip instead. This serves any tracked file on that integration branch
 // because the Files tab displays the full assembled tree, not just the changed-file set.
@@ -296,7 +300,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
     string id,
     string path,
     IRunStore runStore,
-    WorktreeManager worktreeManager,
+    CoordinatorRunService coordinator,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
@@ -321,10 +325,9 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
     if (!EndpointHelpers.TryValidateRelativePath(path, out var normalizedPath))
         return BadRequestError("invalid_file_path", "Invalid file path.");
 
-    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(id);
-
     try
     {
+        var integrationBranch = await ResolveAssemblyIntegrationBranchAsync(coordinator, runId.ToString(), ct);
         using var repo = new Repository(run.RepositoryPath);
         var commit = repo.Branches[integrationBranch]?.Tip
                      ?? repo.Branches[$"refs/heads/{integrationBranch}"]?.Tip;
@@ -721,7 +724,7 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
                 request.Instruction ?? string.Empty,
                 caller.User,
                 run.ProjectId is null ? caller.GitHubLogin : run.SubmittingUser,
-                ct, request.OutputRevisionId);
+                ct, request.OutputRevisionId, request.ReviewRequestId);
 
             var statusCode = directive.Status == SteeringStatus.Deferred
                 ? StatusCodes.Status202Accepted
@@ -830,7 +833,8 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
             Feedback: request.Feedback,
             TargetFiles: request.TargetFiles,
             Reviewer: CallerDisplayName(caller),
-            OutputRevisionId: request.OutputRevisionId);
+            OutputRevisionId: request.OutputRevisionId,
+            ReviewRequestId: request.ReviewRequestId ?? coordinatorRunId);
 
         var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
             scopeFactory,
@@ -860,9 +864,19 @@ app.MapGet("/api/runs/{id}/assembly/content/{**path}", async (
                         message = "The active coordinator will consume this review decision shortly.",
                     },
                     statusCode: StatusCodes.Status202Accepted),
+            AssemblyReviewDeliveryResult.PreservedDecisionRecorded =>
+                Results.Json(
+                    new
+                    {
+                        runId = coordinatorRunId,
+                        accepted = true,
+                        deferred = true,
+                        message = "Decision recorded for this output version. The run remains failed; retry is required before assembly can continue.",
+                    },
+                    statusCode: StatusCodes.Status202Accepted),
             AssemblyReviewDeliveryResult.Forbidden => ForbiddenError(),
             AssemblyReviewDeliveryResult.StaleRevision =>
-                Results.Conflict(new { error = "stale_output_revision", message = "Review the current output revision before deciding." }),
+                Results.Conflict(new { error = "stale_output_revision", message = "This review request or output version is no longer current. Refresh before deciding." }),
             _ => NoAssemblyReviewPending(),
         };
     }
@@ -887,12 +901,20 @@ static void EnumerateAssemblyTree(Tree tree, string prefix, List<WorkspaceNode> 
     }
 }
 
-static string? ResolveAssemblyDiff(Run run, WorktreeManager worktreeManager)
+static async Task<string> ResolveAssemblyIntegrationBranchAsync(
+    CoordinatorRunService coordinator, string runId, CancellationToken ct)
+{
+    var persistedBranch = await coordinator.GetIntegrationBranchAsync(runId, ct).ConfigureAwait(false);
+    return string.IsNullOrWhiteSpace(persistedBranch)
+        ? CoordinatorAssemblyService.IntegrationBranchName(runId)
+        : persistedBranch;
+}
+
+static string? ResolveAssemblyDiff(Run run, WorktreeManager worktreeManager, string integrationBranch)
 {
     if (ShouldUsePersistedAssemblyDiff(run))
         return run.Diff;
 
-    var integrationBranch = CoordinatorAssemblyService.IntegrationBranchName(run.Id.ToString());
     return worktreeManager.TryGetBranchDiff(run.RepositoryPath, run.OriginatingBranch, integrationBranch);
 }
 

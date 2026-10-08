@@ -6,6 +6,66 @@ import path from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { parseArgs, run, runInteractiveInstaller } from "../provision-infra.mjs";
 import { ensureRepoAppPrivateKeySecret } from "../lib/repo-app-secret.mjs";
+import {
+  ACCESS_AS_USER_SCOPE_ID,
+  buildEntraAuthRegistrationPatch,
+} from "../lib/entra-app-registration.mjs";
+
+const ENTRA_CLIENT_ID = "11111111-1111-1111-1111-111111111111";
+const ENTRA_TENANT_ID = "22222222-2222-2222-2222-222222222222";
+
+function configuredEntraApp() {
+  return {
+    id: "33333333-3333-3333-3333-333333333333",
+    appId: ENTRA_CLIENT_ID,
+    signInAudience: "AzureADMyOrg",
+    isFallbackPublicClient: true,
+    ...buildEntraAuthRegistrationPatch({ appId: ENTRA_CLIENT_ID }).patch,
+  };
+}
+
+function resolvedProvisionConfig(env = {}) {
+  return {
+    RESOURCE_GROUP: "agentweaver-rg",
+    CLUSTER_NAME: "agentweaver-aks",
+    ACR_NAME: "agentweaverregistry",
+    ACR_LOGIN_SERVER: "agentweaverregistry.azurecr.io",
+    LOCATION: "westus2",
+    MONITORING_LOCATION: "westus2",
+    NODE_VM_SIZE: "Standard_D4s_v6",
+    KEYVAULT_NAME: "agentweaver-kv",
+    PG_SERVER_NAME: "agentweaver-pg",
+    PG_LOCATION: "westus2",
+    PG_HA_MODE: "ZoneRedundant",
+    PG_ACCESS_MODE: "private",
+    NAMESPACE: "agentweaver",
+    AUTH_MODE: "Entra",
+    ENTRA_CLIENT_ID: ENTRA_CLIENT_ID,
+    ENTRA_TENANT_ID: ENTRA_TENANT_ID,
+    OAUTH_SIGNING_CERTIFICATE_NAME: "signing",
+    OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption",
+    REPO_APP_PRIVATE_KEY_FILE: env.REPO_APP_PRIVATE_KEY_FILE ?? "",
+    IMAGE_TAG: "test",
+    AGENTHOST_IMAGE_TAG: "test",
+    ...env,
+  };
+}
+
+function installerSteps(overrides = {}) {
+  const noOp = { run: async () => ({}) };
+  return {
+    createCluster: noOp,
+    setupIdentity: noOp,
+    provisionMonitoring: noOp,
+    provisionPostgres: noOp,
+    buildImages: { run: async () => ({ expectedImageDigests: {} }) },
+    verifyProvenance: noOp,
+    genA2aMtlsCerts: noOp,
+    deployStep: { run: async () => ({ HOST: "agentweaver.example.invalid" }) },
+    verifyStep: { run: async () => ({ ok: true, pass: 1, fail: 0 }) },
+    ...overrides,
+  };
+}
 
 function generateRsaPrivateKeyPem(type = "pkcs8") {
   return generateKeyPairSync("rsa", {
@@ -73,6 +133,105 @@ test("parseArgs accepts the optional Entra enterprise app object ID flag", () =>
     paramsFile: undefined,
     help: false,
   });
+});
+
+test("run stops before cloud side effects when the configured Entra registration is incomplete", async () => {
+  const calls = [];
+  const app = configuredEntraApp();
+  app.requiredResourceAccess = [];
+  const exec = {
+    async capture(command, args) {
+      calls.push([command, ...args]);
+      if (command === "git") return { code: 1, stdout: "", stderr: "" };
+      if (args[0] === "account") {
+        return { code: 0, stdout: `${ENTRA_TENANT_ID}\n`, stderr: "" };
+      }
+      if (args[0] === "ad" && args[1] === "app") {
+        return { code: 0, stdout: JSON.stringify(app), stderr: "" };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
+    },
+    async run(...args) {
+      calls.push(["run", ...args]);
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  let cloudSteps = 0;
+  const cloudStep = { run: async () => { cloudSteps += 1; } };
+  const steps = installerSteps({
+    createCluster: cloudStep,
+    setupIdentity: cloudStep,
+    provisionMonitoring: cloudStep,
+    provisionPostgres: cloudStep,
+    buildImages: cloudStep,
+    verifyProvenance: cloudStep,
+    genA2aMtlsCerts: cloudStep,
+    deployStep: cloudStep,
+    verifyStep: cloudStep,
+  });
+
+  await assert.rejects(
+    run({
+      argv: [
+        "--image-source", "acr-build",
+        "--entra-client-id", ENTRA_CLIENT_ID,
+        "--entra-tenant-id", ENTRA_TENANT_ID,
+      ],
+      env: {},
+      prompt: { isInteractive: () => false },
+      exec,
+      log: noopLog(),
+      resolveVariables: async ({ env }) => resolvedProvisionConfig(env),
+      steps,
+    }),
+    /self-resource delegated permission.*No Azure resources were changed/,
+  );
+
+  assert.equal(cloudSteps, 0);
+  assert.equal(calls.filter(([command]) => command === "run").length, 0);
+  assert.ok(calls.some(([, ...args]) => args[0] === "account"));
+  assert.ok(calls.some(([, ...args]) => args[0] === "ad"));
+});
+
+test("run completes the installer when the configured Entra registration passes preflight", async () => {
+  const calls = [];
+  const exec = {
+    async capture(command, args) {
+      calls.push([command, ...args]);
+      if (command === "git") return { code: 1, stdout: "", stderr: "" };
+      if (args[0] === "account") {
+        return { code: 0, stdout: `${ENTRA_TENANT_ID}\n`, stderr: "" };
+      }
+      if (args[0] === "ad" && args[1] === "app") {
+        return { code: 0, stdout: JSON.stringify(configuredEntraApp()), stderr: "" };
+      }
+      throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
+    },
+    async run(...args) {
+      calls.push(["run", ...args]);
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  };
+  let clusterCreated = false;
+
+  const result = await run({
+    argv: [
+      "--image-source", "acr-build",
+      "--entra-client-id", ENTRA_CLIENT_ID,
+      "--entra-tenant-id", ENTRA_TENANT_ID,
+    ],
+    env: {},
+    prompt: { isInteractive: () => false },
+    exec,
+    log: noopLog(),
+    resolveVariables: async ({ env }) => resolvedProvisionConfig(env),
+    steps: installerSteps({
+      createCluster: { run: async () => { clusterCreated = true; } },
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(clusterCreated, true);
 });
 
 test("parseArgs accepts the Repo App private-key PEM file", () => {
@@ -339,8 +498,8 @@ test("run imports the staged Repo App key once and makes deploy verification-onl
       PG_ACCESS_MODE: "private",
       NAMESPACE: "agentweaver",
       AUTH_MODE: "Entra",
-      ENTRA_CLIENT_ID: "client-id",
-      ENTRA_TENANT_ID: "tenant-id",
+      ENTRA_CLIENT_ID,
+      ENTRA_TENANT_ID,
       OAUTH_SIGNING_CERTIFICATE_NAME: "signing",
       OAUTH_ENCRYPTION_CERTIFICATE_NAME: "encryption",
       REPO_APP_PRIVATE_KEY_FILE: env.REPO_APP_PRIVATE_KEY_FILE ?? "",
@@ -355,8 +514,8 @@ test("run imports the staged Repo App key once and makes deploy verification-onl
       argv: [
         "--skip-postgres",
         "--image-source", "acr-build",
-        "--entra-client-id", "client-id",
-        "--entra-tenant-id", "tenant-id",
+        "--entra-client-id", ENTRA_CLIENT_ID,
+        "--entra-tenant-id", ENTRA_TENANT_ID,
         "--repo-app-private-key-file", sourceFile,
         "--recover-repo-app-private-key",
       ],
@@ -364,7 +523,15 @@ test("run imports the staged Repo App key once and makes deploy verification-onl
       prompt: { isInteractive: () => false },
       az: {},
       exec: {
-        capture: async () => ({ code: 1, stdout: "", stderr: "" }),
+        capture: async (command, args) => {
+          if (command === "az" && args[0] === "account") {
+            return { code: 0, stdout: ENTRA_TENANT_ID, stderr: "" };
+          }
+          if (command === "az" && args[0] === "ad" && args[1] === "app") {
+            return { code: 0, stdout: JSON.stringify(configuredEntraApp()), stderr: "" };
+          }
+          return { code: 1, stdout: "", stderr: "" };
+        },
         run: async () => ({ code: 0, stdout: "", stderr: "" }),
       },
       log: noopLog(),

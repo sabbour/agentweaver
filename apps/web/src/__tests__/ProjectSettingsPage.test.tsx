@@ -145,9 +145,9 @@ beforeEach(() => {
     project_role_assignments: [
       {
         assignment_id: 'assign-1',
-        principal_id: 'person@contoso.com',
-        display_name: 'Ada Lovelace',
-        email: 'person@contoso.com',
+        principal_id: '33333333-3333-3333-3333-333333333333',
+        display_name: null,
+        email: null,
         role: 'Owner',
         scope: 'Project:proj-1',
       },
@@ -494,7 +494,7 @@ describe('ProjectSettingsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Access/i }));
 
     expect(await screen.findByText('Platform access')).toBeDefined();
-    expect(screen.getByText('Ada Lovelace')).toBeDefined();
+    expect(screen.getByRole('heading', { name: '33333333-3333-3333-3333-333333333333' })).toBeDefined();
   });
 
   it('links Entra access management when the access overview endpoint is unavailable', async () => {
@@ -519,23 +519,64 @@ describe('ProjectSettingsPage', () => {
     expect(screen.queryByText(/^GitHub$/)).toBeNull();
   });
 
-  it('adds a project member through Tank role-assignment contract', async () => {
+  it('adds a project member using the Entra object ID contract', async () => {
     renderPage('proj-1');
 
     await screen.findByText('Rename project');
     fireEvent.click(screen.getByRole('button', { name: /Access/i }));
 
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Add member' }), { target: { value: 'grace@contoso.com' } });
-    fireEvent.change(screen.getByRole('textbox', { name: 'Display name (optional)' }), { target: { value: 'Grace Hopper' } });
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Add member' }), {
+      target: { value: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' },
+    });
     fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'Contributor' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add member' }));
 
     await waitFor(() => expect(apiClient.createProjectRoleAssignment).toHaveBeenCalledWith('proj-1', {
-      principal_id: 'grace@contoso.com',
-      display_name: 'Grace Hopper',
-      email: 'grace@contoso.com',
+      principal_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
       role: 'Contributor',
     }));
+  });
+
+  it('does not submit an email as an Entra project member and marks legacy email entries invalid', async () => {
+    vi.mocked(apiClient.getProjectAccessOverview).mockResolvedValue({
+      auth_mode: 'entra',
+      platform_roles: ['PlatformAdmin'],
+      platform_roles_source: 'entra',
+      current_user_project_role: 'Owner',
+      can_manage_role_assignments: true,
+      project_role_assignments: [
+        {
+          assignment_id: 'legacy-email-assignment',
+          principal_id: 'legacy-member@example.invalid',
+          display_name: null,
+          email: null,
+          role: 'Viewer',
+          scope: 'Project:proj-1',
+        },
+        {
+          assignment_id: 'other-legacy-email-assignment',
+          principal_id: 'other-legacy-member@example.invalid',
+          display_name: null,
+          email: null,
+          role: 'Viewer',
+          scope: 'Project:proj-1',
+        },
+      ],
+    } as never);
+    renderPage('proj-1');
+
+    await screen.findByText('Rename project');
+    fireEvent.click(screen.getByRole('button', { name: /Access/i }));
+    expect(await screen.findAllByText('Invalid legacy membership')).toHaveLength(2);
+    expect(screen.getByText('legacy-member@example.invalid')).toBeDefined();
+    expect(screen.getByText('other-legacy-member@example.invalid')).toBeDefined();
+    expect(screen.getAllByText(/Remove it and re-add the user with their Entra object ID/)).toHaveLength(2);
+
+    const principalInput = await screen.findByRole('textbox', { name: 'Add member' });
+    const addButton = screen.getByRole('button', { name: 'Add member' });
+    fireEvent.change(principalInput, { target: { value: 'legacy-member@example.invalid' } });
+    expect((addButton as HTMLButtonElement).disabled).toBe(true);
+    expect(apiClient.createProjectRoleAssignment).not.toHaveBeenCalled();
   });
 
   it('saves generation model overrides using Tank backend payload shape', async () => {

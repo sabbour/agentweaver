@@ -53,6 +53,11 @@ import {
 type SectionId = 'general' | 'access' | 'repository' | 'unattended' | 'sandbox' | 'danger';
 
 const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
+const ENTRA_OBJECT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isEntraObjectId(value: string): boolean {
+  return ENTRA_OBJECT_ID_RE.test(value.trim());
+}
 
 function modelProviderReadiness(readiness: UnattendedReadiness) {
   if (readiness.model_provider) return readiness.model_provider;
@@ -446,7 +451,6 @@ export function ProjectSettingsPage() {
   const [accessOverviewUnavailable, setAccessOverviewUnavailable] = useState(false);
   const [authConfig, setAuthConfig] = useState<AuthConfigResponse | null>(null);
   const [principalId, setPrincipalId] = useState('');
-  const [principalDisplayName, setPrincipalDisplayName] = useState('');
   const [projectRole, setProjectRole] = useState('Viewer');
   const [savingRoleAssignment, setSavingRoleAssignment] = useState(false);
   const [roleAssignmentError, setRoleAssignmentError] = useState<string | null>(null);
@@ -792,19 +796,16 @@ export function ProjectSettingsPage() {
   };
 
   const handleAddRoleAssignment = async () => {
-    if (!projectId || !principalId.trim()) return;
+    if (!projectId || !isEntraObjectId(principalId)) return;
     setSavingRoleAssignment(true);
     setRoleAssignmentError(null);
     setRoleAssignmentSuccess(null);
     try {
       await apiClient.createProjectRoleAssignment(projectId, {
         principal_id: principalId.trim(),
-        display_name: principalDisplayName.trim() || null,
-        email: principalId.includes('@') ? principalId.trim() : null,
         role: projectRole,
       });
       setPrincipalId('');
-      setPrincipalDisplayName('');
       setProjectRole('Viewer');
       setRoleAssignmentSuccess('Project member saved.');
       await refreshAccessOverview();
@@ -1117,10 +1118,20 @@ export function ProjectSettingsPage() {
                               accessOverview.project_role_assignments.map((assignment) => (
                                 <div key={assignment.assignment_id} className={styles.roleRow}>
                                   <div className={styles.roleIdentity}>
-                                    <TitleText>{assignment.display_name ?? assignment.email ?? assignment.principal_id}</TitleText>
-                                    <Body tone="muted">
-                                      {assignment.email ?? assignment.principal_id}
-                                    </Body>
+                                    {isEntraObjectId(assignment.principal_id) ? (
+                                      <>
+                                        <TitleText>{assignment.display_name ?? assignment.email ?? assignment.principal_id}</TitleText>
+                                        <Body tone="muted">{assignment.email ?? assignment.principal_id}</Body>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <TitleText>Invalid legacy membership</TitleText>
+                                        <Body tone="muted">{assignment.principal_id}</Body>
+                                        <Body tone="muted">
+                                          This email-based entry does not match Entra object IDs. Remove it and re-add the user with their Entra object ID.
+                                        </Body>
+                                      </>
+                                    )}
                                     <div className={styles.badgeRow}>
                                       <Badge appearance="filled">{assignment.role}</Badge>
                                       <Badge appearance="outline">{assignment.scope}</Badge>
@@ -1144,22 +1155,12 @@ export function ProjectSettingsPage() {
 
                           <Field
                             label="Add member"
-                            hint="Enter the Entra object ID or email of the person who should receive access."
+                            hint="Enter the user's Entra object ID (UUID), not an email address. Platform administrators already have access to every project."
                           >
                             <Input
                               value={principalId}
-                              placeholder="person@contoso.com"
+                              placeholder="00000000-0000-0000-0000-000000000000"
                               onChange={(_, data) => setPrincipalId(data.value)}
-                            />
-                          </Field>
-                          <Field
-                            label="Display name (optional)"
-                            hint="Stored for readability until Tank's directory lookup lands."
-                          >
-                            <Input
-                              value={principalDisplayName}
-                              placeholder="Ada Lovelace"
-                              onChange={(_, data) => setPrincipalDisplayName(data.value)}
                             />
                           </Field>
                           <Field label="Role">
@@ -1172,7 +1173,7 @@ export function ProjectSettingsPage() {
                           <div className={styles.formActions}>
                             <Button
                               appearance="primary"
-                              disabled={!accessOverview.can_manage_role_assignments || savingRoleAssignment || !principalId.trim()}
+                              disabled={!accessOverview.can_manage_role_assignments || savingRoleAssignment || !isEntraObjectId(principalId)}
                               onClick={() => void handleAddRoleAssignment()}
                             >
                               {savingRoleAssignment ? 'Saving' : 'Add member'}

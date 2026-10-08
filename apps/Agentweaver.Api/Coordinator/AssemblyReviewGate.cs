@@ -37,11 +37,17 @@ public sealed class AssemblyReviewGate
     /// submits a decision, or is cancelled when the host stops (<paramref name="ct"/>). Replaces any
     /// prior armed gate for the same run. There is no timeout — the wait is indefinite by design.
     /// </summary>
-    public Task<AssemblyReviewDecision> ArmAsync(string coordinatorRunId, string ownerUser, CancellationToken ct, string? revisionId = null)
+    public Task<AssemblyReviewDecision> ArmAsync(
+        string coordinatorRunId,
+        string ownerUser,
+        CancellationToken ct,
+        string? revisionId = null,
+        string? reviewRequestId = null,
+        long? assemblyFencingToken = null)
     {
         var entry = new GateEntry(
             new TaskCompletionSource<AssemblyReviewDecision>(TaskCreationOptions.RunContinuationsAsynchronously),
-            ownerUser, revisionId);
+            ownerUser, revisionId, reviewRequestId, assemblyFencingToken);
 
         var cancellationRegistration = ct.CanBeCanceled
             ? ct.Register(static state =>
@@ -95,7 +101,9 @@ public sealed class AssemblyReviewGate
             if (!owns)
                 return AssemblyReviewSubmitResult.Forbidden;
             if (string.IsNullOrWhiteSpace(decision.OutputRevisionId)
-                || !string.Equals(entry.RevisionId, decision.OutputRevisionId, StringComparison.Ordinal))
+                || !string.Equals(entry.RevisionId, decision.OutputRevisionId, StringComparison.Ordinal)
+                || !string.Equals(entry.ReviewRequestId, decision.ReviewRequestId, StringComparison.Ordinal)
+                || entry.AssemblyFencingToken != decision.AssemblyFencingToken)
                 return AssemblyReviewSubmitResult.StaleRevision;
 
             if (!_gates.Remove(coordinatorRunId, out var existing))
@@ -137,16 +145,25 @@ public sealed class AssemblyReviewGate
         private CancellationTokenRegistration _cancellationRegistration;
         private int _disposed;
 
-        public GateEntry(TaskCompletionSource<AssemblyReviewDecision> tcs, string ownerUser, string? revisionId)
+        public GateEntry(
+            TaskCompletionSource<AssemblyReviewDecision> tcs,
+            string ownerUser,
+            string? revisionId,
+            string? reviewRequestId,
+            long? assemblyFencingToken)
         {
             Tcs = tcs;
             OwnerUser = ownerUser;
             RevisionId = revisionId;
+            ReviewRequestId = reviewRequestId;
+            AssemblyFencingToken = assemblyFencingToken;
         }
 
         public TaskCompletionSource<AssemblyReviewDecision> Tcs { get; }
         public string OwnerUser { get; }
         public string? RevisionId { get; }
+        public string? ReviewRequestId { get; }
+        public long? AssemblyFencingToken { get; }
 
         public void SetRegistration(CancellationTokenRegistration cancellationRegistration)
         {
@@ -173,7 +190,9 @@ public sealed record AssemblyReviewDecision(
     string? Feedback,
     IReadOnlyList<string>? TargetFiles,
     string Reviewer,
-    string? OutputRevisionId = null);
+    string? OutputRevisionId = null,
+    string? ReviewRequestId = null,
+    long? AssemblyFencingToken = null);
 
 /// <summary>Outcome of <see cref="AssemblyReviewGate.TrySubmit"/> so the HTTP layer can map status codes.</summary>
 public enum AssemblyReviewSubmitResult

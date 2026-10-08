@@ -522,7 +522,8 @@ public sealed class CoordinatorSteeringService
         string createdBy,
         string? createdByGitHubLogin = null,
         CancellationToken ct = default,
-        string? outputRevisionId = null)
+        string? outputRevisionId = null,
+        string? reviewRequestId = null)
     {
         var normalized = (kind ?? string.Empty).Trim().ToLowerInvariant();
 
@@ -544,6 +545,8 @@ public sealed class CoordinatorSteeringService
                 var pending = await CoordinatorAssemblyReviewPersistence.GetAsync(
                     _scopeFactory, coordinatorRunId, ct).ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(outputRevisionId)
+                    || string.IsNullOrWhiteSpace(reviewRequestId)
+                    || pending?.ReviewRequestId != reviewRequestId
                     || pending?.OutputRevisionId != outputRevisionId
                     || reviewRun.CurrentOutputRevisionId != outputRevisionId)
                     throw new RunOutputRevisionUnavailableException("stale_output_revision");
@@ -614,7 +617,8 @@ public sealed class CoordinatorSteeringService
         {
             var reviewGateView = await TryDeliverAtAssemblyReviewGateAsync(
                 coordinatorRunId, directiveId, normalized, targetChildRunId, resolvedInstruction,
-                createdBy, createdByGitHubLogin, createdAt, ct, outputRevisionId).ConfigureAwait(false);
+                createdBy, createdByGitHubLogin, createdAt, ct, outputRevisionId, reviewRequestId)
+                .ConfigureAwait(false);
             if (reviewGateView is not null)
                 return reviewGateView;
         }
@@ -1138,7 +1142,7 @@ public sealed class CoordinatorSteeringService
     private async Task<SteeringDirectiveView?> TryDeliverAtAssemblyReviewGateAsync(
         string coordinatorRunId, int directiveId, string kind, string? targetChildRunId, string instruction,
         string createdBy, string? createdByGitHubLogin, DateTimeOffset createdAt, CancellationToken ct,
-        string? outputRevisionId)
+        string? outputRevisionId, string? reviewRequestId)
     {
         // The AwaitingReview interception needs the run store (to confirm the parking state) and the
         // review gate (to deliver). Lightweight unit tests register neither; fall through to the normal
@@ -1174,7 +1178,8 @@ public sealed class CoordinatorSteeringService
             Feedback: instruction,
             TargetFiles: targetFiles,
             Reviewer: createdBy,
-            OutputRevisionId: outputRevisionId);
+            OutputRevisionId: outputRevisionId,
+            ReviewRequestId: reviewRequestId);
 
         var delivery = await CoordinatorAssemblyReviewPersistence.DeliverDecisionAsync(
             _scopeFactory, _reviewGate, coordinatorRunId, decision, createdBy, createdByGitHubLogin, ct)

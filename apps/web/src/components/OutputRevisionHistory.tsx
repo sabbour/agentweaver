@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import type { OutputRevision, OutputRevisionComparison, OutputRevisionFile } from '../api/types';
 
-export function OutputRevisionHistory({ runId }: { runId: string }) {
+export function OutputRevisionHistory({
+  runId,
+  currentReviewRevisionId,
+}: {
+  runId: string;
+  currentReviewRevisionId?: string;
+}) {
   const [history, setHistory] = useState<OutputRevision[]>([]);
   const [selected, setSelected] = useState<OutputRevision | null>(null);
   const [comparison, setComparison] = useState<OutputRevisionComparison | null>(null);
@@ -45,22 +51,36 @@ export function OutputRevisionHistory({ runId }: { runId: string }) {
   }
 
   return (
-    <section aria-label="Output revision history">
-      <h3>Output revision history</h3>
-      {error && <p role="alert">Exact revision unavailable: {error}</p>}
-      {history.length === 0 && !error && <p>No published output revisions.</p>}
+    <section aria-label="Output version history">
+      <h3>Output versions</h3>
+      <p>Saved versions of this run's output. Open one to inspect its files and exact changes.</p>
+      {error && <p role="alert">Exact output version unavailable: {error}</p>}
+      {history.length === 0 && !error && <p>No output versions yet.</p>}
       <ul>
-        {history.map((revision) => (
-          <li key={revision.revision_id}>
-            <button type="button" onClick={() => void inspect(revision.revision_id)}>
-              {revision.revision_id} · generation {revision.lifecycle_generation}
-              {revision.accepted_no_change ? ' · accepted no change' : ''}
-            </button>
-          </li>
-        ))}
+        {history.map((revision, index) => {
+          const versionNumber = history.length - index;
+          return (
+            <li key={revision.revision_id}>
+              <button type="button" onClick={() => void inspect(revision.revision_id)}>
+                Output version {versionNumber}
+                {revision.revision_id === currentReviewRevisionId ? ' · Under review' : ''}
+              </button>
+              <details>
+                <summary>Version details</summary>
+                <p>Revision ID: <code>{revision.revision_id}</code></p>
+                {revision.accepted_no_change && <p>Accepted with no changes</p>}
+              </details>
+            </li>
+          );
+        })}
       </ul>
       {selected && (
         <div>
+          <h4>
+            Output version {history.length - history.findIndex(
+              (revision) => revision.revision_id === selected.revision_id,
+            )}
+          </h4>
           <p>Tree: {selected.tree_hash} · workflow: {selected.workflow_digest ?? 'unavailable'}</p>
           <p>Diff SHA-256: {selected.diff_sha256}</p>
           {selected.diff !== undefined && <pre>{selected.diff}</pre>}

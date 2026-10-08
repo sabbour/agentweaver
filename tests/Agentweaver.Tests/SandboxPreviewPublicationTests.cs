@@ -292,20 +292,40 @@ public sealed class SandboxPreviewPublicationTests
     [Fact]
     public async Task NxdomainThenGateway503Then200_Succeeds()
     {
+        var clock = new PublicationClock(virtualTimers: true);
+        var firstAttempt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondAttempt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thirdAttempt = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = 0;
         var publication = new PreviewPublicationHandler((_, _) =>
         {
             var call = Interlocked.Increment(ref calls);
             if (call == 1)
+            {
+                firstAttempt.SetResult();
                 throw new HttpRequestException(HttpRequestError.NameResolutionError);
+            }
             if (call == 2)
+            {
+                secondAttempt.SetResult();
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+            }
 
+            thirdAttempt.SetResult();
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
         });
-        using var h = new Harness(publication, timeoutSeconds: 1, dnsConvergenceTimeoutSeconds: 5);
+        using var h = new Harness(
+            publication, timeoutSeconds: 1, dnsConvergenceTimeoutSeconds: 5, clock: clock);
 
-        var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var start = h.StartAsync();
+        await firstAttempt.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await clock.WaitForScheduledTimersAsync(TimeSpan.FromSeconds(1), minimumCount: 2);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        await secondAttempt.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await clock.WaitForScheduledTimersAsync(TimeSpan.FromSeconds(2), minimumCount: 1);
+        clock.Advance(TimeSpan.FromSeconds(2));
+        await thirdAttempt.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await start.WaitAsync(TimeSpan.FromSeconds(5));
 
         ((IStatusCodeHttpResult)result).StatusCode.Should().Be(200);
         h.ReadyEvents().Should().HaveCount(2);
@@ -373,9 +393,17 @@ public sealed class SandboxPreviewPublicationTests
                 };
             return new HttpResponseMessage(failure == "403" ? HttpStatusCode.Forbidden : HttpStatusCode.ServiceUnavailable);
         });
-        using var h = new Harness(publication, timeoutSeconds: 1, dnsConvergenceTimeoutSeconds: 1);
+        var clock = failure == "403" ? new PublicationClock(virtualTimers: true) : null;
+        using var h = new Harness(
+            publication, timeoutSeconds: 1, dnsConvergenceTimeoutSeconds: 1, clock: clock);
 
-        var result = await h.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var start = h.StartAsync();
+        if (clock is not null)
+        {
+            await clock.WaitForScheduledTimersAsync(TimeSpan.FromSeconds(1), minimumCount: 4);
+            clock.Advance(TimeSpan.FromSeconds(1));
+        }
+        var result = await start.WaitAsync(TimeSpan.FromSeconds(5));
 
         ((IStatusCodeHttpResult)result).StatusCode.Should().Be(409);
         h.ReadyEvents().Should().BeEmpty();
@@ -586,18 +614,144 @@ public sealed class SandboxPreviewPublicationTests
         }
     }
 
-    private sealed class PublicationClock(DateTimeOffset? utcNow = null) : TimeProvider
+    private sealed class PublicationClock(DateTimeOffset? utcNow = null, bool virtualTimers = false) : TimeProvider
     {
+        private readonly bool _virtualTimers = virtualTimers;
+        private readonly object _gate = new();
+        private readonly List<PublicationTimer> _timers = [];
+        private TaskCompletionSource _timersChanged = NewSignal();
         private long _timestamp;
         private long _utcTicks = (utcNow ?? DateTimeOffset.UtcNow).UtcTicks;
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
         public override long GetTimestamp() => Interlocked.Read(ref _timestamp);
         public override DateTimeOffset GetUtcNow() =>
             new(Interlocked.Read(ref _utcTicks), TimeSpan.Zero);
+
+        public override ITimer CreateTimer(
+            TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (!_virtualTimers)
+                return base.CreateTimer(callback, state, dueTime, period);
+
+            ArgumentNullException.ThrowIfNull(callback);
+            if (period != Timeout.InfiniteTimeSpan && period != TimeSpan.Zero)
+                throw new NotSupportedException("PublicationClock supports one-shot timers only.");
+            var timer = new PublicationTimer(this, callback, state);
+            if (!Change(timer, dueTime, period))
+                throw new ObjectDisposedException(nameof(PublicationTimer));
+            return timer;
+        }
+
+        public async Task WaitForScheduledTimersAsync(TimeSpan dueIn, int minimumCount)
+        {
+            if (dueIn < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(dueIn));
+            if (minimumCount < 1)
+                throw new ArgumentOutOfRangeException(nameof(minimumCount));
+
+            while (true)
+            {
+                Task changed;
+                lock (_gate)
+                {
+                    var dueAt = checked(_timestamp + dueIn.Ticks);
+                    if (_timers.Count(timer => !timer.IsDisposed && timer.DueTimestamp == dueAt)
+                        >= minimumCount)
+                        return;
+                    changed = _timersChanged.Task;
+                }
+
+                await changed.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+        }
+
         public void Advance(TimeSpan elapsed)
         {
-            Interlocked.Add(ref _timestamp, elapsed.Ticks);
-            Interlocked.Add(ref _utcTicks, elapsed.Ticks);
+            if (elapsed < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(elapsed));
+
+            PublicationTimer[] due;
+            lock (_gate)
+            {
+                var now = checked(_timestamp + elapsed.Ticks);
+                Interlocked.Exchange(ref _timestamp, now);
+                Interlocked.Add(ref _utcTicks, elapsed.Ticks);
+                due = _timers
+                    .Where(timer => !timer.IsDisposed && timer.DueTimestamp is { } dueAt && dueAt <= now)
+                    .OrderBy(timer => timer.DueTimestamp)
+                    .ToArray();
+                foreach (var timer in due)
+                    timer.DueTimestamp = null;
+                SignalTimersChanged();
+            }
+
+            foreach (var timer in due)
+                timer.Invoke();
+        }
+
+        private bool Change(PublicationTimer timer, TimeSpan dueTime, TimeSpan period)
+        {
+            if (dueTime < Timeout.InfiniteTimeSpan)
+                throw new ArgumentOutOfRangeException(nameof(dueTime));
+            if (period != Timeout.InfiniteTimeSpan && period != TimeSpan.Zero)
+                throw new NotSupportedException("PublicationClock supports one-shot timers only.");
+
+            lock (_gate)
+            {
+                if (timer.IsDisposed)
+                    return false;
+
+                if (!_timers.Contains(timer))
+                    _timers.Add(timer);
+                timer.DueTimestamp = dueTime == Timeout.InfiniteTimeSpan
+                    ? null
+                    : checked(_timestamp + dueTime.Ticks);
+                SignalTimersChanged();
+                return true;
+            }
+        }
+
+        private void Dispose(PublicationTimer timer)
+        {
+            lock (_gate)
+            {
+                if (timer.IsDisposed)
+                    return;
+
+                timer.IsDisposed = true;
+                timer.DueTimestamp = null;
+                SignalTimersChanged();
+            }
+        }
+
+        private void SignalTimersChanged()
+        {
+            var changed = _timersChanged;
+            _timersChanged = NewSignal();
+            changed.TrySetResult();
+        }
+
+        private static TaskCompletionSource NewSignal() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private sealed class PublicationTimer(
+            PublicationClock owner, TimerCallback callback, object? state) : ITimer
+        {
+            public long? DueTimestamp { get; set; }
+            public bool IsDisposed { get; set; }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) =>
+                owner.Change(this, dueTime, period);
+
+            public void Dispose() => owner.Dispose(this);
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+
+            public void Invoke() => callback(state);
         }
     }
 }

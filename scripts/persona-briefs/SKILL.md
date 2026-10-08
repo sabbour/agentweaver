@@ -25,8 +25,7 @@ node scripts/persona-briefs/challenge-catalog.mjs list --surface ui
 node scripts/persona-briefs/challenge-catalog.mjs get product-management-full-lifecycle-v1
 node scripts/persona-briefs/challenge-catalog.mjs select-release --manifest <release-feature-manifest.json>
 npm run azure:deploy-from-release -- vX.Y.Z --resume `
-  --feature-manifest <release-feature-manifest.json> `
-  --acceptance-bundle <canonical-harness-judge-bundle.json>
+  --feature-manifest <release-feature-manifest.json>
 ```
 
 The output is deterministic JSON. Validation fails closed on unknown fields, dangling
@@ -50,18 +49,17 @@ publication.
 
 ### Release selection
 
-The full catalog is not a release suite. Every release runs:
+The challenge catalog is optional diagnostic tooling, not a prerequisite for an
+ordinary verified deployment. A feature manifest opts into claim validation; adding
+catalog entries is not required when existing coverage is sufficient. Without a
+manifest, catalog diagnostics are reported as `NOT_RUN`, and normal deployment checks
+determine deployment success. This does not claim that product acceptance tests ran.
 
-1. `release-lumenpath-launch-integration-v1`, the bounded representative real-world
-   integration project; and
-2. the smallest focused API, UI, or combined challenge set that directly exercises
-   every newly shipped claim on all affected surfaces.
-
-The optional `fast-smoke` tier can reject an unhealthy deployment cheaply, but it
-cannot replace either release requirement. Deep stress rotates nightly; destructive,
-externally integrated, or specialist challenges remain manual. Missing claim linkage
-or required surface coverage blocks acceptance unless a coordinator-owned reviewed
-disposition explicitly resolves it.
+For release product acceptance, run the exact-source representative integration and
+focused tests for shipped behavior through the release process. A canonical
+Harness/Judge bundle is needed only when opting into the manifest-backed diagnostic
+flow; a bundle without a feature manifest is rejected. Fast smoke, deep stress, and
+specialist challenges remain separate diagnostic tiers.
 
 `workflow-conservative-fan-generation-v1` links #1591-#1593 to focused API acceptance.
 Its contract requires safe fan generation for explicit, pairwise-disjoint content
@@ -82,13 +80,14 @@ structured category, rationale, evidence, and immutable references to coordinato
 records. The local closure helper reports structural eligibility only; it never authorizes
 closure from caller-supplied identities or booleans.
 
-The release deployment boundary validates the closed feature declaration before
-deployment, then validates result schemas after live verification on a resumed run.
-It requires the selected representative challenge,
-direct feature-specific coverage for every affected surface, exact deployed-revision
-evidence, successful cleanup, and no unresolved abnormal anomalies. It validates
-declared results only; it never executes a Harness. The standalone manifest helper is
-diagnostic and cannot close release acceptance.
+When a feature manifest is supplied, the release deployment boundary validates the
+closed feature declaration before deployment and validates result schemas after live
+verification on a resumed run. A canonical bundle must provide the selected
+representative challenge, direct feature-specific coverage for every affected
+surface, exact deployed-revision evidence, successful cleanup, and no unresolved
+abnormal anomalies. The boundary validates declared results only; it never executes
+a Harness. The standalone manifest helper is diagnostic and cannot close release
+acceptance.
 
 Only the deployment boundary can make a canonical Harness/Judge bundle authoritative.
 It resolves every referenced file beneath the bundle root, recomputes SHA-256, compares

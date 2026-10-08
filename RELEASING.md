@@ -11,8 +11,8 @@ Repository release identity and Azure deployment are separate operations.
 | `npm run azure:deploy-from-local` | Current HEAD short SHA | Deploy local work to an existing environment. No release identity is created or consumed. |
 | `npm run azure:deploy-from-commit -- <sha-or-ref>` | Resolved exact commit SHA | Deploy any committed ref without switching or modifying the caller's checkout. |
 | `npm run release:publish` | Prepared `vX.Y.Z` | Create the annotated tag, wait for GHCR images, then create the GitHub Release. No Azure work. |
-| `npm run azure:deploy-from-release -- vX.Y.Z --feature-manifest <path> [--image-source acr-build]` | Existing published semver tag | Validate declared release coverage, import/build and deploy that exact release, then keep acceptance pending until exact post-deployment results close it at this same boundary. |
-| `npm run azure:release -- --feature-manifest <path>` | Prepared `vX.Y.Z` | Publish and deploy the same release through the same two-phase acceptance boundary. |
+| `npm run azure:deploy-from-release -- vX.Y.Z [--image-source acr-build]` | Existing published semver tag | Import/build and deploy the exact release, then verify image provenance, warm-pool, and live health. Optional manifest/bundle diagnostics are reported as `NOT_RUN` when absent. |
+| `npm run azure:release` | Prepared `vX.Y.Z` | Publish and deploy the same release through the normal source, version, image, and live-verification checks. Optional manifest/bundle diagnostics are reported as `NOT_RUN` when absent. |
 | `npm run azure:verify` | Running environment | Read-only health verification. |
 
 ```text
@@ -23,14 +23,16 @@ local HEAD SHA
 arbitrary branch / PR tip / commit
   └─ azure:deploy-from-commit -- <sha-or-ref>
        └─ detached exact-commit worktree → image:<short-SHA> → running environment
-            └─ representative integration + feature-specific API/UI E2E acceptance
+            └─ accepted regression and release-relevant integration evidence
                  └─ only if passing: prepare and promote release
 
 prepared exact main SHA
   └─ release:publish
        └─ annotated vX.Y.Z tag + GHCR images + GitHub Release
-            └─ azure:deploy-from-release -- vX.Y.Z --feature-manifest <path>
+            └─ azure:deploy-from-release -- vX.Y.Z
                  └─ image:vX.Y.Z → running versioned environment
+                      └─ source, provenance, warm-pool, and live-health checks
+                           └─ optional catalog diagnostics: NOT_RUN when not requested
 ```
 
 ## Versioning
@@ -58,6 +60,21 @@ from its exact matching section; do not run another changelog generator.
    forward-port. Never bypass that guard: create a short-lived branch from
    current `dev`, run `npm run release:sync-dev -- <release-preparation-sha>`,
    merge that PR, and plan again.
+   By default, Changesets selects the minimum version implied by the pending
+   fragments. When a release is intentionally targeting a later patch in that
+   same major/minor series, pass the exact target to the planner:
+
+   ```bash
+   npm run release:plan -- --target X.Y.Z
+   ```
+
+   `--target` must be a stable `X.Y.Z` version in the native plan's major/minor
+   series, at least the native minimum, and newer than both `VERSION` and the
+   latest published tag. `--expected` remains an assertion that the prepared
+   version and `release/vX.Y.Z` branch match; it does not select or force a
+   version. Omitting `--target` preserves the native Changesets patch/minor
+   result. Native dependent-package range updates are retained, and the target
+   is applied consistently to planned fixed or linked package groups.
 2. Create `release/vX.Y.Z` from that SHA and soak it. After stabilization fixes
    are committed, record the exact candidate SHA and deploy it before preparing
    release metadata or creating any release identity:
@@ -67,20 +84,28 @@ from its exact matching section; do not run another changelog generator.
    npm run azure:verify
    ```
 
-   Run intermediate end-to-end tests **against this exact-SHA deployment**:
-   representative integration coverage and feature-specific API/UI acceptance
-   for everything shipping. Include the staging identity smoke
+   Review the existing release-relevant evidence for this exact-SHA deployment,
+   including regression CI and any accepted integration or feature checks. Ordinary
+   shipping does not require a new Harness scenario, catalog fixture, or diagnostic
+   bundle. Include the staging identity smoke
    (`node scripts/api-harness/run-persona.mjs` against the deployed staging URL
    with the default recorder-session auth provider) when identity or repository
    authorization is affected. Record the candidate SHA, deployment identity,
-   selected tests, and passing results as release evidence. Failures block
+   evidence used, and results. Failures block
    preparation, promotion, publication, and release deployment; fix the
    candidate, commit, redeploy its new SHA, and rerun acceptance.
 
-3. Only after exact-SHA candidate acceptance passes, on the clean release branch run:
+3. After the exact-SHA candidate deployment and its existing release evidence are
+   verified, on the clean release branch run:
 
    ```bash
    npm run release:prepare -- --expected X.Y.Z
+   ```
+
+   If the plan used an explicit target, pass it again during preparation:
+
+   ```bash
+   npm run release:prepare -- --expected X.Y.Z --target X.Y.Z
    ```
 
 4. Review and commit `VERSION`, package mirrors, `CHANGELOG.md`, and consumed
@@ -100,6 +125,11 @@ from its exact matching section; do not run another changelog generator.
    repair. To inspect without the merge, run
    `npm run release:prepare -- --expected X.Y.Z --no-ancestry-merge`. The command
    fails and prints the same `git merge` command.
+   If `release:prepare` creates the ancestry merge, that invocation stops before
+   applying release metadata. Re-run it on the clean merged tree so Changesets
+   recalculates the plan against any newly merged package manifests, workspace
+   configuration, or changesets; update the target and expected release branch
+   if the native minimum changed.
 
    CI enforces this rule on `release/*` pull requests into `main`.
 6. Promote the prepared branch to `main` through a green PR using a **merge
@@ -137,35 +167,43 @@ From a clean checkout at the exact resulting `origin/main` SHA (including no
 untracked or unexpected git-ignored files). Publication uses the same ignored-file
 policy as preparation: normal dependency, build, test, and harness outputs are
 allowed, while stray ignored files outside those recognized locations still block
-the release. **Do not publish until the exact-SHA candidate deployment and its
-representative integration and feature-specific API/UI acceptance have passed**
-as described above:
+the release. **Do not publish until the exact-SHA candidate deployment is healthy
+and its accepted release-relevant evidence is recorded** as described above.
+Existing evidence for the exact candidate may be reused; ordinary shipping does not
+require a new Harness scenario, catalog fixture, or diagnostic bundle:
 
 ```bash
 # Repository identity only: tag + GHCR images + GitHub Release
 npm run release:publish
 
-# Validate coverage and deploy that already-published release now or later
+# Deploy that already-published release now or later
+npm run azure:deploy-from-release -- vX.Y.Z
+```
+
+For ordinary verified shipping to the default environment, the composite command
+publishes and deploys using the existing source, tag, version, image-digest,
+provenance, Entra, warm-pool, and live-health checks:
+
+```bash
+npm run azure:release
+```
+
+Without diagnostic inputs, release acceptance is reported as `NOT_RUN`; this is
+not a passing catalog or Harness result.
+
+To opt into catalog-backed diagnostics, supply a feature manifest. It is validated
+against the exact tag commit and target deployment identity before publication or
+deployment. A manifest without a bundle preserves the existing two-phase flow and
+leaves acceptance pending after live verification:
+
+```bash
 npm run azure:deploy-from-release -- vX.Y.Z \
   --feature-manifest <release-feature-manifest.json>
 ```
 
-For the normal first shipment to the default environment, the composite command
-publishes and deploys, then deliberately remains blocked until post-deployment
-acceptance evidence is supplied:
-
-```bash
-npm run azure:release -- \
-  --feature-manifest <release-feature-manifest.json>
-```
-
-The first deployment phase validates the closed feature manifest and selected
-representative/feature-specific coverage before any deployment mutation. The manifest
-must name the exact tag commit and target deployment identity. After deployment and
-live verification, the command intentionally stops with acceptance pending.
-
-Run the selected Harness scenarios against that verified deployment. Close acceptance
-only by resuming the release deployment boundary with exact result manifests:
+Run the selected Harness scenarios against that verified deployment. Close the
+opt-in acceptance only by resuming the release deployment boundary with exact
+result manifests:
 
 ```bash
 npm run azure:deploy-from-release -- vX.Y.Z --resume \
@@ -173,8 +211,15 @@ npm run azure:deploy-from-release -- vX.Y.Z --resume \
   --acceptance-bundle <canonical-harness-judge-bundle.json>
 ```
 
-For the composite workflow, use the same arguments with `azure:release -- --resume
-vX.Y.Z`. The gate validates declared manifests; it does not execute Harnesses. It requires the
+For the composite workflow, resume with the same inputs:
+
+```bash
+npm run azure:release -- --resume vX.Y.Z \
+  --feature-manifest <release-feature-manifest.json> \
+  --acceptance-bundle <canonical-harness-judge-bundle.json>
+```
+
+The gate validates declared manifests; it does not execute Harnesses. It requires the
 selected representative challenge, direct API/UI/MCP coverage for every shipped
 behavior and affected surface, non-empty typed evidence bound to the exact deployment,
 project, challenge execution, run, catalog version, and surface, successful cleanup,
@@ -187,12 +232,13 @@ acceptance can close. Missing, outside-root, or hash-mismatched artifacts fail c
 This is an integrity boundary inside the repository's trusted-operator model, not a
 cryptographic defense against a malicious release operator. The operator controls the
 local files and is trusted, while the verifier prevents accidental omissions and simple
-fabricated result JSON from becoming authoritative. Only a verified canonical
-Harness/Judge bundle passed through `azure:deploy-from-release` can close acceptance.
+fabricated result JSON from becoming authoritative. When diagnostics are opted in, only
+a verified canonical Harness/Judge bundle passed through `azure:deploy-from-release`
+can close acceptance.
 Direct helper execution is diagnostic only.
 
 The composite is resumable orchestration, not a transaction. If deployment
-or acceptance fails after publication, the tag and GitHub Release remain durable:
+or opt-in acceptance fails after publication, the tag and GitHub Release remain durable:
 
 ```bash
 npm run azure:release -- --resume vX.Y.Z \
@@ -210,9 +256,10 @@ npm run release:publish -- --resume vX.Y.Z
 To deploy the same release to another configured environment, check out the
 exact tag commit and run `azure:deploy-from-release` with that tag. The command
 requires a clean checkout whose `HEAD` equals the annotated tag, verifies that
-the GitHub Release and prepared metadata exist, validates that environment's feature
-manifest, and then builds/deploys/verifies the release without publishing anything new.
-Each target environment requires its own post-deployment acceptance closure.
+the GitHub Release and prepared metadata exist, then builds/deploys/verifies the
+release without publishing anything new. Supply a feature manifest to opt into
+that target environment's catalog declaration and post-deployment acceptance
+checks; without one, those diagnostics remain `NOT_RUN`.
 
 By default, `azure:deploy-from-release` imports the release images that
 `.github/workflows/publish-images.yml` already published for this exact tag
@@ -221,7 +268,6 @@ images from source into ACR instead, add `--image-source acr-build`:
 
 ```bash
 npm run azure:deploy-from-release -- vX.Y.Z \
-  --feature-manifest <release-feature-manifest.json> \
   --image-source acr-build
 ```
 

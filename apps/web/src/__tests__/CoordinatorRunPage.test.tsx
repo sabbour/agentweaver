@@ -1030,6 +1030,37 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
   });
 
   it('requests assembly changes with reviewer feedback via the inline Change button', async () => {
+    mockRunStreamState.current.events = [
+      {
+        sequence: 1,
+        type: 'coordinator.assembly_review_requested',
+        payload: {
+          gateKind: 'human-review',
+          outputRevisionId: 'reviewed-output-v0',
+          reviewRequestId: 'review-request-v0',
+        },
+      },
+      { sequence: 2, type: 'coordinator.assembly_failed', payload: { reason: 'assembly_error' } },
+      {
+        sequence: 3,
+        type: 'coordinator.assembly_review_preserved',
+        payload: {
+          outputRevisionId: 'reviewed-output-v0',
+          reviewRequestId: 'review-request-v0',
+          reason: 'assembly_error',
+        },
+      },
+      { sequence: 4, type: 'coordinator.assembly_changes_requested', payload: {} },
+      {
+        sequence: 5,
+        type: 'coordinator.assembly_review_requested',
+        payload: {
+          gateKind: 'human-review',
+          outputRevisionId: 'reviewed-output-v1',
+          reviewRequestId: 'review-request-v1',
+        },
+      },
+    ];
     vi.mocked(apiClient.getRun).mockResolvedValue({
       run_id: 'coord-run-1',
       status: 'awaiting_review',
@@ -1053,6 +1084,8 @@ describe('CoordinatorRunPage — unified coordinator graph view', () => {
       expect(apiClient.reviewAssembly).toHaveBeenCalledWith(
         'coord-run-1',
         'request_changes',
+        'reviewed-output-v1',
+        'review-request-v1',
         'Please tighten the error messaging.',
         'signed-provider-key',
       );

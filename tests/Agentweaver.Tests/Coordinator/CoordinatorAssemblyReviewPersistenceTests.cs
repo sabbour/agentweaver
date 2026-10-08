@@ -31,7 +31,7 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
     public async Task UpsertReviewRequest_ClearsPriorDecisionAndFailureStamp()
     {
         const string coordinatorRunId = "coord-review-reset";
-        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+        var reviewRequestId = await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/old", "old-tree", "revision-old", default);
         await CoordinatorAssemblyReviewPersistence.PersistDecisionAsync(
             _scopeFactory,
@@ -42,7 +42,9 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
                 Feedback: "old approval",
                 TargetFiles: null,
                 Reviewer: "alice",
-                OutputRevisionId: "revision-old"),
+                OutputRevisionId: "revision-old",
+                ReviewRequestId: reviewRequestId,
+                AssemblyFencingToken: 0),
             default);
 
         using (var scope = _provider.CreateScope())
@@ -68,6 +70,50 @@ public sealed class CoordinatorAssemblyReviewPersistenceTests : IDisposable
         record.DecisionSubmittedAt.Should().BeNull();
         record.CoordinatorFailedAt.Should().BeNull();
         record.CoordinatorFailureReason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReactivateOpenReview_ClearsFailureStampForSameUndecidedRevision()
+    {
+        const string coordinatorRunId = "coord-review-recovery";
+        const string revisionId = "revision-recovery";
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/recovery", "tree", revisionId, default);
+        (await CoordinatorAssemblyReviewPersistence.MarkCoordinatorFailedAsync(
+            _scopeFactory, coordinatorRunId, "agent_turn_internal_error", default)).Should().BeTrue();
+
+        (await CoordinatorAssemblyReviewPersistence.ReactivateOpenReviewAsync(
+            _scopeFactory, coordinatorRunId, coordinatorRunId, revisionId, 0, default)).Should().BeTrue();
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var record = await db.AssemblyReviews.AsNoTracking()
+            .SingleAsync(r => r.CoordinatorRunId == coordinatorRunId);
+        record.OutputRevisionId.Should().Be(revisionId);
+        record.CoordinatorFailedAt.Should().BeNull();
+        record.CoordinatorFailureReason.Should().BeNull();
+        record.DecisionSubmittedAt.Should().BeNull();
+        record.DecisionJson.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReactivateOpenReview_DoesNotClearFailureForDifferentRevision()
+    {
+        const string coordinatorRunId = "coord-review-recovery-stale";
+        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+            _scopeFactory, coordinatorRunId, "alice", "agentweaver/integration/recovery", "tree", "revision-current", default);
+        (await CoordinatorAssemblyReviewPersistence.MarkCoordinatorFailedAsync(
+            _scopeFactory, coordinatorRunId, "agent_turn_internal_error", default)).Should().BeTrue();
+
+        (await CoordinatorAssemblyReviewPersistence.ReactivateOpenReviewAsync(
+            _scopeFactory, coordinatorRunId, coordinatorRunId, "revision-stale", 0, default)).Should().BeFalse();
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var record = await db.AssemblyReviews.AsNoTracking()
+            .SingleAsync(r => r.CoordinatorRunId == coordinatorRunId);
+        record.CoordinatorFailedAt.Should().NotBeNull();
+        record.CoordinatorFailureReason.Should().Be("agent_turn_internal_error");
     }
 
     [Fact]

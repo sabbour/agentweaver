@@ -243,6 +243,9 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             ? token
             : null;
 
+    private long? ReviewAssemblyFencingToken(CoordinatorDispatchContext context) =>
+        AssemblyFencingToken(context) ?? (_leaseFencingEnabled ? null : 0);
+
     /// <summary>
     /// spec-006 §3.2 / focus item 3: decides whether the deterministic preview step runs after
     /// build-test. The step is ALWAYS the behavior (no feature flag) — it runs whenever it is wired
@@ -742,6 +745,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 workPlanId,
                 integrationBranch = record?.IntegrationBranch,
                 treeHash = record?.AggregateTreeHash,
+                reviewRequestId = record?.ReviewRequestId,
                 outputRevisionId = record?.OutputRevisionId,
                 reason,
             });
@@ -1611,13 +1615,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 // colliding on the same AgentHost claim/pod mid in-flight /configure call. Persisting
                 // the row first closes that window: any sweep that can see InReview can also see the
                 // pending row, so it never misclassifies a freshly-opened gate as orphaned.
-                await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+                var reviewRequestId = await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
                     _scopeFactory,
                     context.CoordinatorRunId,
                     context.SubmittingUser,
                     integrationBranch,
                     aggregateTreeHash,
                     candidate.RevisionId,
+                    ReviewAssemblyFencingToken(context),
                     ct).ConfigureAwait(false);
                 await _assemblyStore.SetStatusAndStageAsync(
                     workPlanId, WorkPlanStatus.InReview, gate.StageId, ct, AssemblyOwner(context))
@@ -1628,6 +1633,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                     workPlanId,
                     integrationBranch,
                     treeHash = aggregateTreeHash,
+                    reviewRequestId,
                     outputRevisionId = candidate.RevisionId,
                     includedSubtaskIds,
                     gateId = gate.Id,
@@ -1763,9 +1769,25 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         }
 
         var inputs = await BuildAssemblyInputsAsync(context, subtasks, edges, ct).ConfigureAwait(false);
-        var decision = string.IsNullOrEmpty(persisted.DecisionJson)
-            ? await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false)
-            : JsonSerializer.Deserialize<AssemblyReviewDecision>(persisted.DecisionJson, JsonDefaults.Options);
+        AssemblyReviewDecision? decision;
+        if (string.IsNullOrEmpty(persisted.DecisionJson))
+        {
+            if (string.IsNullOrWhiteSpace(persisted.ReviewRequestId)
+                || persisted.AssemblyFencingToken is null)
+                throw new RunOutputRevisionUnavailableException("assembly_review_identity_unavailable");
+            await CoordinatorAssemblyReviewPersistence.ReactivateOpenReviewAsync(
+                _scopeFactory,
+                context.CoordinatorRunId,
+                persisted.ReviewRequestId,
+                persisted.OutputRevisionId,
+                persisted.AssemblyFencingToken.Value,
+                ct).ConfigureAwait(false);
+            decision = await AwaitReviewDecisionAsync(context, workPlanId, edges, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            decision = JsonSerializer.Deserialize<AssemblyReviewDecision>(persisted.DecisionJson, JsonDefaults.Options);
+        }
 
         if (decision is null)
             return;
@@ -1790,10 +1812,17 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         await MarkCoordinatorAwaitingReviewAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
         var pending = await CoordinatorAssemblyReviewPersistence.GetAsync(
             _scopeFactory, context.CoordinatorRunId, ct).ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(pending?.OutputRevisionId))
+        if (string.IsNullOrWhiteSpace(pending?.OutputRevisionId)
+            || string.IsNullOrWhiteSpace(pending.ReviewRequestId)
+            || pending.AssemblyFencingToken is null)
             throw new RunOutputRevisionUnavailableException("collective_output_revision_unavailable");
         var decisionTask = _reviewGate.ArmAsync(
-            context.CoordinatorRunId, context.SubmittingUser, ct, pending.OutputRevisionId);
+            context.CoordinatorRunId,
+            context.SubmittingUser,
+            ct,
+            pending.OutputRevisionId,
+            pending.ReviewRequestId,
+            pending.AssemblyFencingToken);
         _ = PollDeferredAssemblyReviewDecisionAsync(context, ct);
         try
         {
@@ -3722,15 +3751,17 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
                 .GetAsync(_scopeFactory, context.CoordinatorRunId, ct).ConfigureAwait(false);
             if (existing is null)
             {
-                await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+                var recoveredReviewRequestId = await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
                     _scopeFactory, context.CoordinatorRunId, context.SubmittingUser,
-                    integrationBranch, aggregateTreeHash, candidate.RevisionId, ct).ConfigureAwait(false);
+                    integrationBranch, aggregateTreeHash, candidate.RevisionId,
+                    ReviewAssemblyFencingToken(context), ct).ConfigureAwait(false);
                 await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
                 Emit(context.CoordinatorRunId, EventTypes.CoordinatorAssemblyReviewRequested, new
                 {
                     workPlanId,
                     integrationBranch,
                     treeHash = aggregateTreeHash,
+                    reviewRequestId = recoveredReviewRequestId,
                     outputRevisionId = candidate.RevisionId,
                     gateKind = "human-review",
                     escalated = true,
@@ -3746,13 +3777,14 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
         var accumulatedFeedback = await BuildAccumulatedGateFeedbackAsync(context.CoordinatorRunId, ct)
             .ConfigureAwait(false);
 
-        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+        var reviewRequestId = await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _scopeFactory,
             context.CoordinatorRunId,
             context.SubmittingUser,
             integrationBranch,
             aggregateTreeHash,
             candidate.RevisionId,
+            ReviewAssemblyFencingToken(context),
             ct).ConfigureAwait(false);
 
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
@@ -3761,6 +3793,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             workPlanId,
             integrationBranch,
             treeHash = aggregateTreeHash,
+            reviewRequestId,
             outputRevisionId = candidate.RevisionId,
             gateKind = "human-review",
             escalated = true,
@@ -4764,9 +4797,10 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
 
         var integrationBranch = IntegrationBranchName(
             context.CoordinatorRunId, context.AssemblyAttemptToken);
-        await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
+        var reviewRequestId = await CoordinatorAssemblyReviewPersistence.UpsertReviewRequestAsync(
             _scopeFactory, context.CoordinatorRunId, context.SubmittingUser,
-            integrationBranch, aggregateTreeHash, candidate.RevisionId, ct).ConfigureAwait(false);
+            integrationBranch, aggregateTreeHash, candidate.RevisionId,
+            ReviewAssemblyFencingToken(context), ct).ConfigureAwait(false);
         await MarkCoordinatorAwaitingReviewAsync(context.CoordinatorRunId, ct).ConfigureAwait(false);
         await EmitGraphAsync(context.CoordinatorRunId, workPlanId, ct).ConfigureAwait(false);
         await EmitTopologyAsync(context.CoordinatorRunId, workPlanId, WorkPlanStatus.InReview, edges, ct)
@@ -4776,6 +4810,7 @@ public sealed class CoordinatorAssemblyService : ICoordinatorAssembly
             workPlanId,
             integrationBranch,
             treeHash = aggregateTreeHash,
+            reviewRequestId,
             outputRevisionId = candidate.RevisionId,
             gateKind = "human-review",
             escalated = true,

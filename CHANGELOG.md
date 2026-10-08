@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.34.2
+
+### Patch Changes
+
+- 68e06c0: Bind assembly review decisions to the exact output version shown to the reviewer, and label saved output snapshots as versions.
+- 87cad99: Read assembled coordinator files and workspace data from the integration branch recorded for the current assembly attempt.
+- dfa943e: Allow release operators to select a later compatible patch target while preserving Changesets' native release plan.
+- e4fafa8: Allow ordinary verified release deployments without requiring optional catalog diagnostics.
+- b50a8f4: Allow a preserved assembly review to accept its pending decision again after coordinator recovery.
+- 4582732: Repair Entra sign-in onboarding and fail installation early for incomplete app registrations; require Entra user object IDs for project membership and add safe callback diagnostics.
+
 ## 0.34.0
 
 ### Minor Changes

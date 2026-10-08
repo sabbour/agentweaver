@@ -3025,6 +3025,15 @@ public sealed class CoordinatorRunService
                 ? ReadComposedAssembly(plan.ParentResumeResultJson) : null);
     }
 
+    /// <summary>Returns the integration branch persisted for the coordinator's current assembly attempt.</summary>
+    public async Task<string?> GetIntegrationBranchAsync(string coordinatorRunId, CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<MemoryDbContext>();
+        var plan = await ResolveWorkPlanAsync(db, coordinatorRunId, ct).ConfigureAwait(false);
+        return plan?.IntegrationBranch;
+    }
+
     /// <summary>
     /// Resolves the collective-assembly gate nodes (RAI / Build &amp; Test / rubberduck / human-review)
     /// for the coordinator run's work plan, so the graph endpoint can render them as <c>planned</c> in
