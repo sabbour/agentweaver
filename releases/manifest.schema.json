@@ -20,11 +20,19 @@
           "id": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9.-]*$" },
           "kind": { "enum": ["contract", "library", "service"] },
           "version": { "$ref": "#/$defs/version" },
-          "project": { "type": "string", "pattern": "^(?:(packages|services)/[A-Za-z0-9./-]+\\.csproj|tools/Agentweaver\\.FoundationProbe/Agentweaver\\.FoundationProbe\\.csproj)$" },
+          "project": { "type": "string", "pattern": "^(?:(packages|services)/[A-Za-z0-9./-]+\\.csproj|tools/Agentweaver\\.FoundationProbe/Agentweaver\\.FoundationProbe\\.csproj|apps/web/package\\.json)$" },
           "imageDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
         },
         "allOf": [
-          { "if": { "not": { "properties": { "kind": { "const": "service" } }, "required": ["kind"] } }, "then": { "not": { "required": ["imageDigest"] } } }
+          { "if": { "not": { "properties": { "kind": { "const": "service" } }, "required": ["kind"] } }, "then": { "not": { "required": ["imageDigest"] } } },
+          {
+            "if": { "properties": { "project": { "const": "apps/web/package.json" } }, "required": ["project"] },
+            "then": { "properties": { "id": { "const": "Agentweaver.Web" }, "kind": { "const": "service" } } }
+          },
+          {
+            "if": { "properties": { "id": { "const": "Agentweaver.Web" } }, "required": ["id"] },
+            "then": { "properties": { "project": { "const": "apps/web/package.json" }, "kind": { "const": "service" } } }
+          }
         ]
       }
     },

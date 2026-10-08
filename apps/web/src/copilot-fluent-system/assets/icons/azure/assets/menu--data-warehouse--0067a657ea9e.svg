@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="eed489de-7a45-4a0c-a726-a54f8d68d32b" x1="3.674" y1="12.635" x2="14.327" y2="12.635" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#32bedd" />
+      <stop offset="0.058" stop-color="#37c5e3" />
+      <stop offset="0.301" stop-color="#49ddf7" />
+      <stop offset="0.45" stop-color="#50e6ff" />
+      <stop offset="0.55" stop-color="#50e6ff" />
+      <stop offset="0.699" stop-color="#49ddf7" />
+      <stop offset="0.942" stop-color="#37c5e3" />
+      <stop offset="1" stop-color="#32bedd" />
+    </linearGradient>
+  </defs>
+  <title>Artboard 1</title>
+  <g id="a63b2ce8-636a-4e39-9a1d-e9956b6a9fea">
+    <g>
+      <path d="M9,8.967c-2.941,0-5.326-.76-5.326-1.7V16.3c0,.93,2.345,1.685,5.253,1.7H9c2.942,0,5.327-.76,5.327-1.7V7.269C14.327,8.207,11.942,8.967,9,8.967Z" fill="url(#eed489de-7a45-4a0c-a726-a54f8d68d32b)" />
+      <path d="M14.327,7.269c0,.938-2.385,1.7-5.327,1.7s-5.326-.76-5.326-1.7S6.059,5.571,9,5.571s5.327.76,5.327,1.7" fill="#e8e8e8" />
+      <path d="M13.083,7.132c0,.6-1.828,1.079-4.083,1.079S4.917,7.728,4.917,7.132,6.745,6.052,9,6.052s4.083.483,4.083,1.08" fill="#50e6ff" />
+      <path d="M9,7.38a11.127,11.127,0,0,0-3.234.41A10.724,10.724,0,0,0,9,8.211a10.736,10.736,0,0,0,3.235-.421A11.139,11.139,0,0,0,9,7.38Z" fill="#32bedd" />
+      <polygon points="17.785 14.935 15.996 14.935 15.996 4.777 9 2.013 2.004 4.777 2.004 14.935 0.215 14.935 0.215 3.686 9 0 17.785 3.686 17.785 14.935" fill="#32bedd" />
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,232 @@
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { PodIndicator } from '../components/PodIndicator';
+import { ActiveEdgeContext, ExecutionModalContext, workflowNodeTypes } from '../components/WorkflowGraphPanel';
+import { _resetRuntimeInfoCache } from '../hooks/useRuntimeInfo';
+import { BotRegular } from '../copilot-fluent-system';
+import { cleanup, render, waitFor } from '@testing-library/react';
+import { ReactFlow } from '@xyflow/react';
+import { MemoryRouter } from 'react-router-dom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { WorkflowNodeData } from '../components/WorkflowGraphPanel';
+import type { Node } from '@xyflow/react';
+/**
+ * Tests for PodIndicator component and useRuntimeInfo hook integration.
+ *
+ * Asserts: (a) indicator shows podName when kubernetes=true;
+ *          (b) indicator NOT rendered when kubernetes=false or podName=null.
+ */
+// ResizeObserver stub required by @xyflow/react.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+
+vi.mock('../api/apiClient', () => ({
+  apiClient: {
+    getSystemRuntime: vi.fn(),
+  },
+}));
+
+afterEach(() => {
+  cleanup();
+  _resetRuntimeInfoCache();
+  vi.clearAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// PodIndicator unit tests (pure presentational)
+// ---------------------------------------------------------------------------
+
+describe('PodIndicator', () => {
+  it('renders nothing when podName is null', () => {
+    const { container } = render(
+      <AzureFluentProvider density="compact">
+        <PodIndicator podName={null} />
+      </AzureFluentProvider>,
+    );
+    // FluentProvider renders a wrapper div; check no pill content is present
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.textContent).toBe('');
+  });
+
+  it('renders nothing when podName is undefined', () => {
+    const { container } = render(
+      <AzureFluentProvider density="compact">
+        <PodIndicator podName={undefined} />
+      </AzureFluentProvider>,
+    );
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(container.textContent).toBe('');
+  });
+
+  it('renders the pod name when podName is provided', () => {
+    const { container } = render(
+      <AzureFluentProvider density="compact">
+        <PodIndicator podName="agentweaver-api-abc123" />
+      </AzureFluentProvider>,
+    );
+    expect(container.textContent).toContain('agentweaver-api-abc123');
+  });
+
+  it('has correct aria-label with pod name', () => {
+    const { container } = render(
+      <AzureFluentProvider density="compact">
+        <PodIndicator podName="pod-xyz" />
+      </AzureFluentProvider>,
+    );
+    const pill = container.querySelector('[aria-label]');
+    expect(pill?.getAttribute('aria-label')).toBe('Executing in pod pod-xyz');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WorkflowNode + useRuntimeInfo integration tests
+// ---------------------------------------------------------------------------
+
+function makeNode(overrides?: Partial<WorkflowNodeData>): Node[] {
+  return [
+    {
+      id: 'n1',
+      type: 'workflow',
+      position: { x: 0, y: 0 },
+      data: {
+        def: { key: 'agent', label: 'Agent', roleDescription: 'AI Assistant', Icon: BotRegular },
+        state: { status: 'pending' },
+        ...overrides,
+      } satisfies WorkflowNodeData,
+    },
+  ];
+}
+
+function Wrapper({ nodes }: { nodes: Node[] }) {
+  return (
+    <AzureFluentProvider density="compact">
+      <MemoryRouter>
+        <ExecutionModalContext.Provider value={undefined}>
+          <ActiveEdgeContext.Provider value={undefined}>
+            <div style={{ width: 800, height: 600 }}>
+              <ReactFlow nodes={nodes} edges={[]} nodeTypes={workflowNodeTypes} />
+            </div>
+          </ActiveEdgeContext.Provider>
+        </ExecutionModalContext.Provider>
+      </MemoryRouter>
+    </AzureFluentProvider>
+  );
+}
+
+describe('WorkflowNode — pod indicator via useRuntimeInfo', () => {
+  it('does NOT show pod chip when executionPodName is absent, even when API pod is available', async () => {
+    // Global API pod exists but there is no per-node executionPodName.
+    // After the fallback removal, the chip must not appear.
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({
+      kubernetes: true,
+      podName: 'api-pod-abc123',
+    });
+
+    render(<Wrapper nodes={makeNode()} />);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Agent'),
+      { timeout: 4000 },
+    );
+    // No chip — the API pod must not appear as a fallback
+    expect(document.body.querySelector('[aria-label^="Executing in pod"]')).toBeNull();
+    expect(document.body.textContent).not.toContain('api-pod-abc123');
+  });
+
+  it('does NOT show pod indicator when kubernetes=false', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({
+      kubernetes: false,
+      podName: null,
+    });
+
+    render(<Wrapper nodes={makeNode()} />);
+
+    // Wait for the agent card to be rendered
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Agent'),
+      { timeout: 4000 },
+    );
+    expect(document.body.querySelector('[aria-label^="Executing in pod"]')).toBeNull();
+  });
+
+  it('does NOT show pod indicator when kubernetes=true but podName is null', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({
+      kubernetes: true,
+      podName: null,
+    });
+
+    render(<Wrapper nodes={makeNode()} />);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Agent'),
+      { timeout: 4000 },
+    );
+    expect(document.body.querySelector('[aria-label^="Executing in pod"]')).toBeNull();
+  });
+
+  it('does NOT show pod indicator when getSystemRuntime fails (network error)', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockRejectedValue(new Error('network error'));
+
+    render(<Wrapper nodes={makeNode()} />);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Agent'),
+      { timeout: 4000 },
+    );
+    expect(document.body.querySelector('[aria-label^="Executing in pod"]')).toBeNull();
+  });
+
+  it('per-node executionPodName overrides the global fallback pod name', async () => {
+    // Global fallback is the shared API pod; node has its own per-agent pod (spec-018 world)
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({
+      kubernetes: true,
+      podName: 'api-pod-global',
+    });
+
+    render(<Wrapper nodes={makeNode({ executionPodName: 'agent-pod-xyz-worker' })} />);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('agent-pod-xyz-worker'),
+      { timeout: 4000 },
+    );
+    // Global fallback must NOT appear — per-node value wins
+    expect(document.body.textContent).not.toContain('api-pod-global');
+  });
+
+  it('null executionPodName shows no chip even when API pod is available (no fallback)', async () => {
+    // Node explicitly has null executionPodName — must not fall through to the global API pod.
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({
+      kubernetes: true,
+      podName: 'api-pod-global',
+    });
+
+    render(<Wrapper nodes={makeNode({ executionPodName: null })} />);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('Agent'),
+      { timeout: 4000 },
+    );
+    expect(document.body.querySelector('[aria-label^="Executing in pod"]')).toBeNull();
+    expect(document.body.textContent).not.toContain('api-pod-global');
+  });
+
+  it('set executionPodName renders chip with that value and does not show API pod', async () => {
+    vi.mocked(apiClient.getSystemRuntime).mockResolvedValue({
+      kubernetes: true,
+      podName: 'api-pod-global',
+    });
+
+    render(<Wrapper nodes={makeNode({ executionPodName: 'agent-host-xyz' })} />);
+
+    await waitFor(
+      () => expect(document.body.textContent).toContain('agent-host-xyz'),
+      { timeout: 4000 },
+    );
+    expect(document.body.querySelector('[aria-label="Executing in pod agent-host-xyz"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain('api-pod-global');
+  });
+});

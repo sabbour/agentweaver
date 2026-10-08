@@ -1,0 +1,40 @@
+<svg id="uuid-b6bbb123-2218-462c-9d9d-83e7320ffaab" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <clipPath id="uuid-6604e165-d26b-4a74-a17c-09b94cfc39c3">
+      <rect width="18" height="18" fill="none" />
+    </clipPath>
+    <linearGradient id="uuid-25ec1a95-55ae-4b80-a03b-9601723a71a6" x1="-609.66" y1="-210.47" x2="-609.66" y2="-216.53" gradientTransform="translate(617.13 -205.76) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".23" stop-color="#5ea0ef" />
+      <stop offset=".32" stop-color="#5b9fee" />
+      <stop offset=".48" stop-color="#509aeb" />
+      <stop offset=".57" stop-color="#3f92e6" />
+      <stop offset=".75" stop-color="#2688df" />
+      <stop offset=".93" stop-color="#127fd9" />
+    </linearGradient>
+    <linearGradient id="uuid-2b2fd1a0-c025-4309-8788-f4fb88572777" x1="-606.62" y1="-212.99" x2="-606.62" y2="-219.05" gradientTransform="translate(617.13 -205.76) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset=".02" stop-color="#5ea0ef" />
+      <stop offset=".14" stop-color="#5b9fee" />
+      <stop offset=".23" stop-color="#5b9fee" />
+      <stop offset=".34" stop-color="#509aeb" />
+      <stop offset=".44" stop-color="#3f92e6" />
+      <stop offset=".63" stop-color="#2688df" />
+      <stop offset=".93" stop-color="#127fd9" />
+    </linearGradient>
+  </defs>
+  <g clip-path="url(#uuid-6604e165-d26b-4a74-a17c-09b94cfc39c3)">
+    <g>
+      <path d="M1.07,1.43h1.29v3.6c0,.16-.13.29-.29.29H.79c-.16,0-.28-.12-.29-.28V2c0-.31.26-.57.57-.57Z" fill="#999" />
+      <path d="M1.07,1.43h1.29v3.6c0,.16-.13.29-.29.29H.79c-.16,0-.28-.12-.29-.28V2c0-.31.26-.57.57-.57Z" fill="#999" isolation="isolate" opacity=".5" />
+      <path d="M15.64,1.43h1.29c.32,0,.57.25.57.57v3.03c0,.16-.13.29-.29.29h-1.29c-.16,0-.29-.13-.29-.29V1.43Z" fill="#999" />
+      <path d="M15.64,1.43h1.29c.32,0,.57.25.57.57v3.03c0,.16-.13.29-.29.29h-1.29c-.16,0-.29-.13-.29-.29V1.43Z" fill="#999" isolation="isolate" opacity=".5" />
+      <path d="M17.5,2v1.25H.5v-1.25c0-.31.25-.57.57-.57h15.87c.31,0,.56.25.56.57Z" fill="#949494" />
+      <path d="M.79,12.68h1.29c.16,0,.29.13.29.29v3.6h-1.29c-.31,0-.57-.25-.57-.56v-3.03c0-.16.13-.29.29-.29Z" fill="#999" />
+      <path d="M.79,12.68h1.29c.16,0,.29.13.29.29v3.6h-1.29c-.31,0-.57-.25-.57-.56v-3.03c0-.16.13-.29.29-.29Z" fill="#999" isolation="isolate" opacity=".5" />
+      <path d="M15.92,12.68h1.29c.16,0,.29.13.29.29v3.03c0,.32-.26.57-.57.57h-1.29v-3.6c0-.16.12-.29.28-.29h0Z" fill="#999" />
+      <path d="M15.92,12.68h1.29c.16,0,.29.13.29.29v3.03c0,.32-.26.57-.57.57h-1.29v-3.6c0-.16.12-.29.28-.29h0Z" fill="#999" isolation="isolate" opacity=".5" />
+      <path d="M.5,16v-1.25h17v1.25c0,.31-.25.57-.57.57H1.07c-.31,0-.57-.25-.57-.57Z" fill="#949494" />
+      <path d="M8.7,4.71h-2.42c-1.67,0-3.02,1.37-3.01,3.04,0,1.48,1.08,2.73,2.54,2.97-.06-.37-.05-.76.03-1.12-1.03-.23-1.68-1.25-1.45-2.29.2-.88.99-1.51,1.89-1.49h2.42c1.06,0,1.92.86,1.92,1.92,0,1.06-.86,1.92-1.92,1.92h-.67c-.09.19-.14.4-.14.61,0,.17.03.34.1.51h.72c1.67-.03,3-1.41,2.97-3.09-.03-1.63-1.34-2.94-2.97-2.97h0Z" fill="url(#uuid-25ec1a95-55ae-4b80-a03b-9601723a71a6)" />
+      <path d="M12.2,7.28c.02.15.03.31.04.46,0,.22-.02.44-.07.66,1.03.23,1.69,1.24,1.46,2.27-.19.89-.99,1.52-1.9,1.51h-2.42c-1.06,0-1.92-.86-1.92-1.92,0-1.06.86-1.92,1.92-1.92h.67c.17-.35.19-.75.05-1.11h-.71c-1.67,0-3.03,1.36-3.03,3.03s1.36,3.03,3.03,3.03h2.42c1.67-.01,3.02-1.38,3.01-3.05-.01-1.48-1.09-2.73-2.54-2.97h0Z" fill="url(#uuid-2b2fd1a0-c025-4309-8788-f4fb88572777)" />
+    </g>
+  </g>
+</svg>

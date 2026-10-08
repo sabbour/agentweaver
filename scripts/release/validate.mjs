@@ -8,6 +8,8 @@ const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.
 const sha = /^[a-f0-9]{40}$/;
 const digest = /^sha256:[a-f0-9]{64}$/;
 const id = /^[A-Za-z][A-Za-z0-9.-]*$/;
+export const WEB_PROJECT_PATH = 'apps/web/package.json';
+export const WEB_LOCK_PATH = 'apps/web/package-lock.json';
 
 function fail(location, message) {
   throw new Error(`${location}: ${message}`);
@@ -38,7 +40,11 @@ function version(value, location) {
   }
 }
 
-function projectPath(value, kind, location) {
+function projectPath(value, kind, componentId, location) {
+  if (value === WEB_PROJECT_PATH) {
+    if (componentId === 'Agentweaver.Web' && kind === 'service') return;
+    fail(location, `only Agentweaver.Web may use ${WEB_PROJECT_PATH} as a service project`);
+  }
   if (kind === 'service' && value === 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj') return;
   const prefixes = kind === 'service' ? ['services'] : kind === 'library' ? ['packages', 'services'] : ['packages'];
   const expectedPaths = prefixes.map((prefix) => `${prefix}/.../*.csproj`).join(' or ');
@@ -56,6 +62,15 @@ function projectFile(project, root, readProject) {
     return readProject(file);
   } catch (error) {
     fail(project, `cannot read checked-in project: ${error.message}`);
+  }
+}
+
+function readJsonFile(project, root, readProject) {
+  const text = projectFile(project, root, readProject);
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    fail(project, `invalid JSON: ${error.message}`);
   }
 }
 
@@ -80,8 +95,12 @@ export function validateManifest(manifest, { root = repositoryRoot, readProject 
     if (typeof component.id !== 'string' || !id.test(component.id)) fail(`${location}.id`, 'invalid component ID');
     if (components.has(component.id)) fail(`${location}.id`, `duplicate component ID "${component.id}"`);
     if (!['contract', 'library', 'service'].includes(component.kind)) fail(`${location}.kind`, 'expected contract, library, or service');
+    if (component.id === 'Agentweaver.Web' &&
+        (component.kind !== 'service' || component.project !== WEB_PROJECT_PATH)) {
+      fail(`${location}.project`, `Agentweaver.Web must be a service mirrored by ${WEB_PROJECT_PATH}`);
+    }
     version(component.version, `${location}.version`);
-    projectPath(component.project, component.kind, `${location}.project`);
+    projectPath(component.project, component.kind, component.id, `${location}.project`);
     if (projects.has(component.project)) fail(`${location}.project`, 'duplicate project path');
     projects.add(component.project);
     if (component.kind === 'service') {
@@ -92,6 +111,33 @@ export function validateManifest(manifest, { root = repositoryRoot, readProject 
       }
     } else if (component.imageDigest !== undefined) {
       fail(`${location}.imageDigest`, 'only services have image digests');
+    }
+    if (component.project === WEB_PROJECT_PATH) {
+      if (component.id !== 'Agentweaver.Web' || component.kind !== 'service') {
+        fail(`${location}.project`, `only Agentweaver.Web may use ${WEB_PROJECT_PATH} as a service project`);
+      }
+      const packageJson = readJsonFile(WEB_PROJECT_PATH, root, readProject);
+      if (packageJson === null || typeof packageJson !== 'object' || Array.isArray(packageJson)) {
+        fail(WEB_PROJECT_PATH, 'expected a package.json object');
+      }
+      version(packageJson.version, `${WEB_PROJECT_PATH}.version`);
+      if (packageJson.version !== component.version) {
+        fail(`${location}.version`, `checked-in ${WEB_PROJECT_PATH} must declare version ${component.version}`);
+      }
+      const packageLock = readJsonFile(WEB_LOCK_PATH, root, readProject);
+      if (packageLock === null || typeof packageLock !== 'object' || Array.isArray(packageLock) ||
+          packageLock.packages === null || typeof packageLock.packages !== 'object' ||
+          Array.isArray(packageLock.packages) ||
+          packageLock.packages[''] === null || typeof packageLock.packages[''] !== 'object' ||
+          Array.isArray(packageLock.packages[''])) {
+        fail(WEB_LOCK_PATH, 'committed npm lockfile must contain a packages[""] object');
+      }
+      version(packageLock.packages[''].version, `${WEB_LOCK_PATH}.packages[""].version`);
+      if (packageLock.packages[''].version !== component.version) {
+        fail(`${location}.version`, `checked-in ${WEB_LOCK_PATH} packages[""].version must match ${component.version}`);
+      }
+      components.set(component.id, { ...component, web: true });
+      continue;
     }
     const xml = projectFile(component.project, root, readProject).replace(/<!--[\s\S]*?-->/g, '');
     const versions = [...xml.matchAll(/<Version>([^<]*)<\/Version>/g)];
@@ -122,7 +168,8 @@ export function validateManifest(manifest, { root = repositoryRoot, readProject 
   }
 
   for (const [consumerId, consumer] of components) {
-    const references = [...consumer.xml.matchAll(/<ProjectReference\b[^>]*\bInclude\s*=\s*(["'])(.*?)\1[^>]*\/?>/g)];
+    const references = consumer.web ? [] :
+      [...consumer.xml.matchAll(/<ProjectReference\b[^>]*\bInclude\s*=\s*(["'])(.*?)\1[^>]*\/?>/g)];
     const referenced = new Set();
     for (const match of references) {
       const target = path.resolve(path.dirname(path.resolve(root, consumer.project)), match[2].replaceAll('\\', '/'));

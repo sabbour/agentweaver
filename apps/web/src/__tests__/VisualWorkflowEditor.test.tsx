@@ -1,0 +1,756 @@
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { VisualWorkflowEditor } from '../components/VisualWorkflowEditor';
+import { apiClient } from '../api/apiClient';
+import { parseWorkflowYaml } from '../utils/workflowYaml';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+/**
+ * Coverage for #186 — the workflow editor's RAI/Rubberduck/Human Review gate palette:
+ * add/configure/remove affordances, branch-routing UI (incl. loop-backs), the
+ * merge/scribe read-only backward-compat path, and inline validation for
+ * unrouted gate verdicts. Complements the pure-function round-trip coverage in
+ * workflowYaml.test.ts with the actual rendered editor surface.
+ */
+
+// ResizeObserver is absent in happy-dom; ReactFlow requires it.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub;
+
+vi.mock('../api/apiClient', () => ({
+  apiClient: {
+    saveWorkflowYaml: vi.fn(),
+    getSystemRuntime: vi.fn().mockResolvedValue({ kubernetes: false, podName: null }),
+  },
+}));
+
+// #540 — spy on React Flow's imperative fitView while delegating to the real
+// implementation, so tests can assert *when* the editor re-fits the viewport
+// without losing real layout/rendering behavior.
+const fitViewSpy = vi.hoisted(() => vi.fn());
+const selectionChange = vi.hoisted(() => ({
+  current: undefined as undefined | ((params: unknown) => void),
+}));
+const edgesDelete = vi.hoisted(() => ({
+  current: undefined as undefined | ((edges: unknown[]) => void),
+}));
+vi.mock('@xyflow/react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@xyflow/react')>();
+  return {
+    ...actual,
+    ReactFlow: (props: React.ComponentProps<typeof actual.ReactFlow>) => {
+      selectionChange.current = props.onSelectionChange as ((params: unknown) => void) | undefined;
+      edgesDelete.current = props.onEdgesDelete as ((edges: unknown[]) => void) | undefined;
+      return <actual.ReactFlow {...props} />;
+    },
+    useReactFlow: () => {
+      const real = actual.useReactFlow();
+      return {
+        ...real,
+        fitView: (...args: Parameters<typeof real.fitView>) => {
+          fitViewSpy(...args);
+          return real.fitView(...args);
+        },
+      };
+    },
+  };
+});
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+  selectionChange.current = undefined;
+  edgesDelete.current = undefined;
+});
+
+function Wrapper({ children }: { children: React.ReactNode }) {
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
+}
+
+const YAML_WITH_UNROUTED_RAI = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+    branches:
+      - revise
+      - safety-failed
+      - no-changes
+      - review
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: implement
+    to: rai-check
+  - from: rai-check
+    to: done
+    when: review
+`;
+
+const YAML_WITH_SELECTED_EDGE_REMOVED = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: implement
+    to: rai-check
+`;
+
+const YAML_WITH_REORDERED_SELECTED_EDGE = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: rai-check
+    to: done
+    when: review
+  - from: implement
+    to: rai-check
+`;
+
+const YAML_WITH_EDGE_INSERTED_BEFORE_SELECTED = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: implement
+    to: done
+    when: shortcut
+  - from: implement
+    to: rai-check
+  - from: rai-check
+    to: done
+    when: review
+`;
+
+const YAML_WITH_DUPLICATE_SELECTED_EDGES = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: implement
+    to: rai-check
+  - from: rai-check
+    to: done
+    when: review
+  - from: rai-check
+    to: done
+    when: review
+`;
+
+const YAML_WITH_EDGE_INSERTED_BEFORE_DUPLICATES = `id: sample
+name: Sample
+description: A sample workflow.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: rai-check
+    type: check
+    label: RAI Check
+    role: review
+    kind: gate
+    gate_kind: rai
+
+  - id: done
+    type: terminal
+    label: Done
+
+edges:
+  - from: implement
+    to: done
+    when: shortcut
+  - from: implement
+    to: rai-check
+  - from: rai-check
+    to: done
+    when: review
+  - from: rai-check
+    to: done
+    when: review
+`;
+
+const YAML_WITH_LEGACY_TAIL = `id: legacy
+name: Legacy
+description: Uses the platform-owned merge/scribe tail.
+start: implement
+
+nodes:
+  - id: implement
+    type: prompt
+    label: Implement
+    agent: backend-engineer
+
+  - id: merge
+    type: merge
+    label: Merge
+
+  - id: scribe
+    type: scribe
+    label: Scribe
+
+edges:
+  - from: implement
+    to: merge
+  - from: merge
+    to: scribe
+`;
+
+const YAML_WITH_SCHEDULE = `id: scheduled
+name: Scheduled workflow
+description: Runs every week.
+start: done
+trigger:
+  type: schedule
+  interval: weekly
+  day_of_week: monday
+  time_of_day: "09:00"
+nodes:
+  - id: done
+    type: terminal
+    label: Done
+edges: []
+`;
+
+const YAML_WITH_EVENT = `id: event-driven
+name: Event-driven workflow
+description: Runs for issues.
+start: done
+trigger:
+  type: event
+  event_name: github.issues
+nodes:
+  - id: done
+    type: terminal
+    label: Done
+edges: []
+`;
+
+function renderEditor(yaml: string) {
+  return render(
+    <Wrapper>
+      <VisualWorkflowEditor projectId="proj-1" workflowId="sample" initialYaml={yaml} />
+    </Wrapper>,
+  );
+}
+
+describe('VisualWorkflowEditor — gate palette (#186)', () => {
+  it('warns inline when a gate has unrouted verdicts', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    // rai-check declares revise / safety-failed / no-changes / review but only
+    // "review" has an outgoing edge — the other three should surface as unrouted.
+    await waitFor(() => {
+      const warning = screen.getByText(/unrouted verdict/i);
+      expect(warning.textContent).toContain('rai-check');
+      expect(warning.textContent).toContain('revise');
+      expect(warning.textContent).toContain('safety-failed');
+      expect(warning.textContent).toContain('no-changes');
+    });
+
+    expect(screen.getByTestId('workflow-node-rai-check').textContent).toContain('Needs routing');
+  });
+
+  it('opens a centered add-node dialog with grouped cards, but never unsupported or owned nodes', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await user.click(await screen.findByRole('button', { name: /add node/i }));
+    const addDialog = await screen.findByTestId('add-node-dialog');
+    expect(addDialog).toBeDefined();
+    expect(screen.getByPlaceholderText('Search node types')).toBeDefined();
+
+    await waitFor(() => {
+      expect(within(addDialog).getByTestId('add-node-option-rai')).toBeDefined();
+      expect(within(addDialog).getByTestId('add-node-option-rubberduck')).toBeDefined();
+      expect(within(addDialog).getByTestId('add-node-option-human-review')).toBeDefined();
+      // "Build & Test" must now appear EXACTLY once (#558). It previously showed
+      // twice — once as the pre-configured SPECIAL_GATES preset and once as the raw
+      // build_test node-type — with identical labels, which was confusing. The raw
+      // primitive is dropped from the palette; the preset is the single entry point.
+      expect(within(addDialog).getAllByTestId('add-node-option-build-test')).toHaveLength(1);
+      expect(within(addDialog).getByTestId('add-node-option-open_pull_request')).toBeDefined();
+    });
+
+    // The dialog keeps the existing groups as scannable sections/tabs.
+    expect(within(addDialog).getByText('All')).toBeDefined();
+    expect(within(addDialog).getAllByText('Reviewers & gates').length).toBeGreaterThan(0);
+    expect(within(addDialog).getAllByText('Agent steps').length).toBeGreaterThan(0);
+    expect(within(addDialog).getAllByText('Actions').length).toBeGreaterThan(0);
+    expect(within(addDialog).getAllByText('Flow control').length).toBeGreaterThan(0);
+
+    // Representative primitives remain reachable in their groups.
+    expect(within(addDialog).getByTestId('add-node-option-prompt')).toBeDefined();
+    expect(within(addDialog).getByTestId('add-node-option-peer_review')).toBeDefined();
+    expect(within(addDialog).getByTestId('add-node-option-fan_out')).toBeDefined();
+
+    expect(within(addDialog).queryByTestId('add-node-option-merge')).toBeNull();
+    expect(within(addDialog).queryByTestId('add-node-option-scribe')).toBeNull();
+    expect(within(addDialog).queryByTestId('add-node-option-publish')).toBeNull();
+  });
+
+  it('does not offer unsupported publication when filtering the add-node dialog', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await user.click(await screen.findByRole('button', { name: /add node/i }));
+    const dialog = await screen.findByTestId('add-node-dialog');
+    expect(dialog).toBeDefined();
+
+    await user.type(screen.getByPlaceholderText('Search node types'), 'publish');
+
+    await waitFor(() => {
+      expect(within(dialog).queryByTestId('add-node-option-publish')).toBeNull();
+    });
+    expect(within(dialog).queryByTestId('add-node-option-rai')).toBeNull();
+  });
+
+  it('renders existing merge/scribe tail nodes read-only for backward compatibility', async () => {
+    renderEditor(YAML_WITH_LEGACY_TAIL);
+
+    // Selecting the legacy merge node (via the canvas node) should show the
+    // read-only notice rather than editable fields. We drive selection through
+    // the underlying model by clicking the rendered node label.
+    const mergeNode = await screen.findByText('Merge');
+    fireEvent.click(mergeNode);
+
+    await waitFor(() => {
+      expect(screen.getByText(/platform-owned tail steps/i)).toBeDefined();
+    });
+  });
+});
+
+describe('VisualWorkflowEditor — viewport re-fit on add (#540)', () => {
+  it('re-fits the viewport after adding a node so it is not clipped by the canvas overflow', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await screen.findByText('Implement');
+    // Let the initial mount-time fitView (driven by the `fitView` prop, not our
+    // imperative hook) settle before asserting on our spy.
+    fitViewSpy.mockClear();
+
+    await user.click(await screen.findByRole('button', { name: /add node/i }));
+    await user.click(await screen.findByTestId('add-node-option-rubberduck'));
+
+    await waitFor(() => {
+      expect(fitViewSpy).toHaveBeenCalledWith(expect.objectContaining({
+        padding: 0.1,
+        maxZoom: 1.8,
+        duration: 300,
+      }));
+    });
+  });
+
+  it('does not re-fit the viewport when an existing node is merely renamed', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    const implementNode = await screen.findByText('Implement');
+    fitViewSpy.mockClear();
+
+    fireEvent.click(implementNode);
+    const labelInput = await screen.findByDisplayValue('Implement');
+    fireEvent.change(labelInput, { target: { value: 'Implement (renamed)' } });
+    fireEvent.blur(labelInput);
+
+    await waitFor(() => {
+      expect((labelInput as HTMLInputElement).value).toBe('Implement (renamed)');
+    });
+    expect(fitViewSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('VisualWorkflowEditor — selection persistence (#1007)', () => {
+  async function selectRaiCheck() {
+    fireEvent.click(await screen.findByText('RAI Check'));
+    return screen.findByRole('textbox', { name: 'Gate branches' });
+  }
+
+  it('shows workflow metadata in the inspector when nothing is selected', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Renamed workflow' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Workflow details')).toBeDefined();
+    });
+  });
+
+  it('keeps a selected node inspector open after text and type edits', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectRaiCheck();
+
+    const label = screen.getByRole('textbox', { name: 'Label' });
+    fireEvent.change(label, { target: { value: 'Review gate' } });
+    fireEvent.blur(label);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Gate branches' })).toBeDefined();
+    });
+
+    await user.click(screen.getByRole('combobox', { name: 'Type' }));
+    await user.click(await screen.findByRole('option', { name: 'Prompt (agent turn)' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'Prompt' })).toBeDefined();
+    });
+    expect(screen.queryByText('Select a node or edge')).toBeNull();
+  });
+
+  it('keeps a selected edge inspector open after editing its text', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await waitFor(() => expect(selectionChange.current).toBeDefined());
+    act(() => {
+      selectionChange.current?.({ nodes: [], edges: [{ data: { index: 1 } }] });
+    });
+    const when = await screen.findByRole('textbox', { name: 'When' });
+    fireEvent.change(when, { target: { value: 'approved' } });
+    fireEvent.blur(when);
+
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: 'When' })).toBeDefined();
+    });
+    expect(screen.queryByText('Select a node or edge')).toBeNull();
+  });
+
+  it('clears the inspector when the selected node is deleted', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectRaiCheck();
+
+    await user.click(screen.getByRole('button', { name: 'Delete node' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Workflow details')).toBeDefined();
+    });
+  });
+});
+
+describe('VisualWorkflowEditor — semantic edge selection (#1015)', () => {
+  async function selectEdge(index: number) {
+    await waitFor(() => expect(selectionChange.current).toBeDefined());
+    act(() => {
+      selectionChange.current?.({ nodes: [], edges: [{ data: { index } }] });
+    });
+    return screen.findByRole('textbox', { name: 'When' });
+  }
+
+  async function replaceYaml(user: ReturnType<typeof userEvent.setup>, yaml: string) {
+    await user.click(screen.getByRole('tab', { name: 'YAML' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow YAML' }), { target: { value: yaml } });
+    await user.click(screen.getByRole('tab', { name: 'Inspector' }));
+  }
+
+  it('clears edge selection when the selected YAML edge is deleted', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectEdge(1);
+
+    await replaceYaml(user, YAML_WITH_SELECTED_EDGE_REMOVED);
+
+    await waitFor(() => {
+      expect(screen.getByText('Workflow details')).toBeDefined();
+    });
+  });
+
+  it('preserves the selected edge through YAML reorder and insertion before it', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+    await selectEdge(1);
+
+    await replaceYaml(user, YAML_WITH_REORDERED_SELECTED_EDGE);
+    expect(await screen.findByText('rai-check → done')).toBeDefined();
+
+    await replaceYaml(user, YAML_WITH_EDGE_INSERTED_BEFORE_SELECTED);
+    const when = await screen.findByRole('textbox', { name: 'When' });
+    fireEvent.change(when, { target: { value: 'approved' } });
+    fireEvent.blur(when);
+
+    await user.click(screen.getByRole('tab', { name: 'YAML' }));
+    const parsed = parseWorkflowYaml((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value);
+    expect(parsed.model?.edges).toEqual([
+      { from: 'implement', to: 'done', when: 'shortcut' },
+      { from: 'implement', to: 'rai-check', when: undefined },
+      { from: 'rai-check', to: 'done', when: 'approved' },
+    ]);
+  });
+
+  it('uses duplicate-edge occurrence to edit the same duplicate after YAML insertion', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_DUPLICATE_SELECTED_EDGES);
+    await selectEdge(2);
+
+    await replaceYaml(user, YAML_WITH_EDGE_INSERTED_BEFORE_DUPLICATES);
+    const when = await screen.findByRole('textbox', { name: 'When' });
+    fireEvent.change(when, { target: { value: 'approved' } });
+    fireEvent.blur(when);
+
+    await user.click(screen.getByRole('tab', { name: 'YAML' }));
+    const parsed = parseWorkflowYaml((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value);
+    expect(parsed.model?.edges.filter((edge) => edge.from === 'rai-check' && edge.to === 'done'))
+      .toEqual([
+        { from: 'rai-check', to: 'done', when: 'review' },
+        { from: 'rai-check', to: 'done', when: 'approved' },
+      ]);
+  });
+
+  it('clears selection when canvas deletion removes the first selected duplicate', async () => {
+    renderEditor(YAML_WITH_DUPLICATE_SELECTED_EDGES);
+    await selectEdge(1);
+
+    await waitFor(() => expect(edgesDelete.current).toBeDefined());
+    act(() => {
+      edgesDelete.current?.([{ data: { index: 1 } }]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Workflow details')).toBeDefined();
+    });
+  });
+
+  it('preserves selection for a later duplicate when canvas deletion removes an earlier one', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_DUPLICATE_SELECTED_EDGES);
+    await selectEdge(2);
+
+    await waitFor(() => expect(edgesDelete.current).toBeDefined());
+    act(() => {
+      edgesDelete.current?.([{ data: { index: 1 } }]);
+    });
+
+    const when = await screen.findByRole('textbox', { name: 'When' });
+    fireEvent.change(when, { target: { value: 'approved' } });
+    fireEvent.blur(when);
+
+    await user.click(screen.getByRole('tab', { name: 'YAML' }));
+    const parsed = parseWorkflowYaml((screen.getByRole('textbox', { name: 'Workflow YAML' }) as HTMLTextAreaElement).value);
+    expect(parsed.model?.edges.filter((edge) => edge.from === 'rai-check' && edge.to === 'done'))
+      .toEqual([{ from: 'rai-check', to: 'done', when: 'approved' }]);
+  });
+});
+
+describe('VisualWorkflowEditor — stable drag targets (#557)', () => {
+  it('exposes editor-owned node, handle, and canvas test ids without React Flow class selectors', async () => {
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    expect(await screen.findByTestId('workflow-canvas')).toBeDefined();
+    expect(screen.getByTestId('workflow-canvas').getAttribute('data-layout-mode')).toBe('balanced-grid');
+    expect(screen.getByTestId('workflow-canvas').hasAttribute('data-layout-engine')).toBe(false);
+    expect(screen.queryByRole('radio')).toBeNull();
+    expect(document.body.textContent).not.toContain('Legacy staircase');
+    expect(await screen.findByTestId('workflow-node-implement')).toBeDefined();
+    // GRID routing (matches CoordinatorRunPage / WorkflowDefinitionInlinePanel) exposes four
+    // source and four target handles per node instead of a single source/target pair.
+    expect(await screen.findByTestId('workflow-node-implement-handle-source-right')).toBeDefined();
+    expect(await screen.findByTestId('workflow-node-rai-check-handle-target-left')).toBeDefined();
+  });
+});
+
+describe('VisualWorkflowEditor — schedule trigger (#561)', () => {
+  it('edits the YAML buffer and persists the schedule with the normal editor save', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Scheduled workflow' } as never);
+    renderEditor(YAML_WITH_SCHEDULE);
+
+    expect(await screen.findByText('weekly · 09:00 UTC')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit schedule trigger' }));
+
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Day of week' }), { target: { value: 'tuesday' } });
+    fireEvent.change(screen.getByLabelText('UTC time'), { target: { value: '13:30' } });
+    await user.click(screen.getByRole('button', { name: 'Save schedule' }));
+
+    expect(screen.getByText('weekly · 13:30 UTC')).toBeDefined();
+    expect(screen.getByText('Unsaved changes')).toBeDefined();
+    expect(apiClient.saveWorkflowYaml).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalledWith(
+      'proj-1',
+      'scheduled',
+      expect.stringContaining('day_of_week: tuesday'),
+    ));
+    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls.at(-1)?.[2]).toContain('time_of_day: 13:30');
+  });
+
+  it('removes an existing schedule from the buffer before saving', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Scheduled workflow' } as never);
+    renderEditor(YAML_WITH_SCHEDULE);
+
+    expect(await screen.findByText('weekly · 09:00 UTC')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit schedule trigger' }));
+    await user.click(await screen.findByRole('button', { name: 'Remove schedule' }));
+
+    expect(screen.getByText('Manual only')).toBeDefined();
+    expect(screen.getByText('Unsaved changes')).toBeDefined();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalled());
+    expect(vi.mocked(apiClient.saveWorkflowYaml).mock.calls.at(-1)?.[2]).not.toContain('trigger:');
+  });
+
+  it('adds a schedule without replacing the current event trigger', async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiClient.saveWorkflowYaml).mockResolvedValue({ name: 'Event-driven workflow' } as never);
+    renderEditor(YAML_WITH_EVENT);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add schedule trigger' }));
+    await user.click(await screen.findByRole('button', { name: 'Save schedule' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiClient.saveWorkflowYaml).toHaveBeenCalled());
+    const savedYaml = vi.mocked(apiClient.saveWorkflowYaml).mock.calls.at(-1)?.[2] ?? '';
+    expect(savedYaml).toContain('triggers:');
+    expect(savedYaml).toContain('type: event');
+    expect(savedYaml).toContain('event_name: github.issues');
+    expect(savedYaml).toContain('type: schedule');
+  });
+});
+
+describe('VisualWorkflowEditor — canvas editing controls (#1010)', () => {
+  it('sets and visibly marks the workflow start node from workflow details', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await user.click(await screen.findByRole('combobox', { name: 'Start node' }));
+    await user.click(await screen.findByRole('option', { name: 'Done' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-done').textContent).toContain('Start');
+    });
+  });
+
+  it('undos and redoes YAML-buffer edits', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Changed workflow' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect((screen.getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('Sample');
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    expect((screen.getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('Changed workflow');
+  });
+
+  it('discards unsaved YAML-buffer edits', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Name' }), {
+      target: { value: 'Changed workflow' },
+    });
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+
+    expect((screen.getByRole('textbox', { name: 'Name' }) as HTMLInputElement).value).toBe('Sample');
+    expect(screen.queryByText('Unsaved changes')).toBeNull();
+  });
+
+  it('reports client-side validation results on demand', async () => {
+    const user = userEvent.setup();
+    renderEditor(YAML_WITH_UNROUTED_RAI);
+
+    await user.click(await screen.findByRole('button', { name: 'Validate' }));
+    expect(screen.getByText(/validation failed.*unrouted verdicts/i)).toBeDefined();
+  });
+});
