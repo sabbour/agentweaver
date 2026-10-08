@@ -224,6 +224,31 @@ public sealed class CosmosMemoryProviderTests
         Assert.Empty((await provider.SearchAsync(new KnowledgeRecordQuery("project-a", "agent-a"))).Items);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.RequestTimeout)]
+    [InlineData(HttpStatusCode.RequestEntityTooLarge)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task PromotionBatchTimeoutLimitAndThrottleResponsesLeaveProposalUnchanged(
+        HttpStatusCode statusCode)
+    {
+        var (provider, store, _) = CreateProvider();
+        var proposalId = await CreateProposalAsync(provider, "promotion-failure");
+        store.FailNextBatchStatus = statusCode;
+
+        await Assert.ThrowsAsync<KnowledgeStorageUnavailableException>(() =>
+            PromoteAsync(provider, proposalId));
+
+        var proposal = await provider.ReadAsync("project-a", proposalId);
+        Assert.Equal(KnowledgeRecordState.Pending, proposal!.State);
+        var revisions = await provider.ReadRevisionsAsync("project-a", proposalId, 1, 10);
+        Assert.Equal(1, revisions.TotalCount);
+        Assert.Equal(1, revisions.Items[0].Revision);
+        var decisions = await provider.SearchAsync(new KnowledgeRecordQuery(
+            "project-a", "agent-a", Kind: KnowledgeRecordKind.Decision, IncludeInactive: true));
+        Assert.Empty(decisions.Items);
+        Assert.Equal(0, store.CountDocuments("accepted-effect"));
+    }
+
     [Fact]
     public async Task DeliveryClaimsPreserveProjectRunOrder()
     {
@@ -246,6 +271,63 @@ public sealed class CosmosMemoryProviderTests
             "project-a", "run-a", secondId, "worker-2", TimeSpan.FromSeconds(30)));
     }
 
+    [Fact]
+    public async Task ExpiredLeaseIsRejectedReclaimedAndFencesPreviousWorkerAfterRestart()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 10, 8, 0, 0, 0, TimeSpan.Zero));
+        var (provider, store, options) = CreateProvider(clock);
+        var proposalId = await CreateProposalAsync(provider, "lease-expiry");
+        var receiptId = (await PromoteAsync(provider, proposalId)).OutboxEventId!.Value;
+        var originalLease = await provider.ClaimAcceptedEffectDeliveryAsync(
+            "project-a", "run-a", receiptId, "worker-old", TimeSpan.FromSeconds(30));
+        Assert.NotNull(originalLease);
+
+        var restartedProvider = new CosmosMemoryProvider(store, options, clock);
+        clock.Advance(TimeSpan.FromSeconds(31));
+        Assert.False(await restartedProvider.AcknowledgeAcceptedEffectDeliveryAsync(
+            "project-a", "run-a", receiptId, originalLease.LeaseToken));
+
+        var reclaimedLease = await restartedProvider.ClaimAcceptedEffectDeliveryAsync(
+            "project-a", "run-a", receiptId, "worker-new", TimeSpan.FromSeconds(30));
+        Assert.NotNull(reclaimedLease);
+        Assert.NotEqual(originalLease.LeaseToken, reclaimedLease.LeaseToken);
+        Assert.False(await restartedProvider.AcknowledgeAcceptedEffectDeliveryAsync(
+            "project-a", "run-a", receiptId, originalLease.LeaseToken));
+        Assert.False(await restartedProvider.ReleaseAcceptedEffectDeliveryAsync(
+            "project-a", "run-a", receiptId, originalLease.LeaseToken));
+        Assert.True(await restartedProvider.AcknowledgeAcceptedEffectDeliveryAsync(
+            "project-a", "run-a", receiptId, reclaimedLease.LeaseToken));
+    }
+
+    [Fact]
+    public async Task ConcurrentDeliveryClaimsUseEtagCasToFenceTheLosingWorker()
+    {
+        var (provider, store, _) = CreateProvider();
+        var proposalId = await CreateProposalAsync(provider, "claim-race");
+        var receiptId = (await PromoteAsync(provider, proposalId)).OutboxEventId!.Value;
+        store.PauseNextBatch();
+        var delayedClaim = provider.ClaimAcceptedEffectDeliveryAsync(
+            "project-a", "run-a", receiptId, "worker-delayed", TimeSpan.FromSeconds(30));
+        AcceptedEffectDeliveryLease? winningLease;
+        try
+        {
+            await store.PausedBatch.WaitAsync(TimeSpan.FromSeconds(10));
+            winningLease = await provider.ClaimAcceptedEffectDeliveryAsync(
+                "project-a", "run-a", receiptId, "worker-winning", TimeSpan.FromSeconds(30));
+            Assert.NotNull(winningLease);
+        }
+        finally
+        {
+            store.ResumePausedBatch();
+        }
+
+        Assert.Null(await delayedClaim);
+        Assert.Null(await provider.ClaimAcceptedEffectDeliveryAsync(
+            "project-a", "run-a", receiptId, "worker-third", TimeSpan.FromSeconds(30)));
+        Assert.True(await provider.AcknowledgeAcceptedEffectDeliveryAsync(
+            "project-a", "run-a", receiptId, winningLease!.LeaseToken));
+    }
+
     private static async Task<Guid> CreateProposalAsync(CosmosMemoryProvider provider, string key)
     {
         var result = await provider.CreateAsync(CreateInput("proposal", key), $"create-{key}");
@@ -265,11 +347,11 @@ public sealed class CosmosMemoryProviderTests
             $"promote-{proposalId:N}");
 
     private static (CosmosMemoryProvider Provider, FakeCosmosMemoryStore Store, CosmosMemoryOptions Options)
-        CreateProvider()
+        CreateProvider(TimeProvider? timeProvider = null)
     {
         var options = Options();
         var store = new FakeCosmosMemoryStore(options);
-        return (new CosmosMemoryProvider(store, options), store, options);
+        return (new CosmosMemoryProvider(store, options, timeProvider), store, options);
     }
 
     private static CosmosMemoryOptions Options() =>
@@ -382,8 +464,11 @@ public sealed class CosmosMemoryProviderTests
         private readonly Dictionary<(string ProjectId, string Id), CosmosMemoryStoredDocument> _documents = [];
         private long _etag;
         private int _pauseNextRecordRead;
+        private int _pauseNextBatch;
         private TaskCompletionSource? _pausedRecordRead;
         private TaskCompletionSource? _resumeRecordRead;
+        private TaskCompletionSource? _pausedBatch;
+        private TaskCompletionSource? _resumeBatch;
 
         public CosmosMemoryContainerIdentity Identity { get; set; } = new(
             options.DatabaseId,
@@ -396,6 +481,8 @@ public sealed class CosmosMemoryProviderTests
         public HttpStatusCode? FailNextBatchStatus { get; set; }
         public Task PausedRecordRead =>
             _pausedRecordRead?.Task ?? throw new InvalidOperationException("No record read is paused.");
+        public Task PausedBatch =>
+            _pausedBatch?.Task ?? throw new InvalidOperationException("No batch is paused.");
 
         public void PauseNextRecordRead()
         {
@@ -405,6 +492,21 @@ public sealed class CosmosMemoryProviderTests
         }
 
         public void ResumePausedRecordRead() => _resumeRecordRead?.TrySetResult();
+
+        public void PauseNextBatch()
+        {
+            _pausedBatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _resumeBatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Interlocked.Exchange(ref _pauseNextBatch, 1);
+        }
+
+        public void ResumePausedBatch() => _resumeBatch?.TrySetResult();
+
+        public int CountDocuments(string documentType)
+        {
+            lock (_gate)
+                return _documents.Values.Count(item => item.Document.DocumentType == documentType);
+        }
 
         public Task<CosmosMemoryContainerIdentity> ReadContainerIdentityAsync(CancellationToken cancellationToken)
         {
@@ -556,37 +658,60 @@ public sealed class CosmosMemoryProviderTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            return ExecuteBatchCoreAsync(projectId, operations, cancellationToken);
+        }
+
+        private async Task<CosmosMemoryBatchResult> ExecuteBatchCoreAsync(
+            string projectId,
+            IReadOnlyList<CosmosMemoryBatchOperation> operations,
+            CancellationToken cancellationToken)
+        {
+            if (Interlocked.Exchange(ref _pauseNextBatch, 0) == 1)
+            {
+                _pausedBatch!.TrySetResult();
+                await _resumeBatch!.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             lock (_gate)
             {
                 if (FailNextBatch)
                 {
                     FailNextBatch = false;
-                    return Task.FromResult(new CosmosMemoryBatchResult(HttpStatusCode.ServiceUnavailable));
+                    return new CosmosMemoryBatchResult(HttpStatusCode.ServiceUnavailable);
                 }
                 if (FailNextBatchStatus is { } failureStatus)
                 {
                     FailNextBatchStatus = null;
-                    return Task.FromResult(new CosmosMemoryBatchResult(failureStatus));
+                    return new CosmosMemoryBatchResult(failureStatus);
                 }
                 foreach (var operation in operations)
                 {
                     var key = (projectId, operation.Document.Id);
                     var existing = _documents.GetValueOrDefault(key);
                     if (operation.Kind == CosmosMemoryBatchOperationKind.Create && existing is not null)
-                        return Task.FromResult(new CosmosMemoryBatchResult(HttpStatusCode.Conflict));
+                        return new CosmosMemoryBatchResult(HttpStatusCode.Conflict);
                     if (operation.Kind == CosmosMemoryBatchOperationKind.Replace &&
                         (existing is null || !string.Equals(existing.ETag, operation.ETag, StringComparison.Ordinal)))
-                        return Task.FromResult(new CosmosMemoryBatchResult(
-                            existing is null ? HttpStatusCode.NotFound : HttpStatusCode.PreconditionFailed));
+                        return new CosmosMemoryBatchResult(
+                            existing is null ? HttpStatusCode.NotFound : HttpStatusCode.PreconditionFailed);
                 }
                 foreach (var operation in operations)
                     _documents[(projectId, operation.Document.Id)] = new CosmosMemoryStoredDocument(
                         operation.Document, Interlocked.Increment(ref _etag).ToString());
-                return Task.FromResult(new CosmosMemoryBatchResult(HttpStatusCode.OK));
+                return new CosmosMemoryBatchResult(HttpStatusCode.OK);
             }
         }
 
         private static string SearchableText(KnowledgeRecord record) =>
             string.Join(' ', record.Type, record.Title, record.Content, string.Join(' ', record.Tags));
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset initialTime) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = initialTime;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan duration) => _utcNow = _utcNow.Add(duration);
     }
 }

@@ -21,6 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using NpgsqlTypes;
 using Xunit;
 
 namespace Agentweaver.Knowledge.Tests;
@@ -33,6 +34,15 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
     {
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
+    private static readonly ImmutableArray<string> OriginalMemoryCapabilities =
+    [
+        "memory.records.read",
+        "memory.records.write",
+        "memory.records.search",
+        "memory.records.revisions",
+        "memory.proposals.promote",
+        "memory.context.compose"
+    ];
 
     [Fact]
     public async Task PendingRelayRetriesThroughEventsAndReturnsPersistedAckAfterRestart()
@@ -56,7 +66,30 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
             writeAllowed: false);
         switchingHandler.SetTarget(deniedEvents.GetTestServer().CreateHandler());
 
+        await SeedOriginalSixMemoryBindingAsync(database);
+        var originalCapabilities = await ReadPinnedMemoryCapabilitiesAsync(database);
         var proposalId = await CreateProposalAsync(knowledgeClient);
+        var pinnedCapabilities = await ReadPinnedMemoryCapabilitiesAsync(database);
+        Assert.Equal(originalCapabilities, pinnedCapabilities);
+        using (var capabilities = JsonDocument.Parse(pinnedCapabilities))
+        {
+            Assert.Equal(
+                OriginalMemoryCapabilities.OrderBy(value => value, StringComparer.Ordinal),
+                capabilities.RootElement.EnumerateArray().Select(value => value.GetString()));
+        }
+        using (var readRequest = new HttpRequestMessage(
+                   HttpMethod.Get,
+                   $"/api/projects/project-a/runs/run-a/agents/agent-a/records/{proposalId:D}"))
+        {
+            readRequest.Headers.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "caller-token");
+            readRequest.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", "tenant-a");
+            using var read = await knowledgeClient.SendAsync(readRequest);
+            Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+            using var body = JsonDocument.Parse(await read.Content.ReadAsStringAsync());
+            Assert.Equal(proposalId, body.RootElement.GetProperty("recordId").GetGuid());
+        }
+
         using var firstAttempt = await PromoteAsync(knowledgeClient, proposalId);
         Assert.Equal(HttpStatusCode.Created, firstAttempt.StatusCode);
         using var firstResult = JsonDocument.Parse(await firstAttempt.Content.ReadAsStringAsync());
@@ -167,6 +200,7 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
         using var stableResult = JsonDocument.Parse(await stableRetry.Content.ReadAsStringAsync());
         Assert.Equal(receiptId, stableResult.RootElement.GetProperty("outboxEventId").GetGuid());
         Assert.Equal("DELIVERED", stableResult.RootElement.GetProperty("delivery").GetString());
+        Assert.Equal(pinnedCapabilities, await ReadPinnedMemoryCapabilitiesAsync(database));
 
         await restartedEvents.DisposeAsync();
         await using var cleanup = await postgres.DataSource.OpenConnectionAsync();
@@ -684,6 +718,54 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
         Assert.Equal(delivered, (bool)(await command.ExecuteScalarAsync())!);
     }
 
+    private static async Task<string> ReadPinnedMemoryCapabilitiesAsync(
+        NativePostgresMemoryProviderTests.KnowledgeDatabase database)
+    {
+        await using var connection = await database.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT negotiated_capabilities::text
+            FROM "{database.Options.Schema}".memory_provider_bindings
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", "project-a");
+        command.Parameters.AddWithValue("run", "run-a");
+        return Assert.IsType<string>(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task SeedOriginalSixMemoryBindingAsync(
+        NativePostgresMemoryProviderTests.KnowledgeDatabase database)
+    {
+        await using var connection = await database.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            INSERT INTO "{database.Options.Schema}".memory_provider_bindings
+                (project_id, run_id, project_revision, project_configuration_revision, context_revision,
+                 provider_id, adapter_version, options_schema_version, options_revision,
+                 resource_id, resource_generation, negotiated_capabilities)
+            VALUES
+                (@project, @run, @project_revision, @configuration_revision, @context_revision,
+                 @provider, @adapter_version, @schema_version, @options_revision,
+                 @resource, @generation, @capabilities)
+            """, connection);
+        command.Parameters.AddWithValue("project", "project-a");
+        command.Parameters.AddWithValue("run", "run-a");
+        command.Parameters.AddWithValue("project_revision", 1L);
+        command.Parameters.AddWithValue("configuration_revision", 1L);
+        command.Parameters.AddWithValue("context_revision", "context-v1");
+        command.Parameters.AddWithValue("provider", NativePostgresMemoryProvider.ProviderId);
+        command.Parameters.AddWithValue(
+            "adapter_version", NativePostgresMemoryProvider.AdapterVersion.ToString());
+        command.Parameters.AddWithValue("schema_version", database.Options.OptionsSchemaVersion);
+        command.Parameters.AddWithValue("options_revision", database.Options.OptionsRevision);
+        command.Parameters.AddWithValue("resource", database.Options.ResourceId);
+        command.Parameters.AddWithValue("generation", database.Options.ResourceGeneration);
+        command.Parameters.AddWithValue(
+            "capabilities",
+            NpgsqlDbType.Jsonb,
+            JsonSerializer.Serialize(OriginalMemoryCapabilities.OrderBy(
+                value => value, StringComparer.Ordinal)));
+        await command.ExecuteNonQueryAsync();
+    }
+
     private static async Task AssertFactAndInboxCountAsync(
         NpgsqlDataSource dataSource,
         string schema,
@@ -789,8 +871,8 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
                             options.OptionsSchemaVersion,
                             options.OptionsRevision,
                             ProviderHostingPattern.RemoteService,
-                            MemoryProviderCapabilities.All.ToImmutableArray(),
-                            MemoryProviderCapabilities.All.ToImmutableArray())])],
+                            OriginalMemoryCapabilities,
+                            OriginalMemoryCapabilities)])],
                     new ProjectRunLimitSnapshot(1000)),
                 _ => throw new InvalidOperationException("Unexpected Projects & Config route.")
             };

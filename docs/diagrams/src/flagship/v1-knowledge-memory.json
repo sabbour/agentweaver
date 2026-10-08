@@ -57,6 +57,16 @@
       "label": "Caller bearer stays in memory. Check exact agent owner, source run, pending state, expected revisions, and fresh effective WriteProjects."
     },
     {
+      "type": "note",
+      "over": ["knowledge", "database"],
+      "label": "Cosmos batch: 100 ops, 2 MB, 5 s; project partition: 20 GB and 10,000 RU/s. 408/413/429 fail closed; tests do not claim live throughput."
+    },
+    {
+      "type": "note",
+      "over": ["knowledge", "database"],
+      "label": "Original six-capability selections retain their immutable pin; a missing existing-run pin still returns 503."
+    },
+    {
       "type": "message",
       "from": "knowledge",
       "to": "database",
@@ -76,7 +86,7 @@
       "type": "message",
       "from": "knowledge",
       "to": "events",
-      "label": "POST accepted-effects: receipt ID and versions; current request adds project/run scope, original N-1 request omits both",
+      "label": "POST accepted-effects: receipt ID, versions and paired project/run scope; original N-1 request omits both",
       "line": "solid",
       "arrow": "filled"
     },
