@@ -150,6 +150,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         string connectionOwnerToken, Func<bool, Task> setHistoricalReadAuthority)
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var expiryTimeProvider = sourceLoss == "sdk-preparation-expiry"
+            ? new RuntimeExpiryTimeProvider()
+            : null;
+        TimeProvider runtimeTimeProvider = expiryTimeProvider ?? TimeProvider.System;
         TraceNativeStage(failures, "Broker startup begin.");
         await using var brokerFactory = new IdentityBrokerWebApplicationFactory(
             _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
@@ -162,7 +166,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 settings["IdentityBroker__RuntimeBootstrap__EnvironmentOwnerAddress"] = "https://environment.test/";
                 settings["IdentityBroker__RuntimeBootstrap__BootstrapLifetime"] = "00:01:00";
                 settings["IdentityBroker__RuntimeBootstrap__SourceLifetime"] =
-                    sourceLoss == "sdk-preparation-expiry" ? "00:00:10" : "00:02:00";
+                    sourceLoss == "sdk-preparation-expiry" ? "00:03:00" : "00:02:00";
                 copilotConnection.ConfigureSettings(settings);
             },
             configureServices: services =>
@@ -276,10 +280,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         new(sdk.ModelId, ModelSourceMode.HostedCopilot)
                 });
             var runtimeBroker = new RuntimeBrokerCredentialClient(
-                runtimeHttp, broker.BaseAddress!, IdentityBrokerWebApplicationFactory.Issuer, actor, TimeProvider.System);
+                runtimeHttp, broker.BaseAddress!, IdentityBrokerWebApplicationFactory.Issuer, actor, runtimeTimeProvider);
             sdk.ExpectedAvailableToolsCount = 7;
             sdk.PersistNativeSessionState = true;
-            var bootstrap = new RuntimeSessionBootstrap(currentOwner, runtimeBroker, factory, actor, TimeProvider.System,
+            var bootstrap = new RuntimeSessionBootstrap(currentOwner, runtimeBroker, factory, actor, runtimeTimeProvider,
                 actions: new RuntimeActionHttpClient(runtimeHttp, new("https://orchestrator.test/"), actor));
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.ConfigureAsync(
                 bootstrap, "forged"u8.ToArray(), Guid.NewGuid(), Guid.NewGuid(), default));
@@ -307,9 +311,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     Assert.NotNull(exchange);
                     Assert.NotNull(exchange.CredentialValue);
                     var grant = exchange.Receipt;
+                    expiryTimeProvider?.SetUtcNow(grant.RecordedAt);
                     exchanged = new(grant.GrantId, grant.RuntimeInstanceId, grant.Revision, grant.Purpose,
                         grant.Audience, grant.ConfigurationHash,
-                        new SecretCredential(exchange.CredentialValue, grant.ExpiresAt));
+                        new SecretCredential(exchange.CredentialValue, grant.ExpiresAt, runtimeTimeProvider));
                     output.WriteLine("Captured actual Broker source exchange for the creation-authority wait.");
                 };
                 if (duringSdkPreparation)
@@ -353,9 +358,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     switch (sourceLoss)
                     {
                         case "sdk-preparation-expiry":
-                            var remaining = exchanged.Credential.ExpiresAt - DateTimeOffset.UtcNow;
-                            if (remaining > TimeSpan.Zero)
-                                await Task.Delay(remaining + TimeSpan.FromMilliseconds(20), timeout.Token);
+                            expiryTimeProvider!.SetUtcNow(exchanged.Credential.ExpiresAt.AddMilliseconds(1));
                             Assert.False(exchanged.Credential.IsUsable());
                             break;
                         case "sdk-preparation-lease":
@@ -405,7 +408,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     var revision = await db.RuntimeGrantRevisions.AsNoTracking()
                         .SingleAsync(row => row.GrantId == exchanged.GrantId);
                     Assert.Equal(RuntimeCredentialState.Active, revision.State);
-                    Assert.True(revision.ExpiresAt <= DateTimeOffset.UtcNow);
+                    Assert.True(revision.ExpiresAt <= runtimeTimeProvider.GetUtcNow());
                 }
                 else if (sourceLoss != "sdk-preparation-lease")
                 {
@@ -1149,6 +1152,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         public DateTimeOffset? Current { get; set; }
         public override DateTimeOffset GetUtcNow() => Current ?? TimeProvider.System.GetUtcNow();
+    }
+
+    private sealed class RuntimeExpiryTimeProvider : TimeProvider
+    {
+        private DateTimeOffset? _current;
+
+        public void SetUtcNow(DateTimeOffset current) => _current = current;
+
+        public override DateTimeOffset GetUtcNow() => _current ?? TimeProvider.System.GetUtcNow();
     }
 
     private sealed class RuntimeLeaseTestTimeProvider : TimeProvider

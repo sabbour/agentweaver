@@ -1441,6 +1441,7 @@
         "dependencies": {
           "Agentweaver.Identity": "[0.0.0, )",
           "Agentweaver.Secrets.AzureKeyVault": "[0.0.0, )",
+          "Agentweaver.SourceControl": "[0.0.0, )",
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.OpenIdConnect": "[10.0.0, )",
           "Microsoft.EntityFrameworkCore": "[10.0.12, )",
