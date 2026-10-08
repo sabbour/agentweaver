@@ -32,9 +32,11 @@ request timeout returns `504`.
 from the Events owner's committed run journal. It checks current Projects & Config
 read authority for the exact signed project/run before loading the first page and
 again after each page has loaded but before writing an event. It repeats that
-check before every later event. A revoked caller therefore receives no subsequent
-event; if an SSE connection has already started, the Gateway terminates it rather
-than sending a misleading JSON error as an event.
+check before every later event. Immediately before each write, it also checks that
+the validated bearer token has not expired while an owner request was in progress.
+A revoked or expired caller therefore receives no subsequent event; if an SSE
+connection has already started, the Gateway terminates it rather than sending a
+misleading JSON error as an event.
 
 Each SSE `id` is the journal's `nextCursor`, unchanged. Reconnect with
 `Last-Event-ID`; the `cursor` query parameter is also supported, but duplicate or

@@ -4,7 +4,9 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Identity;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
+using OpenIddict.Server;
 using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
@@ -60,7 +62,125 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(["Bearer " + validBrokerToken], forwardedBearerTokens);
     }
 
-    private async Task<string> IssueTokenForAudienceBrokerAsync(string audience, string subject)
+    [Fact]
+    public async Task ProductionGatewayStopsSseWhenBrokerTokenExpiresDuringProjectsBodyRead()
+    {
+        var token = await IssueTokenForAudienceBrokerAsync(
+            "https://api.test/",
+            "gateway-project-body-expiry",
+            TimeSpan.FromSeconds(15));
+        var validTo = new DateTimeOffset(
+            new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler()
+                .ReadJwtToken(token).ValidTo,
+            TimeSpan.Zero);
+        Assert.InRange(
+            validTo - DateTimeOffset.UtcNow,
+            TimeSpan.FromSeconds(5),
+            TimeSpan.FromSeconds(25));
+
+        using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        var projectBodyReadStarted = new TaskCompletionSource<DateTimeOffset>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var projectBodyReadCompleted = new TaskCompletionSource<DateTimeOffset>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstSseEvent = new TaskCompletionSource<(string Data, DateTimeOffset WrittenAt)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondSseEvent = new TaskCompletionSource<(string Data, DateTimeOffset WrittenAt)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var sseEventCount = 0;
+        var projectRequestCount = 0;
+        var firstEventId = Guid.Parse("00000000-0000-0000-0000-000000000001");
+
+        await using var gateway = GatewayProductionResourceServer.Start(
+            new X509SecurityKey(certificate),
+            (_, _) =>
+            {
+                var requestNumber = Interlocked.Increment(ref projectRequestCount);
+                var response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = requestNumber == 4
+                        ? new StreamContent(new ExpiringOwnerBodyStream(
+                            validTo, projectBodyReadStarted, projectBodyReadCompleted))
+                        : new StringContent("{}"),
+                };
+                response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+                return Task.FromResult(response);
+            },
+            (request, _) =>
+            {
+                var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(
+                    request.RequestUri?.Query ?? string.Empty);
+                var cursor = query.TryGetValue("cursor", out var cursorValues)
+                    ? cursorValues.SingleOrDefault()
+                    : null;
+                var page = cursor is null
+                    ? """{"events":[{"eventId":"00000000-0000-0000-0000-000000000001"}],"nextCursor":"expiry-cursor-1"}"""
+                    : cursor == "expiry-cursor-1"
+                        ? """{"events":[{"eventId":"00000000-0000-0000-0000-000000000002"}],"nextCursor":"expiry-cursor-2"}"""
+                        : $$"""{"events":[],"nextCursor":"{{cursor}}"}""";
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(page, Encoding.UTF8, "application/json"),
+                });
+            },
+            ownerRequestTimeoutSeconds: 30,
+            observeSseData: data =>
+            {
+                var observed = (data, DateTimeOffset.UtcNow);
+                switch (Interlocked.Increment(ref sseEventCount))
+                {
+                    case 1:
+                        firstSseEvent.TrySetResult(observed);
+                        break;
+                    case 2:
+                        secondSseEvent.TrySetResult(observed);
+                        break;
+                }
+            });
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/v1/projects/expiry-project/runs/expiry-run/events/live");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var responseTask = gateway.Client.SendAsync(
+            request, HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
+        var first = await firstSseEvent.Task.WaitAsync(cancellation.Token);
+        Assert.True(first.WrittenAt < validTo);
+        using (var firstEventData = JsonDocument.Parse(first.Data))
+            Assert.Equal(firstEventId, firstEventData.RootElement.GetProperty("eventId").GetGuid());
+        var readStartedAt = await projectBodyReadStarted.Task.WaitAsync(cancellation.Token);
+        Assert.True(readStartedAt < validTo);
+        var readCompletedAt = await projectBodyReadCompleted.Task.WaitAsync(cancellation.Token);
+        Assert.True(readCompletedAt > validTo);
+        try
+        {
+            using var stoppedResponse = await responseTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(HttpStatusCode.OK, stoppedResponse.StatusCode);
+        }
+        catch (HttpRequestException)
+        {
+        }
+        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            cancellation.Cancel();
+        }
+
+        Assert.Equal(4, Volatile.Read(ref projectRequestCount));
+        Assert.Equal(1, Volatile.Read(ref sseEventCount));
+        Assert.False(secondSseEvent.Task.IsCompleted);
+    }
+
+    private async Task<string> IssueTokenForAudienceBrokerAsync(
+        string audience,
+        string subject,
+        TimeSpan? accessTokenLifetime = null)
     {
         var database = await postgres.CreateMigratedDatabaseAsync();
         await using var brokerFactory = new IdentityBrokerWebApplicationFactory(
@@ -71,7 +191,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             {
                 settings["IdentityBroker__Clients__0__Resources__0"] = audience;
                 settings["IdentityBroker__SecretRedemption__Audience"] = audience;
-            });
+            },
+            configureServices: accessTokenLifetime is { } lifetime
+                ? services => services.PostConfigure<OpenIddictServerOptions>(
+                    options => options.AccessTokenLifetime = lifetime)
+                : null);
 
         _fakeIdp.Subject = subject;
         _fakeIdp.TenantIds = [TenantId];
@@ -97,5 +221,47 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             verifier);
         return tokens.GetProperty("access_token").GetString()
             ?? throw new InvalidOperationException("The Identity broker did not return an access token.");
+    }
+
+    private sealed class ExpiringOwnerBodyStream(
+        DateTimeOffset expiresAt,
+        TaskCompletionSource<DateTimeOffset> readStarted,
+        TaskCompletionSource<DateTimeOffset> readCompleted) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            readStarted.TrySetResult(DateTimeOffset.UtcNow);
+            var delay = expiresAt.AddMilliseconds(250) - DateTimeOffset.UtcNow;
+            if (delay > TimeSpan.Zero)
+                await Task.Delay(delay, cancellationToken);
+            readCompleted.TrySetResult(DateTimeOffset.UtcNow);
+            return 0;
+        }
+
+        public override Task<int> ReadAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+        public override void Flush() => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

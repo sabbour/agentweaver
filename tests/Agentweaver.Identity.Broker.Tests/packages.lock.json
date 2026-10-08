@@ -1308,6 +1308,15 @@
           "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
         }
       },
+      "agentweaver.gateway": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Telemetry": "[0.0.0, )",
+          "OpenIddict.Validation.AspNetCore": "[7.7.1, )",
+          "OpenIddict.Validation.SystemNetHttp": "[7.7.1, )"
+        }
+      },
       "agentweaver.identity": {
         "type": "Project",
         "dependencies": {
