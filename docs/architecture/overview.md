@@ -121,7 +121,10 @@ Sandbox mounting or durable flush.
 
 The [AgentHost source candidate](agenthost.md) includes a pinned image definition and authenticated runtime routes.
 Its local fixtures and CI image receipt do not prove deployed scheduling or paid model execution.
-The repository does not contain a published platform image.
+The repository does not contain a published platform image, AgentHost scheduler,
+or product MCP server. It also includes an unpublished v1 browser client over the
+Gateway/BFF and Identity Broker; that source does not establish a deployed
+application or automatic work scheduling. See the [v1 web client guide](../guide/web-client).
 
 The Knowledge source candidate and its current native Memory boundary are described in
 the [Knowledge and Memory reference](knowledge-memory.md).

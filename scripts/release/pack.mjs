@@ -298,8 +298,9 @@ export function packComponents(manifest, {
         fail(WEB_PROJECT_PATH, `cannot read npm project mirrors: ${error.message}`);
       }
       if (webPackage?.version !== component.version ||
+          webLock?.version !== component.version ||
           webLock?.packages?.['']?.version !== component.version) {
-        fail(WEB_PROJECT_PATH, `package.json and package-lock.json packages[""] must both mirror ${component.version}`);
+        fail(WEB_PROJECT_PATH, `package.json, package-lock.json, and package-lock.json packages[""] must all mirror ${component.version}`);
       }
       locks.set(component.id, {
         path: WEB_LOCK_PATH,

@@ -23,13 +23,15 @@ export function preparationFiles(manifestText, plan, appliedAt, readSource) {
         packageJson = JSON.parse(readSource(WEB_PROJECT_PATH));
         packageLock = JSON.parse(readSource(WEB_LOCK_PATH));
       } catch (error) {
-        fail(WEB_PROJECT_PATH, `cannot read npm version mirrors: ${error.message}`);
+        fail(`${WEB_PROJECT_PATH}: cannot read npm version mirrors: ${error.message}`);
       }
       if (packageJson.version !== entry.fromVersion) fail(`${WEB_PROJECT_PATH}: source version mismatch for ${entry.id}`);
-      if (packageLock?.packages?.['']?.version !== entry.fromVersion) {
-        fail(`${WEB_LOCK_PATH}: source root package version mismatch for ${entry.id}`);
+      if (packageLock?.version !== entry.fromVersion ||
+          packageLock?.packages?.['']?.version !== entry.fromVersion) {
+        fail(`${WEB_LOCK_PATH}: source lockfile version mirrors mismatch for ${entry.id}`);
       }
       packageJson.version = entry.toVersion;
+      packageLock.version = entry.toVersion;
       packageLock.packages[''].version = entry.toVersion;
       files.set(WEB_PROJECT_PATH, JSON.stringify(packageJson, null, 2) + '\n');
       files.set(WEB_LOCK_PATH, JSON.stringify(packageLock, null, 2) + '\n');
