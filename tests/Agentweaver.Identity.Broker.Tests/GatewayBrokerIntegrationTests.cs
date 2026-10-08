@@ -1,5 +1,6 @@
 extern alias GatewayHost;
 extern alias EventsHost;
+extern alias OrchestratorHost;
 extern alias ProjectsConfig;
 
 using System.Collections.Concurrent;
@@ -13,7 +14,9 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Providers;
 using GatewayOwner = GatewayHost::Agentweaver.Gateway.GatewayOwner;
+using GatewayRouteCatalog = GatewayHost::Agentweaver.Gateway.GatewayRouteCatalog;
 using EventsOwner = EventsHost::Agentweaver.EventsAndSessions;
+using OrchestratorHost::Agentweaver.Orchestrator;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
@@ -24,6 +27,11 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
+    private static readonly JsonSerializerOptions OrchestratorJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
     [Fact]
     public async Task GatewayDelegatesOwnerStatusesReplaysCursorsAndReauthorizesBeforeSseWrite()
     {
@@ -99,6 +107,37 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
             if (owner == GatewayOwner.Orchestrator)
             {
+                if (uri.AbsolutePath.EndsWith(
+                    "/coordination/sessions/gateway-session/status", StringComparison.Ordinal))
+                {
+                    var status = new SessionStatusSnapshot(
+                        new SessionIdentity(project.ProjectId, runId, "gateway-session"),
+                        null,
+                        "gateway-session",
+                        CoordinationSessionKind.Coordinator,
+                        false,
+                        CoordinationActivityState.Idle,
+                        null,
+                        CoordinationLifecycleState.Active,
+                        3,
+                        7,
+                        [new SessionStatusBlocker(
+                            CoordinationBlockerKind.AwaitingInput,
+                            "gateway-question",
+                            ["continue"],
+                            true,
+                            "Continue?")],
+                        "available",
+                        "none",
+                        new SessionInterruptionIntentSnapshot(
+                            CoordinationInterruptionIntentState.None,
+                            null,
+                            null),
+                        new OwnerRunExecutionSnapshot("running", 1, null, null));
+                    return JsonResponse(
+                        HttpStatusCode.OK,
+                        JsonSerializer.Serialize(status, OrchestratorJsonOptions));
+                }
                 if (uri.AbsolutePath.EndsWith("/coordination/sessions/gateway-session/spawn", StringComparison.Ordinal))
                     return JsonResponse(
                         HttpStatusCode.Accepted,
@@ -118,6 +157,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var cursor = query.TryGetValue("cursor", out var cursorValues)
                 ? cursorValues.SingleOrDefault()
                 : null;
+            if (cursor is "gateway-cursor-io-before-start" or "gateway-cursor-io-after-start-next")
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StreamContent(new ThrowingOwnerBodyStream()),
+                };
+            if (cursor == "gateway-cursor-io-after-start")
+                return JsonResponse(
+                    HttpStatusCode.OK,
+                    """{"events":[{"eventId":"00000000-0000-0000-0000-000000000002"}],"nextCursor":"gateway-cursor-io-after-start-next"}""");
             if (cursor == "gateway-cursor-invalid-owner")
                 return JsonResponse(
                     HttpStatusCode.OK,
@@ -208,6 +256,145 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(
                 "uuid",
                 recordIdParameter.GetProperty("schema").GetProperty("format").GetString());
+
+            var schemas = openApiDocument.RootElement.GetProperty("components").GetProperty("schemas");
+            Assert.False(schemas.TryGetProperty("OwnerJson", out _));
+            AssertOpenApiReferencesResolve(openApiDocument.RootElement, schemas);
+            var eventPage = await events.ReplayRunAsync(
+                project.ProjectId, runId, null, 10, CancellationToken.None);
+            using (var eventPayload = JsonDocument.Parse(GatewayEventsJournalFixture.SerializePage(eventPage)))
+                AssertPayloadMatchesSchema(
+                    eventPayload.RootElement,
+                    schemas.GetProperty("SessionEventPage"),
+                    schemas);
+
+            var operations = paths.EnumerateObject()
+                .SelectMany(path => path.Value.EnumerateObject())
+                .ToDictionary(
+                    operation => operation.Value.GetProperty("operationId").GetString()!,
+                    operation => operation.Value,
+                    StringComparer.Ordinal);
+            Assert.Equal(GatewayRouteCatalog.Routes.Length, operations.Count);
+            foreach (var route in GatewayRouteCatalog.Routes)
+            {
+                var operation = operations[route.OperationId];
+                var requestBody = operation.GetProperty("requestBody");
+                Assert.Equal(route.HasJsonBody, requestBody.ValueKind != JsonValueKind.Null);
+                if (route.HasJsonBody)
+                    Assert.True(requestBody.GetProperty("content").TryGetProperty("application/json", out _));
+
+                var responses = operation.GetProperty("responses");
+                Assert.Contains(responses.EnumerateObject(), response =>
+                    response.Name.StartsWith("2", StringComparison.Ordinal));
+                if (route.AcceptsOnly)
+                    Assert.True(responses.TryGetProperty("202", out _));
+                foreach (var response in responses.EnumerateObject().Where(response =>
+                    response.Name.StartsWith("2", StringComparison.Ordinal) && response.Name != "204"))
+                {
+                    var content = response.Value.GetProperty("content");
+                    if (route.IsRunEventStream)
+                        Assert.Equal(
+                            "string",
+                            content.GetProperty("text/event-stream").GetProperty("schema")
+                                .GetProperty("type").GetString());
+                    else
+                        Assert.True(content.TryGetProperty("application/json", out _));
+                }
+            }
+
+            using (var projectReadRequest = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/api/v1/projects/{project.ProjectId}?runId={Uri.EscapeDataString(runId)}"))
+            {
+                AddBearerAndTenant(projectReadRequest, runToken, TenantId);
+                using var projectRead = await gateway.Client.SendAsync(projectReadRequest);
+                Assert.Equal(HttpStatusCode.OK, projectRead.StatusCode);
+                using var projectPayload = JsonDocument.Parse(await projectRead.Content.ReadAsStringAsync());
+                AssertPayloadMatchesSchema(
+                    projectPayload.RootElement,
+                    schemas.GetProperty("ProjectSummary"),
+                    schemas);
+            }
+
+            using (var configurationRequest = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/api/v1/projects/{project.ProjectId}/configuration"))
+            {
+                AddBearerAndTenant(configurationRequest, tenantAdminToken, TenantId);
+                using var configuration = await gateway.Client.SendAsync(configurationRequest);
+                Assert.Equal(HttpStatusCode.OK, configuration.StatusCode);
+                using var configurationPayload = JsonDocument.Parse(await configuration.Content.ReadAsStringAsync());
+                AssertPayloadMatchesSchema(
+                    configurationPayload.RootElement,
+                    schemas.GetProperty("VersionedProjectConfiguration"),
+                    schemas);
+            }
+
+            using (var sessionStatusRequest = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/api/v1/projects/{project.ProjectId}/runs/{runId}/coordination/sessions/gateway-session/status"))
+            {
+                AddBearerAndTenant(sessionStatusRequest, runToken, TenantId);
+                using var sessionStatus = await gateway.Client.SendAsync(sessionStatusRequest);
+                Assert.Equal(HttpStatusCode.OK, sessionStatus.StatusCode);
+                using var statusPayload = JsonDocument.Parse(await sessionStatus.Content.ReadAsStringAsync());
+                AssertPayloadMatchesSchema(
+                    statusPayload.RootElement,
+                    schemas.GetProperty("SessionStatusSnapshot"),
+                    schemas);
+                Assert.Equal("idle", statusPayload.RootElement.GetProperty("activity").GetString());
+                Assert.Equal(
+                    "awaitingInput",
+                    statusPayload.RootElement.GetProperty("blockers")[0].GetProperty("kind").GetString());
+            }
+        }
+
+        using (var ioFailureRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/runs/{runId}/events/live?cursor=gateway-cursor-io-before-start"))
+        {
+            AddBearerAndTenant(ioFailureRequest, runToken, TenantId);
+            using var ioFailure = await gateway.Client.SendAsync(ioFailureRequest);
+            Assert.Equal(HttpStatusCode.BadGateway, ioFailure.StatusCode);
+            Assert.Equal("application/problem+json", ioFailure.Content.Headers.ContentType?.MediaType);
+            using var problem = JsonDocument.Parse(await ioFailure.Content.ReadAsStringAsync());
+            Assert.Equal("owner_unavailable", problem.RootElement.GetProperty("code").GetString());
+        }
+
+        using (var ioAfterStartRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/runs/{runId}/events/live?cursor=gateway-cursor-io-after-start"))
+        using (var ioAfterStartCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+        {
+            AddBearerAndTenant(ioAfterStartRequest, runToken, TenantId);
+            using var ioAfterStart = await gateway.Client.SendAsync(
+                ioAfterStartRequest,
+                HttpCompletionOption.ResponseHeadersRead,
+                ioAfterStartCancellation.Token);
+            Assert.Equal(HttpStatusCode.OK, ioAfterStart.StatusCode);
+            await using var ioAfterStartStream =
+                await ioAfterStart.Content.ReadAsStreamAsync(ioAfterStartCancellation.Token);
+            using var ioAfterStartReader = new StreamReader(ioAfterStartStream);
+            var firstIoEvent = await ReadSseEventLinesAsync(ioAfterStartReader, ioAfterStartCancellation.Token);
+            Assert.Equal("id: gateway-cursor-io-after-start-next", firstIoEvent[0]);
+
+            var trailingBody = new StringBuilder();
+            try
+            {
+                var buffer = new char[256];
+                int read;
+                while ((read = await ioAfterStartReader.ReadAsync(buffer, ioAfterStartCancellation.Token)) > 0)
+                    trailingBody.Append(buffer, 0, read);
+            }
+            catch (IOException)
+            {
+            }
+            Assert.DoesNotContain("id: ", trailingBody.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("application/problem+json", trailingBody.ToString(), StringComparison.Ordinal);
+            Assert.Contains(ownerRequests, request =>
+                request.Owner == GatewayOwner.Events &&
+                QueryHelpers.ParseQuery(request.Uri.Query)["cursor"].SingleOrDefault() ==
+                    "gateway-cursor-io-after-start-next");
         }
 
         var callsBeforeUnauthenticatedRequests = ownerRequests.Count + projectOwnerRequests.Count;
@@ -579,6 +766,116 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
         };
 
+    private static void AssertOpenApiReferencesResolve(JsonElement value, JsonElement schemas)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            if (value.TryGetProperty("$ref", out var reference))
+            {
+                const string prefix = "#/components/schemas/";
+                var referenceValue = reference.GetString();
+                Assert.StartsWith(prefix, referenceValue, StringComparison.Ordinal);
+                Assert.True(schemas.TryGetProperty(referenceValue![prefix.Length..], out _));
+            }
+            foreach (var property in value.EnumerateObject())
+                AssertOpenApiReferencesResolve(property.Value, schemas);
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+                AssertOpenApiReferencesResolve(item, schemas);
+        }
+    }
+
+    private static void AssertPayloadMatchesSchema(
+        JsonElement payload,
+        JsonElement schema,
+        JsonElement schemas)
+    {
+        if (payload.ValueKind == JsonValueKind.Null)
+            return;
+        if (schema.TryGetProperty("oneOf", out var variants))
+        {
+            var payloadKind = payload.GetProperty("kind").GetString();
+            schema = variants.EnumerateArray().First(variant =>
+            {
+                var kindSchema = variant.GetProperty("properties").GetProperty("kind");
+                return kindSchema.GetProperty("const").GetString() == payloadKind;
+            });
+        }
+        if (schema.TryGetProperty("anyOf", out var alternatives))
+        {
+            schema = alternatives.EnumerateArray().First(alternative =>
+                !alternative.TryGetProperty("type", out var type) ||
+                type.GetString() != "null");
+        }
+        if (schema.TryGetProperty("$ref", out var reference))
+        {
+            const string prefix = "#/components/schemas/";
+            schema = schemas.GetProperty(reference.GetString()![prefix.Length..]);
+        }
+        if (schema.TryGetProperty("enum", out var enumValues))
+            Assert.Contains(payload.GetString(), enumValues.EnumerateArray().Select(value => value.GetString()));
+        if (schema.TryGetProperty("const", out var constant))
+            Assert.Equal(constant.GetString(), payload.GetString());
+        if (schema.TryGetProperty("type", out var type))
+        {
+            switch (type.GetString())
+            {
+                case "array":
+                    Assert.Equal(JsonValueKind.Array, payload.ValueKind);
+                    break;
+                case "boolean":
+                    Assert.True(payload.ValueKind is JsonValueKind.True or JsonValueKind.False);
+                    break;
+                case "integer":
+                    Assert.Equal(JsonValueKind.Number, payload.ValueKind);
+                    Assert.True(payload.TryGetInt64(out _));
+                    break;
+                case "number":
+                    Assert.Equal(JsonValueKind.Number, payload.ValueKind);
+                    break;
+                case "object":
+                    Assert.Equal(JsonValueKind.Object, payload.ValueKind);
+                    break;
+                case "string":
+                    Assert.Equal(JsonValueKind.String, payload.ValueKind);
+                    if (schema.TryGetProperty("format", out var format))
+                    {
+                        if (format.GetString() == "uuid")
+                            Assert.True(Guid.TryParse(payload.GetString(), out _));
+                        if (format.GetString() == "date-time")
+                            Assert.True(DateTimeOffset.TryParse(payload.GetString(), out _));
+                    }
+                    break;
+            }
+        }
+        if (payload.ValueKind == JsonValueKind.Object &&
+            schema.TryGetProperty("properties", out var properties))
+        {
+            foreach (var required in schema.GetProperty("required").EnumerateArray())
+                Assert.True(payload.TryGetProperty(required.GetString()!, out _));
+            foreach (var property in payload.EnumerateObject())
+            {
+                Assert.True(
+                    properties.TryGetProperty(property.Name, out var propertySchema),
+                    $"The OpenAPI schema does not describe serialized property '{property.Name}'.");
+                AssertPayloadMatchesSchema(property.Value, propertySchema, schemas);
+            }
+        }
+        if (payload.ValueKind == JsonValueKind.Array && schema.TryGetProperty("items", out var items))
+            foreach (var item in payload.EnumerateArray())
+                AssertPayloadMatchesSchema(item, items, schemas);
+    }
+
+    private sealed class ThrowingOwnerBodyStream : MemoryStream
+    {
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException<int>(new IOException("Controlled owner body failure."));
+    }
+
     private static string CreateGatewayTestToken(
         X509Certificate2 certificate,
         string audience,
@@ -600,7 +897,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         private static readonly JsonSerializerOptions EventsJsonOptions = new(JsonSerializerDefaults.Web)
         {
-            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+            Converters =
+            {
+                new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase),
+            },
         };
 
         private readonly NpgsqlDataSource _dataSource;

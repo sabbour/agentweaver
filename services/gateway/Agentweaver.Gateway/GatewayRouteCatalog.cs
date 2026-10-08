@@ -160,7 +160,7 @@ public static class GatewayRouteCatalog
         Coordination("GET", "/sessions/{sessionId}/notifications",
             "readNotifications", "Read session notifications");
         Coordination("POST", "/sessions/{sessionId}/notifications/{notificationId:guid}/acknowledge",
-            "acknowledgeNotification", "Acknowledge a notification", body: true);
+            "acknowledgeNotification", "Acknowledge a notification");
         Coordination("POST", "/sessions/{sessionId}/messages/{messageId:guid}/acknowledge",
             "acknowledgeMessage", "Acknowledge a message", body: true);
         Coordination("GET", "/policy-evaluations/{receiptId:guid}",
