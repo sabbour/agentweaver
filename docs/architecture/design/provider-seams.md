@@ -774,10 +774,20 @@ interactive content within Agentweaver's surface panel rather than operating an
 application server or an agent sandbox.
 
 The planned adapters are A2UI and a GitHub Canvas-compatible adapter. P2 includes
-research and reverse engineering of the GitHub Canvas protocol behind this boundary.
-Compatibility is not claimed until the adapter has evidence. Both adapters use
-versioned content and action schemas, negotiated rendering capabilities, and a pinned
-renderer version. A2UI also pins its component catalog.
+research and reverse engineering behind this boundary. The
+[#1901 findings](applications-and-surfaces.md#github-canvas-evidence-and-versions)
+establish experimental declaration, typed-action callback, and lifecycle shapes;
+no portable GitHub content format, rendering catalog, or browser bridge is established.
+No interoperability was executed. [#1904](https://github.com/sabbour/agentweaver/issues/1904)
+implements only the admitted declaration/action subset after the
+[#1878](https://github.com/sabbour/agentweaver/issues/1878) C1 owner-state contract.
+
+Both adapters require bounded validated schemas, negotiated rendering capabilities,
+and immutable adapter/profile/content pins. A2UI pins its specification and component
+catalog. GitHub discovery is unversioned declaration metadata, not a content/catalog
+pin; its global SDK wire version is not a Canvas format version. The selected
+supported SDK/CLI pair and Agentweaver profile must be explicit. Reuse C1 conformance
+for instances, current authority, idempotency, reconnect, and revision affinity.
 
 Core owns surface instances, viewer authorization, workflow gates, and typed
 `surface_*` actions. A renderer cannot authorize work or mint credentials.
@@ -994,7 +1004,7 @@ volumes and Postgres-backed state, not by retaining dual local/cloud code paths.
 | --- | --- |
 | P0 Foundation | DI contracts, catalog/resolvers/pinning, conformance kit, Postgres schemas and outbox, Blob Object Store, Key Vault/workload identity, OpenTelemetry/Azure Monitor. |
 | P1 Core and defaults | Native Sessions/Memory, agent-sandbox, Azure Files, Cilium intent, AGT, GitHub, Copilot cost ledger; AgentHost startup phases, retention, reclaim, and run fencing. |
-| P2 Parity and cutover | Manifest-based suspend/resume, Guardrails, permission metadata, own Tool & MCP gateway and MCP catalog, Cosmos and Redis Memory providers, Azure BYOK pricing/budgets, built-in AKS Application Hosting, [Canvas and A2UI #1878](https://github.com/sabbour/agentweaver/issues/1878) with planned [GitHub Canvas research #1901](https://github.com/sabbour/agentweaver/issues/1901), context ordering and cache telemetry; exact-SHA AKS persona harnesses and parity-map acceptance. No Elastic SAN or additional hosting adapters. |
+| P2 Parity and cutover | Manifest-based suspend/resume, Guardrails, permission metadata, own Tool & MCP gateway and MCP catalog, Cosmos and Redis Memory providers, Azure BYOK pricing/budgets, built-in AKS Application Hosting, [Canvas and A2UI #1878](https://github.com/sabbour/agentweaver/issues/1878) with [GitHub declaration/action research #1901](https://github.com/sabbour/agentweaver/issues/1901) and separate [adapter #1904](https://github.com/sabbour/agentweaver/issues/1904), context ordering and cache telemetry; exact-SHA AKS persona harnesses and parity-map acceptance. Research is not implementation or interoperability. No Elastic SAN or additional hosting adapters. |
 | P3 After cutover | Gated AKS snapshot/restore; OpenSandbox, Agent Substrate, and Container Apps Sandboxes evaluation; agentsessions; agent filesystem providers; agentgateway. Elastic SAN has no committed delivery phase. |
 
 No P2 requirement depends on an optional P3 provider. The active 0.x line supplies behavioral parity

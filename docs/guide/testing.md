@@ -154,3 +154,37 @@ The Bicep compiler and Kustomize checks run offline. The Foundation Probe runs i
 The Azure acceptance command returns `blocked` when source receipts, target evidence, or dependent resources are missing. A missing Azure environment does not pass acceptance.
 
 Deployment requires separate approval for the exact target, subscription, source, and cost. See [Azure acceptance](./azure-acceptance) and [dedicated Azure environment](../architecture/azure).
+
+## Planned GitHub Canvas adapter acceptance
+
+These are **unexecuted requirements**, not a passing suite or current adapter support.
+Research [#1901](https://github.com/sabbour/agentweaver/issues/1901) inspected public
+declarations and fake/example scenarios; it did not run interoperability, rendering,
+or restart tests. Separate implementation
+[#1904](https://github.com/sabbour/agentweaver/issues/1904) consumes the
+[bounded declaration/action subset and evidence](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/applications-and-surfaces.md#bounded-adapter-subset).
+Reuse [#1878](https://github.com/sabbour/agentweaver/issues/1878) C1 owner-state conformance
+instead of adding another lifecycle owner.
+
+| Planned case | Required evidence |
+| --- | --- |
+| Discovery and validation | Pin the exact SDK/CLI/profile. Expose open/action schemas through retained web and applicable MCP/core catalogs. Reject duplicate or reserved `canvas.` actions, unsupported schemas, remote references, and oversized payloads before dispatch. Use C1's admitted schema subset, not an assumed upstream dialect. |
+| Ambiguous types and instance identity | Reject unqualified duplicate provider-local types. Explicit provider selection resolves one enabled kind. Re-open focuses the same bound instance; a new instance remains distinct. |
+| Artifact and presentation separation | Bind a verified immutable revision/artifact separately from the surface instance. Changed/missing bytes, unsupported content, arbitrary URLs, unsafe schemes, and unavailable renderers fail explicitly without new run pins or fallback. |
+| Agent/user action parity | Invoke the same declared action from an agent/MCP call and the authenticated UI. Validate input and derive actor/session/owner authority server-side. Assert the exact owner effect and journal attribution; browser output never approves a gate or creates a grant. |
+| Revocation and stale binding | Revoke authority before invocation and during an owner/bridge wait. No protected effect follows authority loss. Reject stale instances, spoofed identities, cross-session/tenant references, and unknown actions. |
+| Duplicate and response loss | Lose the response after owner commit. Retry with the same core operation identity and receive one durable outcome/effect. Changed input conflicts; uncertain external effects do not generate a new identity or blind retry. |
+| Warm reconnect and cold resume | Preserve the mounted panel with truthful unavailable state. Restore the same instance/revision with current authorization and a fresh URL, not a saved expired one. Respect durable removal and do not create a new run or duplicate action. |
+| Bridge and renderer failure | Preserve distinct sanitized structured outcomes for invalid input, handler failure, timeout, dropped connection, missing bytes, load failure, and unsupported capability. Provider `status: ready` alone cannot mark content render-ready. |
+| Non-destructive close | Inject `onClose` failure. Closing the view leaves run, journal, revision, and artifact intact; reopen retains the revision. Cleanup remains pending/failed until its actual owner receipt exists. |
+| Host isolation and accessibility | Accept only the expected authenticated origin/session/instance and declared action. Reject credential exposure and arbitrary message-to-tool dispatch. Exercise keyboard open/focus/form/action/close, accessible names, focus restoration, and readable failures. This tests Agentweaver's bridge, not a recovered upstream `postMessage` protocol. |
+| Revision affinity | A new adapter/content revision does not change an existing instance's accepted pins. New bindings are explicit. Exercise applicable C4 upgrade/drain/retention behavior for bundled content without making every bundle slice a prerequisite. |
+| Evidence and claim boundaries | Record exact fixtures and SDK/CLI/profile provenance. Controlled contract/web/MCP tests are not live interoperability. Separately approved exact-SHA AKS C5 acceptance must exercise real retained UI/core/MCP, reconnect, and owned cleanup before deployment/publication claims. |
+
+Implementation requires admitted research, C1, and the retained web/core action
+contracts from [#1859](https://github.com/sabbour/agentweaver/issues/1859) and
+[#1857](https://github.com/sabbour/agentweaver/issues/1857), with applicable
+[#1858](https://github.com/sabbour/agentweaver/issues/1858) MCP operations.
+It does not require all P1, the whole bundle epic, A2UI, Cosmos, Redis, or P3.
+Passing documentation checks supplies no permission for live deployment, credentials,
+paid execution, publication, or destructive cleanup.

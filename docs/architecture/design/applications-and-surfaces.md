@@ -221,7 +221,7 @@ The current source catalog does not yet implement this contract.
 | Canvas adapter | Responsibility | Phase |
 | --- | --- | --- |
 | A2UI | Render declarative packages using a pinned specification and component catalog. Forward typed actions to the existing core gates. | P2 |
-| GitHub Canvas-compatible | Research and reverse engineer GitHub Canvas content and host interactions behind an adapter. Declare only compatibility supported by evidence. | P2 |
+| GitHub Canvas-compatible | Map the researched experimental declaration, action, and lifecycle subset. A portable content format and browser bridge are not established. Implementation remains separate [#1904](https://github.com/sabbour/agentweaver/issues/1904). | P2 |
 
 GitHub Canvas is not a public standard. Compatibility work belongs inside its adapter,
 not in Agentweaver's core action protocol or a replacement UI.
@@ -230,14 +230,102 @@ metadata can approve a workflow, grant permissions, or supply credentials.
 MCP Apps remains a protocol for server-provided UI and uses the existing core action
 and outbound boundaries; it is not an additional Application Hosting adapter.
 
+### GitHub Canvas evidence and versions
+
+Research [#1901](https://github.com/sabbour/agentweaver/issues/1901) inspected accessible
+first-party source and permitted local declarations on 2026-10-08. It establishes
+declaration, callback, and lifecycle shapes, not executed Agentweaver interoperability.
+The historical reverse-engineering artifact is unavailable; no recovered private
+specification is claimed.
+
+| Evidence | Exact baseline | Evidence limit |
+| --- | --- | --- |
+| Public Node SDK | [`github/copilot-sdk` commit `2023ed29af3cae890b26f9e2a269a04d8ac7ba60`](https://github.com/github/copilot-sdk/tree/2023ed29af3cae890b26f9e2a269a04d8ac7ba60) | Experimental source declarations and callback routing, not a released renderer contract. |
+| SDK and wire metadata | [Package](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/package.json): `0.0.0-dev`, CLI pin `1.0.93-3`; [global protocol](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/sdk-protocol-version.json): `3` | Neither value is a Canvas content-format or component-catalog version. |
+| Installed permitted declarations | `canvas.d.ts`, `types.d.ts`, `generated/rpc.d.ts`, and `generated/session-events.d.ts` agree with the inspected public shapes | No installed SDK package version was independently established. |
+| Read-only app discovery | Runtime `1.0.93-1`; browser capabilities returned open/action JSON schemas and `extensionId: connection:1` | This differs from the public CLI pin. No open, action, rendering, reconnect, or integration was exercised. |
+| Released Agentweaver 0.x | `v0.34.2`, commit [`013ba5e12915b6a729763e04221c297438b1cd11`](https://github.com/sabbour/agentweaver/tree/013ba5e12915b6a729763e04221c297438b1cd11) | Existing panel and preview state, not a shipped GitHub Canvas renderer. |
+
+The inspected SDK [factory](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/canvas.ts#L45-L197),
+[RPC declarations](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/generated/rpc.ts#L8085-L8450),
+[provider types](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/types.ts#L2209-L2235),
+and [lifecycle events](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/generated/session-events.ts#L13189-L13560)
+support the matrix below. The [Node examples/tests](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/test/e2e/canvas.e2e.test.ts)
+use a fixed counter result and an example URL. The
+[Python resume scenario](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/python/e2e/test_scenario_canvas_e2e.py)
+uses a fake CLI. These tests were inspected, not executed, and do not prove browser
+rendering, state synchronization, or live restart recovery.
+
+### Compatibility and unknowns
+
+In this table, **observed** means inspected source or successful read-only discovery.
+The proposed mapping is not current adapter support.
+
+| Area | Observed GitHub contract | Proposed Agentweaver mapping and limit |
+| --- | --- | --- |
+| Declaration | Type ID, display metadata, optional open-input schema, and named action schemas; handlers remain in-process and are stripped from declarations. | Map inert metadata to a trusted enabled C1 kind. A declaration is not an executable bundle or immutable content record. |
+| Catalog and versions | Discovery returns provider/type IDs and action schemas. | Pin the tested upstream baseline, adapter/profile, and owned content revision. Discovery and global wire version `3` are not a versioned rendering catalog. |
+| Type and provider identity | `canvasId` is provider-local; `extensionId` disambiguates it. Types also declare stable `extensionInfo` and `canvasProvider.id`. | Resolve the exact pair without first-match fallback. A transient `connection:1` is not durable ownership or authority; stable-field behavior on the observed runtime is untested. |
+| Instance and artifact identity | Caller-selected `instanceId`; re-open focuses that instance. Open snapshots include URL/input/title/status. | Keep the session instance separate from a verified artifact/application revision. A URL or instance does not supply artifact digest, storage ownership, grant, or run pins. |
+| Typed action | Handler receives session/provider/type/instance IDs, action name, input, and optional host/session context; `canvas.` action names are reserved. | Dispatch through the same core path for agent and authenticated user actions. Core supplies actor authority, operation identity and fence; the upstream shape supplies none of these proofs or an output schema. |
+| Provider callback bridge | `canvas.open`, `canvas.close`, and `canvas.action.invoke` callbacks; optional URL/title/status results. | Translate callbacks at the Canvas boundary. This is not an iframe `postMessage`, DOM, state-replication, or generic browser-action contract. Working directory is not a file capability. |
+| Renderer availability | `requestCanvasRenderer` opts into model-facing tools; host capabilities advertise Canvas support. | Negotiate supported rendering and verify loaded content separately. Opt-in, capability presence, and free-form `status: ready` are not viewer authorization or render-readiness evidence. |
+| Lifecycle and reconnect | Opened/closed/registry-changed, transient unavailable, durable recorded, and removed events. Recorded state excludes URL and availability; reconnect opens the same instance with a fresh URL. | Keep the panel mounted with truthful unavailable state. Reauthorize and restore the same binding/revision without a new run, saved expired URL, or replay of uncertain effects. Live restart remains untested. |
+| Errors | `CanvasError(code,message)` becomes JSON-RPC `-32603` with code/message data; unexpected failures use `canvas_handler_error`. | Preserve sanitized structured errors under existing conventions. The complete upstream invalid-input taxonomy and schema dialect are unknown. |
+| Close and cleanup | `onClose` is best-effort; the outer close RPC can resolve despite a handler failure. | Closing removes the view, not its run or artifact. Only the resource owner and its receipt establish cleanup or action settlement. |
+| Deployment | Read-only browser capability discovery succeeded. | No Agentweaver AKS/web/MCP/SDK interoperability was executed. Native Office/terminal, desktop integration, and arbitrary extensions are outside the evidence. |
+
+The released 0.x [run page](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/pages/CoordinatorRunPage.tsx#L5141-L5325)
+has slide panels and a separate preview dialog; closing the dialog does not stop the
+preview. Its [preview state](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/state/runPreviewState.ts)
+requires current assembly and server-backed readiness evidence. Inspected
+[reload tests](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/__tests__/CoordinatorRunPage.test.tsx#L1591-L1664)
+and [preview-state tests](https://github.com/sabbour/agentweaver/blob/013ba5e12915b6a729763e04221c297438b1cd11/apps/web/src/__tests__/CoordinatorRunPage.coordUx.test.tsx#L229-L332)
+support reuse of those presentation and truthful-state patterns. Do not reuse
+sandbox port-forward identity as Canvas artifact identity. The inspected released
+tree contains no GitHub Canvas or A2UI implementation; roadmap entries are not shipped parity.
+
+### Bounded adapter subset
+
+The initial [#1904](https://github.com/sabbour/agentweaver/issues/1904) target is
+**GitHub Canvas declaration/action compatibility**, not full native renderer interoperability.
+It includes trusted declaration/discovery mapping, create/focus/describe/invoke/close
+semantics, one controlled renderer using verified owned assets, and one declared
+typed action through the existing core path. Reconnect preserves instance and revision;
+uncertain actions remain unsettled until their effect owner supplies an outcome.
+
+The optional upstream URL is transient presentation data, not permission to fetch
+arbitrary web or file content. Agentweaver must implement its authenticated retained-web
+bridge; the research does not establish an upstream browser bridge. Use the schema
+subset and payload bounds admitted by C1. Freeze missing bounds there before claiming
+schema validation; do not assume a GitHub schema dialect.
+
+Unsupported scope includes arbitrary extension or package-handler execution,
+a cloned GitHub content format or component catalog, unrestricted URL/file rendering,
+generic JavaScript bridge compatibility, native desktop integration, bidirectional
+state replication, exactly-once external effects, and cleanup implied by close.
+Renderer metadata cannot authorize publication, hosting, workflow execution, or access.
+If arbitrary existing GitHub Canvas content is required, its absent portable content,
+asset, and browser-bridge contract remains a blocker; this narrower subset does not satisfy it.
+
+Implementation requires the admitted research and [#1878](https://github.com/sabbour/agentweaver/issues/1878)
+C1 contract/owner-state slice, retained-web/core action contracts from
+[#1859](https://github.com/sabbour/agentweaver/issues/1859) and
+[#1857](https://github.com/sabbour/agentweaver/issues/1857), and applicable
+[#1858](https://github.com/sabbour/agentweaver/issues/1858) MCP operations.
+It does not wait for the whole bundle epic, all P1, A2UI, Memory adapters, or P3.
+The [planned acceptance cases](../../guide/testing.md#planned-github-canvas-adapter-acceptance)
+remain unexecuted. Integrated exact-SHA AKS acceptance requires separate target,
+access, cost, and owned-cleanup approval; research and documentation checks supply none.
+
 ```mermaid
 flowchart LR
     Revision["Verified application or canvas revision"] --> Hosting["Application Hosting: built-in AKS web runtime"]
-    Revision --> Canvas["Canvas provider: A2UI or GitHub Canvas-compatible"]
+    Revision --> Canvas["Canvas: A2UI renderer or researched GitHub compatibility mapping"]
     Hosting --> Route["Authenticated application route"]
     Canvas --> Panel["Agentweaver surface panel"]
-    Panel --> Actions["Typed surface actions"]
-    Actions --> Core["Core authorization, workflow and policy gates"]
+    Panel --> Actions["Authenticated typed surface actions"]
+    Actions --> Core["Core lifecycle, authorization, operation identity and workflow gates"]
 ```
 
 ## Surface panel
@@ -260,7 +348,7 @@ same core enforcement gates.
 | Kind | Presentation | Action boundary |
 | --- | --- | --- |
 | Application | Sandboxed iframe for `live`, `preview`, or `published`, showing stage and exact revision ([#665](https://github.com/sabbour/agentweaver/issues/665)). | Authenticated app-router route and application permissions. |
-| Canvas | A2UI packages or GitHub Canvas-compatible content rendered by the selected Canvas adapter. | Typed action bound to the specified workflow or gate; content alone cannot authorize it. |
+| Canvas | A2UI packages or verified owned assets under the researched GitHub declaration/action profile. No portable GitHub renderer format is established. | Typed action bound to the specified workflow or gate; content alone cannot authorize it. |
 | MCP App | Sandboxed iframe for an MCP server's `ui://` resource. | UI-initiated tool calls pass core tool authorization, audit, and outbound controls. |
 | Built-in | Diff/review, Markdown document editor, read-only logs/terminal, and workflow graph. | Each built-in declares its allowed actions; a read-only view remains read-only. |
 
@@ -304,6 +392,8 @@ These are standards where standards exist. GitHub Canvas reverse engineering doe
 turn its protocol into a standard. Surface instances, input and action schemas, and
 MCP `surface_*` tools remain Agentweaver-defined.
 Canvas is the renderer seam; format versions and component catalogs are its pinned configuration.
+For the GitHub subset, pin Agentweaver's supported profile and owned content revision;
+do not invent an upstream format or component-catalog version from discovery metadata.
 
 ## Ownership
 

@@ -382,8 +382,11 @@ Their current source acceptance remains under
   Add the separate [Canvas seam and A2UI renderer #1878](https://github.com/sabbour/agentweaver/issues/1878),
   [GitHub Canvas research #1901](https://github.com/sabbour/agentweaver/issues/1901),
   image publication, publish gate, and application/MCP App/built-in surfaces.
-  Research is planned, not performed; the [supported adapter #1904](https://github.com/sabbour/agentweaver/issues/1904)
-  depends on that research and the Canvas contract.
+  The [research findings](../design/applications-and-surfaces.md#github-canvas-evidence-and-versions)
+  establish experimental declarations, actions, and lifecycle shapes, not a portable
+  renderer contract or executed interoperability. The
+  [supported adapter #1904](https://github.com/sabbour/agentweaver/issues/1904)
+  depends on admitted findings and the Canvas C1 contract; it remains unimplemented.
   Elastic SAN and additional Application Hosting providers are outside this scope.
   Close parity against these explicit dispositions, pass API/UI/MCP harnesses, and cut over.
 - **P3 — After cutover.** Consider gated AKS pod snapshot/restore, OpenSandbox,
@@ -424,7 +427,7 @@ the design contains the failure mode.
 | R22 | An active 0.x line keeps moving the parity target. | Decided | Set a cut line once the map is complete; later changes enter the 1.0 backlog rather than blocking cutover. |
 | R23 | Persona harness coverage could arrive too late. | Decided | Run API/UI/MCP harnesses on exact-SHA AKS deployments from the end of P1; require all green at cutover. |
 | R24 | Sandbox options, viewer auth, and application hosting can be confused. | Decided | Keep only built-in AKS Application Hosting for now. Evaluate Container Apps Sandboxes under the Sandbox seam in P3. Gateway/Identity retains viewer authorization. Defer [#666](https://github.com/sabbour/agentweaver/issues/666)/[#667](https://github.com/sabbour/agentweaver/issues/667) hosting adapters. |
-| R25 | A2UI versions and the nonstandard GitHub Canvas protocol can change. | Mitigated | Isolate A2UI and GitHub Canvas compatibility behind the P2 Canvas seam. Pin renderer versions and catalogs; reverse engineering does not grant action authority or claim compatibility before evidence exists. |
+| R25 | A2UI versions and experimental GitHub Canvas declarations/actions can change; a portable GitHub renderer contract is not established. | Mitigated | Isolate compatibility behind the P2 Canvas seam. Pin A2UI specification/catalog and each adapter/profile/content revision; GitHub discovery is not a rendering catalog. Preserve core action authority and require executed acceptance before claiming interoperability. |
 
 ## Consequences
 
