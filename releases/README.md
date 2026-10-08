@@ -327,14 +327,20 @@ The manual workflow has a separate publication choice.
   expected package or image artifact exists for each component rather
   than trusting a nonempty output directory. `release:pack` never pushes a
   package to a feed.
-  Every component requires a checked-in `packages.lock.json`.
-  Services use native .NET `PublishContainer` with an explicit immutable
+  .NET components retain their checked-in `packages.lock.json`; `Agentweaver.Web`
+  is pinned by its committed `apps/web/package-lock.json`.
+  .NET services use native `PublishContainer` with an explicit immutable
   `<ContainerBaseImage>...@sha256:...</ContainerBaseImage>` in their project.
   Exactly one active declaration is required; XML comments do not supply a pin.
   Multiple active declarations, including conditional declarations, block preparation.
   The validated digest is passed explicitly to Release build and container publication.
   A Debug-only project condition cannot select an unpinned SDK default instead.
   The SDK writes a local `<id>.<version>.tar.gz` image archive without a registry push.
+  Web packing instead builds from its locked npm dependencies and committed Dockerfile,
+  whose base images must be digest-pinned and already available locally. It writes a
+  local `<id>.<version>.tar` archive without pulling or pushing. Its provenance binds
+  the exact source tree, npm manifests, Dockerfile, build output, image ID, base-image
+  digests, source/version labels, and `linux/amd64` platform.
   Provenance records lock hashes and image archive hashes, not fabricated registry digests.
   A failed preparation produces no completed provenance.
   Partial output must not mix with a later run.
@@ -390,6 +396,9 @@ Existing claim or result refs, ambiguous responses, and API errors block publica
 The script never overwrites or deletes these refs.
 It pushes packages with native `dotnet nuget push`.
 It loads prepared service images with Docker, then pushes their exact version tags.
+For `Agentweaver.Web`, publication revalidates the committed source and prepared
+image provenance, then checks the loaded image ID, `linux/amd64` platform, and
+source/version labels before registry login, tagging, or push.
 `publication.json` records package hashes and actual immutable registry digests at the source SHA.
 The workflow uploads that receipt separately.
 The script does not modify the draft composition or fabricate deployment evidence.

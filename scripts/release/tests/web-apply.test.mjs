@@ -6,6 +6,7 @@ import test from 'node:test';
 import { applyPlan } from '../apply.mjs';
 import { diffChanges, validateChangesets } from '../changesets.mjs';
 import { createPlan } from '../plan.mjs';
+import { preparationFiles } from '../preparation.mjs';
 
 const component = {
   id: 'Agentweaver.Web',
@@ -69,12 +70,38 @@ test('apply updates both package version mirrors while preserving npm dependency
   assert.deepEqual(result.applied, ['Agentweaver.Web']);
   assert.equal(readJson(root, 'apps/web/package.json').version, '0.2.0');
   const lock = readJson(root, 'apps/web/package-lock.json');
+  assert.equal(lock.version, '0.2.0');
   assert.equal(lock.packages[''].version, '0.2.0');
   assert.equal(lock.packages[''].dependencies.react, '^19.0.0');
   assert.equal(lock.packages['node_modules/react'].version, '19.0.0');
   assert.equal(lock.packages['node_modules/react'].integrity, 'sha512-fixed');
   assert.equal(readManifest(root).components[0].version, '0.2.0');
   assert.deepEqual(applyPlan(plan, manifestPath(root), { root }).skipped, ['Agentweaver.Web']);
+});
+
+test('apply rejects a mismatched top-level lockfile version before writing', (t) => {
+  const root = initRepo(t);
+  const plan = planFor(root);
+  const lockPath = path.join(root, 'apps', 'web', 'package-lock.json');
+  const lock = readJson(root, 'apps/web/package-lock.json');
+  lock.version = '0.2.0';
+  writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+  assert.throws(() => applyPlan(plan, manifestPath(root), { root }),
+    /checked-in apps\/web\/package-lock\.json version must match 0\.1\.0/);
+  assert.equal(readJson(root, 'apps/web/package.json').version, '0.1.0');
+  const unchangedLock = readJson(root, 'apps/web/package-lock.json');
+  assert.equal(unchangedLock.version, '0.2.0');
+  assert.equal(unchangedLock.packages[''].version, '0.1.0');
+});
+
+test('preparation preserves the file and read error when an npm mirror cannot be read', (t) => {
+  const root = initRepo(t);
+  const plan = planFor(root);
+  const manifestText = readFileSync(manifestPath(root), 'utf8');
+  assert.throws(() => preparationFiles(manifestText, plan, '2026-10-08T00:00:00.000Z', (file) => {
+    if (file === 'apps/web/package-lock.json') throw new Error('simulated lockfile I/O failure');
+    return readFileSync(path.join(root, file), 'utf8');
+  }), /release preparation: apps\/web\/package\.json: cannot read npm version mirrors: simulated lockfile I\/O failure/);
 });
 
 test('rollback restores package.json and package-lock.json when the lockfile rename fails', (t) => {

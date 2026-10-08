@@ -76,14 +76,23 @@ npm --prefix apps/web run build
 
 ## Contract limits
 
-The current Gateway contract does not expose run creation or scheduling, child
-session creation, or journal object-content reads. The client therefore opens
-existing runs, addresses messages only between existing active sessions, and
-shows opaque journal references without inventing transcript content. Provider
-and model references are shown as configuration metadata, not as runtime
-bindings; absent runtime model IDs or provisioned provider pins are called out
-as unavailable. Usage totals distinguish priced and unpriced events and do not
-replace missing measurements with zero.
+The Gateway exposes owner routes for accepting a supplied run-root identity,
+proposing typed outcome/workflow/work-plan decisions, asking a coordinator
+question, requesting approval, and registering, spawning, or forking child
+sessions. These are owner-authoritative state operations; root or spawn
+acceptance is not proof that a model run was scheduled or completed. The browser
+client currently opens existing run IDs and does not expose root-acceptance,
+proposal, or child registration/spawn/fork controls. It can message existing
+sessions and request supported detach/archive actions. The Gateway does not
+expose journal object-content reads, so the client shows opaque references
+without inventing transcript content.
+
+The accepted selection contains provider candidates and a model-selection
+reference, not a provisioned provider pin or runtime SDK model ID. Usage is
+returned as run totals without per-event model-binding details. The UI reports
+those runtime identities as unavailable rather than inferring them from
+configuration or usage. Usage totals distinguish priced and unpriced events
+and do not replace missing measurements with zero.
 
 This documentation describes the v1 source client only. It does not establish
 that the web image, Gateway, Broker, or owner services have been published or

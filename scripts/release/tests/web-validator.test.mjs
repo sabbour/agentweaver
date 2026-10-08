@@ -18,12 +18,12 @@ const manifest = () => ({
   compatibility: [],
 });
 const packageJson = (version = '0.1.0') => JSON.stringify({ name: 'web', version, dependencies: { react: '^19.0.0' } }, null, 2);
-const packageLock = (version = '0.1.0', dependency = '19.0.0') => JSON.stringify({
+const packageLock = (version = '0.1.0', dependency = '19.0.0', rootVersion = version) => JSON.stringify({
   name: 'web',
   version,
   lockfileVersion: 3,
   packages: {
-    '': { name: 'web', version, dependencies: { react: dependency } },
+    '': { name: 'web', version: rootVersion, dependencies: { react: dependency } },
     'node_modules/react': { version: dependency },
   },
 }, null, 2);
@@ -58,6 +58,10 @@ test('rejects an npm package version or root lockfile version drift', (t) => {
   assert.throws(() => withFiles(t, {
     'apps/web/package.json': packageJson(),
     'apps/web/package-lock.json': packageLock('0.2.0'),
+  }), /package-lock\.json version must match 0\.1\.0/);
+  assert.throws(() => withFiles(t, {
+    'apps/web/package.json': packageJson(),
+    'apps/web/package-lock.json': packageLock('0.1.0', '19.0.0', '0.2.0'),
   }), /packages\[""\]\.version must match 0\.1\.0/);
 });
 

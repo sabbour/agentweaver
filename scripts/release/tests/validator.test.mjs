@@ -84,6 +84,12 @@ const projects = new Map(fixture.components.map((component) => {
   return [component.project,
     `<Project><PropertyGroup><Version>${component.version}</Version></PropertyGroup>${itemGroup}</Project>`];
 }));
+const webComponent = fixture.components.find(({ id }) => id === 'Agentweaver.Web');
+if (webComponent) {
+  projects.set(webComponent.project, JSON.stringify({ version: webComponent.version }));
+  projects.set('apps/web/package-lock.json',
+    JSON.stringify({ version: webComponent.version, packages: { '': { version: webComponent.version } } }));
+}
 const readProject = (file) => {
   const relative = path.relative(root, file).replaceAll('\\', '/');
   if (!projects.has(relative)) throw new Error(`missing ${relative}`);
@@ -259,6 +265,7 @@ test('scans both XML quote forms and ignores commented-out versions and referenc
     readProject: (file) => {
       const relative = path.relative(root, file).replaceAll('\\', '/');
       const component = componentByProject.get(relative);
+      if (relative === webComponent.project || relative === 'apps/web/package-lock.json') return readProject(file);
       if (!component) throw new Error(`missing ${relative}`);
       return `<Project><PropertyGroup><Version>${component.version}</Version></PropertyGroup><!-- <Version>9.0.0</Version><ProjectReference Include='Unpinned.csproj' /> --></Project>`;
     },
