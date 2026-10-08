@@ -260,7 +260,7 @@ other services.
 | Snapshots | Capture and explicitly restore environments | Environment manager | `None` at cutover; gated AKS Blob-backed pod snapshots | OpenSandbox-native; managed-runtime snapshots after Azure support | Exclusive, paired |
 | Sandbox | Provision, observe, fence, and release AgentHost environments | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; Container Apps Sandboxes (P3 evaluation) | Exclusive |
 | Storage | Durable agent workspace volumes and bindings | Environment manager | Azure Files CSI | Elastic SAN deferred outside P2; future agent filesystem providers | Exclusive |
-| Memory | Authoritative knowledge records and retrieval | Knowledge | Native Postgres | Cosmos and Redis providers (P2) | Exclusive |
+| Memory | Authoritative knowledge records and retrieval | Knowledge | Native Postgres | Cosmos source candidate; Redis (P2) | Exclusive |
 | Policy | Decide permitted actions through AGT | Orchestrator | AGT .NET kernel, YAML rules | —; other rule languages configure AGT, not another adapter | Platform-singleton |
 | Guardrails | Classify untrusted model inputs/results/output | Orchestrator | Azure AI Content Safety Prompt Shields for supported checks | Purview DLP; Llama Guard/Prompt Guard; NeMo Guardrails | Ordered composite |
 | Network Policy | Materialize and verify egress intent | Environment manager | Cilium L3/L4/FQDN; own Tool & MCP gateway L7 | Plain Kubernetes NetworkPolicy where sufficient; agentgateway L7 | Layered |
@@ -567,14 +567,17 @@ contract absorbs changes to future volume APIs
 ## Memory
 
 **Owner:** Knowledge. **Cardinality:** exclusive. Native Postgres remains the default.
-Cosmos and Redis providers join in P2 behind the same Memory contract. Each selected
-provider owns its authoritative memory records, decisions, session context, and revisions;
+The optional `cosmos.memory` source candidate joins it behind the same Memory contract;
+Redis remains planned P2 work. Each selected provider owns its authoritative memory
+records, decisions, session context, revisions, and accepted-effect delivery state.
 Knowledge keeps the authorization, context composition, and provider-binding boundary.
 The Sessions journal and transactional control-plane state remain in PostgreSQL.
 
 The contract reads, writes, searches, and versions records within project and agent
 authorization. Every adapter must preserve revision checks, idempotency, proposal
-promotion, scope isolation, and durable retention before enablement. Redis is a Memory
+promotion, scope isolation, and durable retention before enablement. Cosmos validates
+an existing `/projectId`-partitioned container, its required search composite index,
+and its non-expiring default TTL; it never provisions the container. Redis is a Memory
 provider, not merely a cache in front of PostgreSQL; its persistence and eviction policy
 must not discard authoritative records. No run silently switches providers after a failure.
 Read-only workspace projections remain views, not another writable store. No particular

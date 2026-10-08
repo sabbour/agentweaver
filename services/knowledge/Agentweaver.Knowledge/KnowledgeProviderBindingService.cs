@@ -33,6 +33,23 @@ public sealed class KnowledgeProviderBindingService(
         string projectId,
         string runId,
         CancellationToken cancellationToken)
+        => await ResolveAsync(authority, projectId, runId, allowCreate: true, cancellationToken)
+            .ConfigureAwait(false);
+
+    public async Task<KnowledgeProviderContext> ResolveExistingAndVerifyAsync(
+        ProjectAuthorizationContextResponse authority,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+        => await ResolveAsync(authority, projectId, runId, allowCreate: false, cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task<KnowledgeProviderContext> ResolveAsync(
+        ProjectAuthorizationContextResponse authority,
+        string projectId,
+        string runId,
+        bool allowCreate,
+        CancellationToken cancellationToken)
     {
         ProjectsConfigClient.RequireRunSelectionPermission(authority, projectId);
         var selection = await projects.GetRunSelectionAsync(projectId, runId, cancellationToken)
@@ -100,16 +117,23 @@ public sealed class KnowledgeProviderBindingService(
 
         var negotiation = await provider.NegotiateAsync(candidate, cancellationToken)
             .ConfigureAwait(false);
-        var pinned = resolver.Pin(runId, candidate, options.ResourceId, negotiation);
+        var pinned = resolver.Pin(runId, candidate, negotiation.Resource.ResourceId, negotiation);
         if (!pinned.IsSuccess || pinned.Value is null)
             throw new KnowledgeProviderUnavailableException(
                 pinned.Error?.Message ?? "The selected Memory provider resource could not be pinned.");
 
-        await PersistOrVerifyBindingAsync(
-            projectId,
-            selection,
-            pinned.Value,
-            cancellationToken).ConfigureAwait(false);
+        if (allowCreate)
+            await PersistOrVerifyBindingAsync(
+                projectId,
+                selection,
+                pinned.Value,
+                cancellationToken).ConfigureAwait(false);
+        else
+            await VerifyPersistedBindingAsync(
+                projectId,
+                selection,
+                pinned.Value,
+                cancellationToken).ConfigureAwait(false);
         RecordPinnedBinding(selected.ProviderId, pinned.Value);
         return new KnowledgeProviderContext(
             provider,
@@ -158,6 +182,33 @@ public sealed class KnowledgeProviderBindingService(
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        await VerifyBindingAsync(connection, transaction, projectId, selection, binding, cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task VerifyPersistedBindingAsync(
+        string projectId,
+        ProjectRunSelectionResponse selection,
+        PinnedProviderBinding binding,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await VerifyBindingAsync(connection, transaction, projectId, selection, binding, cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task VerifyBindingAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        ProjectRunSelectionResponse selection,
+        PinnedProviderBinding binding,
+        CancellationToken cancellationToken)
+    {
+        var schema = $"\"{options.Schema}\"";
         await using (var read = new NpgsqlCommand($"""
             SELECT project_revision, project_configuration_revision, context_revision,
                    provider_id, adapter_version,
@@ -171,7 +222,8 @@ public sealed class KnowledgeProviderBindingService(
             read.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, selection.RunId);
             await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                throw new KnowledgeStorageUnavailableException();
+                throw new KnowledgeProviderUnavailableException(
+                    "This run has no persisted Memory provider binding.");
             using var document = JsonDocument.Parse(reader.GetString(9));
             var persistedCapabilities = document.RootElement.EnumerateArray()
                 .Select(item => item.GetString() ?? string.Empty)
@@ -191,7 +243,6 @@ public sealed class KnowledgeProviderBindingService(
                     "This run already has a different immutable Memory provider binding.",
                     StatusCodes.Status409Conflict);
         }
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static void RecordPinnedBinding(string selectedProviderId, PinnedProviderBinding binding)

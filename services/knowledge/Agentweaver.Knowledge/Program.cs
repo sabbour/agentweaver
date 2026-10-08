@@ -8,6 +8,7 @@ using Agentweaver.Providers;
 using Agentweaver.Telemetry;
 using Azure.Core;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.Azure.Cosmos;
 using Npgsql;
 
 var migrate = args.SequenceEqual(["--migrate"], StringComparer.Ordinal);
@@ -41,9 +42,12 @@ var runtimeConnection = KnowledgePostgresDataSource.ReadRuntimeConnection(builde
 var runtimeCredential = KnowledgePostgresDataSource.CreateCredential(runtimeConnection);
 var dataSource = KnowledgePostgresDataSource.Create(runtimeConnection.ConnectionString, runtimeCredential);
 var providerCatalog = ProviderCatalogConfiguration.Load(builder.Configuration);
+var cosmosMemoryOptions = CosmosMemoryOptions.ReadOptional(builder.Configuration);
 
 builder.Services.AddSingleton(runtimeOptions);
 builder.Services.AddSingleton(runtimeOptions.MemoryProvider);
+if (cosmosMemoryOptions is not null)
+    builder.Services.AddSingleton(cosmosMemoryOptions);
 builder.Services.AddSingleton<TokenCredential>(runtimeCredential);
 builder.Services.AddSingleton<NpgsqlDataSource>(dataSource);
 builder.Services.AddSingleton(TimeProvider.System);
@@ -54,14 +58,35 @@ builder.Services.AddSingleton<NativePostgresMemoryProvider>();
 builder.Services.AddSingleton(services => new PostgresOutbox(
     services.GetRequiredService<NpgsqlDataSource>(),
     runtimeOptions.MemoryProvider.Schema));
+if (cosmosMemoryOptions is not null)
+{
+    builder.Services.AddSingleton(services => new CosmosClient(
+        cosmosMemoryOptions.Endpoint.AbsoluteUri,
+        services.GetRequiredService<TokenCredential>(),
+        new CosmosClientOptions
+        {
+            SerializerOptions = new CosmosSerializationOptions
+            {
+                PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase
+            }
+        }));
+    builder.Services.AddSingleton<ICosmosMemoryDocumentStore, CosmosMemoryDocumentStore>();
+    builder.Services.AddSingleton<CosmosMemoryProvider>();
+}
 builder.Services.AddSingleton<IMemoryProvider>(services =>
     services.GetRequiredService<NativePostgresMemoryProvider>());
 builder.Services.AddSingleton<IReadOnlyDictionary<string, IMemoryProvider>>(services =>
-    ImmutableDictionary.CreateRange(
-        StringComparer.Ordinal,
-        [new KeyValuePair<string, IMemoryProvider>(
-            services.GetRequiredService<NativePostgresMemoryProvider>().Descriptor.Id,
-            services.GetRequiredService<NativePostgresMemoryProvider>())]));
+{
+    var providers = ImmutableDictionary.CreateBuilder<string, IMemoryProvider>(StringComparer.Ordinal);
+    var nativeProvider = services.GetRequiredService<NativePostgresMemoryProvider>();
+    providers.Add(nativeProvider.Descriptor.Id, nativeProvider);
+    if (cosmosMemoryOptions is not null)
+    {
+        var cosmosProvider = services.GetRequiredService<CosmosMemoryProvider>();
+        providers.Add(cosmosProvider.Descriptor.Id, cosmosProvider);
+    }
+    return providers.ToImmutable();
+});
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<ProjectsConfigClient>(client =>
     client.BaseAddress = runtimeOptions.ProjectsConfigBaseAddress)
@@ -100,6 +125,12 @@ VerifyNativeProviderRegistration(
     providerCatalog,
     app.Services.GetRequiredService<NativePostgresMemoryProvider>(),
     runtimeOptions.MemoryProvider);
+if (cosmosMemoryOptions is not null &&
+    providerCatalog.TryGetProvider(CosmosMemoryProvider.ProviderId, out _))
+    VerifyCosmosProviderRegistration(
+        providerCatalog,
+        app.Services.GetRequiredService<CosmosMemoryProvider>(),
+        cosmosMemoryOptions);
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
@@ -139,6 +170,23 @@ static void VerifyNativeProviderRegistration(
             provider.Descriptor.AdvertisedCapabilities))
         throw new InvalidOperationException(
             "The provider catalog owner must register the exact native PostgreSQL Memory descriptor and options revision.");
+}
+
+static void VerifyCosmosProviderRegistration(
+    ProviderCatalog catalog,
+    CosmosMemoryProvider provider,
+    CosmosMemoryOptions options)
+{
+    if (!catalog.TryGetProvider(provider.Descriptor.Id, out var registration) ||
+        registration is null ||
+        registration.Descriptor.Seam != ProviderSeam.Memory ||
+        registration.Descriptor.AdapterVersion != provider.Descriptor.AdapterVersion ||
+        registration.Descriptor.OptionsSchemaVersion != options.OptionsSchemaVersion ||
+        registration.OptionsSchemaVersion != options.OptionsSchemaVersion ||
+        !string.Equals(registration.OptionsRevision, options.OptionsRevision, StringComparison.Ordinal) ||
+        !registration.Descriptor.AdvertisedCapabilities.SetEquals(provider.Descriptor.AdvertisedCapabilities))
+        throw new InvalidOperationException(
+            "The provider catalog owner must register the exact Cosmos Memory descriptor and options revision.");
 }
 
 public partial class Program;

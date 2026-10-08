@@ -197,6 +197,8 @@ public sealed class KnowledgeAcceptedEffectReceiptClient(
     };
 
     public async Task<AcceptedEffectReceipt> ReadAsync(
+        string projectId,
+        string runId,
         Guid receiptId,
         CancellationToken cancellationToken)
     {
@@ -204,7 +206,9 @@ public sealed class KnowledgeAcceptedEffectReceiptClient(
         if (headers.Error is not null)
             throw new ProjectFactApiException(headers.Error, StatusCodes.Status401Unauthorized);
         using var request = new HttpRequestMessage(
-            HttpMethod.Get, $"/internal/accepted-effects/{receiptId:D}");
+            HttpMethod.Get,
+            $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
+            $"/accepted-effects/{receiptId:D}");
         request.Headers.Authorization = headers.Authorization;
         if (headers.TenantSelector is not null)
             request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", headers.TenantSelector);
@@ -377,13 +381,20 @@ public sealed class AcceptedEffectApplicationService(
         AcceptedEffectDeliveryRequest request,
         CancellationToken cancellationToken)
     {
-        if (request.ReceiptId == Guid.Empty || request.SchemaVersion < 1 || request.EventVersion < 1)
+        if (request.ReceiptId == Guid.Empty ||
+            !ValidIdentifier(request.ProjectId) ||
+            !ValidIdentifier(request.RunId) ||
+            request.SchemaVersion < 1 ||
+            request.EventVersion < 1)
             throw new ProjectFactApiException("invalid_request", StatusCodes.Status400BadRequest);
         var caller = ValidateCaller(principal, options);
-        var receipt = await receipts.ReadAsync(request.ReceiptId, cancellationToken);
+        var receipt = await receipts.ReadAsync(
+            request.ProjectId, request.RunId, request.ReceiptId, cancellationToken);
         if (receipt.ReceiptId != request.ReceiptId)
             throw new ProjectFactConflictException();
-        if (request.SchemaVersion != receipt.SchemaVersion ||
+        if (!string.Equals(request.ProjectId, receipt.ProjectId, StringComparison.Ordinal) ||
+            !string.Equals(request.RunId, receipt.RunId, StringComparison.Ordinal) ||
+            request.SchemaVersion != receipt.SchemaVersion ||
             request.EventVersion != receipt.EventVersion)
             throw new ProjectFactConflictException();
         ValidateReceipt(receipt, options);

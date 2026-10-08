@@ -10,9 +10,11 @@ public static class MemoryProviderCapabilities
     public const string Revisions = "memory.records.revisions";
     public const string PromoteProposals = "memory.proposals.promote";
     public const string ComposeContext = "memory.context.compose";
+    public const string AcceptedEffectDelivery = "memory.accepted-effects.delivery";
 
     public static ImmutableHashSet<string> All { get; } = ImmutableHashSet.Create(
-        StringComparer.Ordinal, Read, Write, Search, Revisions, PromoteProposals, ComposeContext);
+        StringComparer.Ordinal, Read, Write, Search, Revisions, PromoteProposals, ComposeContext,
+        AcceptedEffectDelivery);
 }
 
 public enum KnowledgeRecordKind
@@ -200,8 +202,18 @@ public sealed record AcceptedEffectReceipt(
 
 public sealed record AcceptedEffectDeliveryRequest(
     Guid ReceiptId,
+    string ProjectId,
+    string RunId,
     int SchemaVersion,
     int EventVersion);
+
+public sealed record AcceptedEffectDeliveryState(
+    AcceptedEffectReceipt Receipt,
+    bool IsDelivered);
+
+public sealed record AcceptedEffectDeliveryLease(
+    AcceptedEffectReceipt Receipt,
+    Guid LeaseToken);
 
 public sealed record ProjectFactAcknowledgment(
     Guid ReceiptId,
@@ -270,6 +282,40 @@ public interface IMemoryProvider
 
     Task<AcceptedEffectReceipt?> ReadAcceptedEffectReceiptAsync(
         Guid receiptId,
+        CancellationToken cancellationToken = default);
+
+    Task<AcceptedEffectReceipt?> ReadAcceptedEffectReceiptAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        CancellationToken cancellationToken = default);
+
+    Task<AcceptedEffectDeliveryState?> ReadAcceptedEffectDeliveryAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        CancellationToken cancellationToken = default);
+
+    Task<AcceptedEffectDeliveryLease?> ClaimAcceptedEffectDeliveryAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        string workerId,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> ReleaseAcceptedEffectDeliveryAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        Guid leaseToken,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> AcknowledgeAcceptedEffectDeliveryAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        Guid leaseToken,
         CancellationToken cancellationToken = default);
 
     Task<KnowledgeContextCandidates> ReadContextCandidatesAsync(

@@ -291,6 +291,35 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         Assert.True((bool)(await status.ExecuteScalarAsync())!);
     }
 
+    [Fact]
+    public async Task ScopedAcceptedEffectReceiptDoesNotCreateMissingMemoryProviderBinding()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/internal/projects/project-a/runs/run-a/accepted-effects/{Guid.NewGuid():D}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+
+        using var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains("memory_provider_unavailable", body, StringComparison.Ordinal);
+        Assert.Contains("no persisted Memory provider binding", body, StringComparison.Ordinal);
+        Assert.Equal(
+            ["/api/authorization/context", "/api/projects/project-a/runs/run-a/selection"],
+            owner.Paths.ToArray());
+
+        await using var connection = await database.DataSource.OpenConnectionAsync();
+        await using var bindingCount = new NpgsqlCommand(
+            $"SELECT count(*) FROM \"{database.Options.Schema}\".memory_provider_bindings",
+            connection);
+        Assert.Equal(0L, (long)(await bindingCount.ExecuteScalarAsync())!);
+    }
+
     private async Task<WebApplication> CreateAppAsync(
         NativePostgresMemoryProviderTests.KnowledgeDatabase database,
         FakeProjectsOwnerHandler owner,

@@ -154,7 +154,11 @@ public sealed class KnowledgeApplicationService(
         ArgumentNullException.ThrowIfNull(request);
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId,
+            runId,
+            ProjectAuthorizationPermission.WriteProjects,
+            cancellationToken,
+            requireExistingBinding: true)
             .ConfigureAwait(false);
         var proposal = RequireAgentRecord(
             await context.Provider.ReadAsync(projectId, proposalId, cancellationToken).ConfigureAwait(false),
@@ -190,7 +194,8 @@ public sealed class KnowledgeApplicationService(
         if (result.Status != KnowledgeWriteStatus.Updated || result.OutboxEventId is not { } receiptId)
             return result;
 
-        var delivery = await relay.TryDeliverAsync(receiptId, cancellationToken).ConfigureAwait(false);
+        var delivery = await relay.TryDeliverAsync(
+            context.Provider, projectId, runId, receiptId, cancellationToken).ConfigureAwait(false);
         return result with
         {
             Delivery = delivery.Delivery,
@@ -222,6 +227,39 @@ public sealed class KnowledgeApplicationService(
             !string.Equals(authority.TenantId, receipt.TenantId, StringComparison.Ordinal) ||
             !string.Equals(authority.BoundProjectId, receipt.BoundProjectId, StringComparison.Ordinal) ||
             !string.Equals(authority.BoundRunId, receipt.BoundRunId, StringComparison.Ordinal))
+            throw new KnowledgeApiException(
+                "accepted_effect_receipt_not_found",
+                "The accepted-effect receipt was not found.",
+                StatusCodes.Status404NotFound);
+        return receipt;
+    }
+
+    public async Task<AcceptedEffectReceipt> ReadAcceptedEffectReceiptAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        CancellationToken cancellationToken)
+    {
+        var context = await ResolveProviderAsync(
+            projectId,
+            runId,
+            ProjectAuthorizationPermission.WriteProjects,
+            cancellationToken,
+            requireExistingBinding: true).ConfigureAwait(false);
+        var receipt = await context.Provider.ReadAcceptedEffectReceiptAsync(
+            projectId, runId, receiptId, cancellationToken).ConfigureAwait(false);
+        if (receipt is null)
+            throw new KnowledgeApiException(
+                "accepted_effect_receipt_not_found",
+                "The accepted-effect receipt was not found.",
+                StatusCodes.Status404NotFound);
+        if (!string.Equals(receipt.ProjectId, projectId, StringComparison.Ordinal) ||
+            !string.Equals(receipt.RunId, runId, StringComparison.Ordinal) ||
+            !string.Equals(context.Authority.ActorId, receipt.Subject, StringComparison.Ordinal) ||
+            !string.Equals(context.Authority.Issuer, receipt.Issuer, StringComparison.Ordinal) ||
+            !string.Equals(context.Authority.TenantId, receipt.TenantId, StringComparison.Ordinal) ||
+            !string.Equals(context.Authority.BoundProjectId, receipt.BoundProjectId, StringComparison.Ordinal) ||
+            !string.Equals(context.Authority.BoundRunId, receipt.BoundRunId, StringComparison.Ordinal))
             throw new KnowledgeApiException(
                 "accepted_effect_receipt_not_found",
                 "The accepted-effect receipt was not found.",
@@ -303,15 +341,19 @@ public sealed class KnowledgeApplicationService(
         string projectId,
         string runId,
         ProjectAuthorizationPermission permission,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requireExistingBinding = false)
     {
         ValidateResourceIdentifier(projectId, nameof(projectId));
         ValidateResourceIdentifier(runId, nameof(runId));
         var authority = await projects.GetCurrentAuthorityAsync(projectId, runId, cancellationToken)
             .ConfigureAwait(false);
         ProjectsConfigClient.RequireProjectPermission(authority, projectId, permission);
-        var provider = await bindings.ResolveAndVerifyAsync(
-            authority, projectId, runId, cancellationToken).ConfigureAwait(false);
+        var provider = requireExistingBinding
+            ? await bindings.ResolveExistingAndVerifyAsync(
+                authority, projectId, runId, cancellationToken).ConfigureAwait(false)
+            : await bindings.ResolveAndVerifyAsync(
+                authority, projectId, runId, cancellationToken).ConfigureAwait(false);
         return new AuthorizedProvider(authority, provider.Provider, provider.Selection);
     }
 

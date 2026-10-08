@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Knowledge accepted project facts",
-  "alt": "Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and outbox intent together. It relays only receipt ID and versions to Events, which fetches the committed receipt and appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. Sessions events and provider pins are unchanged.",
+  "alt": "Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and delivery intent together through the selected Memory provider: native PostgreSQL by default or an existing project-partitioned Cosmos container. It relays only receipt ID and versions to Events, which fetches the committed receipt and appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. The Knowledge run pin and Sessions journal remain in PostgreSQL.",
   "autonumber": true,
   "participants": [
     {
@@ -18,12 +18,12 @@
     },
     {
       "id": "database",
-      "label": "Knowledge\nPostgreSQL",
-      "subLabel": "Records, revisions, receipt, outbox",
+      "label": "Selected Memory\nprovider",
+      "subLabel": "PostgreSQL default or pinned Cosmos",
       "icon": "database",
       "fluentIcon": "state",
       "badge": {
-        "text": "service-owned",
+        "text": "provider-owned",
         "tone": "green"
       }
     },
@@ -60,7 +60,7 @@
       "type": "message",
       "from": "knowledge",
       "to": "database",
-      "label": "One transaction: promote record; create decision/revisions, redacted receipt, outbox intent, idempotency result",
+      "label": "One provider transaction: promote record; create decision/revisions, redacted receipt, delivery intent, idempotency result",
       "line": "solid",
       "arrow": "filled"
     },
@@ -134,7 +134,7 @@
       "type": "message",
       "from": "knowledge",
       "to": "database",
-      "label": "Acknowledge outbox only after exact receipt-bound ack validation",
+      "label": "Acknowledge provider delivery state only after exact receipt-bound ack validation",
       "line": "solid",
       "arrow": "filled"
     },

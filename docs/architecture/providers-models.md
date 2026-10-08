@@ -74,16 +74,18 @@ exactly one Memory candidate; the service resolves that candidate through
 `ProviderCatalog` and `ProviderResolver`, negotiates the live database identity, then
 persists an immutable project/run binding with the project, configuration, and context
 revisions. A missing adapter, capability mismatch, or different later binding fails
-closed without falling back to another provider. The current `postgres.native-memory`
-adapter implements the read, write, search, revision, proposal-promotion, and context
-composition capabilities. See [Knowledge and Memory](knowledge-memory.md) for the
-service and its integration limits.
+closed without falling back to another provider. The current `postgres.native-memory` adapter implements the read, write, search,
+revision, proposal-promotion, and context-composition capabilities. The optional
+`cosmos.memory` source candidate implements those operations and accepted-effect
+delivery with a project-partitioned Cosmos container when registered and configured.
+See [Knowledge and Memory](knowledge-memory.md) for the service and its integration
+limits.
 
-P2 adds Cosmos and Redis adapters behind that same exclusive Memory contract.
-Native PostgreSQL remains the default, and the selected adapter must preserve durable
-records, revisions, scope isolation, idempotency, and proposal semantics.
-These are Memory backends, not replacements for the PostgreSQL Sessions journal.
-The current source contains neither adapter.
+Native PostgreSQL remains the default. Cosmos negotiation validates the existing
+container identity, `/projectId` partition key, required search composite index, and
+non-expiring default TTL; it does not provision resources.
+Redis remains planned P2 work. These are Memory backends, not replacements for the
+PostgreSQL Sessions journal.
 
 Application Hosting currently plans only the built-in AKS web runtime.
 Canvas owns A2UI and GitHub Canvas compatibility work. Elastic SAN is outside P2;

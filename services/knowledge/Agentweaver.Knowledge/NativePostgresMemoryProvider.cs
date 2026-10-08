@@ -606,28 +606,140 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                     "An accepted-effect receipt ID is required.",
                     StatusCodes.Status400BadRequest);
             var stored = await _outbox.ReadAsync(receiptId, cancellationToken).ConfigureAwait(false);
-            if (stored is null || stored.Value.Event.Message.EventType != "knowledge.accepted-effect")
-                return null;
-            try
-            {
-                var receipt = JsonSerializer.Deserialize<AcceptedEffectReceipt>(
-                    stored.Value.Event.Message.Payload.GetRawText(), JsonOptions);
-                if (receipt is null ||
-                    receipt.ReceiptId != receiptId ||
-                    receipt.SchemaVersion != AcceptedEffectContractVersions.CurrentSchemaVersion ||
-                    receipt.EventVersion != stored.Value.Event.Message.EventVersion ||
-                    receipt.EventVersion != AcceptedEffectContractVersions.CurrentEventVersion ||
-                    receipt.EffectId == Guid.Empty ||
-                    receipt.RecordId == Guid.Empty ||
-                    receipt.RecordVersion < 1)
-                    throw new JsonException("Invalid receipt contract.");
-                return receipt;
-            }
-            catch (JsonException)
-            {
-                throw new KnowledgeStorageUnavailableException();
-            }
+            return stored is null
+                ? null
+                : ReadReceiptPayload(stored.Value.Event, receiptId);
         }, cancellationToken);
+
+    public Task<AcceptedEffectReceipt?> ReadAcceptedEffectReceiptAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        CancellationToken cancellationToken = default) =>
+        WithStorageAsync(async () =>
+        {
+            var state = await ReadAcceptedEffectDeliveryCoreAsync(
+                projectId, runId, receiptId, cancellationToken).ConfigureAwait(false);
+            return state?.Receipt;
+        }, cancellationToken);
+
+    public Task<AcceptedEffectDeliveryState?> ReadAcceptedEffectDeliveryAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        CancellationToken cancellationToken = default) =>
+        WithStorageAsync(() => ReadAcceptedEffectDeliveryCoreAsync(
+            projectId, runId, receiptId, cancellationToken), cancellationToken);
+
+    public Task<AcceptedEffectDeliveryLease?> ClaimAcceptedEffectDeliveryAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        string workerId,
+        TimeSpan leaseDuration,
+        CancellationToken cancellationToken = default) =>
+        WithStorageAsync(async () =>
+        {
+            ValidateAcceptedEffectScope(projectId, runId, receiptId);
+            ValidateIdentifier(workerId, nameof(workerId));
+            var delivery = await _outbox.ClaimAsync(
+                workerId, receiptId, leaseDuration, cancellationToken).ConfigureAwait(false);
+            if (delivery is null)
+                return null;
+
+            var receipt = ReadReceiptPayload(delivery.Event, receiptId);
+            if (receipt is null ||
+                !string.Equals(receipt.ProjectId, projectId, StringComparison.Ordinal) ||
+                !string.Equals(receipt.RunId, runId, StringComparison.Ordinal))
+            {
+                await _outbox.ReleaseAsync(receiptId, delivery.LeaseToken, cancellationToken)
+                    .ConfigureAwait(false);
+                return null;
+            }
+            return new AcceptedEffectDeliveryLease(receipt, delivery.LeaseToken);
+        }, cancellationToken);
+
+    public Task<bool> ReleaseAcceptedEffectDeliveryAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        Guid leaseToken,
+        CancellationToken cancellationToken = default) =>
+        WithStorageAsync(async () =>
+        {
+            var state = await ReadAcceptedEffectDeliveryCoreAsync(
+                projectId, runId, receiptId, cancellationToken).ConfigureAwait(false);
+            return state is not null &&
+                await _outbox.ReleaseAsync(receiptId, leaseToken, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
+
+    public Task<bool> AcknowledgeAcceptedEffectDeliveryAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        Guid leaseToken,
+        CancellationToken cancellationToken = default) =>
+        WithStorageAsync(async () =>
+        {
+            var state = await ReadAcceptedEffectDeliveryCoreAsync(
+                projectId, runId, receiptId, cancellationToken).ConfigureAwait(false);
+            return state is not null &&
+                await _outbox.AcknowledgeAsync(receiptId, leaseToken, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
+
+    private async Task<AcceptedEffectDeliveryState?> ReadAcceptedEffectDeliveryCoreAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        CancellationToken cancellationToken)
+    {
+        ValidateAcceptedEffectScope(projectId, runId, receiptId);
+        var stored = await _outbox.ReadAsync(receiptId, cancellationToken).ConfigureAwait(false);
+        if (stored is null)
+            return null;
+        var receipt = ReadReceiptPayload(stored.Value.Event, receiptId);
+        return receipt is null ||
+            !string.Equals(receipt.ProjectId, projectId, StringComparison.Ordinal) ||
+            !string.Equals(receipt.RunId, runId, StringComparison.Ordinal)
+                ? null
+                : new AcceptedEffectDeliveryState(receipt, stored.Value.IsDelivered);
+    }
+
+    private static AcceptedEffectReceipt? ReadReceiptPayload(StoredOutboxEvent stored, Guid receiptId)
+    {
+        if (stored.Message.EventType != "knowledge.accepted-effect")
+            return null;
+        try
+        {
+            var receipt = JsonSerializer.Deserialize<AcceptedEffectReceipt>(
+                stored.Message.Payload.GetRawText(), JsonOptions);
+            if (receipt is null ||
+                receipt.ReceiptId != receiptId ||
+                receipt.SchemaVersion != AcceptedEffectContractVersions.CurrentSchemaVersion ||
+                receipt.EventVersion != stored.Message.EventVersion ||
+                receipt.EventVersion != AcceptedEffectContractVersions.CurrentEventVersion ||
+                receipt.EffectId == Guid.Empty ||
+                receipt.RecordId == Guid.Empty ||
+                receipt.RecordVersion < 1)
+                throw new JsonException("Invalid receipt contract.");
+            return receipt;
+        }
+        catch (JsonException)
+        {
+            throw new KnowledgeStorageUnavailableException();
+        }
+    }
+
+    private static void ValidateAcceptedEffectScope(string projectId, string runId, Guid receiptId)
+    {
+        ValidateIdentifier(projectId, nameof(projectId));
+        ValidateIdentifier(runId, nameof(runId));
+        if (receiptId == Guid.Empty)
+            throw new KnowledgeApiException(
+                "invalid_receipt_id",
+                "An accepted-effect receipt ID is required.",
+                StatusCodes.Status400BadRequest);
+    }
 
     public Task<KnowledgeContextCandidates> ReadContextCandidatesAsync(
         string projectId,
