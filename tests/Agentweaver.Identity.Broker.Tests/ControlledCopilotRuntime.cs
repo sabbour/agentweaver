@@ -36,6 +36,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public string ModelId { get; set; } = "controlled-model";
     public string SdkCredential { get; set; } = "ghu_external-sdk-credential";
     public string AssistantResponse { get; set; } = "controlled response";
+    public string ExpectedPrompt { get; set; } = "A bounded user request.";
     public string? EffectiveModelId { get; set; }
     public Action? BeforeEffectiveModelResponse { get; set; }
     public Func<CancellationToken, Task>? BeforeStatusResponse { get; set; }
@@ -252,7 +253,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                             result = new { modelId = EffectiveModelId ?? ModelId };
                             break;
                         case "session.send":
-                            Assert.Equal("A bounded user request.", parameters.GetProperty("prompt").GetString());
+                            Assert.Equal(ExpectedPrompt, parameters.GetProperty("prompt").GetString());
                             _turnStop?.Dispose();
                             _turnStop = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
                             TurnReceived.TrySetResult();

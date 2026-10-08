@@ -47,6 +47,8 @@ Only registered guarded tools can run.
 Each model turn and protected tool effect requires current AGT authorization and a committed Policy receipt before the effect.
 
 The host serializes turns.
+Prompt text preserves line breaks, tabs, and fenced code without trimming or changing its bytes.
+Unsupported control characters, such as NUL, deny before dispatch.
 `immediate` work takes priority over pending `enqueue` work at the next native idle boundary.
 It does not interrupt an active native turn.
 An exact message replay shares the original completion; changed content under the same ID denies.

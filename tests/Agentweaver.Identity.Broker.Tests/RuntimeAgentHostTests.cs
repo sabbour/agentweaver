@@ -95,6 +95,48 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Theory]
+    [InlineData(" Explain this:\n```csharp\nvar value = 1;\n\tConsole.WriteLine(value);\n```\n ", true)]
+    [InlineData("\tFirst line\r\n\tSecond line\r\n ", true)]
+    [InlineData("A prompt\0with NUL", false)]
+    [InlineData("A prompt\u001bwith escape", false)]
+    public async Task A2APreservesMultilinePromptBytesAndRejectsUnsupportedControlsWithoutDispatch(
+        string prompt, bool supported)
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        fixture.Sdk.ExpectedPrompt = prompt;
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        var input = fixture.Message(fixture.Proof(ready));
+        input = input with { Message = input.Message with { Parts = [new("text", prompt)] } };
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/a2a/message:send", input, HostFixture.Json, timeout.Token);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        if (supported)
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var bytes = Encoding.UTF8.GetBytes(prompt);
+            var send = Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+            Assert.Equal(bytes, Encoding.UTF8.GetBytes(send.Parameters.GetProperty("prompt").GetString()!));
+            Assert.Equal(bytes, Assert.Single(fixture.Material, material => material.Role == "user").Bytes);
+            Assert.Single(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
+        }
+        else
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            using var error = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
+            Assert.Equal("runtime_a2a_message_invalid", error.RootElement.GetProperty("code").GetString());
+            Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+            Assert.Empty(fixture.Material);
+        }
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task NativeUsageMustReachTheAccountingAcknowledgmentBeforeTheTurnSucceeds(bool failAccounting)

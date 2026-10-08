@@ -64,11 +64,14 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         }
     }
 
+    internal static bool HasUnsupportedPromptControls(string prompt) =>
+        prompt.Any(character => char.IsControl(character) && character is not ('\r' or '\n' or '\t'));
+
     internal async Task<string> SendTurnAsync(string prompt, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(prompt) ||
             prompt.Length > AddressedMessageValidation.MaximumTextLength ||
-            prompt.Any(char.IsControl))
+            HasUnsupportedPromptControls(prompt))
             throw new ArgumentException("A bounded text prompt is required.", nameof(prompt));
 
         RequireUsable();
