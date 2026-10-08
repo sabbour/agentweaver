@@ -112,6 +112,325 @@ public sealed class CosmosMemoryProviderTests
     }
 
     [Fact]
+    public async Task DecisionSupersessionChecksCyclesAndRecordsTheReplacement()
+    {
+        var (provider, _, _) = CreateProvider();
+        var first = await CreateDecisionAsync(provider, "decision-first");
+        var replacement = await CreateDecisionAsync(provider, "decision-replacement");
+        var cycle = await provider.UpdateAsync(
+            DecisionUpdate(first, KnowledgeRecordState.Superseded, first.RecordId),
+            "decision-self-cycle");
+        Assert.Equal(KnowledgeWriteStatus.ReplacementCycle, cycle.Status);
+
+        var superseded = await provider.UpdateAsync(
+            DecisionUpdate(first, KnowledgeRecordState.Superseded, replacement.RecordId),
+            "decision-supersede");
+        Assert.Equal(KnowledgeWriteStatus.Updated, superseded.Status);
+        Assert.Equal(KnowledgeRecordState.Superseded, superseded.Record!.State);
+        Assert.Equal(replacement.RecordId, superseded.Record.SupersededByRecordId);
+
+        var reverseCycle = await provider.UpdateAsync(
+            DecisionUpdate(replacement, KnowledgeRecordState.Superseded, first.RecordId),
+            "decision-reverse-cycle");
+        Assert.Equal(KnowledgeWriteStatus.ReplacementCycle, reverseCycle.Status);
+        Assert.Equal(KnowledgeRecordState.Active,
+            (await provider.ReadAsync("project-a", replacement.RecordId))!.State);
+
+        var revisions = await provider.ReadRevisionsAsync("project-a", first.RecordId, 1, 10);
+        Assert.Equal(2, revisions.TotalCount);
+        Assert.Equal("decision_superseded", revisions.Items[0].ChangeKind);
+        Assert.Equal(ActorFingerprint, revisions.Items[0].ActorFingerprint);
+        Assert.Equal(replacement.RecordId, revisions.Items[0].SupersededByRecordId);
+    }
+
+    [Fact]
+    public async Task ConcurrentDecisionSupersessionCannotCommitACycle()
+    {
+        var (provider, store, _) = CreateProvider();
+        var first = await CreateDecisionAsync(provider, "concurrent-first");
+        var second = await CreateDecisionAsync(provider, "concurrent-second");
+        store.PauseNextBatch();
+        var delayed = provider.UpdateAsync(
+            DecisionUpdate(first, KnowledgeRecordState.Superseded, second.RecordId),
+            "concurrent-first-supersede");
+        KnowledgeRecordWriteResult committed;
+        try
+        {
+            await store.PausedBatch.WaitAsync(TimeSpan.FromSeconds(10));
+            committed = await provider.UpdateAsync(
+                DecisionUpdate(second, KnowledgeRecordState.Superseded, first.RecordId),
+                "concurrent-second-supersede");
+        }
+        finally
+        {
+            store.ResumePausedBatch();
+        }
+
+        Assert.Equal(KnowledgeWriteStatus.Updated, committed.Status);
+        Assert.Equal(KnowledgeWriteStatus.ReplacementCycle, (await delayed).Status);
+        Assert.Equal(KnowledgeRecordState.Active,
+            (await provider.ReadAsync("project-a", first.RecordId))!.State);
+        Assert.Equal(KnowledgeRecordState.Superseded,
+            (await provider.ReadAsync("project-a", second.RecordId))!.State);
+    }
+
+    [Fact]
+    public async Task DecisionArchiveRestoreAndApprovalAppendAuditableRevisions()
+    {
+        var (provider, store, options) = CreateProvider();
+        var decision = await CreateDecisionAsync(provider, "decision-restore");
+        var archived = await provider.UpdateAsync(
+            DecisionUpdate(decision, KnowledgeRecordState.Archived, null),
+            "decision-archive");
+        Assert.Equal(KnowledgeRecordState.Archived, archived.Record!.State);
+
+        var restoreInput = new KnowledgeRecordRestore(
+            "project-a", decision.RecordId, archived.Record.Revision, 1, ActorFingerprint, "restore original");
+        var restored = await provider.RestoreAsync(restoreInput, "decision-restore");
+        var restarted = new CosmosMemoryProvider(store, options);
+        var duplicateRestore = await restarted.RestoreAsync(restoreInput, "decision-restore");
+        Assert.Equal(KnowledgeWriteStatus.Updated, restored.Status);
+        Assert.Equal(KnowledgeRecordState.Active, restored.Record!.State);
+        Assert.Equal(KnowledgeTrustState.Pending, restored.Record.TrustState);
+        Assert.True(duplicateRestore.IsDuplicate);
+        Assert.Equal(restored.Record.RevisionId, duplicateRestore.Record!.RevisionId);
+
+        var approved = await restarted.ApproveDecisionAsync(
+            new KnowledgeDecisionApproval(
+                "project-a", decision.RecordId, restored.Record.Revision, ActorFingerprint, "approve restored"),
+            "decision-approve");
+        Assert.Equal(KnowledgeTrustState.Approved, approved.Record!.TrustState);
+        var history = await restarted.ReadRevisionsAsync("project-a", decision.RecordId, 1, 10);
+        Assert.Equal(4, history.TotalCount);
+        Assert.Equal("decision_approved", history.Items[0].ChangeKind);
+        Assert.Equal("decision_restored", history.Items[1].ChangeKind);
+        Assert.Equal("decision_archived", history.Items[2].ChangeKind);
+        Assert.Equal(ActorFingerprint, history.Items[1].ActorFingerprint);
+        Assert.Equal("restore original", history.Items[1].Reason);
+    }
+
+    [Fact]
+    public async Task TransferPreservesHistoryAndImportReplaysAfterProviderRestart()
+    {
+        var (source, _, options) = CreateProvider();
+        var memory = await source.CreateAsync(CreateInput("memory", "before transfer"), "transfer-memory");
+        var updated = await source.UpdateAsync(
+            UpdateInput(memory.Record!.RecordId, "after transfer"), "transfer-memory-update");
+        var decision = await CreateDecisionAsync(source, "transfer-decision");
+        var replacement = await CreateDecisionAsync(source, "transfer-replacement");
+        var superseded = await source.UpdateAsync(
+            DecisionUpdate(decision, KnowledgeRecordState.Superseded, replacement.RecordId),
+            "transfer-decision-supersede");
+        var foreignProposal = await source.CreateAsync(
+            CreateInput("proposal", "foreign-agent-decision") with { AgentId = "agent-b" },
+            "foreign-agent-proposal");
+        var foreignDecision = await source.PromoteProposalAsync(
+            "project-a",
+            "run-a",
+            foreignProposal.Record!.RecordId,
+            1,
+            ActorFingerprint,
+            Authorization(),
+            "foreign-agent-promotion");
+        Assert.NotNull(foreignDecision.Decision);
+        var bundle = await source.ExportAsync("project-a", "agent-a");
+        Assert.Equal(KnowledgeRecordTransferContract.Format, bundle.Format);
+        Assert.Equal(3, bundle.Records.Length);
+        Assert.Equal(KnowledgeRecordState.Superseded, superseded.Record!.State);
+        Assert.Equal(2, bundle.Records.Single(entry => entry.Record.Kind == KnowledgeRecordKind.Memory)
+            .Revisions.Length);
+
+        var destinationStore = new FakeCosmosMemoryStore(options);
+        var destination = new CosmosMemoryProvider(destinationStore, options);
+        var mismatchedScope = await Assert.ThrowsAsync<KnowledgeApiException>(() =>
+            destination.ImportAsync(
+                bundle with { AgentId = "agent-b" }, "run-import", ActorFingerprint, "wrong-transfer-scope"));
+        Assert.Equal("invalid_knowledge_transfer", mismatchedScope.Code);
+        var imported = await destination.ImportAsync(bundle, "run-import", ActorFingerprint, "transfer-import");
+        var restarted = new CosmosMemoryProvider(destinationStore, options);
+        var duplicate = await restarted.ImportAsync(
+            bundle, "run-import", ActorFingerprint, "transfer-import");
+        Assert.Equal(3, imported.Records.Length);
+        Assert.True(duplicate.IsDuplicate);
+        Assert.All(imported.Records, record =>
+        {
+            Assert.Equal(KnowledgeRecordState.Active, record.State);
+            Assert.Equal(KnowledgeTrustState.Pending, record.TrustState);
+            Assert.Null(record.SupersededByRecordId);
+        });
+        var importedMemory = imported.Records.Single(record => record.Kind == KnowledgeRecordKind.Memory);
+        Assert.Equal(updated.Record!.Content, importedMemory.Content);
+        Assert.Equal("run-import", importedMemory.SourceRunId);
+        Assert.Equal(KnowledgeTrustState.Pending, importedMemory.TrustState);
+        var history = await restarted.ReadRevisionsAsync("project-a", importedMemory.RecordId, 1, 10);
+        Assert.Equal(3, history.TotalCount);
+        Assert.Equal(bundle.Records.Single(entry => entry.Record.Kind == KnowledgeRecordKind.Memory)
+            .Revisions.Select(revision => revision.RevisionId), history.Items
+            .Where(revision => revision.ChangeKind != "imported")
+            .OrderBy(revision => revision.Revision)
+            .Select(revision => revision.RevisionId));
+        Assert.Equal("imported", history.Items[0].ChangeKind);
+        Assert.Equal(ActorFingerprint, history.Items[0].ActorFingerprint);
+        var importedDecision = imported.Records.Single(record => record.RecordId == decision.RecordId);
+        var decisionHistory = await restarted.ReadRevisionsAsync(
+            "project-a", importedDecision.RecordId, 1, 10);
+        Assert.Contains(decisionHistory.Items, revision =>
+            revision.ChangeKind == "decision_superseded" &&
+            revision.SupersededByRecordId == replacement.RecordId);
+        var reexport = await restarted.ExportAsync("project-a", "agent-a");
+        Assert.Equal(3, reexport.Records.Length);
+        Assert.Equal("agent-a", reexport.AgentId);
+    }
+
+    [Fact]
+    public async Task TransferExportAndImportAcceptLegacyRevisionsWithoutSourceProvenance()
+    {
+        var (source, store, options) = CreateProvider();
+        var created = await source.CreateAsync(
+            CreateInput("memory", "legacy Cosmos revision") with { SourceRunId = "run-a" },
+            "legacy-transfer-memory");
+        store.ClearRevisionProvenance("project-a", created.Record!.RecordId);
+
+        var bundle = await source.ExportAsync("project-a", "agent-a");
+        var entry = Assert.Single(bundle.Records);
+        Assert.Equal("run-a", entry.Record.SourceRunId);
+        Assert.Null(entry.Revisions[^1].SourceRunId);
+        Assert.Null(entry.Revisions[^1].SourceSessionId);
+
+        var destination = new CosmosMemoryProvider(new FakeCosmosMemoryStore(options), options);
+        var imported = await destination.ImportAsync(
+            bundle, "run-import", ActorFingerprint, "legacy-transfer-import");
+
+        var record = Assert.Single(imported.Records);
+        Assert.Equal(KnowledgeRecordState.Active, record.State);
+        Assert.Equal(KnowledgeTrustState.Pending, record.TrustState);
+        Assert.Equal("run-import", record.SourceRunId);
+    }
+
+    [Fact]
+    public async Task TransferRejectsNullCollectionsAndMalformedHistoricalSnapshots()
+    {
+        var (source, _, options) = CreateProvider();
+        var created = await source.CreateAsync(
+            CreateInput("memory", "before transfer"), "malformed-transfer-memory");
+        await source.UpdateAsync(
+            UpdateInput(created.Record!.RecordId, "current head"), "malformed-transfer-update");
+        var bundle = await source.ExportAsync("project-a", "agent-a");
+        var entry = Assert.Single(bundle.Records);
+        var destination = new CosmosMemoryProvider(new FakeCosmosMemoryStore(options), options);
+
+        async Task AssertInvalidAsync(KnowledgeRecordTransferBundle input, string key)
+        {
+            var exception = await Assert.ThrowsAsync<KnowledgeApiException>(() =>
+                destination.ImportAsync(input, "run-import", ActorFingerprint, key));
+            Assert.Equal("invalid_knowledge_transfer", exception.Code);
+            Assert.Equal(StatusCodes.Status400BadRequest, exception.StatusCode);
+        }
+
+        await AssertInvalidAsync(bundle with { Records = default }, "transfer-missing-records");
+        await AssertInvalidAsync(
+            bundle with
+            {
+                Records = bundle.Records.SetItem(
+                    0,
+                    entry with { Revisions = entry.Revisions.SetItem(entry.Revisions.Length - 1, null!) })
+            },
+            "transfer-null-revision");
+
+        var firstRevision = entry.Revisions[0];
+        var invalidSnapshots = new[]
+        {
+            firstRevision with { Content = null! },
+            firstRevision with { Type = new string('x', 65) },
+            firstRevision with { Importance = "critical" }
+        };
+        for (var index = 0; index < invalidSnapshots.Length; index++)
+        {
+            var malformedEntry = entry with
+            {
+                Revisions = entry.Revisions.SetItem(0, invalidSnapshots[index])
+            };
+            await AssertInvalidAsync(
+                bundle with { Records = bundle.Records.SetItem(0, malformedEntry) },
+                $"transfer-invalid-history-{index}");
+        }
+    }
+
+    [Fact]
+    public async Task TransferRejectsSelfSupersessionInHistoricalRevision()
+    {
+        var (source, _, options) = CreateProvider();
+        var decision = await CreateDecisionAsync(source, "self-cycle-transfer");
+        var bundle = await source.ExportAsync("project-a", "agent-a");
+        var original = Assert.Single(bundle.Records);
+        var superseded = SupersedeTransferEntry(original, original.Record.RecordId);
+        var previous = superseded.Revisions[^1];
+        var restoredRevision = previous with
+        {
+            Revision = previous.Revision + 1,
+            RevisionId = Guid.NewGuid(),
+            PreviousRevisionId = previous.RevisionId,
+            State = KnowledgeRecordState.Active,
+            TrustState = KnowledgeTrustState.Pending,
+            SupersededByRecordId = null,
+            ChangeKind = "decision_restored",
+            Reason = "restored"
+        };
+        var restored = superseded with
+        {
+            Record = superseded.Record with
+            {
+                Revision = restoredRevision.Revision,
+                PreviousRevisionId = previous.RevisionId,
+                RevisionId = restoredRevision.RevisionId,
+                State = KnowledgeRecordState.Active,
+                TrustState = KnowledgeTrustState.Pending,
+                SupersededByRecordId = null
+            },
+            Revisions = superseded.Revisions.Add(restoredRevision)
+        };
+        var invalidBundle = bundle with { Records = bundle.Records.Replace(original, restored) };
+        var destination = new CosmosMemoryProvider(new FakeCosmosMemoryStore(options), options);
+
+        var exception = await Assert.ThrowsAsync<KnowledgeApiException>(() =>
+            destination.ImportAsync(invalidBundle, "run-import", ActorFingerprint, "transfer-self-cycle"));
+
+        Assert.Equal("invalid_knowledge_transfer", exception.Code);
+        Assert.Equal(StatusCodes.Status400BadRequest, exception.StatusCode);
+        Assert.Equal(KnowledgeRecordState.Active, decision.State);
+    }
+
+    [Fact]
+    public async Task TransferRejectsSupersessionTargetsFromAnotherAgent()
+    {
+        var (source, _, options) = CreateProvider();
+        var decision = await CreateDecisionAsync(source, "foreign-transfer-source");
+        var bundle = await source.ExportAsync("project-a", "agent-a");
+        var original = Assert.Single(bundle.Records);
+        var destination = new CosmosMemoryProvider(new FakeCosmosMemoryStore(options), options);
+        var foreignProposal = await destination.CreateAsync(
+            CreateInput("proposal", "foreign target") with { AgentId = "agent-b" },
+            "foreign-transfer-target");
+        var foreignDecision = await destination.PromoteProposalAsync(
+            "project-a",
+            "run-a",
+            foreignProposal.Record!.RecordId,
+            1,
+            ActorFingerprint,
+            Authorization(),
+            "foreign-transfer-promotion");
+        var foreignReference = SupersedeTransferEntry(original, foreignDecision.Decision!.RecordId);
+        var foreignBundle = bundle with { Records = bundle.Records.Replace(original, foreignReference) };
+
+        var exception = await Assert.ThrowsAsync<KnowledgeApiException>(() =>
+            destination.ImportAsync(foreignBundle, "run-import", ActorFingerprint, "transfer-foreign-target"));
+
+        Assert.Equal("invalid_replacement", exception.Code);
+        Assert.Equal(StatusCodes.Status409Conflict, exception.StatusCode);
+        Assert.Equal(KnowledgeRecordState.Active, decision.State);
+    }
+
+    [Fact]
     public async Task ConcurrentIdenticalRetriesReplayCommittedUpdateRejectAndPromotion()
     {
         var (provider, store, _) = CreateProvider();
@@ -334,6 +653,61 @@ public sealed class CosmosMemoryProviderTests
         return result.Record!.RecordId;
     }
 
+    private static async Task<KnowledgeRecord> CreateDecisionAsync(CosmosMemoryProvider provider, string key)
+    {
+        var proposalId = await CreateProposalAsync(provider, key);
+        var result = await PromoteAsync(provider, proposalId);
+        return result.Decision!;
+    }
+
+    private static KnowledgeRecordUpdate DecisionUpdate(
+        KnowledgeRecord record,
+        KnowledgeRecordState state,
+        Guid? supersededByRecordId) =>
+        new(
+            "project-a",
+            record.RecordId,
+            record.Revision,
+            record.Type,
+            record.Title,
+            record.Content,
+            record.Rationale,
+            record.Importance,
+            record.Tags,
+            state,
+            ActorFingerprint,
+            state == KnowledgeRecordState.Superseded ? "superseded" : state.ToString(),
+            supersededByRecordId);
+
+    private static KnowledgeRecordTransferEntry SupersedeTransferEntry(
+        KnowledgeRecordTransferEntry entry,
+        Guid replacementId)
+    {
+        var previous = entry.Revisions[^1];
+        var revision = previous with
+        {
+            Revision = previous.Revision + 1,
+            RevisionId = Guid.NewGuid(),
+            PreviousRevisionId = previous.RevisionId,
+            State = KnowledgeRecordState.Superseded,
+            SupersededByRecordId = replacementId,
+            ChangeKind = "decision_superseded",
+            Reason = "superseded"
+        };
+        return entry with
+        {
+            Record = entry.Record with
+            {
+                Revision = revision.Revision,
+                PreviousRevisionId = previous.RevisionId,
+                RevisionId = revision.RevisionId,
+                State = KnowledgeRecordState.Superseded,
+                SupersededByRecordId = replacementId
+            },
+            Revisions = entry.Revisions.Add(revision)
+        };
+    }
+
     private static Task<KnowledgeProposalPromotionResult> PromoteAsync(
         CosmosMemoryProvider provider,
         Guid proposalId) =>
@@ -508,6 +882,27 @@ public sealed class CosmosMemoryProviderTests
                 return _documents.Values.Count(item => item.Document.DocumentType == documentType);
         }
 
+        public void ClearRevisionProvenance(string projectId, Guid recordId)
+        {
+            lock (_gate)
+            {
+                foreach (var (key, stored) in _documents.ToArray())
+                {
+                    if (key.ProjectId != projectId ||
+                        stored.Document.RecordId != recordId ||
+                        stored.Document.RecordRevision is not { } revision)
+                        continue;
+                    _documents[key] = stored with
+                    {
+                        Document = stored.Document with
+                        {
+                            RecordRevision = revision with { SourceRunId = null, SourceSessionId = null }
+                        }
+                    };
+                }
+            }
+        }
+
         public Task<CosmosMemoryContainerIdentity> ReadContainerIdentityAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -569,6 +964,51 @@ public sealed class CosmosMemoryProviderTests
                 var page = items.Skip((query.Page - 1) * query.PageSize).Take(query.PageSize).ToImmutableArray();
                 return Task.FromResult(new KnowledgeRecordPage(
                     page, items.Length, query.Page, query.PageSize));
+            }
+        }
+
+        public Task<IReadOnlyList<KnowledgeRecord>> ReadTransferCandidatesAsync(
+            string projectId,
+            string agentId,
+            int maximumRecords,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                IReadOnlyList<KnowledgeRecord> records = _documents.Values
+                    .Select(item => item.Document)
+                    .Where(item => item.DocumentType == "record" && item.Record is not null)
+                    .Select(item => item.Record!)
+                    .Where(record => record.ProjectId == projectId &&
+                        record.AgentId == agentId &&
+                        (record.Kind == KnowledgeRecordKind.Decision ||
+                         record.Kind == KnowledgeRecordKind.Memory))
+                    .OrderByDescending(record => record.UpdatedAt)
+                    .ThenBy(record => record.RecordId)
+                    .Take(maximumRecords + 1)
+                    .ToArray();
+                return Task.FromResult(records);
+            }
+        }
+
+        public Task<IReadOnlyCollection<Guid>> FindRevisionIdsAsync(
+            string projectId,
+            IReadOnlyCollection<Guid> revisionIds,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                IReadOnlyCollection<Guid> found = _documents.Values
+                    .Select(item => item.Document)
+                    .Where(item => item.ProjectId == projectId &&
+                        item.DocumentType == "revision" &&
+                        item.RecordRevision is not null &&
+                        revisionIds.Contains(item.RecordRevision.RevisionId))
+                    .Select(item => item.RecordRevision!.RevisionId)
+                    .ToHashSet();
+                return Task.FromResult(found);
             }
         }
 

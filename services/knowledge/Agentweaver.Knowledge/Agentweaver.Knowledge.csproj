@@ -18,5 +18,6 @@
   <ItemGroup>
     <EmbeddedResource Include="Migrations\001_knowledge.sql" />
     <EmbeddedResource Include="Migrations\002_accepted_effect_receipts.sql" />
+    <EmbeddedResource Include="Migrations\003_knowledge_decision_lifecycle.sql" />
   </ItemGroup>
 </Project>

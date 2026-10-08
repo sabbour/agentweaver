@@ -110,6 +110,25 @@ return the original result; a reused key with different request content conflict
 Not-found, stale-revision, invalid-state, provider, storage, and budget conditions do
 not return success-shaped placeholders.
 
+Memory and Decision edits, archival, and supersession use the same expected-revision
+compare-and-swap. A superseded Decision links to its replacement Decision, and the
+change is appended to its immutable history. Restoring a historical revision does not
+rewind or replace that history: it appends a new head containing the selected content.
+The restored record is Active with Pending trust, and a restored Decision must be
+approved explicitly before it is trusted again. Explicit Decision approval also
+appends a revision; unlike proposal promotion, it does not create an accepted-effect
+receipt or deliver a project fact.
+
+The agent-scoped export and import routes use the selected, already-pinned Memory
+provider. Version 1 exports only Memory and Decision records with their complete
+revision chains for one exact project and agent. The bundle is bounded to 25 records,
+500 revisions, and 1 MiB. Import requires the bundle's project and agent to match the
+authorized route, rejects unsupported or incomplete histories, foreign replacement
+links, cycles, and ID collisions, and never merges an existing record. It preserves
+the source revisions and appends an `imported` revision with the importing actor and
+run; imported records are Active with Pending trust and require explicit approval
+before Decisions are trusted. Unsupported formats and invalid input fail explicitly.
+
 New proposals are pending and cannot be edited like ordinary memory. Promotion
 requires the caller's current effective `WriteProjects` permission, the exact agent
 owner, source run, pending state, and expected revision. It marks the proposal
