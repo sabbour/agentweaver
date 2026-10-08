@@ -3,6 +3,8 @@ extern alias ProjectsConfig;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Agentweaver.Abstractions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -258,6 +260,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     [InlineData("uncertain", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_upstream_unavailable")]
     [InlineData("installation", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_user_credential_invalid")]
     [InlineData("account", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_identity_changed")]
+    [InlineData("oauth-array", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_upstream_contract_invalid")]
+    [InlineData("oauth-null", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_upstream_contract_invalid")]
+    [InlineData("user-array", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_upstream_contract_invalid")]
+    [InlineData("user-null", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_upstream_contract_invalid")]
+    [InlineData("expires-string", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_user_credential_invalid")]
+    [InlineData("expires-null", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_user_credential_invalid")]
+    [InlineData("refresh-expires-string", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_user_credential_invalid")]
+    [InlineData("refresh-expires-null", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_user_credential_invalid")]
+    [InlineData("user-id-string", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_user_verification_failed")]
+    [InlineData("user-id-null", CopilotConnectionState.RefreshIndeterminate, "copilot_connection_user_verification_failed")]
     public async Task CopilotRefreshFailuresKeepCommittedVersionAndPreventUnsafeReplay(
         string fault, CopilotConnectionState expectedState, string error)
     {
@@ -274,6 +286,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ProjectAuthorityResourceType.Platform, "default", ProjectAuthorityRole.PlatformAdmin);
         using var transport = new ControlledCopilotConnection();
         var linked = await LinkRuntimeCopilotConnectionAsync(projects, ownerToken, transport);
+        var tokenReply = JsonSerializer.SerializeToNode(new
+        {
+            access_token = ControlledCopilotConnection.UserAccessToken,
+            token_type = "bearer", expires_in = 3600,
+            refresh_token = ControlledCopilotConnection.UserRefreshToken, refresh_token_expires_in = 86400
+        })!.AsObject();
         switch (fault)
         {
             case "transient":
@@ -292,6 +310,35 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             case "account":
                 transport.GitHubUserId = 99;
                 break;
+            case "oauth-array":
+                transport.ExchangeJson = "[]";
+                break;
+            case "oauth-null":
+                transport.ExchangeJson = "null";
+                break;
+            case "user-array":
+                transport.UserJson = "[]";
+                break;
+            case "user-null":
+                transport.UserJson = "null";
+                break;
+            case "expires-string":
+            case "expires-null":
+                tokenReply["expires_in"] = fault == "expires-string" ? JsonValue.Create("3600") : null;
+                transport.ExchangeJson = tokenReply.ToJsonString();
+                break;
+            case "refresh-expires-string":
+            case "refresh-expires-null":
+                tokenReply["refresh_token_expires_in"] = fault == "refresh-expires-string"
+                    ? JsonValue.Create("86400") : null;
+                transport.ExchangeJson = tokenReply.ToJsonString();
+                break;
+            case "user-id-string":
+                transport.UserJson = """{"id":"42","type":"User"}""";
+                break;
+            case "user-id-null":
+                transport.UserJson = """{"id":null,"type":"User"}""";
+                break;
         }
         await using var factory = new IdentityBrokerWebApplicationFactory(
             _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
@@ -304,17 +351,31 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(failed, fault == "uncertain"
             ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.Forbidden);
         Assert.True(failed.Headers.CacheControl?.NoStore);
-        Assert.Contains(error, await failed.Content.ReadAsStringAsync());
+        var failureBody = await failed.Content.ReadAsStringAsync();
+        using (var failureJson = JsonDocument.Parse(failureBody))
+            Assert.Equal(error, failureJson.RootElement.GetProperty("error").GetString());
+        Assert.DoesNotContain(transport.AccessToken, failureBody);
+        Assert.DoesNotContain(transport.RefreshToken, failureBody);
+        Assert.DoesNotContain(ControlledCopilotConnection.UserAccessToken, failureBody);
+        Assert.DoesNotContain(ControlledCopilotConnection.UserRefreshToken, failureBody);
+        Assert.DoesNotContain(ControlledCopilotConnection.ClientSecret, failureBody);
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
         var current = await db.CopilotConnections.AsNoTracking().SingleAsync();
         Assert.Equal(expectedState, current.State);
         Assert.Equal(linked.Revision + 2, current.Revision);
         Assert.Equal("42", current.GitHubUserId);
+        Assert.Equal($"copilot-user-{linked.ConnectionId:N}", current.SecretId);
         Assert.Equal("version-1", current.SecretVersion);
         Assert.Equal(linked.ConnectionId, current.ConnectionId);
         Assert.Equal(1, transport.Writes);
         Assert.Equal(2, transport.Exchanges);
+        if (fault.StartsWith("oauth-", StringComparison.Ordinal) ||
+            fault.StartsWith("expires-", StringComparison.Ordinal) ||
+            fault.StartsWith("refresh-expires-", StringComparison.Ordinal))
+            Assert.Equal(1, transport.UserReads);
+        if (fault.StartsWith("user-", StringComparison.Ordinal))
+            Assert.Equal(2, transport.UserReads);
         if (expectedState == CopilotConnectionState.TransientUnavailable)
         {
             transport.ExchangeStatus = HttpStatusCode.OK;
@@ -332,6 +393,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 new ChangeCopilotConnectionRequest(linked.ConnectionId, current.Revision));
             await AssertStatusAsync(retry, HttpStatusCode.Forbidden);
             Assert.Equal(2, transport.Exchanges);
+            Assert.Equal(1, transport.Writes);
         }
         using var revoked = await SendJsonAsync(broker, HttpMethod.Post,
             "/internal/connections/copilot-user/revoke", ownerToken,
@@ -343,6 +405,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(CopilotConnectionState.Revoked, revokedReceipt.State);
         Assert.DoesNotContain(transport.AccessToken, string.Join('\n', factory.LogMessages));
         Assert.DoesNotContain(transport.RefreshToken, string.Join('\n', factory.LogMessages));
+        Assert.DoesNotContain(ControlledCopilotConnection.ClientSecret, string.Join('\n', factory.LogMessages));
+        Assert.DoesNotContain(ControlledCopilotConnection.UserAccessToken, string.Join('\n', factory.LogMessages));
+        Assert.DoesNotContain(ControlledCopilotConnection.UserRefreshToken, string.Join('\n', factory.LogMessages));
     }
 
     [Theory]
