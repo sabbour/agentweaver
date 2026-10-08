@@ -1,10 +1,12 @@
 using System.Buffers;
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
+using OpenIddict.Abstractions;
 
 namespace Agentweaver.Gateway;
 
@@ -342,8 +344,20 @@ public sealed class GatewayOwnerClient(
     private static async Task<AuthenticationHeaderValue> RequireValidatedBearerAsync(HttpContext context)
     {
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
+        var expiresAt = authentication.Principal?.GetExpirationDate();
+        if (expiresAt is null &&
+            long.TryParse(
+                authentication.Principal?.FindFirst("exp")?.Value,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var unixExpiration) &&
+            unixExpiration >= DateTimeOffset.MinValue.ToUnixTimeSeconds() &&
+            unixExpiration <= DateTimeOffset.MaxValue.ToUnixTimeSeconds())
+            expiresAt = DateTimeOffset.FromUnixTimeSeconds(unixExpiration);
         var values = context.Request.Headers.Authorization;
         if (!authentication.Succeeded ||
+            expiresAt is null ||
+            expiresAt.Value <= DateTimeOffset.UtcNow ||
             context.User.Identity?.IsAuthenticated != true ||
             values.Count != 1 ||
             !AuthenticationHeaderValue.TryParse(values[0], out var bearer) ||
@@ -382,18 +396,17 @@ public sealed class GatewayOwnerClient(
         value.Length > 0 &&
         value.All(character => character is not '\r' and not '\n' and not '\0');
 
-    private static async Task WriteEventAsync(
+    private async Task WriteEventAsync(
         HttpContext context,
         GatewayRunEventPage page,
         CancellationToken cancellationToken)
     {
+        _ = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
         var cursor = page.NextCursor
             ?? throw new InvalidDataException("Events owner omitted the cursor for a journal event.");
-        await context.Response.WriteAsync($"id: {cursor}\n", cancellationToken).ConfigureAwait(false);
-        await context.Response.WriteAsync("event: session-event\n", cancellationToken).ConfigureAwait(false);
-        await context.Response.WriteAsync(
-            $"data: {JsonSerializer.Serialize(page.Event, JsonOptions)}\n\n",
-            cancellationToken).ConfigureAwait(false);
+        var eventText = $"id: {cursor}\nevent: session-event\n" +
+            $"data: {JsonSerializer.Serialize(page.Event, JsonOptions)}\n\n";
+        await context.Response.WriteAsync(eventText, cancellationToken).ConfigureAwait(false);
         await context.Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 

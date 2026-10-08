@@ -1,7 +1,9 @@
 extern alias GatewayHost;
 
+using System.Text;
 using GatewayOwner = GatewayHost::Agentweaver.Gateway.GatewayOwner;
 using GatewayProgram = GatewayHost::Program;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -28,9 +30,13 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
 
     public static GatewayProductionResourceServer Start(
         SecurityKey signingKey,
-        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> projectsOwner)
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> projectsOwner,
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? eventsOwner = null,
+        int ownerRequestTimeoutSeconds = 10,
+        Action<string>? observeSseData = null)
     {
-        var factory = new ProductionGatewayFactory(signingKey, projectsOwner);
+        var factory = new ProductionGatewayFactory(
+            signingKey, projectsOwner, eventsOwner, ownerRequestTimeoutSeconds, observeSseData);
         try
         {
             var client = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -58,21 +64,28 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
         private readonly Dictionary<string, string?> _previousSettings = new(StringComparer.Ordinal);
         private readonly SecurityKey _signingKey;
         private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _projectsOwner;
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? _eventsOwner;
+        private readonly Action<string>? _observeSseData;
         private bool _restored;
 
         public ProductionGatewayFactory(
             SecurityKey signingKey,
-            Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> projectsOwner)
+            Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> projectsOwner,
+            Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? eventsOwner,
+            int ownerRequestTimeoutSeconds,
+            Action<string>? observeSseData)
         {
             _signingKey = signingKey;
             _projectsOwner = projectsOwner;
+            _eventsOwner = eventsOwner;
+            _observeSseData = observeSseData;
             SetEnvironment("Identity__Issuer", IdentityBrokerWebApplicationFactory.Issuer);
             SetEnvironment("Identity__Audience", "https://api.test/");
             SetEnvironment("Gateway__Owners__Projects", "https://projects.test");
             SetEnvironment("Gateway__Owners__Orchestrator", "https://orchestrator.test");
             SetEnvironment("Gateway__Owners__Knowledge", "https://knowledge.test");
             SetEnvironment("Gateway__Owners__Events", "https://events.test");
-            SetEnvironment("Gateway__OwnerRequestTimeoutSeconds", "10");
+            SetEnvironment("Gateway__OwnerRequestTimeoutSeconds", ownerRequestTimeoutSeconds.ToString());
         }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -90,7 +103,16 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
                     nameof(GatewayOwner.Projects),
                     options => options.HttpMessageHandlerBuilderActions.Add(
                         handlerBuilder => handlerBuilder.PrimaryHandler =
-                        new ProjectsOwnerHandler(_projectsOwner)));
+                        new OwnerHandler(_projectsOwner)));
+                if (_eventsOwner is not null)
+                    services.Configure<HttpClientFactoryOptions>(
+                        nameof(GatewayOwner.Events),
+                        options => options.HttpMessageHandlerBuilderActions.Add(
+                            handlerBuilder => handlerBuilder.PrimaryHandler =
+                            new OwnerHandler(_eventsOwner)));
+                if (_observeSseData is not null)
+                    services.AddSingleton<IStartupFilter>(
+                        new SseObservationStartupFilter(_observeSseData));
             });
         }
 
@@ -117,7 +139,7 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
         }
     }
 
-    private sealed class ProjectsOwnerHandler(
+    private sealed class OwnerHandler(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler)
         : HttpMessageHandler
     {
@@ -125,5 +147,88 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
             HttpRequestMessage request,
             CancellationToken cancellationToken) =>
             handler(request, cancellationToken);
+    }
+
+    private sealed class SseObservationStartupFilter(Action<string> observe) : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) =>
+            app =>
+            {
+                app.Use(async (context, nextRequest) =>
+                {
+                    if (context.Request.Path.Value?.EndsWith("/events/live", StringComparison.Ordinal) != true)
+                    {
+                        await nextRequest();
+                        return;
+                    }
+
+                    var originalBody = context.Response.Body;
+                    context.Response.Body = new SseObservationStream(originalBody, observe);
+                    try
+                    {
+                        await nextRequest();
+                    }
+                    finally
+                    {
+                        context.Response.Body = originalBody;
+                    }
+                });
+                next(app);
+            };
+    }
+
+    private sealed class SseObservationStream(Stream inner, Action<string> observe) : MemoryStream
+    {
+        private string _pending = string.Empty;
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            inner.Write(buffer, offset, count);
+            Observe(buffer.AsSpan(offset, count));
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            inner.Write(buffer);
+            Observe(buffer);
+        }
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await inner.WriteAsync(buffer, cancellationToken);
+            Observe(buffer.Span);
+        }
+
+        public override async Task WriteAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            await inner.WriteAsync(buffer, offset, count, cancellationToken);
+            Observe(buffer.AsSpan(offset, count));
+        }
+
+        public override void Flush() => inner.Flush();
+
+        public override Task FlushAsync(CancellationToken cancellationToken) =>
+            inner.FlushAsync(cancellationToken);
+
+        private void Observe(ReadOnlySpan<byte> bytes)
+        {
+            _pending += Encoding.UTF8.GetString(bytes);
+            var separator = _pending.IndexOf("\n\n", StringComparison.Ordinal);
+            while (separator >= 0)
+            {
+                var block = _pending[..separator];
+                _pending = _pending[(separator + 2)..];
+                foreach (var line in block.Split('\n'))
+                    if (line.StartsWith("data: ", StringComparison.Ordinal))
+                        observe(line["data: ".Length..]);
+                separator = _pending.IndexOf("\n\n", StringComparison.Ordinal);
+            }
+        }
     }
 }
