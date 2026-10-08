@@ -118,9 +118,10 @@ data erasure. Release is rejected while the volume is bound or attached. Known p
 owner record safely retryable; uncertain provider effects remain reconcilable. Azure Files does not claim
 Sandbox mounting or durable flush.
 
-The repository does not contain the AgentHost, product
-API, web UI, product MCP server, or application router. It does not contain a published
-platform image.
+The repository does not contain the AgentHost scheduler or product MCP server.
+It includes an unpublished v1 browser client over the Gateway/BFF and Identity
+Broker; that source does not establish a deployed application, a published image,
+or automatic work scheduling. See the [v1 web client guide](../guide/web-client).
 
 The Knowledge source candidate and its current native Memory boundary are described in
 the [Knowledge and Memory reference](knowledge-memory.md).

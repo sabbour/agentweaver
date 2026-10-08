@@ -126,11 +126,16 @@ export function validateManifest(manifest, { root = repositoryRoot, readProject 
       }
       const packageLock = readJsonFile(WEB_LOCK_PATH, root, readProject);
       if (packageLock === null || typeof packageLock !== 'object' || Array.isArray(packageLock) ||
+          typeof packageLock.version !== 'string' ||
           packageLock.packages === null || typeof packageLock.packages !== 'object' ||
           Array.isArray(packageLock.packages) ||
           packageLock.packages[''] === null || typeof packageLock.packages[''] !== 'object' ||
           Array.isArray(packageLock.packages[''])) {
         fail(WEB_LOCK_PATH, 'committed npm lockfile must contain a packages[""] object');
+      }
+      version(packageLock.version, `${WEB_LOCK_PATH}.version`);
+      if (packageLock.version !== component.version) {
+        fail(`${location}.version`, `checked-in ${WEB_LOCK_PATH} version must match ${component.version}`);
       }
       version(packageLock.packages[''].version, `${WEB_LOCK_PATH}.packages[""].version`);
       if (packageLock.packages[''].version !== component.version) {

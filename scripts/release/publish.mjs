@@ -1,10 +1,10 @@
 // Only the manually confirmed publication workflow invokes this script.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateFile } from './validate.mjs';
+import { validateFile, WEB_LOCK_PATH, WEB_PROJECT_PATH } from './validate.mjs';
 import { componentImageRepository } from './pack.mjs';
 import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
 import { runPublicationCommand as command } from './command.mjs';
@@ -17,6 +17,86 @@ const initialProbeDigest = 'sha256:452be7e284ee6c33814fcedcf1d7c98f98384d09ea723
 const initialProbeClaim = 'agentweaver-publication/initial-foundation-probe-0.0.0-replacement';
 const samplerProbeDigest = 'sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969';
 const samplerProbeClaim = 'agentweaver-publication/foundation-probe-0.0.0-sampler-replacement';
+const contentHashPattern = /^[a-f0-9]{64}$/;
+const imageIdPattern = /^sha256:[a-f0-9]{64}$/;
+
+function validateWebArtifact(component, artifact, componentProvenance, sourceSha, root, git) {
+  const reject = () => fail('prepared web image provenance does not match the exact source, version, or linux/amd64 artifact');
+  const repository = componentImageRepository(component.id);
+  const tag = `${component.version.replaceAll('+', '_')}-${sourceSha}`;
+  const imageReference = `${repository}:${tag}`;
+  const source = componentProvenance?.source;
+  const build = componentProvenance?.build;
+  const sourceFiles = source?.files;
+  if (component.id !== 'Agentweaver.Web' || component.kind !== 'service' ||
+      component.project !== WEB_PROJECT_PATH || artifact.repository !== repository ||
+      artifact.tag !== tag || artifact.imageReference !== imageReference ||
+      artifact.platform !== 'linux/amd64' || !imageIdPattern.test(artifact.imageId ?? '') ||
+      artifact.labels?.['org.opencontainers.image.revision'] !== sourceSha ||
+      artifact.labels?.['org.opencontainers.image.version'] !== component.version ||
+      !Array.isArray(sourceFiles) || sourceFiles.length === 0) {
+    reject();
+  }
+
+  const sourcePaths = git('ls-tree', '-r', '--name-only', sourceSha, '--', 'apps/web')
+    .split(/\r?\n/).filter(Boolean).sort();
+  if (sourcePaths.length !== sourceFiles.length ||
+      sourcePaths.some((file, index) => sourceFiles[index]?.path !== file)) {
+    reject();
+  }
+  const actualFiles = sourcePaths.map((file) => {
+    const full = path.resolve(root, file);
+    if (!full.startsWith(root + path.sep)) reject();
+    let stat;
+    let bytes;
+    try {
+      stat = lstatSync(full);
+      bytes = readFileSync(full);
+    } catch (error) {
+      fail(`prepared web source file ${file} cannot be verified: ${error.message}`);
+    }
+    if (!stat.isFile()) reject();
+    return { path: file, sha256: hash(bytes), size: stat.size };
+  });
+  if (actualFiles.some((file, index) =>
+    file.sha256 !== sourceFiles[index]?.sha256 || file.size !== sourceFiles[index]?.size)) {
+    reject();
+  }
+  const treeSha256 = hash(JSON.stringify(actualFiles.map(({ path: file, sha256 }) => [file, sha256])));
+  const sourceByPath = new Map(actualFiles.map(({ path: file, sha256 }) => [file, sha256]));
+  if (source.treeSha256 !== treeSha256 ||
+      source.packageJsonSha256 !== sourceByPath.get(WEB_PROJECT_PATH) ||
+      source.packageLockSha256 !== sourceByPath.get(WEB_LOCK_PATH) ||
+      source.dockerfileSha256 !== sourceByPath.get('apps/web/Dockerfile') ||
+      componentProvenance?.lock?.path !== WEB_LOCK_PATH ||
+      componentProvenance.lock.sha256 !== sourceByPath.get(WEB_LOCK_PATH)) {
+    reject();
+  }
+
+  const baseImages = artifact.baseImages;
+  const output = artifact.buildOutput;
+  if (!Array.isArray(baseImages) || baseImages.length === 0 ||
+      baseImages.some((image) => typeof image.reference !== 'string' ||
+        !/@sha256:[a-f0-9]{64}$/.test(image.reference) ||
+        image.repositoryDigest !== image.reference ||
+        !imageIdPattern.test(image.imageId ?? '')) ||
+      !Array.isArray(output?.files) || output.files.length === 0 ||
+      output.files.some((file) => typeof file.path !== 'string' ||
+        !contentHashPattern.test(file.sha256 ?? '') ||
+        !Number.isSafeInteger(file.size) || file.size < 0) ||
+      !contentHashPattern.test(output.sha256 ?? '') ||
+      hash(JSON.stringify(output.files)) !== output.sha256 ||
+      build?.tool !== 'npm' || build.dockerfile !== 'apps/web/Dockerfile' ||
+      build.dockerBuildArguments?.IMAGE_TAG !== component.version ||
+      build.dockerBuildArguments?.GIT_SHA !== sourceSha ||
+      build.imageId !== artifact.imageId || build.imageReference !== imageReference ||
+      build.platform !== 'linux/amd64' ||
+      JSON.stringify(build.baseImages) !== JSON.stringify(baseImages) ||
+      JSON.stringify(build.output) !== JSON.stringify(output)) {
+    reject();
+  }
+  return imageReference;
+}
 
 function parseRegistry(value) {
   if (typeof value !== 'string' || value.trim() !== value) return undefined;
@@ -45,6 +125,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   confirmFoundationProbeSamplerReplacement,
   expectedFoundationProbeSamplerDigest,
 } = {}) {
+  root = path.resolve(root);
   if (!confirmed || !/^[a-f0-9]{40}$/.test(sourceSha ?? '')) fail('explicit confirmation and exact source SHA are required');
   if (packagesOnly && foundationProbeOnly) fail('package-only and Foundation Probe-only publication are mutually exclusive');
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -108,16 +189,25 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     fail('missing or unexpected artifact provenance');
   }
   const selected = [];
-  for (const component of components) {
+  for (let index = 0; index < components.length; index++) {
+    const component = components[index];
     const kind = component.kind === 'service' ? 'image' : 'package';
     const filename = kind === 'image' ? `${component.id}.${component.version}.tar.gz`
       : `${path.basename(component.project, '.csproj')}.${component.version}.nupkg`;
-    const matches = provenance.artifacts.filter((artifact) => artifact.path === filename && artifact.kind === kind && artifact.componentId === component.id);
+    const artifactFilename = component.project === WEB_PROJECT_PATH
+      ? `${component.id}.${component.version}.tar`
+      : filename;
+    const matches = provenance.artifacts.filter((artifact) =>
+      artifact.path === artifactFilename && artifact.kind === kind && artifact.componentId === component.id);
     if (matches.length !== 1) fail(`missing unique artifact for ${component.id}`);
     const artifact = matches[0];
-    const file = path.join(directory, filename);
+    const file = path.join(directory, artifactFilename);
     if (hash(readFileSync(file)) !== artifact.sha256) fail(`artifact hash mismatch for ${component.id}`);
-    selected.push({ component, artifact, file });
+    const componentProvenance = provenance.components[index];
+    const localImageReference = component.project === WEB_PROJECT_PATH
+      ? validateWebArtifact(component, artifact, componentProvenance, sourceSha, root, git)
+      : undefined;
+    selected.push({ component, artifact, file, localImageReference });
   }
   const hasPackages = selected.some(({ artifact }) => artifact.kind === 'package');
   const hasImages = selected.some(({ artifact }) => artifact.kind === 'image');
@@ -236,15 +326,33 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   receipt.claimSha = createRecord('claim', { ...receipt, status: 'claimed' });
   let publicationError;
   try {
+    for (const { component, artifact, file, localImageReference } of selected) {
+      if (localImageReference === undefined) continue;
+      run('docker', ['load', '--input', file]);
+      let image;
+      try {
+        image = JSON.parse(run('docker', ['image', 'inspect', '--format', '{{json .}}', localImageReference]));
+      } catch (error) {
+        fail(`loaded web image cannot be inspected: ${error.message}`);
+      }
+      const labels = image?.Config?.Labels;
+      if (image?.Id !== artifact.imageId || image?.Os !== 'linux' || image?.Architecture !== 'amd64' ||
+          labels?.['org.opencontainers.image.revision'] !== sourceSha ||
+          labels?.['org.opencontainers.image.version'] !== component.version) {
+        fail('loaded web image does not match its source, version, local image identity, or linux/amd64 provenance');
+      }
+    }
     if (hasImages) run('docker', ['login', registry.host, '--username', env.RELEASE_REGISTRY_USER, '--password-stdin'], env.RELEASE_REGISTRY_PASSWORD);
     for (const { component, artifact, file } of selected) {
       if (artifact.kind === 'package') {
         run('dotnet', ['nuget', 'push', file, '--source', env.RELEASE_NUGET_SOURCE, '--api-key', env.RELEASE_NUGET_API_KEY]);
         receipt.published.push({ id: component.id, version: component.version, kind: 'package', feed: env.RELEASE_NUGET_SOURCE, sha256: artifact.sha256 });
       } else {
-        const local = `${componentImageRepository(component.id)}:${component.version}`;
+        const local = component.project === WEB_PROJECT_PATH
+          ? artifact.imageReference
+          : `${componentImageRepository(component.id)}:${component.version}`;
         const remote = `${imageRepositories.get(component.id)}:${component.version}`;
-        run('docker', ['load', '--input', file]);
+        if (component.project !== WEB_PROJECT_PATH) run('docker', ['load', '--input', file]);
         if (replaceProbe) {
           const config = JSON.parse(run('docker', ['inspect', '--format', '{{json .Config}}', local]));
           const source = resolveProbeImageSource({ repoRoot: root });
