@@ -15,6 +15,11 @@ public static class KnowledgeEndpoints
         agents.MapGet("/records/{recordId:guid}", ReadAsync);
         agents.MapPut("/records/{recordId:guid}", UpdateAsync);
         agents.MapGet("/records/{recordId:guid}/revisions", ReadRevisionsAsync);
+        agents.MapPost("/records/{recordId:guid}/restore", RestoreAsync);
+        agents.MapPost("/records/{recordId:guid}/approve", ApproveDecisionAsync);
+        agents.MapGet("/records/export", ExportAsync);
+        agents.MapPost("/records/import", ImportAsync)
+            .WithMetadata(new RequestSizeLimitAttribute(KnowledgeRecordTransferContract.MaximumBytes));
         agents.MapPost("/proposals/{proposalId:guid}/promote", PromoteAsync);
         agents.MapPost("/proposals/{proposalId:guid}/reject", RejectAsync);
         agents.MapGet("/context", CompileContextAsync);
@@ -115,6 +120,77 @@ public static class KnowledgeEndpoints
         ExecuteAsync(async () => Results.Ok(await service.ReadRevisionsAsync(
             projectId, runId, agentId, recordId, page ?? 1, pageSize ?? 50, cancellationToken)
             .ConfigureAwait(false)));
+
+    private static Task<IResult> RestoreAsync(
+        string projectId,
+        string runId,
+        string agentId,
+        Guid recordId,
+        RestoreKnowledgeRecordRequest request,
+        HttpContext httpContext,
+        KnowledgeApplicationService service,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () => ToWriteResult(await service.RestoreAsync(
+            projectId,
+            runId,
+            agentId,
+            recordId,
+            request,
+            IdempotencyKey(httpContext),
+            cancellationToken).ConfigureAwait(false)));
+
+    private static Task<IResult> ApproveDecisionAsync(
+        string projectId,
+        string runId,
+        string agentId,
+        Guid recordId,
+        ApproveKnowledgeDecisionRequest request,
+        HttpContext httpContext,
+        KnowledgeApplicationService service,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () => ToWriteResult(await service.ApproveDecisionAsync(
+            projectId,
+            runId,
+            agentId,
+            recordId,
+            request,
+            IdempotencyKey(httpContext),
+            cancellationToken).ConfigureAwait(false)));
+
+    private static Task<IResult> ExportAsync(
+        string projectId,
+        string runId,
+        string agentId,
+        HttpContext httpContext,
+        KnowledgeApplicationService service,
+        CancellationToken cancellationToken)
+    {
+        httpContext.Response.Headers.CacheControl = "no-store";
+        return ExecuteAsync(async () => Results.Ok(await service.ExportAsync(
+            projectId, runId, agentId, cancellationToken).ConfigureAwait(false)));
+    }
+
+    private static Task<IResult> ImportAsync(
+        string projectId,
+        string runId,
+        string agentId,
+        KnowledgeRecordTransferBundle request,
+        HttpContext httpContext,
+        KnowledgeApplicationService service,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            var result = await service.ImportAsync(
+                projectId,
+                runId,
+                agentId,
+                request,
+                IdempotencyKey(httpContext),
+                cancellationToken).ConfigureAwait(false);
+            return Results.Json(result, statusCode: result.IsDuplicate
+                ? StatusCodes.Status200OK
+                : StatusCodes.Status201Created);
+        });
 
     private static Task<IResult> PromoteAsync(
         string projectId,
@@ -267,6 +343,8 @@ public static class KnowledgeEndpoints
             KnowledgeWriteStatus.Stale => Conflict("stale_revision", result.CurrentRevision),
             KnowledgeWriteStatus.IdempotencyConflict => Conflict("idempotency_conflict", result.CurrentRevision),
             KnowledgeWriteStatus.InvalidState => Conflict("invalid_record_state", result.CurrentRevision),
+            KnowledgeWriteStatus.InvalidReplacement => Conflict("invalid_replacement", result.CurrentRevision),
+            KnowledgeWriteStatus.ReplacementCycle => Conflict("replacement_cycle", result.CurrentRevision),
             _ => throw new InvalidOperationException("Unexpected Knowledge write status.")
         };
 

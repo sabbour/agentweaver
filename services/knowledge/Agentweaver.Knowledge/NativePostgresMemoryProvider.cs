@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Data;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -16,16 +17,19 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
     public const string ProviderId = "postgres.native-memory";
     public static Version AdapterVersion { get; } = new(1, 0, 0);
     public const int OptionsSchemaVersion = NativePostgresMemoryOptions.CurrentOptionsSchemaVersion;
+    private const int MaximumDecisionChainLength = 64;
 
     private const string RecordColumns = """
         record_id, project_id, agent_id, kind, record_type, title, content, rationale,
         importance, tags, state, trust_state, revision, current_revision_id,
         previous_revision_id, source_run_id, source_session_id, promoted_decision_id,
-        created_at, updated_at
+        created_at, updated_at, superseded_by_record_id
         """;
     private const string RevisionColumns = """
         record_id, revision, revision_id, previous_revision_id, kind, record_type,
-        title, content, rationale, importance, tags, state, trust_state, change_kind, created_at
+        title, content, rationale, importance, tags, state, trust_state, reason,
+        superseded_by_record_id, source_run_id, source_session_id, actor_fingerprint,
+        change_kind, created_at
         """;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -302,6 +306,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             await InsertRevisionAsync(
                 connection, transaction, record, normalized.ActorFingerprint,
                 normalized.Kind == KnowledgeRecordKind.Proposal ? "proposal_created" : "created",
+                normalized.Kind == KnowledgeRecordKind.Proposal ? "proposal created" : "created",
                 cancellationToken).ConfigureAwait(false);
             var result = new KnowledgeRecordWriteResult(KnowledgeWriteStatus.Created, record);
             await CompleteWriteAsync(
@@ -325,6 +330,12 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 .ConfigureAwait(false);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
                 .ConfigureAwait(false);
+            var candidate = await ReadRecordAsync(
+                connection, transaction, normalized.ProjectId, normalized.RecordId, cancellationToken)
+                .ConfigureAwait(false);
+            if (candidate?.Kind == KnowledgeRecordKind.Decision)
+                await AcquireDecisionGraphLockAsync(
+                    connection, transaction, normalized.ProjectId, cancellationToken).ConfigureAwait(false);
             var reservation = await ReserveWriteAsync(
                 connection, transaction, normalized.ProjectId, normalized.ActorFingerprint, idempotencyKey,
                 fingerprint, "record", normalized.RecordId, cancellationToken).ConfigureAwait(false);
@@ -343,11 +354,42 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             if (current.Revision != normalized.ExpectedRevision)
                 return new KnowledgeRecordWriteResult(
                     KnowledgeWriteStatus.Stale, null, CurrentRevision: current.Revision);
-            if (current.Kind is not (KnowledgeRecordKind.Memory or KnowledgeRecordKind.SessionContext) ||
-                normalized.State is not (KnowledgeRecordState.Active or KnowledgeRecordState.Archived))
+            if (current.Kind is not (KnowledgeRecordKind.Memory or KnowledgeRecordKind.SessionContext or
+                    KnowledgeRecordKind.Decision) ||
+                (current.Kind == KnowledgeRecordKind.Decision
+                    ? normalized.State is not (KnowledgeRecordState.Active or KnowledgeRecordState.Archived or
+                        KnowledgeRecordState.Superseded)
+                    : normalized.State is not (KnowledgeRecordState.Active or KnowledgeRecordState.Archived)) ||
+                (current.Kind != KnowledgeRecordKind.Decision && normalized.SupersededByRecordId is not null) ||
+                (current.Kind == KnowledgeRecordKind.Decision &&
+                    (current.State == KnowledgeRecordState.Superseded ||
+                     (current.State == KnowledgeRecordState.Archived &&
+                      normalized.State == KnowledgeRecordState.Active))))
                 return new KnowledgeRecordWriteResult(
                     KnowledgeWriteStatus.InvalidState, null, CurrentRevision: current.Revision);
 
+            if (current.Kind == KnowledgeRecordKind.Decision)
+            {
+                KnowledgeTransferValidator.ValidateSupersessionState(
+                    current.Kind, normalized.State, normalized.SupersededByRecordId,
+                    "invalid_replacement");
+                if (normalized.State == KnowledgeRecordState.Superseded &&
+                    current.State != KnowledgeRecordState.Active)
+                    return new KnowledgeRecordWriteResult(
+                        KnowledgeWriteStatus.InvalidState, null, CurrentRevision: current.Revision);
+                if (normalized.SupersededByRecordId is { } replacementId)
+                {
+                    var replacementStatus = await ValidateDecisionReplacementAsync(
+                        connection, transaction, normalized.ProjectId, current.AgentId, normalized.RecordId,
+                        replacementId, cancellationToken).ConfigureAwait(false);
+                    if (replacementStatus is not null)
+                        return new KnowledgeRecordWriteResult(replacementStatus.Value, null,
+                            CurrentRevision: current.Revision);
+                }
+            }
+
+            var decisionContentChanged = current.Content != normalized.Content ||
+                current.Rationale != normalized.Rationale;
             var contentChanged = current.Type != normalized.Type ||
                 current.Title != normalized.Title ||
                 current.Content != normalized.Content ||
@@ -356,7 +398,18 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 !current.Tags.SequenceEqual(normalized.Tags, StringComparer.Ordinal);
             var trustState = current.Kind == KnowledgeRecordKind.SessionContext
                 ? current.TrustState
-                : contentChanged ? KnowledgeTrustState.Pending : current.TrustState;
+                : current.Kind == KnowledgeRecordKind.Decision
+                    ? decisionContentChanged ? KnowledgeTrustState.Pending : current.TrustState
+                    : contentChanged ? KnowledgeTrustState.Pending : current.TrustState;
+            var changeKind = current.Kind == KnowledgeRecordKind.Decision
+                ? normalized.State switch
+                {
+                    KnowledgeRecordState.Archived when current.State != KnowledgeRecordState.Archived =>
+                        "decision_archived",
+                    KnowledgeRecordState.Superseded => "decision_superseded",
+                    _ => "updated"
+                }
+                : "updated";
             var now = _timeProvider.GetUtcNow();
             var updated = current with
             {
@@ -371,17 +424,352 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 Revision = checked(current.Revision + 1),
                 PreviousRevisionId = current.RevisionId,
                 RevisionId = Guid.NewGuid(),
-                UpdatedAt = now
+                UpdatedAt = now,
+                SupersededByRecordId = normalized.SupersededByRecordId
             };
             await UpdateCurrentRecordAsync(
                 connection, transaction, current.Revision, updated, cancellationToken).ConfigureAwait(false);
             await InsertRevisionAsync(
-                connection, transaction, updated, normalized.ActorFingerprint, "updated", cancellationToken)
+                connection, transaction, updated, normalized.ActorFingerprint, changeKind,
+                normalized.Reason ?? changeKind.Replace('_', ' '), cancellationToken)
                 .ConfigureAwait(false);
             var result = new KnowledgeRecordWriteResult(KnowledgeWriteStatus.Updated, updated);
             await CompleteWriteAsync(
                 connection, transaction, normalized.ProjectId, normalized.ActorFingerprint, idempotencyKey,
                 updated.RecordId, result, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return result;
+        }, cancellationToken);
+
+    public Task<KnowledgeRecordWriteResult> RestoreAsync(
+        KnowledgeRecordRestore input,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default) =>
+        WithStorageAsync(async () =>
+        {
+            ArgumentNullException.ThrowIfNull(input);
+            ValidateIdentifier(input.ProjectId, nameof(input.ProjectId));
+            ValidateActorFingerprint(input.ActorFingerprint);
+            ValidateIdempotencyKey(idempotencyKey);
+            if (input.RecordId == Guid.Empty || input.ExpectedRevision < 1 || input.Revision < 1)
+                throw new KnowledgeApiException(
+                    "invalid_restore_revision",
+                    "A record ID and positive current and historical revisions are required.",
+                    StatusCodes.Status400BadRequest);
+            var fingerprint = Fingerprint(input);
+            await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var candidate = await ReadRecordAsync(
+                connection, transaction, input.ProjectId, input.RecordId, cancellationToken)
+                .ConfigureAwait(false);
+            if (candidate?.Kind == KnowledgeRecordKind.Decision)
+                await AcquireDecisionGraphLockAsync(
+                    connection, transaction, input.ProjectId, cancellationToken).ConfigureAwait(false);
+            var reservation = await ReserveWriteAsync(
+                connection, transaction, input.ProjectId, input.ActorFingerprint, idempotencyKey,
+                fingerprint, "record", input.RecordId, cancellationToken).ConfigureAwait(false);
+            if (!reservation.IsNew)
+            {
+                var duplicate = Deserialize<KnowledgeRecordWriteResult>(reservation.ResultJson);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return duplicate with { IsDuplicate = true };
+            }
+
+            var current = await ReadLockedRecordAsync(
+                connection, transaction, input.ProjectId, input.RecordId, cancellationToken)
+                .ConfigureAwait(false);
+            if (current is null)
+                return new KnowledgeRecordWriteResult(KnowledgeWriteStatus.NotFound, null);
+            if (current.Revision != input.ExpectedRevision)
+                return new KnowledgeRecordWriteResult(
+                    KnowledgeWriteStatus.Stale, null, CurrentRevision: current.Revision);
+            if (current.Kind is not (KnowledgeRecordKind.Memory or KnowledgeRecordKind.Decision))
+                return new KnowledgeRecordWriteResult(
+                    KnowledgeWriteStatus.InvalidState, null, CurrentRevision: current.Revision);
+            var historical = await ReadRevisionSnapshotAsync(
+                connection, transaction, input.ProjectId, input.RecordId, input.Revision, cancellationToken)
+                .ConfigureAwait(false);
+            if (historical is null)
+                return new KnowledgeRecordWriteResult(KnowledgeWriteStatus.NotFound, null);
+
+            var updated = current with
+            {
+                Type = historical.Type,
+                Title = historical.Title,
+                Content = historical.Content,
+                Rationale = historical.Rationale,
+                Importance = historical.Importance,
+                Tags = historical.Tags,
+                State = KnowledgeRecordState.Active,
+                TrustState = KnowledgeTrustState.Pending,
+                Revision = checked(current.Revision + 1),
+                PreviousRevisionId = current.RevisionId,
+                RevisionId = Guid.NewGuid(),
+                UpdatedAt = _timeProvider.GetUtcNow(),
+                SupersededByRecordId = null
+            };
+            var changeKind = current.Kind == KnowledgeRecordKind.Decision
+                ? "decision_restored"
+                : "updated";
+            var reason = input.Reason ?? $"restored revision {input.Revision}";
+            await UpdateCurrentRecordAsync(
+                connection, transaction, current.Revision, updated, cancellationToken).ConfigureAwait(false);
+            await InsertRevisionAsync(
+                connection, transaction, updated, input.ActorFingerprint, changeKind, reason,
+                cancellationToken).ConfigureAwait(false);
+            var result = new KnowledgeRecordWriteResult(KnowledgeWriteStatus.Updated, updated);
+            await CompleteWriteAsync(
+                connection, transaction, input.ProjectId, input.ActorFingerprint, idempotencyKey,
+                updated.RecordId, result, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return result;
+        }, cancellationToken);
+
+    public Task<KnowledgeRecordWriteResult> ApproveDecisionAsync(
+        KnowledgeDecisionApproval input,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default) =>
+        WithStorageAsync(async () =>
+        {
+            ArgumentNullException.ThrowIfNull(input);
+            ValidateIdentifier(input.ProjectId, nameof(input.ProjectId));
+            ValidateActorFingerprint(input.ActorFingerprint);
+            ValidateIdempotencyKey(idempotencyKey);
+            if (input.RecordId == Guid.Empty || input.ExpectedRevision < 1)
+                throw new KnowledgeApiException(
+                    "invalid_decision_revision",
+                    "A Decision ID and positive expected revision are required.",
+                    StatusCodes.Status400BadRequest);
+            var fingerprint = Fingerprint(input);
+            await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var reservation = await ReserveWriteAsync(
+                connection, transaction, input.ProjectId, input.ActorFingerprint, idempotencyKey,
+                fingerprint, "record", input.RecordId, cancellationToken).ConfigureAwait(false);
+            if (!reservation.IsNew)
+            {
+                var duplicate = Deserialize<KnowledgeRecordWriteResult>(reservation.ResultJson);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return duplicate with { IsDuplicate = true };
+            }
+
+            var current = await ReadLockedRecordAsync(
+                connection, transaction, input.ProjectId, input.RecordId, cancellationToken)
+                .ConfigureAwait(false);
+            if (current is null || current.Kind != KnowledgeRecordKind.Decision)
+                return new KnowledgeRecordWriteResult(KnowledgeWriteStatus.NotFound, null);
+            if (current.Revision != input.ExpectedRevision)
+                return new KnowledgeRecordWriteResult(
+                    KnowledgeWriteStatus.Stale, null, CurrentRevision: current.Revision);
+            if (current.State != KnowledgeRecordState.Active ||
+                current.TrustState is not (KnowledgeTrustState.Pending or KnowledgeTrustState.Legacy))
+                return new KnowledgeRecordWriteResult(
+                    KnowledgeWriteStatus.InvalidState, null, CurrentRevision: current.Revision);
+
+            var approved = current with
+            {
+                TrustState = KnowledgeTrustState.Approved,
+                Revision = checked(current.Revision + 1),
+                PreviousRevisionId = current.RevisionId,
+                RevisionId = Guid.NewGuid(),
+                UpdatedAt = _timeProvider.GetUtcNow()
+            };
+            await UpdateCurrentRecordAsync(
+                connection, transaction, current.Revision, approved, cancellationToken).ConfigureAwait(false);
+            await InsertRevisionAsync(
+                connection, transaction, approved, input.ActorFingerprint, "decision_approved",
+                input.Reason ?? "approved", cancellationToken).ConfigureAwait(false);
+            var result = new KnowledgeRecordWriteResult(KnowledgeWriteStatus.Updated, approved);
+            await CompleteWriteAsync(
+                connection, transaction, input.ProjectId, input.ActorFingerprint, idempotencyKey,
+                approved.RecordId, result, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return result;
+        }, cancellationToken);
+
+    public Task<KnowledgeRecordTransferBundle> ExportAsync(
+        string projectId,
+        string agentId,
+        CancellationToken cancellationToken = default) =>
+        WithStorageAsync(async () =>
+        {
+            ValidateIdentifier(projectId, nameof(projectId));
+            ValidateIdentifier(agentId, nameof(agentId));
+            await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await using var transaction = await connection.BeginTransactionAsync(
+                IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+            var records = new List<KnowledgeRecord>();
+            await using (var command = new NpgsqlCommand($"""
+                SELECT {RecordColumns}
+                FROM {_schema}.knowledge_records
+                WHERE project_id = @project
+                  AND agent_id = @agent
+                  AND kind IN ('Decision', 'Memory')
+                ORDER BY kind, agent_id, record_id
+                LIMIT @limit
+                """, connection, transaction))
+            {
+                command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+                command.Parameters.AddWithValue("agent", NpgsqlDbType.Varchar, agentId);
+                command.Parameters.AddWithValue("limit", NpgsqlDbType.Integer,
+                    KnowledgeRecordTransferContract.MaximumRecords + 1);
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    records.Add(ReadRecord(reader));
+            }
+            if (records.Count > KnowledgeRecordTransferContract.MaximumRecords)
+                throw KnowledgeTransferValidator.TooLarge(
+                    "The Knowledge export record count exceeds the supported bound.");
+
+            var histories = records.ToDictionary(
+                record => record.RecordId,
+                _ => new List<KnowledgeRecordRevision>());
+            if (records.Count > 0)
+            {
+                await using var command = new NpgsqlCommand($"""
+                    SELECT {RevisionColumns}
+                    FROM {_schema}.knowledge_revisions
+                    WHERE project_id = @project AND record_id = ANY(@records)
+                    ORDER BY record_id, revision
+                    """, connection, transaction);
+                command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+                command.Parameters.AddWithValue(
+                    "records",
+                    NpgsqlDbType.Array | NpgsqlDbType.Uuid,
+                    records.Select(record => record.RecordId).ToArray());
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                var revisionCount = 0;
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    if (++revisionCount > KnowledgeRecordTransferContract.MaximumRevisions)
+                        throw KnowledgeTransferValidator.TooLarge(
+                            "The Knowledge export revision count exceeds the supported bound.");
+                    var revision = ReadRevision(reader);
+                    if (!histories.TryGetValue(revision.RecordId, out var history))
+                        throw IncompleteExport();
+                    history.Add(revision);
+                }
+            }
+
+            var bundle = new KnowledgeRecordTransferBundle(
+                KnowledgeRecordTransferContract.Format,
+                KnowledgeRecordTransferContract.SchemaVersion,
+                projectId,
+                agentId,
+                records.Select(record => new KnowledgeRecordTransferEntry(
+                    record, histories[record.RecordId].ToImmutableArray())).ToImmutableArray());
+            KnowledgeTransferValidator.Validate(
+                bundle, projectId, agentId, "knowledge_transfer_incomplete",
+                StatusCodes.Status409Conflict, allowEmpty: true);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return bundle;
+        }, cancellationToken);
+
+    public Task<KnowledgeRecordImportResult> ImportAsync(
+        KnowledgeRecordTransferBundle input,
+        string runId,
+        string actorFingerprint,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default) =>
+        WithStorageAsync(async () =>
+        {
+            ArgumentNullException.ThrowIfNull(input);
+            ValidateIdentifier(input.ProjectId, nameof(input.ProjectId));
+            ValidateIdentifier(input.AgentId, nameof(input.AgentId));
+            ValidateIdentifier(runId, nameof(runId));
+            ValidateActorFingerprint(actorFingerprint);
+            ValidateIdempotencyKey(idempotencyKey);
+            KnowledgeTransferValidator.Validate(input, input.ProjectId, input.AgentId);
+            var fingerprint = Fingerprint(new { input, runId });
+            var projectId = input.ProjectId;
+            var resultRecordId = input.Records[0].Record.RecordId;
+            await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await AcquireDecisionGraphLockAsync(
+                connection, transaction, projectId, cancellationToken).ConfigureAwait(false);
+            var reservation = await ReserveWriteAsync(
+                connection, transaction, projectId, actorFingerprint, idempotencyKey,
+                fingerprint, "transfer", resultRecordId, cancellationToken).ConfigureAwait(false);
+            if (!reservation.IsNew)
+            {
+                var duplicate = Deserialize<KnowledgeRecordImportResult>(reservation.ResultJson);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return duplicate with { IsDuplicate = true };
+            }
+
+            var recordIds = input.Records.Select(entry => entry.Record.RecordId).ToArray();
+            await using (var collision = new NpgsqlCommand($"""
+                SELECT record_id FROM {_schema}.knowledge_records
+                WHERE record_id = ANY(@records)
+                LIMIT 1
+                """, connection, transaction))
+            {
+                collision.Parameters.AddWithValue(
+                    "records", NpgsqlDbType.Array | NpgsqlDbType.Uuid, recordIds);
+                if (await collision.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                    throw TransferConflict("A transferred record ID already exists; import does not merge record heads.");
+            }
+
+            var revisionIds = input.Records
+                .SelectMany(entry => entry.Revisions)
+                .Select(revision => revision.RevisionId)
+                .ToArray();
+            await using (var collision = new NpgsqlCommand($"""
+                SELECT revision_id FROM {_schema}.knowledge_revisions
+                WHERE revision_id = ANY(@revisions)
+                LIMIT 1
+                """, connection, transaction))
+            {
+                collision.Parameters.AddWithValue(
+                    "revisions", NpgsqlDbType.Array | NpgsqlDbType.Uuid, revisionIds);
+                if (await collision.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                    throw TransferConflict("A transferred revision ID already exists; import will not overwrite history.");
+            }
+
+            await ValidateTransferReplacementGraphAsync(
+                connection, transaction, input, cancellationToken).ConfigureAwait(false);
+            var now = _timeProvider.GetUtcNow();
+            var importedRecords = ImmutableArray.CreateBuilder<KnowledgeRecord>(input.Records.Length);
+            foreach (var entry in input.Records)
+            {
+                var source = entry.Record;
+                var imported = source with
+                {
+                    State = KnowledgeRecordState.Active,
+                    Revision = checked(source.Revision + 1),
+                    PreviousRevisionId = source.RevisionId,
+                    RevisionId = Guid.NewGuid(),
+                    TrustState = KnowledgeTrustState.Pending,
+                    SourceRunId = runId,
+                    SourceSessionId = null,
+                    UpdatedAt = now,
+                    SupersededByRecordId = null
+                };
+                var creatorFingerprint = entry.Revisions[0].ActorFingerprint ?? actorFingerprint;
+                await InsertRecordAsync(
+                    connection, transaction, imported, creatorFingerprint, cancellationToken)
+                    .ConfigureAwait(false);
+                foreach (var revision in entry.Revisions)
+                    await InsertRevisionSnapshotAsync(
+                        connection, transaction, projectId, revision, cancellationToken).ConfigureAwait(false);
+                await InsertRevisionAsync(
+                    connection, transaction, imported, actorFingerprint, "imported",
+                    "imported from an authorized Knowledge transfer", cancellationToken)
+                    .ConfigureAwait(false);
+                importedRecords.Add(imported);
+            }
+
+            var result = new KnowledgeRecordImportResult(importedRecords.ToImmutable());
+            await CompleteWriteAsync(
+                connection, transaction, projectId, actorFingerprint, idempotencyKey,
+                resultRecordId, result, cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return result;
         }, cancellationToken);
@@ -445,7 +833,8 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             await UpdateCurrentRecordAsync(
                 connection, transaction, current.Revision, updated, cancellationToken).ConfigureAwait(false);
             await InsertRevisionAsync(
-                connection, transaction, updated, actorFingerprint, "proposal_rejected", cancellationToken)
+                connection, transaction, updated, actorFingerprint, "proposal_rejected",
+                "proposal rejected", cancellationToken)
                 .ConfigureAwait(false);
             var result = new KnowledgeRecordWriteResult(KnowledgeWriteStatus.Updated, updated);
             await CompleteWriteAsync(
@@ -542,11 +931,11 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 .ConfigureAwait(false);
             await InsertRevisionAsync(
                 connection, transaction, promotedProposal, actorFingerprint,
-                "proposal_promoted", cancellationToken).ConfigureAwait(false);
+                "proposal_promoted", "proposal promoted", cancellationToken).ConfigureAwait(false);
             await InsertRecordAsync(
                 connection, transaction, decision, actorFingerprint, cancellationToken).ConfigureAwait(false);
             await InsertRevisionAsync(
-                connection, transaction, decision, actorFingerprint, "created", cancellationToken)
+                connection, transaction, decision, actorFingerprint, "created", "created", cancellationToken)
                 .ConfigureAwait(false);
 
             var eventId = Guid.NewGuid();
@@ -840,6 +1229,211 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             : null;
     }
 
+    private async Task<KnowledgeRecord?> ReadRecordAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        Guid recordId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT {RecordColumns}
+            FROM {_schema}.knowledge_records
+            WHERE project_id = @project AND record_id = @record
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+        command.Parameters.AddWithValue("record", NpgsqlDbType.Uuid, recordId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadRecord(reader)
+            : null;
+    }
+
+    private async Task<KnowledgeRecordRevision?> ReadRevisionSnapshotAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        Guid recordId,
+        int revision,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT {RevisionColumns}
+            FROM {_schema}.knowledge_revisions
+            WHERE project_id = @project AND record_id = @record AND revision = @revision
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+        command.Parameters.AddWithValue("record", NpgsqlDbType.Uuid, recordId);
+        command.Parameters.AddWithValue("revision", NpgsqlDbType.Integer, revision);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadRevision(reader)
+            : null;
+    }
+
+    private static async Task AcquireDecisionGraphLockAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('agentweaver.knowledge.decision-graph'), hashtext(@project))",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Text, projectId);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<KnowledgeWriteStatus?> ValidateDecisionReplacementAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        string sourceAgentId,
+        Guid sourceRecordId,
+        Guid replacementRecordId,
+        CancellationToken cancellationToken)
+    {
+        var visited = new HashSet<Guid> { sourceRecordId };
+        var currentId = replacementRecordId;
+        for (var depth = 0; depth < MaximumDecisionChainLength; depth++)
+        {
+            if (!visited.Add(currentId))
+                return KnowledgeWriteStatus.ReplacementCycle;
+            var current = await ReadRecordAsync(
+                connection, transaction, projectId, currentId, cancellationToken).ConfigureAwait(false);
+            if (current is null || current.Kind != KnowledgeRecordKind.Decision ||
+                !string.Equals(current.AgentId, sourceAgentId, StringComparison.Ordinal))
+                return KnowledgeWriteStatus.InvalidReplacement;
+            if (current.State == KnowledgeRecordState.Superseded)
+            {
+                if (current.SupersededByRecordId is not { } next)
+                    return KnowledgeWriteStatus.InvalidReplacement;
+                currentId = next;
+                continue;
+            }
+            return current.State is KnowledgeRecordState.Active or KnowledgeRecordState.Archived
+                ? null
+                : KnowledgeWriteStatus.InvalidReplacement;
+        }
+        throw new KnowledgeApiException(
+            "supersession_chain_too_long",
+            "The Decision supersession chain exceeds the supported traversal bound.",
+            StatusCodes.Status409Conflict);
+    }
+
+    private async Task ValidateTransferReplacementGraphAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        KnowledgeRecordTransferBundle bundle,
+        CancellationToken cancellationToken)
+    {
+        var included = bundle.Records.ToDictionary(entry => entry.Record.RecordId);
+        var referencedIds = bundle.Records
+            .SelectMany(entry => entry.Revisions
+                .Where(revision => revision.SupersededByRecordId is not null)
+                .Select(revision => revision.SupersededByRecordId!.Value))
+            .Distinct();
+        foreach (var targetId in referencedIds)
+        {
+            if (included.TryGetValue(targetId, out var includedTarget))
+            {
+                if (includedTarget.Record.Kind != KnowledgeRecordKind.Decision ||
+                    !string.Equals(includedTarget.Record.AgentId, bundle.AgentId, StringComparison.Ordinal))
+                    throw InvalidReplacement(
+                        "A supersession link must target a Decision in the transferred agent scope.");
+                continue;
+            }
+            var target = await ReadRecordAsync(
+                connection, transaction, bundle.ProjectId, targetId, cancellationToken).ConfigureAwait(false);
+            if (target?.Kind != KnowledgeRecordKind.Decision ||
+                !string.Equals(target.AgentId, bundle.AgentId, StringComparison.Ordinal))
+                throw InvalidReplacement(
+                    "A supersession target is missing or outside the transferred project and agent scope.");
+        }
+
+        foreach (var source in bundle.Records
+                     .Where(entry => entry.Record.State == KnowledgeRecordState.Superseded))
+        {
+            var visited = new HashSet<Guid> { source.Record.RecordId };
+            var currentId = source.Record.SupersededByRecordId!.Value;
+            var reachedTerminal = false;
+            for (var depth = 0; depth < MaximumDecisionChainLength; depth++)
+            {
+                if (!visited.Add(currentId))
+                    throw ReplacementCycle();
+                var current = included.TryGetValue(currentId, out var entry)
+                    ? entry.Record
+                    : await ReadRecordAsync(
+                        connection, transaction, bundle.ProjectId, currentId, cancellationToken)
+                        .ConfigureAwait(false);
+                if (current is null || current.Kind != KnowledgeRecordKind.Decision ||
+                    !string.Equals(current.AgentId, bundle.AgentId, StringComparison.Ordinal))
+                    throw InvalidReplacement(
+                        "A supersession target is missing or outside the transferred project and agent scope.");
+                if (current.State == KnowledgeRecordState.Superseded)
+                {
+                    if (current.SupersededByRecordId is not { } next)
+                        throw InvalidReplacement("A superseded Decision has no replacement link.");
+                    currentId = next;
+                    continue;
+                }
+                if (current.State is not (KnowledgeRecordState.Active or KnowledgeRecordState.Archived))
+                    throw InvalidReplacement("A supersession target has an unsupported state.");
+                reachedTerminal = true;
+                break;
+            }
+            if (!reachedTerminal)
+                throw new KnowledgeApiException(
+                    "supersession_chain_too_long",
+                    "The Decision supersession chain exceeds the supported traversal bound.",
+                    StatusCodes.Status409Conflict);
+        }
+    }
+
+    private async Task InsertRevisionSnapshotAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        KnowledgeRecordRevision revision,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            INSERT INTO {_schema}.knowledge_revisions
+                (project_id, record_id, revision, revision_id, previous_revision_id,
+                 kind, record_type, title, content, rationale, importance, tags,
+                 state, trust_state, source_run_id, source_session_id, actor_fingerprint,
+                 change_kind, reason, superseded_by_record_id, created_at)
+            VALUES
+                (@project, @record, @revision, @revision_id, @previous_revision_id,
+                 @kind, @type, @title, @content, @rationale, @importance, @tags,
+                 @state, @trust, @source_run, @source_session, @actor,
+                 @change_kind, @reason, @superseded_by, @created)
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+        command.Parameters.AddWithValue("record", NpgsqlDbType.Uuid, revision.RecordId);
+        command.Parameters.AddWithValue("revision", NpgsqlDbType.Integer, revision.Revision);
+        command.Parameters.AddWithValue("revision_id", NpgsqlDbType.Uuid, revision.RevisionId);
+        AddNullable(command, "previous_revision_id", NpgsqlDbType.Uuid, revision.PreviousRevisionId);
+        command.Parameters.AddWithValue("kind", NpgsqlDbType.Varchar, revision.Kind.ToString());
+        command.Parameters.AddWithValue("type", NpgsqlDbType.Varchar, revision.Type);
+        AddNullable(command, "title", NpgsqlDbType.Varchar, revision.Title);
+        command.Parameters.AddWithValue("content", NpgsqlDbType.Text, revision.Content);
+        AddNullable(command, "rationale", NpgsqlDbType.Text, revision.Rationale);
+        command.Parameters.AddWithValue("importance", NpgsqlDbType.Varchar, revision.Importance);
+        command.Parameters.AddWithValue("tags", NpgsqlDbType.Array | NpgsqlDbType.Text, revision.Tags.ToArray());
+        command.Parameters.AddWithValue("state", NpgsqlDbType.Varchar, revision.State.ToString());
+        command.Parameters.AddWithValue("trust", NpgsqlDbType.Varchar, revision.TrustState.ToString());
+        AddNullable(command, "source_run", NpgsqlDbType.Varchar, revision.SourceRunId);
+        AddNullable(command, "source_session", NpgsqlDbType.Varchar, revision.SourceSessionId);
+        AddNullable(command, "actor", NpgsqlDbType.Char, revision.ActorFingerprint);
+        AddNullable(command, "change_kind", NpgsqlDbType.Varchar, revision.ChangeKind);
+        AddNullable(command, "reason", NpgsqlDbType.Text, revision.Reason);
+        AddNullable(command, "superseded_by", NpgsqlDbType.Uuid, revision.SupersededByRecordId);
+        command.Parameters.AddWithValue("created", NpgsqlDbType.TimestampTz, revision.CreatedAt);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task InsertRecordAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -852,12 +1446,12 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 (record_id, project_id, agent_id, kind, record_type, title, content, rationale,
                  importance, tags, state, trust_state, revision, current_revision_id,
                  previous_revision_id, source_run_id, source_session_id, promoted_decision_id,
-                 creator_fingerprint, created_at, updated_at)
+                 creator_fingerprint, created_at, updated_at, superseded_by_record_id)
             VALUES
                 (@record, @project, @agent, @kind, @type, @title, @content, @rationale,
                  @importance, @tags, @state, @trust, @revision, @revision_id,
                  @previous_revision_id, @source_run, @source_session, @promoted_decision,
-                 @actor, @created, @updated)
+                 @actor, @created, @updated, @superseded_by)
             """, connection, transaction);
         AddRecordParameters(command, record, actorFingerprint);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -867,8 +1461,9 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         KnowledgeRecord record,
-        string actorFingerprint,
-        string changeKind,
+        string? actorFingerprint,
+        string? changeKind,
+        string? reason,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
@@ -876,11 +1471,12 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 (project_id, record_id, revision, revision_id, previous_revision_id,
                  kind, record_type, title, content, rationale, importance, tags,
                  state, trust_state, source_run_id, source_session_id, actor_fingerprint,
-                 change_kind, created_at)
+                 change_kind, reason, superseded_by_record_id, created_at)
             VALUES
                 (@project, @record, @revision, @revision_id, @previous_revision_id,
                  @kind, @type, @title, @content, @rationale, @importance, @tags,
-                 @state, @trust, @source_run, @source_session, @actor, @change_kind, @created)
+                 @state, @trust, @source_run, @source_session, @actor, @change_kind,
+                 @reason, @superseded_by, @created)
             """, connection, transaction);
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, record.ProjectId);
         command.Parameters.AddWithValue("record", NpgsqlDbType.Uuid, record.RecordId);
@@ -898,8 +1494,10 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         command.Parameters.AddWithValue("trust", NpgsqlDbType.Varchar, record.TrustState.ToString());
         AddNullable(command, "source_run", NpgsqlDbType.Varchar, record.SourceRunId);
         AddNullable(command, "source_session", NpgsqlDbType.Varchar, record.SourceSessionId);
-        command.Parameters.AddWithValue("actor", NpgsqlDbType.Char, actorFingerprint);
-        command.Parameters.AddWithValue("change_kind", NpgsqlDbType.Varchar, changeKind);
+        AddNullable(command, "actor", NpgsqlDbType.Char, actorFingerprint);
+        AddNullable(command, "change_kind", NpgsqlDbType.Varchar, changeKind);
+        AddNullable(command, "reason", NpgsqlDbType.Text, reason);
+        AddNullable(command, "superseded_by", NpgsqlDbType.Uuid, record.SupersededByRecordId);
         command.Parameters.AddWithValue("created", NpgsqlDbType.TimestampTz, record.UpdatedAt);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -917,7 +1515,8 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 rationale = @rationale, importance = @importance, tags = @tags,
                 state = @state, trust_state = @trust, revision = @revision,
                 current_revision_id = @revision_id, previous_revision_id = @previous_revision_id,
-                promoted_decision_id = @promoted_decision, updated_at = @updated
+                promoted_decision_id = @promoted_decision, updated_at = @updated,
+                superseded_by_record_id = @superseded_by
             WHERE project_id = @project AND record_id = @record AND revision = @expected
             """, connection, transaction);
         command.Parameters.AddWithValue("kind", NpgsqlDbType.Varchar, record.Kind.ToString());
@@ -933,6 +1532,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         command.Parameters.AddWithValue("revision_id", NpgsqlDbType.Uuid, record.RevisionId);
         AddNullable(command, "previous_revision_id", NpgsqlDbType.Uuid, record.PreviousRevisionId);
         AddNullable(command, "promoted_decision", NpgsqlDbType.Uuid, record.PromotedDecisionId);
+        AddNullable(command, "superseded_by", NpgsqlDbType.Uuid, record.SupersededByRecordId);
         command.Parameters.AddWithValue("updated", NpgsqlDbType.TimestampTz, record.UpdatedAt);
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, record.ProjectId);
         command.Parameters.AddWithValue("record", NpgsqlDbType.Uuid, record.RecordId);
@@ -1042,7 +1642,8 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             reader.IsDBNull(16) ? null : reader.GetString(16),
             reader.IsDBNull(17) ? null : reader.GetGuid(17),
             reader.GetFieldValue<DateTimeOffset>(18),
-            reader.GetFieldValue<DateTimeOffset>(19));
+            reader.GetFieldValue<DateTimeOffset>(19),
+            reader.IsDBNull(20) ? null : reader.GetGuid(20));
 
     private static KnowledgeRecordRevision ReadRevision(NpgsqlDataReader reader) =>
         new(
@@ -1059,8 +1660,13 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             reader.GetFieldValue<string[]>(10).ToImmutableArray(),
             Enum.Parse<KnowledgeRecordState>(reader.GetString(11), ignoreCase: false),
             Enum.Parse<KnowledgeTrustState>(reader.GetString(12), ignoreCase: false),
-            reader.GetString(13).Replace('_', ' '),
-            reader.GetFieldValue<DateTimeOffset>(14));
+            reader.IsDBNull(13) ? null : reader.GetString(13),
+            reader.GetFieldValue<DateTimeOffset>(19),
+            reader.IsDBNull(14) ? null : reader.GetGuid(14),
+            reader.IsDBNull(15) ? null : reader.GetString(15),
+            reader.IsDBNull(16) ? null : reader.GetString(16),
+            reader.IsDBNull(17) ? null : reader.GetString(17),
+            reader.IsDBNull(18) ? null : reader.GetString(18));
 
     private static void AddRecordParameters(
         NpgsqlCommand command,
@@ -1085,6 +1691,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         AddNullable(command, "source_run", NpgsqlDbType.Varchar, record.SourceRunId);
         AddNullable(command, "source_session", NpgsqlDbType.Varchar, record.SourceSessionId);
         AddNullable(command, "promoted_decision", NpgsqlDbType.Uuid, record.PromotedDecisionId);
+        AddNullable(command, "superseded_by", NpgsqlDbType.Uuid, record.SupersededByRecordId);
         command.Parameters.AddWithValue("actor", NpgsqlDbType.Char, actorFingerprint);
         command.Parameters.AddWithValue("created", NpgsqlDbType.TimestampTz, record.CreatedAt);
         command.Parameters.AddWithValue("updated", NpgsqlDbType.TimestampTz, record.UpdatedAt);
@@ -1131,6 +1738,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             string.IsNullOrWhiteSpace(input.Type) || input.Type.Length > 64 ||
             string.IsNullOrWhiteSpace(input.Content) || input.Content.Length > 40_000 ||
             input.Title?.Length > 512 || input.Rationale?.Length > 8_000 ||
+            input.Reason?.Length > 1_024 || input.Reason?.Any(char.IsControl) == true ||
             input.Importance is not ("low" or "medium" or "high") ||
             input.Tags.IsDefault || input.Tags.Length > 32)
             throw new KnowledgeApiException(
@@ -1154,6 +1762,8 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             string.IsNullOrWhiteSpace(input.Type) || input.Type.Length > 64 ||
             string.IsNullOrWhiteSpace(input.Content) || input.Content.Length > 40_000 ||
             input.Title?.Length > 512 || input.Rationale?.Length > 8_000 ||
+            input.Reason?.Length > 1_024 || input.Reason?.Any(char.IsControl) == true ||
+            input.SupersededByRecordId == Guid.Empty ||
             input.Importance is not ("low" or "medium" or "high") ||
             input.Tags.IsDefault || input.Tags.Length > 32)
             throw new KnowledgeApiException(
@@ -1185,7 +1795,8 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
 
     private static void ValidateActorFingerprint(string value)
     {
-        if (value.Length != 64 || value.Any(character => !Uri.IsHexDigit(character)))
+        if (string.IsNullOrWhiteSpace(value) || value.Length != 64 ||
+            value.Any(character => !Uri.IsHexDigit(character)))
             throw new KnowledgeApiException(
                 "invalid_actor_fingerprint",
                 "A validated actor fingerprint is required.",
@@ -1229,6 +1840,24 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
+
+    private static KnowledgeApiException IncompleteExport() =>
+        new(
+            "knowledge_transfer_incomplete",
+            "A complete, consistent Knowledge revision chain could not be exported.",
+            StatusCodes.Status409Conflict);
+
+    private static KnowledgeApiException TransferConflict(string detail) =>
+        new("knowledge_transfer_conflict", detail, StatusCodes.Status409Conflict);
+
+    private static KnowledgeApiException InvalidReplacement(string detail) =>
+        new("invalid_replacement", detail, StatusCodes.Status409Conflict);
+
+    private static KnowledgeApiException ReplacementCycle() =>
+        new(
+            "replacement_cycle",
+            "A Decision cannot be superseded by itself or by a Decision that leads back to it.",
+            StatusCodes.Status409Conflict);
 
     private static void ValidateIdempotencyKey(string value)
     {

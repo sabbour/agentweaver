@@ -658,8 +658,12 @@ route and the authority response.
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records` | Create a Memory, SessionContext, or Proposal record. Requires one `Idempotency-Key`; a new write returns `201`, an identical retry returns `200`, and reuse with different request content returns `409`. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records?kind={kind}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` | Search only the requested project and agent, with bounded pages; requires current `WriteProjects` for private content. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Read one record in the requested project/agent scope; requires current `WriteProjects` for private content. |
-| `PUT /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Append a revision using `expectedRevision` compare-and-swap and an `Idempotency-Key`; stale revisions return `409`. |
+| `PUT /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Append a revision using `expectedRevision` compare-and-swap and an `Idempotency-Key`; stale revisions return `409`. Memory and Decision records may be archived; only Decisions may be superseded, and the replacement link must identify a Decision. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/revisions?page={n}&pageSize={n}` | Read bounded immutable revision history; requires current `WriteProjects` for private content. |
+| `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/restore` | Body selects a historical `revision` and supplies current `expectedRevision` plus optional `reason`; with an `Idempotency-Key`, appends a new head rather than rewinding history. The restored record is Active+Pending; a Decision requires explicit approval before it is trusted again. |
+| `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/approve` | Explicitly approve an Active Pending or Legacy Decision using `expectedRevision`, optional `reason`, and an `Idempotency-Key`; appends an approval revision. This does not promote a proposal or deliver an accepted project fact. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/export` | No-store export of the exact project/agent's Memory and Decision records with complete immutable revision chains in `agentweaver.knowledge-transfer.v1` schema 1; bounded to 25 records, 500 revisions, and 1 MiB. |
+| `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/import` | Import a version-1 transfer bundle whose project and agent must match the authorized route; requires an `Idempotency-Key`. Preserves transferred history and appends an `imported` revision, setting current records Active+Pending. Unsupported/incomplete input returns `400`, collisions or graph conflicts return `409`, and size-limit violations return `413`; initial and identical requests return `201` and `200`. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/proposals/{proposalId}/promote` | Explicitly promote an owned pending proposal using its expected revision and an `Idempotency-Key`. The response includes `delivery` (`DELIVERED` or `PENDING`); pending delivery does not undo the committed promotion. An identical retry uses the same immutable receipt. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/proposals/{proposalId}/reject` | Explicitly reject a pending proposal using its expected revision and an `Idempotency-Key`. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/context?q={text}&maxItems={n}&maxTokens={n}` | Compose bounded context with immutable revision references; requires current `WriteProjects` for private content. Invalid narrowing is `400`; mandatory-content, candidate, or output budget overflow is returned explicitly as `413`. |
@@ -668,7 +672,12 @@ route and the authority response.
 
 The service owns a separate `knowledge` PostgreSQL schema. Revisions are append-only,
 provider bindings are immutable, and current records cannot be physically deleted;
-record changes use expected revisions. Proposal promotion checks current
+record changes use expected revisions. Restore appends a new revision based on a
+historical snapshot and never removes later history. Decision restore resets trust to
+Pending; a separate explicit approval appends the approval revision. Versioned
+transfers preserve the complete Memory/Decision revision chains and provenance while
+rejecting ID collisions instead of merging record heads; imported records are
+Active+Pending. Proposal promotion checks current
 `WriteProjects`, agent ownership, source run, pending state, and expected revision. It
 commits the proposal revision, approved decision, redacted immutable receipt, and
 Knowledge-owned outbox intent in one transaction. Events fetches the receipt and

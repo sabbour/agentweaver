@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
@@ -31,7 +32,8 @@ public enum KnowledgeRecordState
     Active,
     Rejected,
     Archived,
-    Promoted
+    Promoted,
+    Superseded
 }
 
 public enum KnowledgeTrustState
@@ -42,6 +44,7 @@ public enum KnowledgeTrustState
     Legacy
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record KnowledgeRecord(
     Guid RecordId,
     string ProjectId,
@@ -62,8 +65,10 @@ public sealed record KnowledgeRecord(
     string? SourceSessionId,
     Guid? PromotedDecisionId,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    Guid? SupersededByRecordId = null);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record KnowledgeRecordRevision(
     Guid RecordId,
     int Revision,
@@ -78,8 +83,13 @@ public sealed record KnowledgeRecordRevision(
     ImmutableArray<string> Tags,
     KnowledgeRecordState State,
     KnowledgeTrustState TrustState,
-    string Reason,
-    DateTimeOffset CreatedAt);
+    string? Reason,
+    DateTimeOffset CreatedAt,
+    Guid? SupersededByRecordId = null,
+    string? SourceRunId = null,
+    string? SourceSessionId = null,
+    string? ActorFingerprint = null,
+    string? ChangeKind = null);
 
 public sealed record KnowledgeRecordQuery(
     string ProjectId,
@@ -112,7 +122,9 @@ public enum KnowledgeWriteStatus
     NotFound,
     Stale,
     IdempotencyConflict,
-    InvalidState
+    InvalidState,
+    InvalidReplacement,
+    ReplacementCycle
 }
 
 public sealed record KnowledgeRecordCreate(
@@ -142,7 +154,49 @@ public sealed record KnowledgeRecordUpdate(
     ImmutableArray<string> Tags,
     KnowledgeRecordState State,
     string ActorFingerprint,
-    string Reason);
+    string? Reason = null,
+    Guid? SupersededByRecordId = null);
+
+public sealed record KnowledgeRecordRestore(
+    string ProjectId,
+    Guid RecordId,
+    int ExpectedRevision,
+    int Revision,
+    string ActorFingerprint,
+    string? Reason);
+
+public sealed record KnowledgeDecisionApproval(
+    string ProjectId,
+    Guid RecordId,
+    int ExpectedRevision,
+    string ActorFingerprint,
+    string? Reason);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record KnowledgeRecordTransferBundle(
+    string Format,
+    int SchemaVersion,
+    string ProjectId,
+    string AgentId,
+    ImmutableArray<KnowledgeRecordTransferEntry> Records);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record KnowledgeRecordTransferEntry(
+    KnowledgeRecord Record,
+    ImmutableArray<KnowledgeRecordRevision> Revisions);
+
+public sealed record KnowledgeRecordImportResult(
+    ImmutableArray<KnowledgeRecord> Records,
+    bool IsDuplicate = false);
+
+public static class KnowledgeRecordTransferContract
+{
+    public const string Format = "agentweaver.knowledge-transfer.v1";
+    public const int SchemaVersion = 1;
+    public const int MaximumRecords = 25;
+    public const int MaximumRevisions = 500;
+    public const int MaximumBytes = 1_048_576;
+}
 
 public sealed record KnowledgeRecordWriteResult(
     KnowledgeWriteStatus Status,
@@ -261,6 +315,28 @@ public interface IMemoryProvider
 
     Task<KnowledgeRecordWriteResult> UpdateAsync(
         KnowledgeRecordUpdate input,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default);
+
+    Task<KnowledgeRecordWriteResult> RestoreAsync(
+        KnowledgeRecordRestore input,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default);
+
+    Task<KnowledgeRecordWriteResult> ApproveDecisionAsync(
+        KnowledgeDecisionApproval input,
+        string idempotencyKey,
+        CancellationToken cancellationToken = default);
+
+    Task<KnowledgeRecordTransferBundle> ExportAsync(
+        string projectId,
+        string agentId,
+        CancellationToken cancellationToken = default);
+
+    Task<KnowledgeRecordImportResult> ImportAsync(
+        KnowledgeRecordTransferBundle input,
+        string runId,
+        string actorFingerprint,
         string idempotencyKey,
         CancellationToken cancellationToken = default);
 

@@ -351,6 +351,11 @@
     },
     {
       "consumer": "Agentweaver.Mcp",
+      "dependency": "Agentweaver.Abstractions",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Mcp",
       "dependency": "Agentweaver.Telemetry",
       "versions": ["0.0.0"]
     },

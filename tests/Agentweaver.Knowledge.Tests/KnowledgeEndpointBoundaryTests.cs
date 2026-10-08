@@ -16,6 +16,8 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -60,7 +62,12 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.Equal(
-            ["/api/authorization/context", "/api/projects/project-a/runs/run-a/selection"],
+            [
+                "/api/authorization/context",
+                "/api/projects/project-a/runs/run-a/selection",
+                "/api/authorization/context",
+                "/api/projects/project-a/runs/run-a/selection"
+            ],
             owner.Paths.ToArray());
         Assert.All(owner.AuthorizationHeaders, header => Assert.Equal("Bearer caller-token", header));
         Assert.All(owner.CacheControlHeaders, header => Assert.Null(header));
@@ -96,8 +103,281 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.Equal(
-            ["/api/authorization/context", "/api/projects/project-a/runs/run-a/selection"],
+            [
+                "/api/authorization/context",
+                "/api/projects/project-a/runs/run-a/selection",
+                "/api/authorization/context",
+                "/api/projects/project-a/runs/run-a/selection"
+            ],
             owner.Paths.ToArray());
+    }
+
+    [Fact]
+    public async Task EndpointRechecksWriteAuthorityAfterProviderBindingBeforeCreatingRecord()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(
+            database.Options, writeAllowed: true, revokeWriteAfterFirstSelection: true);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/api/projects/project-a/runs/run-a/agents/agent-a/records")
+        {
+            Content = JsonContent.Create(
+                new
+                {
+                    kind = "memory",
+                    type = "note",
+                    content = "must not be committed after revocation",
+                    importance = "medium",
+                    tags = new[] { "revoked" }
+                },
+                options: JsonOptions)
+        };
+        request.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", "caller-token");
+        request.Headers.TryAddWithoutValidation("Idempotency-Key", "boundary-revoked-after-binding");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(
+            [
+                "/api/authorization/context",
+                "/api/projects/project-a/runs/run-a/selection",
+                "/api/authorization/context"
+            ],
+            owner.Paths.ToArray());
+        await using var connection = await database.DataSource.OpenConnectionAsync();
+        await using var count = new NpgsqlCommand(
+            $"SELECT count(*) FROM \"{database.Options.Schema}\".knowledge_records",
+            connection);
+        Assert.Equal(0L, (long)(await count.ExecuteScalarAsync())!);
+    }
+
+    [Fact]
+    public async Task DecisionArchiveRestoreApprovalAndExportUseTheVersionedOwnerRoutes()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        var importEndpoint = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(endpoint => endpoint.RoutePattern.RawText ==
+                "/api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/import");
+        Assert.Equal(
+            (long)KnowledgeRecordTransferContract.MaximumBytes,
+            importEndpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>()?.MaxRequestBodySize);
+
+        async Task<Guid> CreateDecisionAsync(string key, string content, string agentId = "agent-a")
+        {
+            using var create = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/api/projects/project-a/runs/run-a/agents/{agentId}/records")
+            {
+                Content = JsonContent.Create(
+                    new
+                    {
+                        kind = "proposal",
+                        type = "architecture",
+                        title = "decision",
+                        content,
+                        importance = "medium",
+                        tags = new[] { "lifecycle" }
+                    },
+                    options: JsonOptions)
+            };
+            create.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+            create.Headers.TryAddWithoutValidation("Idempotency-Key", $"{key}-create");
+            using var created = await client.SendAsync(create);
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+            var proposalId = createdJson.RootElement.GetProperty("record").GetProperty("recordId").GetGuid();
+
+            using var promote = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"/api/projects/project-a/runs/run-a/agents/{agentId}/proposals/{proposalId:D}/promote")
+            {
+                Content = JsonContent.Create(new { expectedRevision = 1 }, options: JsonOptions)
+            };
+            promote.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+            promote.Headers.TryAddWithoutValidation("Idempotency-Key", $"{key}-promote");
+            using var promoted = await client.SendAsync(promote);
+            Assert.Equal(HttpStatusCode.Created, promoted.StatusCode);
+            using var promotedJson = JsonDocument.Parse(await promoted.Content.ReadAsStringAsync());
+            return promotedJson.RootElement.GetProperty("decision").GetProperty("recordId").GetGuid();
+        }
+
+        async Task<HttpResponseMessage> UpdateDecisionAsync(
+            Guid recordId,
+            int expectedRevision,
+            string state,
+            Guid? supersededByRecordId = null,
+            string agentId = "agent-a",
+            string? keySuffix = null)
+        {
+            var payload = new Dictionary<string, object?>
+            {
+                ["expectedRevision"] = expectedRevision,
+                ["type"] = "architecture",
+                ["title"] = "decision",
+                ["content"] = recordId == Guid.Empty ? "unused" : "content",
+                ["importance"] = "medium",
+                ["tags"] = new[] { "lifecycle" },
+                ["state"] = state
+            };
+            if (supersededByRecordId is { } target)
+                payload["supersededByRecordId"] = target;
+            var request = new HttpRequestMessage(
+                HttpMethod.Put,
+                $"/api/projects/project-a/runs/run-a/agents/{agentId}/records/{recordId:D}")
+            {
+                Content = JsonContent.Create(payload, options: JsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+            request.Headers.TryAddWithoutValidation(
+                "Idempotency-Key", $"decision-{recordId:N}-{keySuffix ?? state}");
+            var response = await client.SendAsync(request);
+            request.Dispose();
+            return response;
+        }
+
+        var first = await CreateDecisionAsync("first-decision", "first content");
+        var second = await CreateDecisionAsync("second-decision", "second content");
+        var foreignDirectTarget = await CreateDecisionAsync(
+            "foreign-direct-target", "foreign direct target", "agent-b");
+        using (var foreignDirect = await UpdateDecisionAsync(
+                   first, 1, "superseded", foreignDirectTarget, keySuffix: "foreign-direct"))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, foreignDirect.StatusCode);
+            Assert.Contains("invalid_replacement",
+                await foreignDirect.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+
+        var transitiveSource = await CreateDecisionAsync("foreign-chain-source", "chain source");
+        var chainTarget = await CreateDecisionAsync("foreign-chain-target", "same-agent link");
+        var foreignDownstream = await CreateDecisionAsync(
+            "foreign-chain-downstream", "foreign downstream", "agent-b");
+        await using (var connection = await database.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{database.Options.Schema}".knowledge_records
+            SET state = 'Superseded', superseded_by_record_id = @replacement
+            WHERE project_id = @project AND record_id = @record
+            """, connection))
+        {
+            command.Parameters.AddWithValue("replacement", foreignDownstream);
+            command.Parameters.AddWithValue("project", "project-a");
+            command.Parameters.AddWithValue("record", chainTarget);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+        using (var foreignTransitive = await UpdateDecisionAsync(
+                   transitiveSource, 1, "superseded", chainTarget, keySuffix: "foreign-transitive"))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, foreignTransitive.StatusCode);
+            Assert.Contains("invalid_replacement",
+                await foreignTransitive.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+        await using (var connection = await database.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{database.Options.Schema}".knowledge_records
+            SET state = 'Active', superseded_by_record_id = NULL
+            WHERE project_id = @project AND record_id = @record
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", "project-a");
+            command.Parameters.AddWithValue("record", chainTarget);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+
+        using (var supersede = await UpdateDecisionAsync(
+                   first, 1, "superseded", second))
+        {
+            Assert.Equal(HttpStatusCode.OK, supersede.StatusCode);
+            using var document = JsonDocument.Parse(await supersede.Content.ReadAsStringAsync());
+            Assert.Equal("superseded",
+                document.RootElement.GetProperty("record").GetProperty("state").GetString());
+            Assert.Equal(second,
+                document.RootElement.GetProperty("record").GetProperty("supersededByRecordId").GetGuid());
+        }
+
+        using (var archive = await UpdateDecisionAsync(second, 1, "archived"))
+            Assert.Equal(HttpStatusCode.OK, archive.StatusCode);
+
+        using var rejectedApproval = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/projects/project-a/runs/run-a/agents/agent-a/records/{second:D}/approve")
+        {
+            Content = JsonContent.Create(new { expectedRevision = 2 }, options: JsonOptions)
+        };
+        rejectedApproval.Headers.Authorization =
+            new AuthenticationHeaderValue("Bearer", "caller-token");
+        rejectedApproval.Headers.TryAddWithoutValidation("Idempotency-Key", "approve-while-archived");
+        using var rejected = await client.SendAsync(rejectedApproval);
+        Assert.Equal(HttpStatusCode.Conflict, rejected.StatusCode);
+
+        using var restore = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/projects/project-a/runs/run-a/agents/agent-a/records/{second:D}/restore")
+        {
+            Content = JsonContent.Create(
+                new { expectedRevision = 2, revision = 1, reason = "restore archived decision" },
+                options: JsonOptions)
+        };
+        restore.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+        restore.Headers.TryAddWithoutValidation("Idempotency-Key", "restore-archived-decision");
+        using var restored = await client.SendAsync(restore);
+        Assert.Equal(HttpStatusCode.OK, restored.StatusCode);
+        using var restoredJson = JsonDocument.Parse(await restored.Content.ReadAsStringAsync());
+        Assert.Equal("active", restoredJson.RootElement.GetProperty("record").GetProperty("state").GetString());
+        Assert.Equal("pending", restoredJson.RootElement.GetProperty("record").GetProperty("trustState").GetString());
+
+        using var approve = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/projects/project-a/runs/run-a/agents/agent-a/records/{second:D}/approve")
+        {
+            Content = JsonContent.Create(new { expectedRevision = 3, reason = "approve restored decision" },
+                options: JsonOptions)
+        };
+        approve.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+        approve.Headers.TryAddWithoutValidation("Idempotency-Key", "approve-restored-decision");
+        using var approved = await client.SendAsync(approve);
+        Assert.Equal(HttpStatusCode.OK, approved.StatusCode);
+
+        using var export = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/projects/project-a/runs/run-a/agents/agent-a/records/export");
+        export.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+        using var exported = await client.SendAsync(export);
+        Assert.Equal(HttpStatusCode.OK, exported.StatusCode);
+        Assert.Equal("no-store", exported.Headers.CacheControl?.ToString());
+        using var bundle = JsonDocument.Parse(await exported.Content.ReadAsStringAsync());
+        Assert.Equal(KnowledgeRecordTransferContract.Format,
+            bundle.RootElement.GetProperty("format").GetString());
+        Assert.Equal(KnowledgeRecordTransferContract.SchemaVersion,
+            bundle.RootElement.GetProperty("schemaVersion").GetInt32());
+        var records = bundle.RootElement.GetProperty("records");
+        Assert.Equal(4, records.GetArrayLength());
+        Assert.All(records.EnumerateArray(), entry =>
+        {
+            Assert.Equal("agent-a", entry.GetProperty("record").GetProperty("agentId").GetString());
+            Assert.True(entry.GetProperty("revisions").GetArrayLength() > 0);
+        });
+
+        using var import = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/api/projects/project-a/runs/run-a/agents/agent-a/records/import")
+        {
+            Content = JsonContent.Create(bundle.RootElement.Clone(), options: JsonOptions)
+        };
+        import.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "caller-token");
+        import.Headers.TryAddWithoutValidation("Idempotency-Key", "import-existing-bundle");
+        using var collision = await client.SendAsync(import);
+        Assert.Equal(HttpStatusCode.Conflict, collision.StatusCode);
+        Assert.Contains("knowledge_transfer_conflict",
+            await collision.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -606,6 +886,25 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                 ImmutableArray<KnowledgeRecord>.Empty, 0, query.Page, query.PageSize));
         }
 
+        public Task<IReadOnlyList<KnowledgeRecord>> ReadTransferCandidatesAsync(
+            string projectId,
+            string agentId,
+            int maximumRecords,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<KnowledgeRecord>>([]);
+        }
+
+        public Task<IReadOnlyCollection<Guid>> FindRevisionIdsAsync(
+            string projectId,
+            IReadOnlyCollection<Guid> revisionIds,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyCollection<Guid>>([]);
+        }
+
         public Task<KnowledgeRecordRevisionPage> ReadRevisionsAsync(
             string projectId,
             Guid recordId,
@@ -655,11 +954,14 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         bool bindCaller = true,
         ProviderDescriptor? selectedMemoryDescriptor = null,
         int? selectedOptionsSchemaVersion = null,
-        string? selectedOptionsRevision = null) : HttpMessageHandler
+        string? selectedOptionsRevision = null,
+        bool revokeWriteAfterFirstSelection = false) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<string> _paths = new();
         private readonly ConcurrentQueue<string?> _authorizationHeaders = new();
         private readonly ConcurrentQueue<string?> _cacheControlHeaders = new();
+        private int _writeAllowed = writeAllowed ? 1 : 0;
+        private int _selectionCount;
 
         public IReadOnlyCollection<string> Paths => _paths;
         public IReadOnlyCollection<string?> AuthorizationHeaders => _authorizationHeaders;
@@ -673,12 +975,18 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
             _paths.Enqueue(path);
             _authorizationHeaders.Enqueue(request.Headers.Authorization?.ToString());
             _cacheControlHeaders.Enqueue(request.Headers.CacheControl?.ToString());
-            object payload = path switch
+            object payload;
+            if (path == "/api/authorization/context")
+                payload = Authority();
+            else if (path == "/api/projects/project-a/runs/run-a/selection")
             {
-                "/api/authorization/context" => Authority(),
-                "/api/projects/project-a/runs/run-a/selection" => Selection(),
-                _ => throw new InvalidOperationException($"Unexpected Projects & Config route '{path}'.")
-            };
+                payload = Selection();
+                if (revokeWriteAfterFirstSelection &&
+                    Interlocked.Increment(ref _selectionCount) == 1)
+                    Interlocked.Exchange(ref _writeAllowed, 0);
+            }
+            else
+                throw new InvalidOperationException($"Unexpected Projects & Config route '{path}'.");
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = JsonContent.Create(payload, options: JsonOptions)
@@ -692,7 +1000,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                 ProjectAuthorizationPermission.ReadProjects, 1));
             permissions.Add(new ProjectAuthorizationPermissionGrant(
                 ProjectAuthorizationPermission.ReadRunSelection, 1));
-            if (writeAllowed)
+            if (Volatile.Read(ref _writeAllowed) != 0)
                 permissions.Add(new ProjectAuthorizationPermissionGrant(
                     ProjectAuthorizationPermission.WriteProjects, 1));
             return new ProjectAuthorizationContextResponse(

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Agentweaver.Abstractions;
 
 namespace Agentweaver.Gateway;
 
@@ -73,6 +74,10 @@ internal static partial class GatewayOpenApi
             ["searchKnowledge"] = C(null, "KnowledgeRecordPage", "200"),
             ["readKnowledgeRecord"] = C(null, "KnowledgeRecord", "200"),
             ["updateKnowledgeRecord"] = C("UpdateKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201"),
+            ["restoreKnowledgeRecord"] = C("RestoreKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201"),
+            ["approveKnowledgeDecision"] = C("ApproveKnowledgeDecisionRequest", "KnowledgeRecordWriteResult", "200", "201"),
+            ["exportKnowledgeRecords"] = C(null, "KnowledgeRecordTransferBundle", "200"),
+            ["importKnowledgeRecords"] = C("KnowledgeRecordTransferBundle", "KnowledgeRecordImportResult", "200", "201"),
             ["readKnowledgeRevisions"] = C(null, "KnowledgeRecordRevisionPage", "200"),
             ["promoteKnowledgeProposal"] = C("PromoteKnowledgeProposalRequest", "KnowledgeProposalPromotionResult", "200", "201"),
             ["rejectKnowledgeProposal"] = C("RejectKnowledgeProposalRequest", "KnowledgeRecordWriteResult", "200", "201"),
@@ -175,6 +180,9 @@ internal static partial class GatewayOpenApi
         if (route.OperationId is
             "createKnowledgeRecord" or
             "updateKnowledgeRecord" or
+            "restoreKnowledgeRecord" or
+            "approveKnowledgeDecision" or
+            "importKnowledgeRecords" or
             "promoteKnowledgeProposal" or
             "rejectKnowledgeProposal")
         {
@@ -255,6 +263,7 @@ internal static partial class GatewayOpenApi
             ["x-agentweaver-owner-path"] = route.OwnerPath,
             ["x-agentweaver-accepted-only"] = route.AcceptsOnly,
             ["x-agentweaver-stream"] = route.IsRunEventStream ? "server-sent-events" : null,
+            ["x-agentweaver-max-request-body-bytes"] = route.MaximumRequestBodyBytes,
         };
     }
 
@@ -718,42 +727,67 @@ internal static partial class GatewayOpenApi
         ["PolicyEvaluationReceiptAdmissionAcknowledgment"] = Obj(["receiptId", "identity"],
             ("receiptId", Uuid()), ("identity", Ref("SessionIdentity"))),
 
-        ["CreateKnowledgeRecordRequest"] = Obj(["kind", "type", "content", "importance", "tags"],
+        ["CreateKnowledgeRecordRequest"] = StrictObj(["kind", "type", "content", "importance", "tags"],
             ("kind", Enum("memory", "proposal", "decision", "sessionContext")), ("type", Str()), ("title", NullableStr()),
             ("content", Str()), ("rationale", NullableStr()), ("importance", Str()), ("tags", Arr(Str()))),
-        ["UpdateKnowledgeRecordRequest"] = Obj(["expectedRevision", "type", "content", "importance", "tags", "state"],
+        ["UpdateKnowledgeRecordRequest"] = StrictObj(["expectedRevision", "type", "content", "importance", "tags", "state"],
             ("expectedRevision", Int()), ("type", Str()), ("title", NullableStr()), ("content", Str()),
             ("rationale", NullableStr()), ("importance", Str()), ("tags", Arr(Str())),
-            ("state", Enum("pending", "active", "rejected", "archived", "promoted"))),
-        ["PromoteKnowledgeProposalRequest"] = Obj(["expectedRevision"], ("expectedRevision", Int())),
-        ["RejectKnowledgeProposalRequest"] = Obj(["expectedRevision"], ("expectedRevision", Int())),
-        ["KnowledgeRecord"] = Obj(["recordId", "projectId", "agentId", "kind", "type", "content", "importance", "tags", "state", "trustState", "revision", "revisionId", "createdAt", "updatedAt"],
+            ("state", Enum("pending", "active", "rejected", "archived", "promoted", "superseded")),
+            ("reason", NullableStr()), ("supersededByRecordId", NullableUuid())),
+        ["RestoreKnowledgeRecordRequest"] = StrictObj(["expectedRevision", "revision"],
+            ("expectedRevision", Int()), ("revision", Int()), ("reason", NullableStr())),
+        ["ApproveKnowledgeDecisionRequest"] = StrictObj(["expectedRevision"],
+            ("expectedRevision", Int()), ("reason", NullableStr())),
+        ["PromoteKnowledgeProposalRequest"] = StrictObj(["expectedRevision"], ("expectedRevision", Int())),
+        ["RejectKnowledgeProposalRequest"] = StrictObj(["expectedRevision"], ("expectedRevision", Int())),
+        ["KnowledgeRecord"] = StrictObj(["recordId", "projectId", "agentId", "kind", "type", "content", "importance", "tags", "state", "trustState", "revision", "revisionId", "createdAt", "updatedAt"],
             ("recordId", Uuid()), ("projectId", Str()), ("agentId", Str()),
             ("kind", Enum("memory", "proposal", "decision", "sessionContext")), ("type", Str()), ("title", NullableStr()),
             ("content", Str()), ("rationale", NullableStr()), ("importance", Str()), ("tags", Arr(Str())),
-            ("state", Enum("pending", "active", "rejected", "archived", "promoted")),
+            ("state", Enum("pending", "active", "rejected", "archived", "promoted", "superseded")),
             ("trustState", Enum("pending", "approved", "rejected", "legacy")), ("revision", Int()), ("revisionId", Uuid()),
             ("previousRevisionId", NullableUuid()), ("sourceRunId", NullableStr()), ("sourceSessionId", NullableStr()),
-            ("promotedDecisionId", NullableUuid()), ("createdAt", Date()), ("updatedAt", Date())),
-        ["KnowledgeRecordPage"] = Obj(["items", "totalCount", "page", "pageSize"],
+            ("promotedDecisionId", NullableUuid()), ("createdAt", Date()), ("updatedAt", Date()),
+            ("supersededByRecordId", NullableUuid())),
+        ["KnowledgeRecordPage"] = StrictObj(["items", "totalCount", "page", "pageSize"],
             ("items", Arr(Ref("KnowledgeRecord"))), ("totalCount", Int()), ("page", Int()), ("pageSize", Int())),
-        ["KnowledgeRecordRevision"] = Obj(["recordId", "revision", "revisionId", "kind", "type", "content", "importance", "tags", "state", "trustState", "reason", "createdAt"],
+        ["KnowledgeRecordRevision"] = StrictObj(["recordId", "revision", "revisionId", "kind", "type", "content", "importance", "tags", "state", "trustState", "reason", "createdAt"],
             ("recordId", Uuid()), ("revision", Int()), ("revisionId", Uuid()), ("previousRevisionId", NullableUuid()),
             ("kind", Enum("memory", "proposal", "decision", "sessionContext")), ("type", Str()), ("title", NullableStr()),
             ("content", Str()), ("rationale", NullableStr()), ("importance", Str()), ("tags", Arr(Str())),
-            ("state", Enum("pending", "active", "rejected", "archived", "promoted")),
-            ("trustState", Enum("pending", "approved", "rejected", "legacy")), ("reason", Str()), ("createdAt", Date())),
-        ["KnowledgeRecordRevisionPage"] = Obj(["items", "totalCount", "page", "pageSize"],
+            ("state", Enum("pending", "active", "rejected", "archived", "promoted", "superseded")),
+            ("trustState", Enum("pending", "approved", "rejected", "legacy")), ("reason", NullableStr()),
+            ("createdAt", Date()), ("supersededByRecordId", NullableUuid()),
+            ("sourceRunId", NullableStr()), ("sourceSessionId", NullableStr()),
+            ("actorFingerprint", NullableStr()), ("changeKind", NullableStr())),
+        ["KnowledgeRecordRevisionPage"] = StrictObj(["items", "totalCount", "page", "pageSize"],
             ("items", Arr(Ref("KnowledgeRecordRevision"))), ("totalCount", Int()), ("page", Int()), ("pageSize", Int())),
-        ["KnowledgeRecordWriteResult"] = Obj(["status", "isDuplicate"],
-            ("status", Enum("created", "updated", "notFound", "stale", "idempotencyConflict", "invalidState")),
+        ["KnowledgeRecordWriteResult"] = StrictObj(["status", "isDuplicate"],
+            ("status", Enum("created", "updated", "notFound", "stale", "idempotencyConflict", "invalidState",
+                "invalidReplacement", "replacementCycle")),
             ("record", NullableRef("KnowledgeRecord")), ("currentRevision", NullableInt()), ("isDuplicate", Bool())),
-        ["KnowledgeProposalPromotionResult"] = Obj(["status", "isDuplicate"],
-            ("status", Enum("created", "updated", "notFound", "stale", "idempotencyConflict", "invalidState")),
+        ["KnowledgeProposalPromotionResult"] = StrictObj(["status", "isDuplicate"],
+            ("status", Enum("created", "updated", "notFound", "stale", "idempotencyConflict", "invalidState",
+                "invalidReplacement", "replacementCycle")),
             ("proposal", NullableRef("KnowledgeRecord")), ("decision", NullableRef("KnowledgeRecord")),
             ("outboxEventId", NullableUuid()), ("isDuplicate", Bool()), ("currentRevision", NullableInt()),
             ("delivery", NullableStr()), ("deliveryCode", NullableStr()), ("requiredAudienceSubject", NullableStr()),
             ("requiredAudience", NullableStr()), ("deliveryAcknowledgment", NullableJson())),
+        ["KnowledgeRecordTransferBundle"] = StrictObj(
+            ["format", "schemaVersion", "projectId", "agentId", "records"],
+            ("format", Const(KnowledgeRecordTransferContract.Format)),
+            ("schemaVersion", new { type = "integer", @const = KnowledgeRecordTransferContract.SchemaVersion }),
+            ("projectId", Str()), ("agentId", Str()),
+            ("records", BoundedArray(Ref("KnowledgeRecordTransferEntry"), 1,
+                KnowledgeRecordTransferContract.MaximumRecords))),
+        ["KnowledgeRecordTransferEntry"] = StrictObj(["record", "revisions"],
+            ("record", Ref("KnowledgeRecord")),
+            ("revisions", BoundedArray(Ref("KnowledgeRecordRevision"), 1,
+                KnowledgeRecordTransferContract.MaximumRevisions))),
+        ["KnowledgeRecordImportResult"] = StrictObj(["records", "isDuplicate"],
+            ("records", BoundedArray(Ref("KnowledgeRecord"), 1, KnowledgeRecordTransferContract.MaximumRecords)),
+            ("isDuplicate", Bool())),
         ["MemoryContextCompilation"] = Obj(["omittedMemoryCount", "omittedSessionCount", "omissionCauses", "revisionReferences"],
             ("text", NullableStr()), ("omittedMemoryCount", Int()), ("omittedSessionCount", Int()),
             ("omissionCauses", Arr(Str())), ("revisionReferences", Arr(Ref("KnowledgeRevisionReference")))),
@@ -817,6 +851,18 @@ internal static partial class GatewayOpenApi
             ["properties"] = properties.ToDictionary(property => property.Name, property => property.Schema, StringComparer.Ordinal),
         };
 
+    private static object StrictObj(
+        string[] required,
+        params (string Name, object Schema)[] properties) =>
+        new Dictionary<string, object>
+        {
+            ["type"] = "object",
+            ["required"] = required,
+            ["properties"] = properties.ToDictionary(
+                property => property.Name, property => property.Schema, StringComparer.Ordinal),
+            ["additionalProperties"] = false,
+        };
+
     private static object Ref(string name) =>
         new Dictionary<string, string> { ["$ref"] = "#/components/schemas/" + name };
 
@@ -829,6 +875,14 @@ internal static partial class GatewayOpenApi
     private static object Enum(params string[] values) => new { type = "string", @enum = values };
     private static object Const(string value) => new { type = "string", @const = value };
     private static object Arr(object items) => new { type = "array", items };
+    private static object BoundedArray(object items, int minItems, int maxItems) =>
+        new Dictionary<string, object>
+        {
+            ["type"] = "array",
+            ["items"] = items,
+            ["minItems"] = minItems,
+            ["maxItems"] = maxItems,
+        };
     private static object AnyJson() => new Dictionary<string, object>();
     private static object NullableJson() => new Dictionary<string, object>();
     private static object Nullable(object schema) =>

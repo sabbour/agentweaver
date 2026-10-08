@@ -27,6 +27,23 @@ public sealed record UpdateKnowledgeRecordRequest
     public required string Importance { get; init; }
     public required ImmutableArray<string> Tags { get; init; }
     public required KnowledgeRecordState State { get; init; }
+    public string? Reason { get; init; }
+    public Guid? SupersededByRecordId { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RestoreKnowledgeRecordRequest
+{
+    public required int ExpectedRevision { get; init; }
+    public required int Revision { get; init; }
+    public string? Reason { get; init; }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ApproveKnowledgeDecisionRequest
+{
+    public required int ExpectedRevision { get; init; }
+    public string? Reason { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

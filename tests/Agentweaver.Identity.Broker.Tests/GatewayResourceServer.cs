@@ -5,6 +5,8 @@ using GatewayOptions = GatewayHost::Agentweaver.Gateway.GatewayOptions;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -25,6 +27,13 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
     }
 
     public HttpClient Client => _client;
+
+    public IRequestSizeLimitMetadata? GetRequestSizeLimit(string routePattern) =>
+        ((IEndpointRouteBuilder)_app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Single(endpoint => endpoint.RoutePattern.RawText == routePattern)
+            .Metadata.GetMetadata<IRequestSizeLimitMetadata>();
 
     public static async Task<GatewayResourceServer> StartAsync(
         SecurityKey signingKey,

@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Collections.Immutable;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Gateway;
 
@@ -214,6 +215,8 @@ public static class GatewayEndpoints
                     (route.AcceptsOnly
                         ? "An accepted response means the owner accepted work; it does not mean that work completed."
                         : "The owner remains authoritative for request validation and current resource authorization."));
+            if (route.MaximumRequestBodyBytes is { } maximumRequestBodyBytes)
+                endpoint.WithMetadata(new RequestSizeLimitAttribute(maximumRequestBodyBytes));
         }
 
         endpoints.MapFallback(
