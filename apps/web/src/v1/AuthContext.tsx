@@ -157,7 +157,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => () => pollAbortRef.current?.abort(), []);
 
-  const authorize = useCallback(async (requestedBinding: RunBinding | null = null) => {
+  const authorize = useCallback(async (
+    requestedBinding: RunBinding | null = null,
+    popupOverride?: Window | null,
+  ) => {
     if (configurationError) {
       setError(configurationError);
       return;
@@ -171,7 +174,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     let popup: Window | null = null;
     try {
-      popup = window.open('about:blank', 'agentweaver-identity', 'popup,width=560,height=720');
+      popup = popupOverride === undefined
+        ? window.open('about:blank', 'agentweaver-identity', 'popup,width=560,height=720')
+        : popupOverride;
       const transaction = transactionFor(requestedBinding);
       transactionRef.current = transaction;
       storeAuthorizationTransaction(transaction);
@@ -201,21 +206,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             popup.close();
             return;
           }
-          if (response.ok) {
-            const result: unknown = await response.json().catch(() => null);
-            if (isConsentPrompt(result)) {
-              if (result.client_id !== config.clientId ||
-                  result.requested_scopes.some((scope) => !config.scopes.includes(scope))) {
-                throw new Error('The Broker consent response does not match this registered client and its configured scopes.');
-              }
-              popup.close();
-              setConsent(result);
-              return;
-            }
-            const body = result as { error?: string; error_description?: string } | null;
-            if (body?.error)
-              throw new Error(body.error_description ?? `Identity Broker authorization failed: ${body.error}.`);
+          if (!response.ok) {
+            const problem = await response.json().catch(() => null) as {
+              error?: string;
+              error_description?: string;
+            } | null;
+            throw new Error(
+              problem?.error_description ??
+                (problem?.error
+                  ? `Identity Broker authorization failed: ${problem.error}.`
+                  : `Identity Broker authorization failed with HTTP ${response.status}.`),
+            );
           }
+          const result: unknown = await response.json().catch(() => null);
+          if (isConsentPrompt(result)) {
+            if (result.client_id !== config.clientId ||
+                result.requested_scopes.some((scope) => !config.scopes.includes(scope))) {
+              throw new Error('The Broker consent response does not match this registered client and its configured scopes.');
+            }
+            popup.close();
+            setConsent(result);
+            return;
+          }
+          const body = result as { error?: string; error_description?: string } | null;
+          if (body?.error)
+            throw new Error(body.error_description ?? `Identity Broker authorization failed: ${body.error}.`);
         } catch (reason) {
           if (reason instanceof Error && !/aborted|load failed|failed to fetch/i.test(reason.message))
             throw reason;
@@ -246,21 +261,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setBusy(true);
     setError(null);
+    let popup: Window | null = null;
     try {
+      popup = approve
+        ? window.open('about:blank', 'agentweaver-identity', 'popup,width=560,height=720')
+        : null;
       const response = await submitBrokerConsent(defaultAuthorizationConfig(), consent, approve);
-      if (await consumeAuthorizationResponse(response.url, transaction)) return;
+      if (await consumeAuthorizationResponse(response.url, transaction)) {
+        popup?.close();
+        return;
+      }
       if (!approve) {
         throw new Error('Consent was declined. No Agentweaver session was created.');
       }
-      throw new Error('The Broker accepted consent but did not return an authorization response.');
+      if (!popup)
+        throw new Error('Allow the Identity Broker sign-in popup to continue.');
+      await authorize(transaction.binding, popup);
     } catch (reason) {
+      popup?.close();
       setError(reason instanceof Error ? reason.message : 'Broker consent failed.');
       if (!approve) clearAuthorizationTransaction();
     } finally {
-      setConsent(null);
+      if (!approve) setConsent(null);
       setBusy(false);
     }
-  }, [consent, consumeAuthorizationResponse]);
+  }, [authorize, consent, consumeAuthorizationResponse]);
 
   const refresh = useCallback((current: AuthSession): Promise<AuthSession | null> => {
     const latest = sessionRef.current;

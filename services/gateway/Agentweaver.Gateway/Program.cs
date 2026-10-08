@@ -25,6 +25,9 @@ builder.Services.AddHttpClient(nameof(GatewayOwner.Knowledge), client =>
 builder.Services.AddHttpClient(nameof(GatewayOwner.Events), client =>
     client.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(CreateOwnerHandler);
+builder.Services.AddHttpClient(nameof(GatewayOwner.IdentityBroker), client =>
+    client.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(CreateOwnerHandler);
 builder.Services.AddSingleton<GatewayOwnerClient>();
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, GatewayAuthorizationResultHandler>();
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);

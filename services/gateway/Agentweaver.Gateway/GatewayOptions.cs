@@ -7,6 +7,7 @@ public sealed record GatewayOptions(
     Uri OrchestratorOwnerBaseAddress,
     Uri KnowledgeOwnerBaseAddress,
     Uri EventsOwnerBaseAddress,
+    Uri IdentityBrokerAddress,
     TimeSpan OwnerRequestTimeout)
 {
     public const int EventPollIntervalMilliseconds = 1000;
@@ -17,6 +18,7 @@ public sealed record GatewayOptions(
         GatewayOwner.Orchestrator => OrchestratorOwnerBaseAddress,
         GatewayOwner.Knowledge => KnowledgeOwnerBaseAddress,
         GatewayOwner.Events => EventsOwnerBaseAddress,
+        GatewayOwner.IdentityBroker => IdentityBrokerAddress,
         _ => throw new ArgumentOutOfRangeException(nameof(owner)),
     };
 
@@ -32,12 +34,22 @@ public sealed record GatewayOptions(
 
         return new GatewayOptions(
             RequiredHttpsUri(identity["Issuer"], "Identity:Issuer", allowPath: true),
-            RequiredHttpsUri(identity["Audience"], "Identity:Audience", allowPath: true).AbsoluteUri,
+            RequiredHttpsAudience(identity["Audience"]),
             RequiredHttpsRoot(owners["Projects"], "Gateway:Owners:Projects"),
             RequiredHttpsRoot(owners["Orchestrator"], "Gateway:Owners:Orchestrator"),
             RequiredHttpsRoot(owners["Knowledge"], "Gateway:Owners:Knowledge"),
             RequiredHttpsRoot(owners["Events"], "Gateway:Owners:Events"),
+            RequiredHttpsRoot(owners["IdentityBrokerAddress"], "Gateway:Owners:IdentityBrokerAddress"),
             TimeSpan.FromSeconds(timeoutSeconds));
+    }
+
+    private static string RequiredHttpsAudience(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !string.Equals(value, value.Trim(), StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Gateway configuration 'Identity:Audience' must be an absolute HTTPS audience.");
+        _ = RequiredHttpsUri(value, "Identity:Audience", allowPath: true);
+        return value;
     }
 
     private static Uri RequiredHttpsRoot(string? value, string key)

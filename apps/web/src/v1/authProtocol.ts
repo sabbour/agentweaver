@@ -184,12 +184,16 @@ export async function submitBrokerConsent(
     },
     credentials: 'include',
     cache: 'no-store',
+    redirect: 'manual',
     body: JSON.stringify({
       consent_handle: prompt.consent_handle,
       approve,
       scopes: approve ? prompt.requested_scopes : [],
     }),
   });
+  if (response.type === 'opaqueredirect' ||
+      (response.status >= 300 && response.status < 400))
+    return response;
   if (!response.ok) {
     const problem = await response.json().catch(() => ({})) as { error_description?: string; error?: string };
     throw new Error(problem.error_description ?? problem.error ?? `Broker consent failed with HTTP ${response.status}.`);

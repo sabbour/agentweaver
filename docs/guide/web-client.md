@@ -17,6 +17,7 @@ flowchart LR
 
   Browser -->|PKCE authorization, consent, token refresh| Broker
   Browser -->|Bearer API requests and ordered SSE| Gateway
+  Gateway -->|Original-bearer Repo App and Copilot BFF| Broker
   Gateway --> Projects
   Gateway --> Orchestrator
   Gateway --> Events
@@ -36,9 +37,14 @@ success.
 | --- | --- |
 | `/projects` | List projects visible to the signed-in identity and create a project. Creation does not assign an Owner. |
 | `/projects/:projectId` | Read project state and open an existing run by its exact ID. |
-| `/projects/:projectId/settings` | Read and append a revisioned project-configuration document. Owners validate the submitted configuration. |
+| `/projects/:projectId/settings` | Read and append a revisioned project-configuration document, connect the GitHub Repo App, and view its stable Identity connection ID. Owners validate the submitted configuration. |
 | `/projects/:projectId/knowledge` | Search paginated Knowledge records for an exact project, run, and agent; proposal decisions and record revisions remain owner-authoritative. |
-| `/projects/:projectId/runs/:runId` | Read run/session snapshots and journal events; view topology, outcomes and approvals, activity, accepted selection, and usage; send addressed messages or request supported tree actions. |
+| `/projects/:projectId/runs/:runId` | Read run/session snapshots and journal events; view topology, chat, outcomes and approvals, activity, accepted selection, and usage; manage run-bound GitHub App repository setup/pinning; send addressed messages or request supported tree actions. The `view` query selects a run tab (for example, `?view=chat`); unsupported values open Topology. |
+
+The shell's Run chat control opens Chat only for the exact project/run binding
+held by the current Broker session. Without that binding, the control remains
+disabled. Changing a run tab updates `view` while retaining unrelated query
+parameters.
 
 The run view polls authoritative owner snapshots and replays all journal pages
 before opening the live event stream. It merges replay/live overlap by event ID
@@ -48,6 +54,30 @@ Owner acceptance is not represented as delivery, completion, or a state
 transition; the refreshed snapshot supplies the resulting state.
 Knowledge search exposes owner-reported result pages rather than hiding records
 after the first page.
+
+Project settings include the retained GitHub Repo App connection control. The
+Identity Broker status supplies a stable opaque `connectionId`; the project
+configuration selects it with `sourceControl.authMode: "githubApp"` and
+`sourceControl.appConnectionId`. Existing configurations without `authMode`
+remain legacy secret mode. Provider tokens, numeric installation/repository IDs,
+and permission grants remain owner-held. OAuth uses a popup and the exact
+host-only transaction cookie; the callback returns only an allow-listed outcome
+to the opener. After consent, the browser starts a fresh PKCE authorization in
+that popup rather than following the consent redirect through a cross-origin
+fetch.
+
+When the accepted run configuration selects GitHub App mode, and its owner
+routes have been admitted and configured, the run Selection view can list safe
+repository metadata, begin the run-bound App installation, and pin a selected
+repository by sending its opaque short-lived selection code to the existing
+run-bound Source Control `/pin` operation. The accepted run owner validates the
+selected repository and current authority; bodyless legacy secret-mode pinning
+is unchanged. User authorization and repository discovery are Gateway browser
+routes, not MCP tools; run-bound repository operations remain in the first-party
+MCP catalog. Status and discovery failures remain unavailable rather than
+appearing disconnected or empty, and run-bound setup/pinning stay disabled
+until the exact tenant selector is available. Source mappings do not claim
+owner or deployment availability.
 
 ## Configuration and commands
 
@@ -86,6 +116,12 @@ proposal, or child registration/spawn/fork controls. It can message existing
 sessions and request supported detach/archive actions. The Gateway does not
 expose journal object-content reads, so the client shows opaque references
 without inventing transcript content.
+
+Run-produced-file browsing remains explicitly unavailable in this v1 UI.
+P2 #1917 owns the durable run-bound artifact manifest, diff, and object-version
+producer needed to browse produced files after workspaces or branches change.
+The browser will map that owner contract after admission; it does not proxy a
+host filesystem or claim parity from the older monolithic file endpoints.
 
 The accepted selection contains provider candidates and a model-selection
 reference, not a provisioned provider pin or runtime SDK model ID. Usage is

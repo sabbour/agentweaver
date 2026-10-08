@@ -884,13 +884,16 @@ superseded, and the original grant is superseded and not current. This handling 
 to merge execution; ordinary intent reads do not expose stale intents, and no merge request
 is sent.
 
-Projects stores only a repository identity and versioned API, checkout, and webhook `SecretRef`s. After an
-authorized caller requests a run pin, Orchestrator resolves the exact provider from the accepted run
-selection, redeems the API reference through Identity.Broker, negotiates the repository, rechecks current
-Projects and Core authority, and persists the provider/resource generation and negotiated capabilities
-against the accepted selection hash and execution fence. Secret values are operation-scoped and invalidated;
-the default Orchestrator audience remains unchanged, while Broker redemption separately requires both
-audiences.
+Projects stores the repository identity and explicit Source Control authentication mode. Legacy secret mode
+uses versioned API, checkout, and webhook `SecretRef`s; GitHub App mode uses a stable Identity-owned
+`appConnectionId` and does not store provider tokens or installation IDs. Older configurations that omit
+`authMode` remain in secret mode. After an authorized caller requests a run pin, Orchestrator resolves the
+exact provider from the accepted run selection, redeems the API reference through Identity.Broker in secret
+mode or consumes an actor-bound, single-use repository selection code in GitHub App mode, then rechecks
+current Projects and Core authority and persists the provider/resource generation and negotiated
+capabilities against the accepted selection hash and execution fence. Secret values are operation-scoped
+and invalidated; the default Orchestrator audience remains unchanged, while Broker redemption separately
+requires both audiences. Provider tokens and numeric App installation/repository IDs remain owner-held.
 
 The authenticated run-scoped Orchestrator API exposes issue creation, exact-head/base pull-request
 create-or-reuse, review reads, workspace preparation/diff, typed merge intents, and the relay endpoint.
@@ -917,10 +920,33 @@ not a deployed service or public webhook endpoint.
 
 <p align="center">
   <a href="../../diagrams/flagship/v1-source-control-owner-flow.png">
-    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration stores one repository and ID/version-only API, checkout, and webhook SecretRefs; Broker credentials are temporary. Issue-write requires GitHub issues to be enabled, repository names compare case-insensitively, and provider IDs remain exact. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay." />
+    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. One repository and ID/version-only API, checkout, and webhook SecretRefs come from the accepted project configuration; Broker credentials are temporary. Typed issue, pull-request, and review operations use the pinned provider binding. Workspaces isolate each run and return a bounded diff. GitHub webhooks are accepted only through an authenticated project/run relay, with raw-byte HMAC verification, pinned repository checks, and durable delivery deduplication; direct GitHub posts are rejected. Merge requires a server-read pull request, immutable intent, typed approval, current authority and grant, exact-head required checks, and a repository-scoped PostgreSQL lock. Pre-effect revocation is a persisted conflict without a merge write; post-effect revocation retains the true merged SHA for replay. Expected base is a preflight only, and uncertain remote outcomes remain explicit." />
   </a>
 </p>
 <p align="center" class="aw-diagram-links"><a href="../../diagrams/flagship/v1-source-control-owner-flow.png">Open full-size PNG</a> · <a href="../../diagrams/drawio/generated/flagship/v1-source-control-owner-flow.drawio">Open editable draw.io source</a></p>
+
+The drawing above focuses on the legacy `SecretRef` owner path. GitHub App mode
+uses the following separate source contract; it does not establish that the
+Identity or Source Control owner routes are admitted or deployed:
+
+```mermaid
+flowchart LR
+    Browser["Retained v1 browser"]
+    Gateway["Gateway BFF"]
+    Identity["Identity Broker"]
+    Config["Accepted config: githubApp + appConnectionId"]
+    Source["Source Control owner"]
+    Core["Projects & Core"]
+    Store["Source Control owner store"]
+    Browser -->|"Current user bearer; safe repository selection"| Gateway
+    Gateway -->|"Same bearer; no tenant selector"| Identity
+    Identity -->|"Metadata + single-use selectionCode"| Browser
+    Config --> Source
+    Browser -->|"Run bearer + tenant + selectionCode"| Gateway
+    Gateway -->|"Same run bearer and tenant"| Source
+    Source -->|"Current authority and accepted repository"| Core
+    Source -->|"Pin exact provider IDs server-side"| Store
+```
 
 ## Telemetry
 

@@ -59,8 +59,64 @@ describes the SSE response as `text/event-stream`; an invalid cursor is `400`.
 
 The Gateway requires HTTPS `Identity:Issuer`, `Identity:Audience`, and HTTPS service
 root addresses for `Gateway:Owners:Projects`, `Gateway:Owners:Orchestrator`,
-`Gateway:Owners:Knowledge`, and `Gateway:Owners:Events`. The optional finite
+`Gateway:Owners:Knowledge`, `Gateway:Owners:Events`, and
+`Gateway:Owners:IdentityBrokerAddress`. The optional finite
 `Gateway:OwnerRequestTimeoutSeconds` is 1–120 seconds and defaults to 15.
+
+### GitHub Repo App and Copilot connection BFF
+
+These explicit Gateway-to-Identity Broker routes are outside the OpenAPI catalog
+and describe source mappings, not owner or deployment availability. Repo App
+operations require the Identity/Source Control producer in #1907; Copilot
+operations require #1906. Missing owner routes/configuration remain explicit
+failures.
+User-level authorization, status, refresh/revoke, and repository discovery require
+the current Broker bearer and no tenant selector. The status response exposes only
+`connected`, `githubLogin`, and the stable opaque Identity `connectionId`; provider
+tokens, numeric installation/repository IDs, and permissions remain owner-held.
+Repository discovery returns safe metadata, while `POST /api/github/repository-selections`
+accepts `{ "fullName": "owner/repository" }` and returns only a short-lived
+single-use `{ "selectionCode", "expiresAt" }`.
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /api/auth/github/repo-app/authorizations` | Begin user OAuth with optional allow-listed `returnRouteKey`; returns `authorizationUrl`, `transactionId`, and `expiresAt`. |
+| `GET /api/auth/github/repo-app/authorization/status` | Read `{ connected, githubLogin, connectionId }`. |
+| `GET /api/auth/github/repo-app/authorizations/{transactionId}` | Read the transaction's `{ status }`. |
+| `POST /api/auth/github/repo-app/authorization/refresh` / `DELETE /api/auth/github/repo-app/authorization` | Refresh or revoke owner-held user authorization; no token payload. |
+| `GET /api/github/repository-selections` | Read repository and installation display metadata without provider IDs or permissions. |
+| `POST /api/github/repository-selections` | Exchange `{ fullName }` for an opaque short-lived `{ selectionCode, expiresAt }`. |
+| `GET /auth/github/repo-app/callback` | Bearerless OAuth callback; only `code`, `state`, and `error` are forwarded with the exact transaction cookie. |
+| `GET /auth/github/repo-app/installation/callback` | Bearerless installation callback; only `installation_id`, `setup_action`, and `state` are forwarded with the exact transaction cookie. |
+| `POST /api/v1/projects/{projectId}/runs/{runId}/source-control/github-app-installations/authorizations` | Run-bound installation start using the unchanged Broker bearer and required `X-Agentweaver-Tenant`; browser-only, not an MCP tool. |
+| `POST /api/connections/copilot-user/v1/{begin,complete,refresh,revoke}` / `GET /api/connections/copilot-user/v1/{connectionId}` | Copilot user-connection lifecycle; complete forwards the exact `__Host-agentweaver-copilot-link` cookie, bearer, and checked tenant unchanged. |
+
+The OAuth and installation callbacks preserve the owner's `Location` and every
+`Set-Cookie` header. Their host-only cookies are
+`__Host-agentweaver-repo-app-auth` and
+`__Host-agentweaver-repo-app-install-auth`; the browser does not forward an
+Identity Broker session cookie. The Copilot begin flow uses only
+`__Host-agentweaver-copilot-link`. No Gateway token exchange or caller-supplied
+actor/project/redirect authority is added.
+
+For accepted project configuration, optional `sourceControl.authMode` is
+`secret` or `githubApp`; older configurations that omit it remain legacy secret
+mode without rewriting omitted defaults. `sourceControl.appConnectionId` is the
+stable Identity reference for GitHub App mode, and `apiSecretReference` remains
+for secret mode only. The existing run-bound
+`POST /api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/pin`
+accepts an optional `{ "selectionCode": "..." }` body for App mode; omitting the
+body preserves legacy behavior. Both modes keep the existing
+`SourceControlRepositoryPinView` response and `200`/`202` semantics. The owner
+matches the opaque code against the accepted repository and stores exact provider
+IDs server-side.
+
+The browser lifecycle, user-level selection APIs, and callbacks are not exposed
+as first-party MCP tools. Run-bound repository operations in the finite OpenAPI
+catalog remain available as ordinary MCP tools and require `tenantSelector`.
+Run-produced-file list/diff/content reads remain unavailable until the durable
+manifest/object-version owner in P2 #1917 is admitted; no raw filesystem Gateway
+proxy is part of this contract.
 
 ## First-party MCP client
 

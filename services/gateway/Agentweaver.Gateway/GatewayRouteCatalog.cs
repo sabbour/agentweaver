@@ -8,6 +8,7 @@ public enum GatewayOwner
     Orchestrator,
     Knowledge,
     Events,
+    IdentityBroker,
 }
 
 public sealed record GatewayRoute(
@@ -20,7 +21,10 @@ public sealed record GatewayRoute(
     ImmutableArray<string> QueryParameters,
     bool HasJsonBody = false,
     bool AcceptsOnly = false,
-    bool IsRunEventStream = false);
+    bool IsRunEventStream = false,
+    bool RequiresTenantSelector = false,
+    bool ForwardSetCookie = false,
+    bool JsonBodyRequired = true);
 
 public static class GatewayRouteCatalog
 {
@@ -42,7 +46,9 @@ public static class GatewayRouteCatalog
             string[]? query = null,
             bool body = false,
             bool acceptsOnly = false,
-            bool eventStream = false) =>
+            bool eventStream = false,
+            bool requiresTenantSelector = false,
+            bool jsonBodyRequired = true) =>
             routes.Add(new GatewayRoute(
                 method,
                 VersionPrefix + publicSuffix,
@@ -53,7 +59,9 @@ public static class GatewayRouteCatalog
                 (query ?? []).ToImmutableArray(),
                 body,
                 acceptsOnly,
-                eventStream));
+                eventStream,
+                requiresTenantSelector,
+                JsonBodyRequired: jsonBodyRequired));
 
         Add("GET", GatewayOwner.Projects, "/projects", "/api/projects/",
             "listProjects", "List projects");
@@ -81,6 +89,50 @@ public static class GatewayRouteCatalog
         Add("PUT", GatewayOwner.Projects, "/platform/runtime-defaults",
             "/api/platform/runtime-defaults/",
             "updatePlatformRuntimeDefaults", "Update platform runtime defaults", body: true);
+
+        var sourceControl = "/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}";
+        void SourceControl(
+            string method,
+            string suffix,
+            string operationId,
+            string summary,
+            bool body = false,
+            bool acceptsOnly = false,
+            bool jsonBodyRequired = true) =>
+            Add(
+                method,
+                GatewayOwner.Orchestrator,
+                sourceControl + suffix,
+                "/api" + sourceControl + suffix,
+                operationId,
+                summary,
+                body: body,
+                acceptsOnly: acceptsOnly,
+                requiresTenantSelector: true,
+                jsonBodyRequired: jsonBodyRequired);
+
+        SourceControl("POST", "/pin",
+            "pinSourceControlRepository", "Pin the selected repository",
+            body: true,
+            jsonBodyRequired: false);
+        SourceControl("POST", "/issues",
+            "createSourceControlIssue", "Create a repository issue", body: true);
+        SourceControl("POST", "/pull-requests",
+            "createSourceControlPullRequest", "Create or reuse a pull request", body: true);
+        SourceControl("GET", "/pull-requests/{pullRequestNumber:long}/reviews",
+            "readSourceControlReviews", "Read pull request reviews");
+        SourceControl("POST", "/workspaces",
+            "prepareSourceControlWorkspace", "Prepare a repository workspace", body: true);
+        SourceControl("POST", "/workspaces/{workspaceId}/diff",
+            "readSourceControlWorkspaceDiff", "Read a repository workspace diff", body: true);
+        SourceControl("POST", "/merge-intents",
+            "prepareSourceControlMergeIntent", "Request approval for a pull request merge",
+            body: true,
+            acceptsOnly: true);
+        SourceControl("GET", "/merge-intents/{intentId}",
+            "readSourceControlMergeIntent", "Read a pull request merge intent");
+        SourceControl("POST", "/merge-intents/{intentId}/execute",
+            "executeSourceControlMergeIntent", "Execute an approved pull request merge");
 
         var coordination = "/projects/{projectId}/runs/{runId}/coordination";
         void Coordination(

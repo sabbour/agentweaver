@@ -42,6 +42,7 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
             new Uri("https://orchestrator.test/"),
             new Uri("https://knowledge.test/"),
             new Uri("https://events.test/"),
+            new Uri("https://identity-broker.test/"),
             ownerRequestTimeout ?? TimeSpan.FromSeconds(10));
 
         var builder = WebApplication.CreateBuilder();
