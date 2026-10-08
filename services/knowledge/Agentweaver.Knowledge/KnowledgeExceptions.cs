@@ -10,7 +10,7 @@ public sealed class KnowledgeApiException(
 }
 
 public sealed class KnowledgeStorageUnavailableException()
-    : Exception("Knowledge PostgreSQL storage is unavailable.");
+    : Exception("Knowledge storage is unavailable.");
 
 public sealed class KnowledgeProviderUnavailableException(string message)
     : Exception(message);

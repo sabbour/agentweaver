@@ -4,10 +4,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
-using Agentweaver.Persistence.Postgres;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
-using Npgsql;
 
 namespace Agentweaver.Knowledge;
 
@@ -21,7 +19,6 @@ public sealed record AcceptedEffectDeliveryResult(
 public sealed class AcceptedEffectRelay(
     HttpClient client,
     IHttpContextAccessor contextAccessor,
-    PostgresOutbox outbox,
     KnowledgeRuntimeOptions options,
     ILogger<AcceptedEffectRelay> logger)
 {
@@ -35,59 +32,60 @@ public sealed class AcceptedEffectRelay(
     };
 
     public async Task<AcceptedEffectDeliveryResult> TryDeliverAsync(
+        IMemoryProvider provider,
+        string projectId,
+        string runId,
         Guid receiptId,
         CancellationToken cancellationToken)
     {
-        OutboxDelivery? delivery = null;
+        AcceptedEffectDeliveryLease? delivery = null;
         try
         {
-            var stored = await outbox.ReadAsync(receiptId, cancellationToken).ConfigureAwait(false);
-            if (stored is null || stored.Value.Event.Message.EventType != "knowledge.accepted-effect")
+            var stored = await provider.ReadAcceptedEffectDeliveryAsync(
+                projectId, runId, receiptId, cancellationToken).ConfigureAwait(false);
+            if (stored is null)
                 return Pending("accepted_effect_outbox_missing");
-            if (stored.Value.IsDelivered)
+            if (stored.IsDelivered)
                 return new AcceptedEffectDeliveryResult("DELIVERED");
 
-            delivery = await outbox.ClaimAsync(
-                $"knowledge-relay-{Environment.ProcessId}",
+            delivery = await provider.ClaimAcceptedEffectDeliveryAsync(
+                projectId,
+                runId,
                 receiptId,
+                $"knowledge-relay-{Environment.ProcessId}",
                 TimeSpan.FromSeconds(30),
                 cancellationToken).ConfigureAwait(false);
             if (delivery is null)
             {
-                var current = await outbox.ReadAsync(receiptId, cancellationToken).ConfigureAwait(false);
+                var current = await provider.ReadAcceptedEffectDeliveryAsync(
+                    projectId, runId, receiptId, cancellationToken).ConfigureAwait(false);
                 return current?.IsDelivered == true
                     ? new AcceptedEffectDeliveryResult("DELIVERED")
                     : Pending("accepted_effect_delivery_busy");
             }
 
-            AcceptedEffectReceipt? receipt;
-            try
-            {
-                receipt = JsonSerializer.Deserialize<AcceptedEffectReceipt>(
-                    delivery.Event.Message.Payload.GetRawText(), JsonOptions);
-            }
-            catch (JsonException exception)
-            {
-                LogFailure(exception, "accepted_effect_receipt_invalid");
-                return await FailAsync(delivery, "accepted_effect_receipt_invalid").ConfigureAwait(false);
-            }
-            if (receipt is null ||
-                receipt.ReceiptId != receiptId ||
+            var receipt = delivery.Receipt;
+            if (receipt.ReceiptId != receiptId ||
+                !string.Equals(receipt.ProjectId, projectId, StringComparison.Ordinal) ||
+                !string.Equals(receipt.RunId, runId, StringComparison.Ordinal) ||
                 receipt.SchemaVersion != AcceptedEffectContractVersions.CurrentSchemaVersion ||
-                receipt.EventVersion != AcceptedEffectContractVersions.CurrentEventVersion ||
-                receipt.EventVersion != delivery.Event.Message.EventVersion)
-                return await FailAsync(delivery, "accepted_effect_receipt_invalid").ConfigureAwait(false);
+                receipt.EventVersion != AcceptedEffectContractVersions.CurrentEventVersion)
+                return await FailAsync(
+                    provider, projectId, runId, delivery, "accepted_effect_receipt_invalid")
+                    .ConfigureAwait(false);
 
             var forwarded = GetForwardedCallerHeaders();
             if (forwarded.Error is not null)
-                return await FailAsync(delivery, forwarded.Error).ConfigureAwait(false);
+                return await FailAsync(provider, projectId, runId, delivery, forwarded.Error)
+                    .ConfigureAwait(false);
 
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
                 new Uri(options.EventsBaseAddress, "/internal/project-facts/accepted-effects"))
             {
                 Content = JsonContent.Create(new AcceptedEffectDeliveryRequest(
-                    receipt.ReceiptId, receipt.SchemaVersion, receipt.EventVersion), options: JsonOptions)
+                    receipt.ReceiptId, receipt.ProjectId, receipt.RunId,
+                    receipt.SchemaVersion, receipt.EventVersion), options: JsonOptions)
             };
             request.Headers.Authorization = forwarded.EventsAuthorization;
             if (forwarded.KnowledgeAuthorization is not null)
@@ -100,7 +98,7 @@ public sealed class AcceptedEffectRelay(
                 request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             if (response.StatusCode == HttpStatusCode.Unauthorized)
                 return await FailAsync(
-                    delivery,
+                    provider, projectId, runId, delivery,
                     "events_audience_required",
                     receipt.Subject,
                     options.EventsAudience).ConfigureAwait(false);
@@ -108,9 +106,11 @@ public sealed class AcceptedEffectRelay(
                 response.StatusCode == HttpStatusCode.MovedPermanently ||
                 response.StatusCode == HttpStatusCode.TemporaryRedirect ||
                 response.StatusCode == HttpStatusCode.PermanentRedirect)
-                return await FailAsync(delivery, "events_redirect_rejected").ConfigureAwait(false);
+                return await FailAsync(
+                    provider, projectId, runId, delivery, "events_redirect_rejected").ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
-                return await FailAsync(delivery, StatusCode(response.StatusCode)).ConfigureAwait(false);
+                return await FailAsync(
+                    provider, projectId, runId, delivery, StatusCode(response.StatusCode)).ConfigureAwait(false);
 
             ProjectFactAcknowledgment? acknowledgment;
             try
@@ -129,11 +129,13 @@ public sealed class AcceptedEffectRelay(
                 acknowledgment.FactId == Guid.Empty ||
                 !string.Equals(acknowledgment.ProjectId, receipt.ProjectId, StringComparison.Ordinal) ||
                 acknowledgment.Sequence < 1)
-                return await FailAsync(delivery, "events_acknowledgment_invalid").ConfigureAwait(false);
+                return await FailAsync(
+                    provider, projectId, runId, delivery, "events_acknowledgment_invalid").ConfigureAwait(false);
 
-            if (!await outbox.AcknowledgeAsync(
-                    receiptId, delivery.LeaseToken, cancellationToken).ConfigureAwait(false))
-                return await FailAsync(delivery, "accepted_effect_acknowledgment_fenced")
+            if (!await provider.AcknowledgeAcceptedEffectDeliveryAsync(
+                    projectId, runId, receiptId, delivery.LeaseToken, cancellationToken).ConfigureAwait(false))
+                return await FailAsync(
+                    provider, projectId, runId, delivery, "accepted_effect_acknowledgment_fenced")
                     .ConfigureAwait(false);
             return new AcceptedEffectDeliveryResult("DELIVERED", Acknowledgment: acknowledgment);
         }
@@ -143,35 +145,49 @@ public sealed class AcceptedEffectRelay(
                 ? "accepted_effect_delivery_cancelled"
                 : "accepted_effect_delivery_timeout";
             LogFailure(exception, code);
-            return delivery is null ? Pending(code) : await FailAsync(delivery, code).ConfigureAwait(false);
+            return delivery is null
+                ? Pending(code)
+                : await FailAsync(provider, projectId, runId, delivery, code).ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
         {
             LogFailure(exception, "events_transport_unavailable");
             return delivery is null
                 ? Pending("events_transport_unavailable")
-                : await FailAsync(delivery, "events_transport_unavailable").ConfigureAwait(false);
+                : await FailAsync(provider, projectId, runId, delivery, "events_transport_unavailable")
+                    .ConfigureAwait(false);
         }
         catch (JsonException exception)
         {
             LogFailure(exception, "accepted_effect_outbox_invalid");
             return delivery is null
                 ? Pending("accepted_effect_outbox_invalid")
-                : await FailAsync(delivery, "accepted_effect_outbox_invalid").ConfigureAwait(false);
+                : await FailAsync(provider, projectId, runId, delivery, "accepted_effect_outbox_invalid")
+                    .ConfigureAwait(false);
         }
-        catch (NpgsqlException exception)
+        catch (KnowledgeStorageUnavailableException exception)
         {
             LogFailure(exception, "accepted_effect_storage_unavailable");
             return delivery is null
                 ? Pending("accepted_effect_storage_unavailable")
-                : await FailAsync(delivery, "accepted_effect_storage_unavailable").ConfigureAwait(false);
+                : await FailAsync(provider, projectId, runId, delivery, "accepted_effect_storage_unavailable")
+                    .ConfigureAwait(false);
+        }
+        catch (KnowledgeProviderUnavailableException exception)
+        {
+            LogFailure(exception, "accepted_effect_provider_unavailable");
+            return delivery is null
+                ? Pending("accepted_effect_provider_unavailable")
+                : await FailAsync(provider, projectId, runId, delivery, "accepted_effect_provider_unavailable")
+                    .ConfigureAwait(false);
         }
         catch (TimeoutException exception)
         {
             LogFailure(exception, "accepted_effect_storage_timeout");
             return delivery is null
                 ? Pending("accepted_effect_storage_timeout")
-                : await FailAsync(delivery, "accepted_effect_storage_timeout").ConfigureAwait(false);
+                : await FailAsync(provider, projectId, runId, delivery, "accepted_effect_storage_timeout")
+                    .ConfigureAwait(false);
         }
     }
 
@@ -217,19 +233,30 @@ public sealed class AcceptedEffectRelay(
     }
 
     private async Task<AcceptedEffectDeliveryResult> FailAsync(
-        OutboxDelivery delivery,
+        IMemoryProvider provider,
+        string projectId,
+        string runId,
+        AcceptedEffectDeliveryLease delivery,
         string code,
         string? requiredAudienceSubject = null,
         string? requiredAudience = null)
     {
         try
         {
-            if (!await outbox.ReleaseAsync(
-                    delivery.Event.Message.Id, delivery.LeaseToken, CancellationToken.None).ConfigureAwait(false))
+            if (!await provider.ReleaseAcceptedEffectDeliveryAsync(
+                    projectId,
+                    runId,
+                    delivery.Receipt.ReceiptId,
+                    delivery.LeaseToken,
+                    CancellationToken.None).ConfigureAwait(false))
                 logger.LogDebug(
                     "Accepted-effect delivery lease was no longer owned. FailureCode={FailureCode}", code);
         }
-        catch (NpgsqlException exception)
+        catch (KnowledgeStorageUnavailableException exception)
+        {
+            LogFailure(exception, code);
+        }
+        catch (KnowledgeProviderUnavailableException exception)
         {
             LogFailure(exception, code);
         }

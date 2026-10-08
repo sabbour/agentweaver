@@ -1,16 +1,17 @@
 # Knowledge and Memory
 
 `Agentweaver.Knowledge` is an unpublished .NET 10 service candidate. It owns the
-project memory API, immutable revision history, context compiler, provider bindings,
-and a separate PostgreSQL `knowledge` schema. Source presence does not mean the
-service is deployed or that a caller's accepted outcome has reached the native
-Events project-fact stream. Project facts are separate from the Sessions run journal.
+project memory API, context compiler, and immutable run-provider bindings in its
+PostgreSQL `knowledge` schema. Memory records, revisions, idempotency, and accepted-effect
+delivery state belong to the selected Memory provider. Source presence does not mean the
+service is deployed or that a caller's accepted outcome has reached the native Events
+project-fact stream. Project facts are separate from the Sessions run journal.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'" alt="Knowledge rechecks current project authority and run selection, commits an accepted proposal receipt and outbox intent with its records, then relays only the receipt ID and versions to Events. Events fetches the receipt from the fixed Knowledge owner, rechecks current authority, and commits a separate project fact with its sequence and inbox receipt." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'" alt="Knowledge rechecks current project authority and run selection, commits an accepted proposal receipt and delivery intent through the selected Memory provider, then relays only the receipt ID and versions to Events. Events fetches the receipt from the fixed Knowledge owner, rechecks current authority, and commits a separate project fact with its sequence and inbox receipt. Native PostgreSQL remains the default; the optional Cosmos container is project-partitioned." />
   </a>
-  <figcaption>Accepted project facts are durably admitted by Events before Knowledge marks its outbox delivered. This path does not append to or change the run-bound Sessions journal.</figcaption>
+  <figcaption>Accepted project facts are durably admitted by Events before Knowledge marks provider-owned delivery state complete. The Knowledge run pin and Sessions journal remain in PostgreSQL; project facts do not append to or change the run-bound journal.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.drawio'">Open editable draw.io source</a></p>
 
@@ -52,16 +53,18 @@ history. Context candidates are filtered by project, with active approved decisi
 available project-wide, agent memories kept agent-local unless approved and tagged
 `cross-team`, and SessionContext limited to the requested agent and run. The current
 runtime authority contract has no agent-to-principal visibility grant, so a runtime
-caller without current `WriteProjects` fails closed. Knowledge owns record, revision,
-idempotency, provider-binding, and outbox storage; it does not read or write another
-service's schema.
+caller without current `WriteProjects` fails closed. Knowledge owns the authorization
+and data boundaries; the selected Memory provider stores records, revisions,
+idempotency receipts, and accepted-effect delivery state. The immutable run-provider
+binding and Knowledge service schema remain in PostgreSQL. Knowledge does not read or
+write another service's schema.
 
 ## Memory provider and run binding
 
 `Agentweaver.Abstractions` defines the provider-neutral `IMemoryProvider` contract and
-the read, write, search, revision, proposal-promotion, and context-composition
-capabilities. The current adapter is `postgres.native-memory`, version `1.0.0`, with
-options schema version `1`.
+the read, write, search, revision, proposal-promotion, context-composition, and
+accepted-effect-delivery capabilities. `postgres.native-memory` remains the default.
+The optional `cosmos.memory` adapter is version `1.0.0` with options schema version `1`.
 
 The accepted Projects run selection must contain exactly one exclusive Memory
 candidate. Knowledge compares it with the catalog-owner snapshot loaded from
@@ -73,20 +76,25 @@ capabilities, project revision, configuration revision, and context revision. On
 later operations, a changed run selection or provider binding fails closed; there is
 no provider fallback.
 
-### Planned P2 adapters
+### Cosmos Memory source candidate
 
-P2 adds Cosmos and Redis providers beside native PostgreSQL through the same
-exclusive `IMemoryProvider` boundary. Native PostgreSQL remains the default.
-Knowledge retains authorization, context composition, accepted selection checks, and
-immutable provider bindings. The selected adapter owns its memory records and revisions.
-The current source implements only the native PostgreSQL adapter.
+When the catalog and `Knowledge:CosmosProvider` options register Cosmos, an accepted
+run selection can choose it through the same exclusive `IMemoryProvider` boundary.
+Native PostgreSQL remains the default. Negotiation verifies the configured database,
+container, `/projectId` partition key, required search composite index, non-expiring
+default TTL, resource identity, and generation; it does not provision or create Cosmos
+resources. The Cosmos SDK uses the host's configured runtime workload identity. Records, immutable revisions, idempotency receipts, proposal
+promotion, and accepted-effect receipt/delivery state are stored in project-partitioned
+Cosmos batches. Knowledge still stores immutable run-provider bindings and its service
+schema in PostgreSQL. A missing, unavailable, or incompatible selected provider fails
+closed; a run never falls back to PostgreSQL.
 
-Both adapters must preserve durable records, revision checks, idempotent writes,
-proposal promotion, and project/agent isolation before enablement.
-Redis is a Memory backend, not merely a cache over native PostgreSQL.
-Its persistence and eviction configuration must not discard authoritative memory.
-Memory selection does not move the Sessions journal, authorization state, or
-service outboxes out of PostgreSQL.
+The Cosmos tests use a fake document-store transport and exercise selection metadata,
+partition isolation, immutable revisions, conflicts, idempotency, promotion, delivery
+leases, and restart behavior. They do not prove live Cosmos permissions, throughput,
+availability, or cloud deployment. Redis remains planned P2 work, not part of this
+source candidate. Neither Memory adapter replaces the PostgreSQL Sessions journal or
+the PostgreSQL state owned by other services.
 
 ## Records and revisions
 
@@ -102,8 +110,9 @@ New proposals are pending and cannot be edited like ordinary memory. Promotion
 requires the caller's current effective `WriteProjects` permission, the exact agent
 owner, source run, pending state, and expected revision. It marks the proposal
 promoted, creates an approved decision, appends both revision histories, and records
-an immutable redacted accepted-effect receipt and outbox intent in one Knowledge
-database transaction. The receipt contains identity and authorization bounds,
+an immutable redacted accepted-effect receipt and delivery intent atomically through
+the selected Memory provider. Native PostgreSQL uses its Knowledge database transaction;
+Cosmos writes the scoped documents in one project-partition batch. The receipt contains identity and authorization bounds,
 effect and record IDs, record version, and accepted time. It contains no proposal
 content or credentials.
 
@@ -111,7 +120,9 @@ content or credentials.
 `Cache-Control: no-store`. Knowledge requires the original issuer and subject, matching resource
 bindings, no purpose-bound token, and a fresh current `WriteProjects` authorization.
 It returns receipt metadata only; it does not expose the decision or proposal
-contents.
+contents. The scoped route
+`GET /internal/projects/{projectId}/runs/{runId}/accepted-effects/{receiptId}` reads
+only from the already-pinned Memory provider and does not create a missing run binding.
 
 After the commit, a caller-driven relay sends only the receipt ID and contract
 versions to the fixed HTTPS Events endpoint. It forwards the existing Knowledge
@@ -128,8 +139,11 @@ inbox receipt in one Events PostgreSQL transaction. Knowledge marks the outbox
 delivered only after validating the persisted Events acknowledgment. A transport,
 authorization, or persistence failure leaves the accepted decision and receipt
 committed and reports delivery as `PENDING`; a fresh authorized caller can retry the
-same receipt. These project facts are not session events, do not enter the run
-journal, and do not create or change a provider pin.
+same receipt. For Cosmos Memory, the accepted-effect receipt and delivery intent are
+committed with the promoted records in the selected project's partition, and the
+relay claims and acknowledges delivery through that same provider. These project
+facts are not session events, do not enter the run journal, and do not create or
+change a provider pin.
 
 ## Context composition
 

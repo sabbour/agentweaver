@@ -21,6 +21,10 @@ public static class KnowledgeEndpoints
 
         app.MapGet("/internal/accepted-effects/{receiptId:guid}", ReadAcceptedEffectReceiptAsync)
             .RequireAuthorization();
+        app.MapGet(
+                "/internal/projects/{projectId}/runs/{runId}/accepted-effects/{receiptId:guid}",
+                ReadScopedAcceptedEffectReceiptAsync)
+            .RequireAuthorization();
     }
 
     private static Task<IResult> CreateAsync(
@@ -181,6 +185,20 @@ public static class KnowledgeEndpoints
         httpContext.Response.Headers.CacheControl = "no-store";
         return ExecuteAsync(async () => Results.Ok(
             await service.ReadAcceptedEffectReceiptAsync(receiptId, cancellationToken).ConfigureAwait(false)));
+    }
+
+    private static Task<IResult> ReadScopedAcceptedEffectReceiptAsync(
+        string projectId,
+        string runId,
+        Guid receiptId,
+        HttpContext httpContext,
+        KnowledgeApplicationService service,
+        CancellationToken cancellationToken)
+    {
+        httpContext.Response.Headers.CacheControl = "no-store";
+        return ExecuteAsync(async () => Results.Ok(
+            await service.ReadAcceptedEffectReceiptAsync(
+                projectId, runId, receiptId, cancellationToken).ConfigureAwait(false)));
     }
 
     private static async Task<IResult> ExecuteAsync(Func<Task<IResult>> action)

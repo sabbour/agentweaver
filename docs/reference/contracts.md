@@ -493,6 +493,7 @@ route and the authority response.
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/proposals/{proposalId}/reject` | Explicitly reject a pending proposal using its expected revision and an `Idempotency-Key`. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/context?q={text}&maxItems={n}&maxTokens={n}` | Compose bounded context with immutable revision references; requires current `WriteProjects` for private content. Invalid narrowing is `400`; mandatory-content, candidate, or output budget overflow is returned explicitly as `413`. |
 | `GET /internal/accepted-effects/{receiptId}` | No-store redacted accepted-effect receipt for the original issuer/subject and matching bounds, after a fresh current project `WriteProjects` check. Does not return proposal or decision content. |
+| `GET /internal/projects/{projectId}/runs/{runId}/accepted-effects/{receiptId}` | No-store redacted receipt scoped to the selected, already-pinned Memory provider and exact project/run. A missing or changed immutable provider binding fails closed without creating a replacement. |
 
 The service owns a separate `knowledge` PostgreSQL schema. Revisions are append-only,
 provider bindings are immutable, and current records cannot be physically deleted;
@@ -518,6 +519,7 @@ Configuration:
 | `ConnectionStrings:KnowledgeMigration` | Separate connection for the explicit `--migrate` operation. |
 | `Knowledge:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Separate explicit migration workload identity. |
 | `Knowledge:Provider:{ResourceId,DatabaseName,ResourceGeneration,Schema,OptionsRevision,OptionsSchemaVersion}` | Expected resource identity and immutable provider options used during negotiation/pinning. |
+| `Knowledge:CosmosProvider:{Endpoint,DatabaseId,ContainerId,ResourceId,ResourceGeneration,OptionsRevision,OptionsSchemaVersion}` | Optional Cosmos Memory adapter configuration. The catalog must register the adapter and a run must select it; negotiation requires the existing container partition key `/projectId`, the search composite index, and a non-expiring default TTL. The schema version defaults to `1`. These settings do not provision Cosmos resources. |
 | `Knowledge:Context:{MaximumCandidates,MaximumItems,MaximumTokens}` | Service-owned hard limits; each request can only narrow them and the current run's prompt-token limit. |
 
 Both PostgreSQL connections omit passwords and use TLS `VerifyFull` with the

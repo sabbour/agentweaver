@@ -126,6 +126,8 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
                    Content = JsonContent.Create(
                        new AcceptedEffectDeliveryRequest(
                            receiptId,
+                           "project-a",
+                           "run-a",
                            AcceptedEffectContractVersions.CurrentSchemaVersion,
                            AcceptedEffectContractVersions.CurrentEventVersion),
                        options: JsonOptions)
@@ -173,7 +175,7 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
         Assert.Equal("events_unavailable", result.RootElement.GetProperty("deliveryCode").GetString());
         Assert.Contains(logs.Entries, entry =>
             entry.Contains("FailureCode=events_unavailable", StringComparison.Ordinal) &&
-            entry.Contains("FailureType=PostgresException", StringComparison.Ordinal));
+            entry.Contains("FailureType=KnowledgeStorageUnavailableException", StringComparison.Ordinal));
         Assert.All(logs.Entries, entry =>
         {
             Assert.DoesNotContain("caller-token", entry, StringComparison.Ordinal);
@@ -438,6 +440,8 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
         {
             Content = JsonContent.Create(new AcceptedEffectDeliveryRequest(
                 receiptId,
+                "project-a",
+                "run-a",
                 AcceptedEffectContractVersions.CurrentSchemaVersion,
                 AcceptedEffectContractVersions.CurrentEventVersion), options: JsonOptions)
         };
