@@ -61,9 +61,14 @@ export function parseArgs(argv = []) {
   const takeValue = (i, name) => {
     const raw = argv[i];
     const eq = raw.indexOf("=");
-    if (eq !== -1) return { value: raw.slice(eq + 1), consumed: 0 };
+    if (eq !== -1) {
+      const value = raw.slice(eq + 1);
+      if (!value.trim()) throw new Error(`${name} requires a non-empty value`);
+      return { value, consumed: 0 };
+    }
     const next = argv[i + 1];
     if (next === undefined) throw new Error(`${name} requires a value`);
+    if (!next.trim()) throw new Error(`${name} requires a non-empty value`);
     return { value: next, consumed: 1 };
   };
 
@@ -112,6 +117,10 @@ export function parseArgs(argv = []) {
     throw new Error("--resume and --restart are mutually exclusive.");
   }
 
+  if (!help && acceptanceBundlePath && !featureManifestPath) {
+    throw new Error("--acceptance-bundle requires --feature-manifest.");
+  }
+
   return {
     tag,
     dryRun,
@@ -130,8 +139,7 @@ export const HELP_TEXT = `deploy-from-release -- deploy an existing published Ag
 Usage:
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z [--dry-run]
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --image-source acr-build
-  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z \
-    --feature-manifest <path>
+  node scripts/azure/cli.mjs deploy-from-release vX.Y.Z [--feature-manifest <path>]
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --resume \
     --feature-manifest <path> --acceptance-bundle <path>
   node scripts/azure/cli.mjs deploy-from-release vX.Y.Z --recover-repo-app-private-key
@@ -147,12 +155,13 @@ vX.Y.Z images from source into ACR instead. Either way, this deploys them,
 verifies live provenance against the tag, waits for the AgentHost warm pool,
 and runs health verification.
 
-Every non-dry-run release deployment requires a feature manifest before
-deployment. After deployment and verification, acceptance remains blocked
-until an integrity-verified canonical Harness/Judge bundle is supplied. Re-run with
---resume and the same feature manifest plus --acceptance-bundle to
-re-verify the deployment and close release acceptance without repeating
-completed build/deploy stages.
+Feature-manifest and canonical-bundle checks are optional diagnostics. A
+supplied feature manifest is validated before build/deploy; a canonical bundle
+requires that manifest and is validated after live verification. Without a
+manifest, release acceptance is reported as NOT_RUN while the ordinary
+deployment checks still determine success. With a manifest but no bundle,
+acceptance remains pending; run Harness and re-run with --resume, the same
+manifest, and --acceptance-bundle to close it.
 
 Transient Azure CLI failures (connection resets, throttling, timeouts) are
 retried automatically for idempotent registry operations. Completed build and
@@ -348,7 +357,7 @@ export async function run(opts = {}) {
       deployedRevision: release.commit,
       deploymentIdentity: releaseDeploymentIdentity(cfg),
     };
-    if (!dryRun) {
+    if (!dryRun && parsed.featureManifestPath) {
       acceptance.runReleaseDeclarationGate({
         featureManifestPath: parsed.featureManifestPath,
         expectedDeployment,
@@ -455,8 +464,10 @@ export async function run(opts = {}) {
     const verify = await verifyStep.run(deployCfg, { exec, log });
     let releaseAcceptance = dryRun
       ? { ok: false, status: "NOT_EVALUATED_DRY_RUN" }
-      : { ok: false, status: "BLOCKED_ON_DEPLOYMENT_VERIFICATION" };
-    if (!dryRun && verify.ok) {
+      : parsed.featureManifestPath
+        ? { ok: false, status: "BLOCKED_ON_DEPLOYMENT_VERIFICATION" }
+        : { ok: false, status: "NOT_RUN" };
+    if (!dryRun && verify.ok && parsed.featureManifestPath) {
       if (!parsed.acceptanceBundlePath) {
         throw new Error(
           "Release deployment verified, but acceptance remains pending. Run the selected Harness "
@@ -471,9 +482,9 @@ export async function run(opts = {}) {
       });
     }
 
-    // A fully verified deployment must not leave a checkpoint behind, or the
-    // next --resume for this tag would skip stages that should run again.
-    if (dryRun || (verify.ok && releaseAcceptance.ok)) {
+    // A successful ordinary deployment or completed diagnostic run must not
+    // leave a checkpoint that would skip stages on the next default run.
+    if (dryRun || (verify.ok && (!parsed.featureManifestPath || releaseAcceptance.ok))) {
       clearCheckpoint(resumeKey, checkpointIo);
     }
 

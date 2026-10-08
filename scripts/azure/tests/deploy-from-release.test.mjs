@@ -111,6 +111,18 @@ test("deploy-from-release requires one vX.Y.Z tag", () => {
   });
   assert.throws(() => parseArgs([]), /Usage/);
   assert.throws(() => parseArgs(["1.2.3"]), /Usage/);
+  assert.throws(
+    () => parseArgs(["v1.2.3", "--acceptance-bundle", "bundle.json"]),
+    /--acceptance-bundle requires --feature-manifest/,
+  );
+  assert.throws(
+    () => parseArgs(["v1.2.3", "--feature-manifest="]),
+    /--feature-manifest requires a non-empty value/,
+  );
+  assert.throws(
+    () => parseArgs(["v1.2.3", "--acceptance-bundle", "   "]),
+    /--acceptance-bundle requires a non-empty value/,
+  );
 });
 
 test("deploy-from-release accepts --image-source ghcr and --ghcr-token", () => {
@@ -243,6 +255,7 @@ test("deploy-from-release builds, deploys, verifies provenance, waits, then veri
   });
 
   assert.equal(result.ok, true);
+  assert.deepEqual(result.releaseAcceptance, { ok: true });
   assert.deepEqual(order, ["build", "deploy", "provenance", "warm-pool", "health"]);
   assert.equal(buildCfg.IMAGE_TAG, "v1.2.3");
   assert.equal(buildCfg.AGENTHOST_IMAGE_TAG, "v1.2.3");
@@ -354,11 +367,63 @@ test("verified standalone deployment remains blocked until post-deploy results c
   assert.deepEqual(order, ["declaration", "build", "deploy", "provenance", "health"]);
 });
 
-test("standalone release deployment validates feature declaration before build or deploy", async () => {
+test("ordinary standalone release deployment completes without catalog diagnostics", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-no-diagnostics-"));
+  const order = [];
+  const exec = fakeExec();
+  exec.capture = async (cmd, args) => {
+    if (cmd === "git" && args[0] === "tag") {
+      return { code: 0, stdout: "v1.2.3\nv1.2.2\n" };
+    }
+    if (cmd === "kubectl") {
+      order.push("warm-pool");
+      return { code: 1, stdout: "", json: null };
+    }
+    return { code: 0, stdout: "" };
+  };
+
+  try {
+    const result = await run({
+      argv: ["v1.2.3", "--image-source", "acr-build"],
+      repoRoot: "/repo",
+      exec,
+      log,
+      readFile,
+      validatedRelease: { tag: "v1.2.3", version: "1.2.3", commit: "abc" },
+      resolveVariables: async () => ({
+        ACR_NAME: "acr",
+        SUBSCRIPTION_ID: "sub",
+        RESOURCE_GROUP: "rg",
+        CLUSTER_NAME: "cluster",
+        NAMESPACE: "agentweaver",
+      }),
+      checkpointIo: { dir },
+      acceptance: {
+        runReleaseDeclarationGate: () => assert.fail("must not run without a feature manifest"),
+        runCanonicalReleaseAcceptanceGate: () => assert.fail("must not run without a feature manifest"),
+      },
+      steps: {
+        buildImages: { run: async () => { order.push("build"); return {}; } },
+        deployStep: { run: async () => { order.push("deploy"); return {}; } },
+        verifyProvenance: { run: async () => { order.push("provenance"); return {}; } },
+        verifyStep: { run: async () => { order.push("health"); return { ok: true }; } },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.releaseAcceptance, { ok: false, status: "NOT_RUN" });
+    assert.deepEqual(order, ["build", "deploy", "provenance", "warm-pool", "health"]);
+    assert.deepEqual(fs.readdirSync(dir), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("standalone release deployment validates an explicit feature declaration before build or deploy", async () => {
   const calls = [];
   await assert.rejects(
     run({
-      argv: ["v1.2.3", "--image-source", "acr-build"],
+      argv: ["v1.2.3", "--image-source", "acr-build", "--feature-manifest", "feature.json"],
       repoRoot: "/repo",
       exec: fakeExec(),
       log,
@@ -374,8 +439,8 @@ test("standalone release deployment validates feature declaration before build o
       acceptance: {
         runReleaseDeclarationGate: ({ featureManifestPath }) => {
           calls.push("declaration");
-          assert.equal(featureManifestPath, undefined);
-          throw new Error("--feature-manifest is required");
+          assert.equal(featureManifestPath, "feature.json");
+          throw new Error("invalid release feature declaration");
         },
       },
       steps: {
@@ -383,9 +448,29 @@ test("standalone release deployment validates feature declaration before build o
         deployStep: { run: async () => calls.push("deploy") },
       },
     }),
-    /--feature-manifest is required/,
+    /invalid release feature declaration/,
   );
   assert.deepEqual(calls, ["declaration"]);
+});
+
+test("a bundle without a feature manifest is rejected before deployment side effects", async () => {
+  const calls = [];
+  await assert.rejects(
+    run({
+      argv: ["v1.2.3", "--acceptance-bundle", "bundle.json"],
+      resolveVariables: async () => { calls.push("resolve-variables"); },
+      acceptance: {
+        runReleaseDeclarationGate: () => calls.push("declaration"),
+        runCanonicalReleaseAcceptanceGate: () => calls.push("canonical"),
+      },
+      steps: {
+        buildImages: { run: async () => calls.push("build") },
+        deployStep: { run: async () => calls.push("deploy") },
+      },
+    }),
+    /--acceptance-bundle requires --feature-manifest/,
+  );
+  assert.deepEqual(calls, []);
 });
 
 test("release deployment stops before build when Entra registration preflight cannot read the exact app", async () => {

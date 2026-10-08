@@ -236,26 +236,33 @@ URLs cannot replace revision-, project-, and run-bound execution evidence.
 Every passing execution claim and required surface needs non-empty typed evidence bound
 to the exact deployed revision, project, challenge execution, run, and surface.
 
-The full catalog does not run for every release. Release acceptance combines the
-bounded `release-lumenpath-launch-integration-v1` representative project with focused
-API and/or UI challenges for every newly shipped behavior, selected from its affected
-surfaces. Missing direct claim or surface coverage fails closed. Scheduled deep stress
-and manual destructive scenarios remain separate.
+Ordinary release commands do not require catalog diagnostics; when no feature
+manifest or bundle is supplied, they report release acceptance as `NOT_RUN` and
+continue to rely on the normal source, image, provenance, and live-health checks.
+Required real feature/regression tests remain part of exact-SHA candidate acceptance.
 
-Release planning selects and documents the required scenarios but does not execute them.
-Before release deployment, the deployment boundary validates the declared scenario
-selection and binds it to the target tag commit and deployment identity. After that exact
-revision is deployed, run the selected Harness scenarios and resume
-`azure:deploy-from-release` with their result manifests. The boundary fails closed unless
-the representative challenge and every feature-specific affected surface have passing
-exact-revision evidence, cleanup succeeded, and no abnormal anomaly remains unresolved.
-Evidence also binds to the catalog version. The standalone manifest validator is
-diagnostic only and cannot close acceptance.
+The full catalog does not run for every release. When a release explicitly opts into
+catalog-backed acceptance by supplying a feature manifest, that acceptance combines
+the bounded `release-lumenpath-launch-integration-v1` representative project with
+focused API and/or UI challenges for every newly shipped behavior, selected from its
+affected surfaces. Missing direct claim or surface coverage fails closed in this
+opt-in mode. Scheduled deep stress and manual destructive scenarios remain separate.
 
-Authoritative closure requires a canonical Harness/Judge bundle. The verifier resolves
-every result and evidence path beneath that bundle's directory, rejects traversal or
-missing files, recomputes SHA-256, compares media/path metadata, and binds bundle, batch,
-result, scenario, and execution IDs to the exact deployment. This protects the
+Release planning selects and documents the diagnostic scenarios but does not execute
+them. When `--feature-manifest` is supplied, the deployment boundary validates the
+declared selection and binds it to the target tag commit and deployment identity before
+deployment. After that exact revision is deployed, run the selected Harness scenarios
+and resume `azure:deploy-from-release` with the same manifest and a result bundle. The
+boundary fails closed unless the representative challenge and every feature-specific
+affected surface have passing exact-revision evidence, cleanup succeeded, and no
+abnormal anomaly remains unresolved. Evidence also binds to the catalog version. The
+standalone manifest validator is diagnostic only and cannot close acceptance.
+
+When opt-in diagnostics are used, authoritative closure requires a canonical
+Harness/Judge bundle. The verifier resolves every result and evidence path beneath
+that bundle's directory, rejects traversal or missing files, recomputes SHA-256,
+compares media/path metadata, and binds bundle, batch, result, scenario, and execution
+IDs to the exact deployment. This protects the
 trusted release operator from accidental or simply fabricated JSON closure; it does not
 claim cryptographic protection from a malicious operator who controls the local files.
 
