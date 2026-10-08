@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Native Sessions journal, accepted facts, and owner delivery",
-  "alt": "Events & Sessions commits journal facts and serves ordered replay. Orchestrator rechecks current Projects authority, accepted decision, persisted selection context, work item, turn, and Environment placement after waits. Typed TurnContent and SdkCache material uses the existing Object Store. Events stores bytes before journal references, rechecks authority after waits and retries, and checks digest and length before historical disclosure. Observe credentials alone do not authorize material writes. AgentHost guards actual native SDK turns and registered tools with committed Policy receipts, prioritizes immediate work at native idle boundaries, and waits for immutable Cost accounting before acknowledgment. Compatible opaque SDK caches resume through the native SDK; missing or incompatible caches rebuild authenticated journal context without effect replay. Environment supplies the first three startup timestamps under its retained lease, and AgentHost supplies actual configured and ready timestamps. These source contracts do not prove deployment or paid model execution.",
+  "alt": "Events & Sessions commits journal facts and serves ordered replay. Orchestrator rechecks current Projects authority, accepted decision, persisted selection context, work item, turn, and Environment placement after waits. Typed TurnContent and SdkCache material uses the existing Object Store. Events stores bytes before journal references, rechecks authority after waits and retries, and checks digest and length before historical disclosure. Observe credentials alone do not authorize material writes. AgentHost guards actual native SDK turns and registered tools with committed Policy receipts, prioritizes immediate work at native idle boundaries, and waits for immutable Cost accounting before acknowledgment. Compatible opaque SDK caches resume through the native SDK; missing or incompatible caches rebuild authenticated journal context without effect replay. Native packages load from the read-only image distribution, not private session state. Environment supplies the first three startup timestamps under its retained lease, and AgentHost supplies actual configured and ready timestamps. These source contracts do not prove deployment or paid model execution.",
   "autonumber": true,
   "participants": [
     {
@@ -194,6 +194,11 @@
       "type": "note",
       "over": ["caller", "api", "postgres"],
       "label": "Retained lease: scheduled/imageReady/started; host: configured/ready. Actual compressed OCI bytes; time ceilings, no size cap."
+    },
+    {
+      "type": "note",
+      "over": ["caller", "api", "postgres"],
+      "label": "Native packages: read-only image /app/native. Private session state: /state and /tmp remain noexec; opaque SDK caches keep authenticated recovery."
     }
   ]
 }

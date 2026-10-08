@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import test from 'node:test';
 import { measureAgentHostImage } from '../measure-agenthost-image.mjs';
@@ -63,4 +64,24 @@ test('rejects a tag index with multiple platforms', async () => {
   const f = fixture();
   await assert.rejects(() => measureAgentHostImage(
     Buffer.from(JSON.stringify({ schemaVersion: 2, manifests: [f.descriptor, f.descriptor] })), f.read, f.source));
+});
+
+test('both exact-image native probes keep private mounts non-executable and verify the image-owned distribution', () => {
+  const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
+  const dockerfile = readFileSync(new URL('../../../services/agenthost/Agentweaver.AgentHost/Dockerfile', import.meta.url), 'utf8');
+  for (const uid of [1654, 1000]) {
+    for (const mount of ['/state', '/tmp']) {
+      assert.ok(workflow.includes(`--tmpfs ${mount}:rw,noexec,nosuid,nodev,uid=${uid},gid=${uid},mode=700`));
+    }
+  }
+  assert.match(workflow, /--network none --read-only/g);
+  assert.match(workflow, /--cap-drop ALL --security-opt no-new-privileges/g);
+  assert.match(workflow, /status\.nativeDistribution !== "\/app\/native"/);
+  assert.match(workflow, /result\.native\.nativeDistribution !== "\/app\/native"/);
+  assert.match(workflow, /status\.privatePackageCacheAbsent !== true/);
+  assert.match(workflow, /result\.native\.privatePackageCacheAbsent !== true/);
+  assert.match(workflow, /test ! -d \/state\/\.cache\/copilot\/pkg/);
+  for (const file of ['index.js', 'app.js', 'prebuilds/linux-x64/runtime.node']) {
+    assert.ok(dockerfile.includes(`test -s /publish/native/${file}`));
+  }
 });

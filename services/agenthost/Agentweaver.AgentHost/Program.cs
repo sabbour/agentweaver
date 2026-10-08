@@ -22,9 +22,13 @@ if (args.SequenceEqual(["--verify-native-runtime"]))
     var status = await client.GetStatusAsync(deadline.Token);
     if (status.Version != verified.RuntimeVersion)
         throw new InvalidOperationException("The native SDK status does not match the image-owned runtime.");
+    if (Directory.Exists("/state/.cache/copilot/pkg"))
+        throw new InvalidOperationException("The native runtime extracted executable packages into private session state.");
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
     {
-        sdkVersion = "1.0.11", runtimeVersion = status.Version, status.ProtocolVersion
+        sdkVersion = "1.0.11", runtimeVersion = status.Version, status.ProtocolVersion,
+        nativeDistribution = Path.GetDirectoryName(verified.ExecutablePath),
+        privatePackageCacheAbsent = true
     }));
     return;
 }

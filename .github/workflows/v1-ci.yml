@@ -64,15 +64,17 @@ jobs:
           node --input-type=module -e 'import fs from "node:fs"; const receipt = JSON.parse(fs.readFileSync("artifacts/images/agenthost.json")); if (receipt.image.configDigest !== process.argv[1]) throw Error("The loaded smoke image differs from the measured OCI image.");' "$IMAGE_CONFIG"
           timeout 60s docker run --rm --platform linux/amd64 --network none --read-only \
             --cap-drop ALL --security-opt no-new-privileges \
-            --tmpfs /state:uid=1654,gid=1654,mode=700 --tmpfs /tmp:mode=1777 \
+            --tmpfs /state:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=700 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=700 \
             agentweaver-agenthost:ci --verify-native-runtime > artifacts/images/agenthost-native-status.json
-          node --input-type=module -e 'import fs from "node:fs"; const status = JSON.parse(fs.readFileSync("artifacts/images/agenthost-native-status.json")); if (status.sdkVersion !== "1.0.11" || status.runtimeVersion !== "1.0.79" || status.ProtocolVersion !== 3) throw Error("The image does not run the pinned native SDK protocol.");'
+          node --input-type=module -e 'import fs from "node:fs"; const status = JSON.parse(fs.readFileSync("artifacts/images/agenthost-native-status.json")); if (status.sdkVersion !== "1.0.11" || status.runtimeVersion !== "1.0.79" || status.ProtocolVersion !== 3 || status.nativeDistribution !== "/app/native" || status.privatePackageCacheAbsent !== true) throw Error("The image does not run its pinned image-owned native SDK protocol.");'
           timeout 60s docker run --rm --platform linux/amd64 --network none --read-only \
             --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges \
-            --tmpfs /workspace:uid=1000,gid=1000,mode=755 \
-            --tmpfs /state:uid=1000,gid=1000,mode=700 --tmpfs /tmp:uid=1000,gid=1000,mode=700 \
-            --tmpfs /configuration:uid=1000,gid=1000,mode=700 \
-            --tmpfs /run/agenthost-tls:uid=1000,gid=1000,mode=700 \
+            --tmpfs /workspace:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=755 \
+            --tmpfs /state:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=700 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=700 \
+            --tmpfs /configuration:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=700 \
+            --tmpfs /run/agenthost-tls:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=700 \
             --entrypoint /bin/sh agentweaver-agenthost:ci -ec '
               test "$(id -u):$(id -g)" = "1000:1000"
               test "$(stat -c "%u:%g:%a" /workspace)" = "1000:1000:755"
@@ -102,10 +104,14 @@ jobs:
                 cat "$file" > /dev/null
               done
               umask 077
+              for file in /app/native/copilot /app/native/index.js /app/native/app.js /app/native/prebuilds/linux-x64/runtime.node; do
+                test -s "$file" && test -r "$file" && test ! -w "$file"
+              done
               STATUS="$(dotnet /app/Agentweaver.AgentHost.dll --verify-native-runtime)"
+              test ! -d /state/.cache/copilot/pkg
               printf "{\"uid\":1000,\"gid\":1000,\"workspaceDirectoryMode\":\"0755\",\"workspaceFileMode\":\"0644\",\"privateDirectoryMode\":\"0700\",\"configurationAndTlsMode\":\"0440\",\"native\":%s}\n" "$STATUS"
             ' > artifacts/images/agenthost-profile-access.json
-          node --input-type=module -e 'import fs from "node:fs"; const result = JSON.parse(fs.readFileSync("artifacts/images/agenthost-profile-access.json")); if (result.uid !== 1000 || result.gid !== 1000 || result.native.sdkVersion !== "1.0.11" || result.native.runtimeVersion !== "1.0.79" || result.native.ProtocolVersion !== 3) throw Error("The exact AgentHost image cannot execute under its selected workspace owner.");'
+          node --input-type=module -e 'import fs from "node:fs"; const result = JSON.parse(fs.readFileSync("artifacts/images/agenthost-profile-access.json")); if (result.uid !== 1000 || result.gid !== 1000 || result.native.sdkVersion !== "1.0.11" || result.native.runtimeVersion !== "1.0.79" || result.native.ProtocolVersion !== 3 || result.native.nativeDistribution !== "/app/native" || result.native.privatePackageCacheAbsent !== true) throw Error("The exact AgentHost image cannot execute under its selected workspace owner.");'
           rm artifacts/images/agenthost.oci.tar
       - name: Test release validator with coverage
         if: ${{ !cancelled() }}
