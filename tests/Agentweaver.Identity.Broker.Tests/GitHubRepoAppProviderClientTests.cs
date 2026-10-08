@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity.Broker;
 using Xunit;
@@ -110,6 +112,95 @@ public sealed class GitHubRepoAppProviderClientTests
     }
 
     [Fact]
+    public async Task DiscoveryReadsAllInstallationPagesBeforeReturning()
+    {
+        var requests = new List<string>();
+        var apiHandler = new StubHandler((request, _) =>
+        {
+            var uri = request.RequestUri!;
+            requests.Add(uri.PathAndQuery);
+            if (uri.AbsolutePath == "/user/installations")
+            {
+                var page = PageNumber(uri);
+                var offset = (page - 1) * 100;
+                var count = Math.Min(100, 201 - offset);
+                var installations = Enumerable.Range(offset + 1, count)
+                    .Select(id => new
+                    {
+                        id,
+                        account = new { login = $"org{id}", type = "Organization" },
+                        repository_selection = "selected"
+                    });
+                return Task.FromResult(JsonResponse(JsonSerializer.Serialize(new { installations })));
+            }
+
+            if (uri.AbsolutePath.StartsWith("/user/installations/", StringComparison.Ordinal) &&
+                uri.AbsolutePath.EndsWith("/repositories", StringComparison.Ordinal))
+                return Task.FromResult(JsonResponse("{\"repositories\":[]}"));
+
+            throw new Xunit.Sdk.XunitException($"Unexpected GitHub discovery path: {uri.PathAndQuery}");
+        });
+        var client = CreateClient(EmptyHandler(), apiHandler);
+        var accessToken = new SecretCredential(
+            "user-access-token", Now.AddHours(1), new FrozenTimeProvider(Now));
+
+        var result = await client.BrowseAsync(accessToken, CancellationToken.None);
+
+        Assert.True(
+            result.Installations.Count == 201,
+            $"Expected 201 installations; requested pages: {string.Join(", ", requests)}");
+        Assert.Contains(result.Installations, installation => installation.InstallationId == 201);
+        Assert.Contains("/user/installations?per_page=100&page=3", requests);
+        Assert.Equal(204, requests.Count);
+    }
+
+    [Fact]
+    public async Task DiscoveryReadsAllRepositoryPagesBeforeReturning()
+    {
+        var requests = new List<string>();
+        var apiHandler = new StubHandler((request, _) =>
+        {
+            var uri = request.RequestUri!;
+            requests.Add(uri.PathAndQuery);
+            if (uri.AbsolutePath == "/user/installations")
+                return Task.FromResult(JsonResponse(
+                    "{\"installations\":[{\"id\":456,\"account\":{\"login\":\"octo\"," +
+                    "\"type\":\"Organization\"},\"repository_selection\":\"selected\"}]}"));
+
+            if (uri.AbsolutePath == "/user/installations/456/repositories")
+            {
+                var page = PageNumber(uri);
+                var offset = (page - 1) * 100;
+                var count = Math.Min(100, 250 - offset);
+                var repositories = Enumerable.Range(offset + 1, count)
+                    .Select(id => new
+                    {
+                        id,
+                        full_name = $"octo/repo{id}",
+                        owner = new { login = "octo" },
+                        @private = true,
+                        default_branch = "main"
+                    });
+                return Task.FromResult(JsonResponse(JsonSerializer.Serialize(new { repositories })));
+            }
+
+            throw new Xunit.Sdk.XunitException($"Unexpected GitHub discovery path: {uri.PathAndQuery}");
+        });
+        var client = CreateClient(EmptyHandler(), apiHandler);
+        var accessToken = new SecretCredential(
+            "user-access-token", Now.AddHours(1), new FrozenTimeProvider(Now));
+
+        var result = await client.BrowseAsync(accessToken, CancellationToken.None);
+
+        Assert.True(
+            result.Repositories.Count == 250,
+            $"Expected 250 repositories; requested pages: {string.Join(", ", requests)}");
+        Assert.Contains(result.Repositories, repository => repository.FullName == "octo/repo250");
+        Assert.Contains("/user/installations/456/repositories?per_page=100&page=3", requests);
+        Assert.Equal(4, requests.Count);
+    }
+
+    [Fact]
     public async Task RefreshHttpFailureIsNotRetriedAndDoesNotExposeResponseBody()
     {
         var calls = 0;
@@ -178,6 +269,13 @@ public sealed class GitHubRepoAppProviderClientTests
                 pair => Uri.UnescapeDataString(pair[0].Replace('+', ' ')),
                 pair => Uri.UnescapeDataString(pair[1].Replace('+', ' ')),
                 StringComparer.Ordinal);
+
+    private static int PageNumber(Uri uri)
+    {
+        var page = uri.Query.Split('&')
+            .Single(part => part.StartsWith("page=", StringComparison.Ordinal));
+        return int.Parse(page.AsSpan("page=".Length), CultureInfo.InvariantCulture);
+    }
 
     private sealed class StubHandler(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send)

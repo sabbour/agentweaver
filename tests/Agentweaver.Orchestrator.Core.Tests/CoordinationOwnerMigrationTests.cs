@@ -40,7 +40,8 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             "009_runtime_owner_context.sql",
             "runtime_registration.sql",
             "011_runtime_usage_source.sql",
-            "012_source_control_owner.sql"
+            "012_source_control_owner.sql",
+            "013_source_control_github_app_pins.sql"
         ];
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         {
@@ -79,7 +80,7 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
         await using var verify = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".coordination_schema_migrations
             """, verifyConnection);
-        Assert.Equal(12L, await verify.ExecuteScalarAsync());
+        Assert.Equal(13L, await verify.ExecuteScalarAsync());
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version)

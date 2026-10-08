@@ -13,6 +13,8 @@ internal static class GitHubRepoAppEndpoints
         app.MapPost("/auth/github/repo-app/install", BeginInstallationSetupAsync);
         app.MapGet("/auth/github/repo-app/callback", CompleteCallbackAsync);
         app.MapGet("/auth/github/repo-app/csrf", GetAntiforgeryTokenAsync);
+        app.MapGet("/auth/github/repo-app/status", GetStatusAsync);
+        app.MapPost("/auth/github/repo-app/disconnect", DisconnectAsync);
         app.MapGet("/auth/github/repo-app/repositories", ListRepositoriesAsync);
         app.MapPost("/auth/github/repo-app/selection", CreateRepositorySelectionAsync);
     }
@@ -146,6 +148,56 @@ internal static class GitHubRepoAppEndpoints
         }
     }
 
+    private static async Task<IResult> GetStatusAsync(
+        HttpContext context,
+        GitHubRepoAppConnectionService connectionService,
+        CancellationToken cancellationToken)
+    {
+        if (await TryGetOwnerIdAsync(context, cancellationToken).ConfigureAwait(false) is not { } ownerId)
+            return Results.Unauthorized();
+
+        context.Response.Headers.CacheControl = "no-store";
+        var status = await connectionService.GetStatusAsync(ownerId, cancellationToken).ConfigureAwait(false);
+        return Results.Json(status);
+    }
+
+    private static async Task<IResult> DisconnectAsync(
+        HttpContext context,
+        GitHubRepoAppDisconnectInput input,
+        GitHubRepoAppConnectionService connectionService,
+        IAntiforgery antiforgery,
+        CancellationToken cancellationToken)
+    {
+        if (await TryGetOwnerIdAsync(context, cancellationToken).ConfigureAwait(false) is not { } ownerId)
+            return Results.Unauthorized();
+        context.Response.Headers.CacheControl = "no-store";
+        try
+        {
+            await antiforgery.ValidateRequestAsync(context).ConfigureAwait(false);
+        }
+        catch (AntiforgeryValidationException)
+        {
+            return Results.BadRequest(new { error = "invalid_request" });
+        }
+
+        if (string.IsNullOrWhiteSpace(input.ConnectionId) || input.ExpectedConnectionRevision < 1)
+            return Results.BadRequest(new { error = "invalid_request" });
+
+        try
+        {
+            var status = await connectionService.DisconnectAsync(
+                ownerId,
+                input.ConnectionId,
+                input.ExpectedConnectionRevision,
+                cancellationToken).ConfigureAwait(false);
+            return Results.Json(status);
+        }
+        catch (GitHubRepoAppConnectionException error)
+        {
+            return ConnectionError(context, error);
+        }
+    }
+
     private static async Task<IResult> CreateRepositorySelectionAsync(
         HttpContext context,
         GitHubRepoAppRepositorySelectionInput input,
@@ -244,6 +296,8 @@ internal static class GitHubRepoAppEndpoints
             GitHubRepoAppConnectionFailure.Revoked => (StatusCodes.Status409Conflict, "connection_revoked"),
             GitHubRepoAppConnectionFailure.RefreshInProgress => (StatusCodes.Status503ServiceUnavailable, "refresh_in_progress"),
             GitHubRepoAppConnectionFailure.RotationUncertain => (StatusCodes.Status409Conflict, "rotation_uncertain"),
+            GitHubRepoAppConnectionFailure.ConnectionRevisionConflict =>
+                (StatusCodes.Status409Conflict, "connection_revision_conflict"),
             GitHubRepoAppConnectionFailure.ProviderUnavailable => (StatusCodes.Status502BadGateway, "provider_unavailable"),
             _ => (StatusCodes.Status404NotFound, "repository_unavailable")
         };
@@ -253,3 +307,6 @@ internal static class GitHubRepoAppEndpoints
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record GitHubRepoAppRepositorySelectionInput(long InstallationId, long RepositoryId);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record GitHubRepoAppDisconnectInput(string ConnectionId, long ExpectedConnectionRevision);
