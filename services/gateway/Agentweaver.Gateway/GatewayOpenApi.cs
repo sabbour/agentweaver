@@ -163,6 +163,27 @@ internal static partial class GatewayOpenApi
             })
             .ToArray();
 
+        if (route.OperationId is
+            "createKnowledgeRecord" or
+            "updateKnowledgeRecord" or
+            "promoteKnowledgeProposal" or
+            "rejectKnowledgeProposal")
+        {
+            parameters = parameters.Append(new
+            {
+                name = "Idempotency-Key",
+                @in = "header",
+                required = true,
+                schema = new
+                {
+                    type = "string",
+                    minLength = 1,
+                    maxLength = 128,
+                    pattern = "^[A-Za-z0-9._:-]+$",
+                },
+            }).ToArray();
+        }
+
         var contract = GetContract(route);
         var responses = new Dictionary<string, object>(StringComparer.Ordinal)
         {

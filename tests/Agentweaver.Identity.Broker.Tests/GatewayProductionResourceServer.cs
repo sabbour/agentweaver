@@ -28,15 +28,18 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
 
     public HttpClient Client { get; }
 
+    public HttpMessageHandler CreateHandler() => _factory.Server.CreateHandler();
+
     public static GatewayProductionResourceServer Start(
         SecurityKey signingKey,
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> projectsOwner,
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? eventsOwner = null,
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? knowledgeOwner = null,
         int ownerRequestTimeoutSeconds = 10,
         Action<string>? observeSseData = null)
     {
         var factory = new ProductionGatewayFactory(
-            signingKey, projectsOwner, eventsOwner, ownerRequestTimeoutSeconds, observeSseData);
+            signingKey, projectsOwner, eventsOwner, knowledgeOwner, ownerRequestTimeoutSeconds, observeSseData);
         try
         {
             var client = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -65,6 +68,7 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
         private readonly SecurityKey _signingKey;
         private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _projectsOwner;
         private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? _eventsOwner;
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? _knowledgeOwner;
         private readonly Action<string>? _observeSseData;
         private bool _restored;
 
@@ -72,12 +76,14 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
             SecurityKey signingKey,
             Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> projectsOwner,
             Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? eventsOwner,
+            Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? knowledgeOwner,
             int ownerRequestTimeoutSeconds,
             Action<string>? observeSseData)
         {
             _signingKey = signingKey;
             _projectsOwner = projectsOwner;
             _eventsOwner = eventsOwner;
+            _knowledgeOwner = knowledgeOwner;
             _observeSseData = observeSseData;
             SetEnvironment("Identity__Issuer", IdentityBrokerWebApplicationFactory.Issuer);
             SetEnvironment("Identity__Audience", "https://api.test/");
@@ -110,6 +116,12 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
                         options => options.HttpMessageHandlerBuilderActions.Add(
                             handlerBuilder => handlerBuilder.PrimaryHandler =
                             new OwnerHandler(_eventsOwner)));
+                if (_knowledgeOwner is not null)
+                    services.Configure<HttpClientFactoryOptions>(
+                        nameof(GatewayOwner.Knowledge),
+                        options => options.HttpMessageHandlerBuilderActions.Add(
+                        handlerBuilder => handlerBuilder.PrimaryHandler =
+                            new OwnerHandler(_knowledgeOwner)));
                 if (_observeSseData is not null)
                     services.AddSingleton<IStartupFilter>(
                         new SseObservationStartupFilter(_observeSseData));

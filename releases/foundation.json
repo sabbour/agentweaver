@@ -88,6 +88,12 @@
       "project": "services/gateway/Agentweaver.Gateway/Agentweaver.Gateway.csproj"
     },
     {
+      "id": "Agentweaver.Mcp",
+      "kind": "service",
+      "version": "0.1.0",
+      "project": "services/mcp/Agentweaver.Mcp/Agentweaver.Mcp.csproj"
+    },
+    {
       "id": "Agentweaver.Orchestrator",
       "kind": "service",
       "version": "0.0.0",
@@ -306,6 +312,11 @@
     },
     {
       "consumer": "Agentweaver.Gateway",
+      "dependency": "Agentweaver.Telemetry",
+      "versions": ["0.0.0"]
+    },
+    {
+      "consumer": "Agentweaver.Mcp",
       "dependency": "Agentweaver.Telemetry",
       "versions": ["0.0.0"]
     },

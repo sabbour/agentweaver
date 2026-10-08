@@ -105,7 +105,7 @@ flowchart LR
     Web -->|"HTTP and SSE"| Bff
     Cli -->|"HTTP"| Bff
     Cli -->|"MCP"| Mcp
-    Mcp -->|"HTTP"| Bff
+    Mcp -->|"HTTP with the validated Broker bearer"| Bff
     Bff -->|"internal gRPC"| Orch
     Bff -->|"authentication"| Identity
     Orch -->|"run-selection API"| Config
@@ -137,7 +137,7 @@ flowchart LR
 | Source Control & Merge | Git workspace preparation, diff and assembly, merge locks, pull requests, webhooks, backlog intake, and the Source Control provider seam. | Platform-wide project identity. |
 | Knowledge | Memory and session-context records, decisions and proposals, prompt composition, and Memory adapters. | Repository files as an authoritative memory database. |
 | Events & Sessions | Run journal, message contents and delivery state, SSE fan-out, Sessions adapters, durable usage ledger, and Cost adapters. | Orchestrator workflow transitions or approval policy. |
-| First-party MCP server | Agentweaver MCP operations, including `surface_*` discovery and actions. | Independent authorization or a second orchestration state machine. |
+| First-party MCP server | Native MCP tools sourced from the Gateway's finite OpenAPI catalog; validates Broker tokens and forwards the same bearer to Gateway. | Independent authorization, caller-supplied actor identity, or a second orchestration state machine. |
 | Web frontend | Agentweaver's own run/chat interface and surface panel, A2UI renderer, and MCP Apps host bridge. | Durable backend authority or a copied Copilot application UX. |
 
 Projects & Config owns a PostgreSQL schema for configuration and authorization. It resolves the validated issuer and local subject to an active membership and current resource roles; tokens and checked tenant selectors do not grant roles. Runtime database credentials can read authority records but cannot mutate them. A separate privileged source path provisions memberships and roles and revokes them with revision checks, immutable audit, and a last-Owner invariant. Privileged resource services obtain fresh, effective caller permissions from `GET /api/authorization/context` for each operation; they do not maintain separate membership/role records, caches, or authorization pins. The Orchestrator supplies a trusted, revisioned run-selection context; the service checks project and platform revisions, resolves project model settings before platform defaults without fallback from an unavailable explicit setting, resolves provider candidates through the provider catalog contract, and enforces egress and run-limit narrowing. The returned immutable snapshot records candidates and selection revisions, not provisioned resources or authorization. Consumers pin final resource identity and negotiated capabilities only after provisioning.

@@ -1177,7 +1177,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         KnowledgeTestDatabase database,
         ProviderCatalog catalog,
         HttpClient projectsClient,
-        SecurityKey signingKey)
+        SecurityKey signingKey,
+        IReadOnlyList<string>? additionalAudiences = null)
     {
         var provider = database.Provider;
         var runtimeOptions = new KnowledgeRuntimeOptions(
@@ -1201,7 +1202,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                     ValidateIssuer = true,
                     ValidIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
                     ValidateAudience = true,
-                    ValidAudience = runtimeOptions.Audience,
+                    ValidAudiences = new[] { runtimeOptions.Audience }
+                        .Concat(additionalAudiences ?? Array.Empty<string>())
+                        .ToArray(),
                     ValidateIssuerSigningKey = true,
                     IssuerSigningKey = signingKey,
                     ValidateLifetime = true,
