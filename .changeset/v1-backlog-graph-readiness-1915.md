@@ -1,5 +1,6 @@
 ---
 "Agentweaver.Orchestrator.Core": minor
+"Agentweaver.Orchestrator": minor
 ---
 
 Add a project-scoped backlog dependency graph and conservative readiness evaluation,
