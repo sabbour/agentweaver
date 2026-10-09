@@ -1528,7 +1528,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             "1.0.0",
             "generated-catalog-v1",
             WorkflowDefinitionOrigin.Generated,
-            1,
+            3,
             [
                 new WorkflowStepDefinition(
                     "implement",
