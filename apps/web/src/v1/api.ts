@@ -1,20 +1,28 @@
 import { gatewayBaseUrl } from './config';
+import { isProjectAuthorizationContextResponse } from './contracts';
 import type {
+  CopilotAuthorizationCallback,
+  CopilotConnectionBegin,
+  CopilotConnectionMutation,
+  CopilotConnectionReceipt,
   CoordinatorDecisionOperationResponse,
   CoordinatorDecisionStateView,
   CoordinationTreeCommandResult,
   EffectiveRunSelection,
+  KnowledgeRecordImportResult,
   KnowledgeProposalPromotionResult,
-  KnowledgeRecord,
   KnowledgeRecordPage,
+  KnowledgeRecordRevisionPage,
+  KnowledgeRecordTransferBundle,
+  KnowledgeRecordUpdateInput,
   KnowledgeRecordWriteResult,
   OwnerRunStatus,
+  ProjectAuthorizationContextResponse,
   ProjectConfiguration,
   ProjectSummary,
   RepoAppAuthorizationStart,
   RepoAppAuthorizationStatus,
   RepoAppAuthorizationTransaction,
-  RepoAppInstallationStart,
   RepoAppRepositorySelectionCode,
   RepoAppRepositorySelectionList,
   SessionEventEnvelope,
@@ -72,6 +80,7 @@ export class AgentweaverGatewayClient {
     path: string,
     init: RequestInit = {},
     baseUrl = this.baseUrl,
+    tenantSelector?: string | null,
   ): Promise<T> {
     if (!token) {
       throw new GatewayError(401, { code: 'unauthorized' }, 'Sign in through the Identity Broker to continue.');
@@ -79,6 +88,8 @@ export class AgentweaverGatewayClient {
     const headers = new Headers(init.headers);
     headers.set('Authorization', `Bearer ${token}`);
     headers.set('Accept', 'application/json');
+    if (tenantSelector !== undefined && tenantSelector !== null)
+      headers.set('X-Agentweaver-Tenant', tenantSelector);
     if (init.body !== undefined) headers.set('Content-Type', 'application/json');
 
     const response = await this.fetcher.call(globalThis, `${baseUrl}${path}`, {
@@ -106,20 +117,62 @@ export class AgentweaverGatewayClient {
     return await response.json() as T;
   }
 
-  listProjects(token: string): Promise<ProjectSummary[]> {
-    return this.request(token, '/projects');
+  async getAuthorizationContext(
+    token: string,
+    tenantSelector?: string | null,
+  ): Promise<ProjectAuthorizationContextResponse> {
+    const context = await this.request<unknown>(
+      token,
+      '/authorization/context',
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+    if (!isProjectAuthorizationContextResponse(context))
+      throw new GatewayError(
+        502,
+        { code: 'owner_contract_invalid' },
+        'The Projects owner returned an invalid authorization-context contract.',
+      );
+    return context;
   }
 
-  createProject(token: string, name: string): Promise<ProjectSummary> {
-    return this.request(token, '/projects', { method: 'POST', body: JSON.stringify({ name }) });
+  listProjects(token: string, tenantSelector?: string | null): Promise<ProjectSummary[]> {
+    return this.request(token, '/projects', {}, this.baseUrl, tenantSelector);
   }
 
-  getProject(token: string, projectId: string): Promise<ProjectSummary> {
-    return this.request(token, `/projects/${encodeSegments(projectId)}`);
+  createProject(token: string, name: string, tenantSelector?: string | null): Promise<ProjectSummary> {
+    return this.request(
+      token,
+      '/projects',
+      { method: 'POST', body: JSON.stringify({ name }) },
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
-  getProjectConfiguration(token: string, projectId: string): Promise<VersionedProjectConfiguration> {
-    return this.request(token, `/projects/${encodeSegments(projectId)}/configuration`);
+  getProject(token: string, projectId: string, tenantSelector?: string | null): Promise<ProjectSummary> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId)}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  getProjectConfiguration(
+    token: string,
+    projectId: string,
+    tenantSelector?: string | null,
+  ): Promise<VersionedProjectConfiguration> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId)}/configuration`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
   updateProjectConfiguration(
@@ -127,11 +180,91 @@ export class AgentweaverGatewayClient {
     projectId: string,
     expectedRevision: number,
     configuration: ProjectConfiguration,
+    tenantSelector?: string | null,
   ): Promise<VersionedProjectConfiguration> {
     return this.request(token, `/projects/${encodeSegments(projectId)}/configuration`, {
       method: 'PUT',
       body: JSON.stringify({ expectedRevision, configuration }),
-    });
+    }, this.baseUrl, tenantSelector);
+  }
+
+  beginCopilotConnection(
+    token: string,
+    scope: 'project' | 'platform',
+    scopeId: string,
+    tenantSelector?: string | null,
+  ): Promise<CopilotConnectionBegin> {
+    return this.request(
+      token,
+      '/api/connections/copilot-user/v1/begin',
+      {
+        method: 'POST',
+        body: JSON.stringify({ scope, scopeId }),
+        credentials: 'include',
+      },
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
+  }
+
+  completeCopilotConnection(
+    token: string,
+    callback: CopilotAuthorizationCallback,
+    tenantSelector?: string | null,
+  ): Promise<CopilotConnectionReceipt> {
+    return this.request(
+      token,
+      '/api/connections/copilot-user/v1/complete',
+      {
+        method: 'POST',
+        body: JSON.stringify(callback),
+        credentials: 'include',
+      },
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
+  }
+
+  getCopilotConnection(
+    token: string,
+    connectionId: string,
+    tenantSelector?: string | null,
+  ): Promise<CopilotConnectionReceipt> {
+    return this.request(
+      token,
+      `/api/connections/copilot-user/v1/${encodeURIComponent(connectionId)}`,
+      {},
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
+  }
+
+  refreshCopilotConnection(
+    token: string,
+    request: CopilotConnectionMutation,
+    tenantSelector?: string | null,
+  ): Promise<CopilotConnectionReceipt> {
+    return this.request(
+      token,
+      '/api/connections/copilot-user/v1/refresh',
+      { method: 'POST', body: JSON.stringify(request) },
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
+  }
+
+  revokeCopilotConnection(
+    token: string,
+    request: CopilotConnectionMutation,
+    tenantSelector?: string | null,
+  ): Promise<CopilotConnectionReceipt> {
+    return this.request(
+      token,
+      '/api/connections/copilot-user/v1/revoke',
+      { method: 'POST', body: JSON.stringify(request) },
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
   }
 
   beginRepoAppAuthorization(
@@ -210,29 +343,12 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  beginProjectGitHubAppInstallationAuthorization(
-    token: string,
-    projectId: string,
-    runId: string,
-    tenantId: string,
-  ): Promise<RepoAppInstallationStart> {
-    return this.request(
-      token,
-      `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'github-app-installations', 'authorizations')}`,
-      {
-        method: 'POST',
-        headers: { 'X-Agentweaver-Tenant': tenantId },
-        credentials: 'include',
-      },
-    );
-  }
-
   pinSourceControlRepository(
     token: string,
     projectId: string,
     runId: string,
     sessionId: string,
-    tenantId: string,
+    tenantSelector: string | null,
     selectionCode?: string,
   ): Promise<SourceControlRepositoryPinView> {
     return this.request(
@@ -240,32 +356,91 @@ export class AgentweaverGatewayClient {
       `/projects/${encodeSegments(projectId, 'runs', runId, 'source-control', 'sessions', sessionId, 'pin')}`,
       {
         method: 'POST',
-        headers: { 'X-Agentweaver-Tenant': tenantId },
         ...(selectionCode === undefined
           ? {}
           : { body: JSON.stringify({ selectionCode }) }),
       },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
-  getRunSelection(token: string, projectId: string, runId: string): Promise<EffectiveRunSelection> {
-    return this.request(token, `/projects/${encodeSegments(projectId, 'runs', runId, 'selection')}`);
+  getRunSelection(
+    token: string,
+    projectId: string,
+    runId: string,
+    tenantSelector?: string | null,
+  ): Promise<EffectiveRunSelection> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'selection')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
-  getRunStatus(token: string, projectId: string, runId: string): Promise<OwnerRunStatus> {
-    return this.request(token, `/projects/${encodeSegments(projectId, 'runs', runId, 'coordination', 'status')}`);
+  getRunStatus(
+    token: string,
+    projectId: string,
+    runId: string,
+    tenantSelector?: string | null,
+  ): Promise<OwnerRunStatus> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'coordination', 'status')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
-  getSessionTree(token: string, projectId: string, runId: string, sessionId: string): Promise<SessionTreeSnapshot> {
-    return this.request(token, `/projects/${encodeSegments(projectId, 'runs', runId, 'coordination', 'sessions', sessionId, 'tree')}`);
+  getSessionTree(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    tenantSelector?: string | null,
+  ): Promise<SessionTreeSnapshot> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'coordination', 'sessions', sessionId, 'tree')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
-  getSessionStatus(token: string, projectId: string, runId: string, sessionId: string): Promise<SessionStatusSnapshot> {
-    return this.request(token, `/projects/${encodeSegments(projectId, 'runs', runId, 'coordination', 'sessions', sessionId, 'status')}`);
+  getSessionStatus(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    tenantSelector?: string | null,
+  ): Promise<SessionStatusSnapshot> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'coordination', 'sessions', sessionId, 'status')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
-  getDecisions(token: string, projectId: string, runId: string, sessionId: string): Promise<CoordinatorDecisionStateView> {
-    return this.request(token, `/projects/${encodeSegments(projectId, 'runs', runId, 'coordination', 'sessions', sessionId, 'decisions')}`);
+  getDecisions(
+    token: string,
+    projectId: string,
+    runId: string,
+    sessionId: string,
+    tenantSelector?: string | null,
+  ): Promise<CoordinatorDecisionStateView> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'coordination', 'sessions', sessionId, 'decisions')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
   answerGate(
@@ -277,6 +452,7 @@ export class AgentweaverGatewayClient {
     expectedStateVersion: number,
     answer: { choiceId?: string; freeformAnswer?: string },
     idempotencyKey: string,
+    tenantSelector?: string | null,
   ): Promise<CoordinatorDecisionOperationResponse> {
     return this.request(
       token,
@@ -290,6 +466,8 @@ export class AgentweaverGatewayClient {
           freeformAnswer: answer.freeformAnswer ?? null,
         }),
       },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
@@ -302,6 +480,7 @@ export class AgentweaverGatewayClient {
     expectedStateVersion: number,
     approved: boolean,
     idempotencyKey: string,
+    tenantSelector?: string | null,
   ): Promise<CoordinatorDecisionOperationResponse> {
     const action = approved ? 'approve' : 'reject';
     return this.request(
@@ -311,6 +490,8 @@ export class AgentweaverGatewayClient {
         method: 'POST',
         body: JSON.stringify({ expectedStateVersion, idempotencyKey }),
       },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
@@ -321,6 +502,7 @@ export class AgentweaverGatewayClient {
     sessionId: string,
     executionFence: number,
     idempotencyKey: string,
+    tenantSelector?: string | null,
   ): Promise<CoordinationTreeCommandResult> {
     return this.request(
       token,
@@ -329,6 +511,8 @@ export class AgentweaverGatewayClient {
         method: 'POST',
         body: JSON.stringify({ executionFence, idempotencyKey }),
       },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
@@ -340,6 +524,7 @@ export class AgentweaverGatewayClient {
     childSessionId: string,
     executionFence: number,
     idempotencyKey: string,
+    tenantSelector?: string | null,
   ): Promise<CoordinationTreeCommandResult> {
     return this.request(
       token,
@@ -348,6 +533,8 @@ export class AgentweaverGatewayClient {
         method: 'POST',
         body: JSON.stringify({ executionFence, idempotencyKey }),
       },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
@@ -360,6 +547,7 @@ export class AgentweaverGatewayClient {
     text: string,
     idempotencyKey: string,
     mode: 'immediate' | 'enqueue' = 'immediate',
+    tenantSelector?: string | null,
   ): Promise<{ ownerMessageId: string; recipientSessionId: string; status: string; requestId?: string | null }> {
     return this.request(
       token,
@@ -375,6 +563,8 @@ export class AgentweaverGatewayClient {
           payload: { text },
         }),
       },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
@@ -384,12 +574,16 @@ export class AgentweaverGatewayClient {
     runId: string,
     cursor?: string | null,
     limit = 100,
+    tenantSelector?: string | null,
   ): Promise<SessionEventPage> {
     const query = new URLSearchParams({ limit: String(limit) });
     if (cursor) query.set('cursor', cursor);
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'events')}?${query.toString()}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
@@ -399,12 +593,19 @@ export class AgentweaverGatewayClient {
     runId: string,
     cursor: string | null,
     signal: AbortSignal,
+    tenantSelector?: string | null,
   ): AsyncGenerator<{ cursor: string; event: SessionEventEnvelope }> {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+    const headers = new Headers({
+      Authorization: `Bearer ${token}`,
+      Accept: 'text/event-stream',
+    });
+    if (tenantSelector !== undefined && tenantSelector !== null)
+      headers.set('X-Agentweaver-Tenant', tenantSelector);
     const response = await this.fetcher(
       `${this.baseUrl}/projects/${encodeSegments(projectId, 'runs', runId, 'events', 'live')}${query}`,
       {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+        headers,
         credentials: 'omit',
         cache: 'no-store',
         signal,
@@ -460,8 +661,19 @@ export class AgentweaverGatewayClient {
     }
   }
 
-  getRunUsage(token: string, projectId: string, runId: string): Promise<UsageRunTotals> {
-    return this.request(token, `/projects/${encodeSegments(projectId, 'runs', runId, 'usage')}`);
+  getRunUsage(
+    token: string,
+    projectId: string,
+    runId: string,
+    tenantSelector?: string | null,
+  ): Promise<UsageRunTotals> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'usage')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
   searchKnowledge(
@@ -470,6 +682,7 @@ export class AgentweaverGatewayClient {
     runId: string,
     agentId: string,
     options: { query?: string; kind?: string; page?: number; pageSize?: number; includeInactive?: boolean } = {},
+    tenantSelector?: string | null,
   ): Promise<KnowledgeRecordPage> {
     const query = new URLSearchParams();
     if (options.query) query.set('q', options.query);
@@ -480,6 +693,9 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       `/projects/${encodeSegments(projectId, 'runs', runId, 'agents', agentId, 'records')}?${query.toString()}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
@@ -498,6 +714,7 @@ export class AgentweaverGatewayClient {
       tags: string[];
     },
     idempotencyKey: string,
+    tenantSelector?: string | null,
   ): Promise<KnowledgeRecordWriteResult> {
     return this.request(
       token,
@@ -507,6 +724,8 @@ export class AgentweaverGatewayClient {
         headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify(record),
       },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
@@ -517,8 +736,9 @@ export class AgentweaverGatewayClient {
     agentId: string,
     recordId: string,
     revision: number,
-    record: Pick<KnowledgeRecord, 'type' | 'title' | 'content' | 'rationale' | 'importance' | 'tags' | 'state'>,
+    record: KnowledgeRecordUpdateInput,
     idempotencyKey: string,
+    tenantSelector?: string | null,
   ): Promise<KnowledgeRecordWriteResult> {
     return this.request(
       token,
@@ -528,6 +748,116 @@ export class AgentweaverGatewayClient {
         headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({ expectedRevision: revision, ...record }),
       },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  readKnowledgeRevisions(
+    token: string,
+    projectId: string,
+    runId: string,
+    agentId: string,
+    recordId: string,
+    options: { page?: number; pageSize?: number } = {},
+    tenantSelector?: string | null,
+  ): Promise<KnowledgeRecordRevisionPage> {
+    const query = new URLSearchParams();
+    query.set('page', String(options.page ?? 1));
+    query.set('pageSize', String(options.pageSize ?? 50));
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'agents', agentId, 'records', recordId, 'revisions')}?${query.toString()}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  restoreKnowledgeRecord(
+    token: string,
+    projectId: string,
+    runId: string,
+    agentId: string,
+    recordId: string,
+    expectedRevision: number,
+    revision: number,
+    reason: string | null,
+    idempotencyKey: string,
+    tenantSelector?: string | null,
+  ): Promise<KnowledgeRecordWriteResult> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'agents', agentId, 'records', recordId, 'restore')}`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({ expectedRevision, revision, reason }),
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  approveKnowledgeDecision(
+    token: string,
+    projectId: string,
+    runId: string,
+    agentId: string,
+    recordId: string,
+    expectedRevision: number,
+    reason: string | null,
+    idempotencyKey: string,
+    tenantSelector?: string | null,
+  ): Promise<KnowledgeRecordWriteResult> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'agents', agentId, 'records', recordId, 'approve')}`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify({ expectedRevision, reason }),
+      },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  exportKnowledgeRecords(
+    token: string,
+    projectId: string,
+    runId: string,
+    agentId: string,
+    tenantSelector?: string | null,
+  ): Promise<KnowledgeRecordTransferBundle> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'agents', agentId, 'records', 'export')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  importKnowledgeRecords(
+    token: string,
+    projectId: string,
+    runId: string,
+    agentId: string,
+    bundle: KnowledgeRecordTransferBundle,
+    idempotencyKey: string,
+    tenantSelector?: string | null,
+  ): Promise<KnowledgeRecordImportResult> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'runs', runId, 'agents', agentId, 'records', 'import')}`,
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(bundle),
+      },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
@@ -539,6 +869,7 @@ export class AgentweaverGatewayClient {
     proposalId: string,
     expectedRevision: number,
     idempotencyKey: string,
+    tenantSelector?: string | null,
   ): Promise<KnowledgeProposalPromotionResult> {
     return this.request(
       token,
@@ -548,6 +879,8 @@ export class AgentweaverGatewayClient {
         headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({ expectedRevision }),
       },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 
@@ -559,6 +892,7 @@ export class AgentweaverGatewayClient {
     proposalId: string,
     expectedRevision: number,
     idempotencyKey: string,
+    tenantSelector?: string | null,
   ): Promise<KnowledgeRecordWriteResult> {
     return this.request(
       token,
@@ -568,6 +902,8 @@ export class AgentweaverGatewayClient {
         headers: { 'Idempotency-Key': idempotencyKey },
         body: JSON.stringify({ expectedRevision }),
       },
+      this.baseUrl,
+      tenantSelector,
     );
   }
 }

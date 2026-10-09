@@ -198,12 +198,15 @@ Platform release composition, chart wiring, and deployment gates remain future w
   changes require a fresh changeset even when the release prose describes them.
 - `Agentweaver.Web` is the React client mirrored by `apps/web/package.json` and
   `apps/web/package-lock.json`. It is a separate service image in the draft
-  manifest, not the retired .NET static host. Its source-bound preparation runs
-  `npm ci --offline` and the Vite build with ambient `VITE_*` values removed,
-  then builds a local image from the checked-in digest-pinned web Dockerfile.
-  The runtime entrypoint supplies browser configuration from container
-  environment variables. The resulting local image archive and build/source
-  hashes are recorded in provenance; preparation does not publish or deploy it.
+  manifest, served by the ASP.NET Core 10 host under `apps/web/host`. Its
+  source-bound preparation runs `npm ci --offline` and the Vite build with
+  ambient `VITE_*` values removed, then restores the host with its checked-in
+  `packages.lock.json` in locked mode and publishes it as a framework-dependent
+  application. It builds a local image from the checked-in digest-pinned ASP.NET
+  runtime Dockerfile; the host supplies browser configuration from container
+  environment variables without shell interpolation. The resulting local image
+  archive and source/build-output hashes are recorded in provenance; preparation
+  does not publish or deploy it.
 
 Run `npm run release:validate` to check the draft against checked-in projects
 and validate all `.changeset/*.md` records. Run
@@ -313,11 +316,11 @@ The manual workflow has a separate publication choice.
   By default it packs contracts/libraries and prepares service images in a fresh,
   empty `artifacts/release/pack/` directory. Pass `--packages-only` to prepare
   only the manifest's contracts and libraries; service images are not rebuilt.
-  The web service uses its committed npm lockfile and an isolated staging context
-  containing the source-bound `apps/web` files and fresh build output. Its
-  `FROM` images must be immutable digest references already available locally;
-  web packing disables network access during Docker build and never pulls or
-  pushes an image.
+  The web service uses its committed npm and ASP.NET host lockfiles and an
+  isolated staging context containing the source-bound `apps/web` files, Vite
+  assets, and framework-dependent host publish output. Its `FROM` image must be
+  an immutable digest reference already available locally; web packing disables
+  network access during Docker build and never pulls or pushes an image.
   It writes an atomic `provenance.json` receipt after all artifacts succeed.
   The receipt includes the source commit SHA, manifest hash, each component's ID/kind/version,
   and a SHA-256 hash of every artifact file it actually produced. It refuses
@@ -328,7 +331,7 @@ The manual workflow has a separate publication choice.
   than trusting a nonempty output directory. `release:pack` never pushes a
   package to a feed.
   .NET components retain their checked-in `packages.lock.json`; `Agentweaver.Web`
-  is pinned by its committed `apps/web/package-lock.json`.
+  binds its committed npm lockfile and ASP.NET host `packages.lock.json`.
   .NET services use native `PublishContainer` with an explicit immutable
   `<ContainerBaseImage>...@sha256:...</ContainerBaseImage>` in their project.
   Exactly one active declaration is required; XML comments do not supply a pin.
@@ -336,11 +339,12 @@ The manual workflow has a separate publication choice.
   The validated digest is passed explicitly to Release build and container publication.
   A Debug-only project condition cannot select an unpinned SDK default instead.
   The SDK writes a local `<id>.<version>.tar.gz` image archive without a registry push.
-  Web packing instead builds from its locked npm dependencies and committed Dockerfile,
-  whose base images must be digest-pinned and already available locally. It writes a
-  local `<id>.<version>.tar` archive without pulling or pushing. Its provenance binds
-  the exact source tree, npm manifests, Dockerfile, build output, image ID, base-image
-  digests, source/version labels, and `linux/amd64` platform.
+  Web packing instead builds from its locked npm and .NET dependencies and committed
+  Dockerfile, whose ASP.NET runtime base must be digest-pinned and already available
+  locally. It writes a local `<id>.<version>.tar` archive without pulling or pushing.
+  Its provenance binds the exact source tree, npm and host lockfiles, Dockerfile,
+  Vite and host publish outputs, image ID, base-image digest, source/version labels,
+  and `linux/amd64` platform.
   Provenance records lock hashes and image archive hashes, not fabricated registry digests.
   A failed preparation produces no completed provenance.
   Partial output must not mix with a later run.

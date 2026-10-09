@@ -8,7 +8,13 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateFile, WEB_LOCK_PATH, WEB_PROJECT_PATH } from './validate.mjs';
+import {
+  validateFile,
+  WEB_HOST_LOCK_PATH,
+  WEB_HOST_PROJECT_PATH,
+  WEB_LOCK_PATH,
+  WEB_PROJECT_PATH,
+} from './validate.mjs';
 import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -73,21 +79,18 @@ function listFilesRecursive(dir, readdir, stat) {
   return out;
 }
 
-function listRegularWebFiles(dir, readdir) {
+function listRegularWebFiles(dir, readdir, location = 'apps/web/dist') {
   const out = [];
   for (const entry of readdir(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...listRegularWebFiles(full, readdir));
+    if (entry.isDirectory()) out.push(...listRegularWebFiles(full, readdir, location));
     else if (entry.isFile()) out.push(full);
-    else fail('apps/web/dist', `unsupported build output entry ${path.relative(dir, full)}`);
+    else fail(location, `unsupported build output entry ${path.relative(dir, full)}`);
   }
   return out;
 }
 
 function parseWebDockerfile(text) {
-  if (text.includes('apps/Agentweaver.Web')) {
-    fail('apps/web/Dockerfile', 'the web image must not depend on the retired apps/Agentweaver.Web host');
-  }
   const logical = text.replaceAll('\r\n', '\n').split('\n')
     .reduce((lines, line) => {
       if (lines.length && lines.at(-1).endsWith('\\')) {
@@ -140,7 +143,7 @@ function parseWebDockerfile(text) {
   return images;
 }
 
-function createWebDockerContext(root, sourceFiles, distDir, contextDir, {
+function createWebDockerContext(root, sourceFiles, distDir, publishDir, contextDir, {
   readFile, readdir, stat, writeFile, mkdir,
 }) {
   for (const source of sourceFiles) {
@@ -152,7 +155,13 @@ function createWebDockerContext(root, sourceFiles, distDir, contextDir, {
   }
   for (const file of listFilesRecursive(distDir, readdir, stat)) {
     const relative = path.relative(distDir, file);
-    const destination = path.join(contextDir, 'dist', relative);
+    const destination = path.join(contextDir, 'wwwroot', relative);
+    mkdir(path.dirname(destination), { recursive: true });
+    writeFile(destination, readFile(file));
+  }
+  for (const file of listFilesRecursive(publishDir, readdir, stat)) {
+    const relative = path.relative(publishDir, file);
+    const destination = path.join(contextDir, 'publish', relative);
     mkdir(path.dirname(destination), { recursive: true });
     writeFile(destination, readFile(file));
   }
@@ -161,8 +170,9 @@ function createWebDockerContext(root, sourceFiles, distDir, contextDir, {
 function sourceTreeMetadata(root, sourceSha, git, readFile, stat) {
   const output = git('ls-tree', '-r', '--name-only', sourceSha, '--', 'apps/web');
   const paths = output.split(/\r?\n/).filter(Boolean).sort();
-  if (!paths.includes(WEB_PROJECT_PATH) || !paths.includes(WEB_LOCK_PATH) || !paths.includes('apps/web/Dockerfile')) {
-    fail('apps/web', 'package.json, committed package-lock.json, and Dockerfile must all exist in source HEAD');
+  if (![WEB_PROJECT_PATH, WEB_LOCK_PATH, WEB_HOST_PROJECT_PATH, WEB_HOST_LOCK_PATH, 'apps/web/Dockerfile']
+    .every((file) => paths.includes(file))) {
+    fail('apps/web', 'package.json, both committed lockfiles, the ASP.NET host project, and Dockerfile must all exist in source HEAD');
   }
   if (paths.some((file) => file.split('/').includes('dist') || file.split('/').includes('node_modules'))) {
     fail('apps/web', 'dist and node_modules must not be checked into the release source tree');
@@ -270,6 +280,7 @@ export function packComponents(manifest, {
   if (probeSource && probeSource.sourceSha !== sourceSha) fail('git', 'Probe image source changed before preparation');
   const buildEnvironment = cleanBuildEnvironment(environment);
   const runNpm = npm ?? defaultNpm(buildEnvironment);
+  const runDotnet = dotnet ?? defaultDotnet(root);
   const runDocker = docker ?? defaultDocker(root);
   const expectedArtifacts = new Map();
   const locks = new Map();
@@ -282,7 +293,11 @@ export function packComponents(manifest, {
       }
       const lock = path.resolve(root, WEB_LOCK_PATH);
       if (!existsImpl(lock)) fail(component.project, 'committed npm package-lock.json is required before preparation');
-      for (const file of [WEB_PROJECT_PATH, WEB_LOCK_PATH, 'apps/web/Dockerfile']) {
+      const hostLock = path.resolve(root, WEB_HOST_LOCK_PATH);
+      if (!existsImpl(hostLock)) fail(component.project, 'committed ASP.NET host packages.lock.json is required before preparation');
+      for (const file of [
+        WEB_PROJECT_PATH, WEB_LOCK_PATH, WEB_HOST_PROJECT_PATH, WEB_HOST_LOCK_PATH, 'apps/web/Dockerfile',
+      ]) {
         try {
           git('cat-file', '-e', `${sourceSha}:${file}`);
         } catch (error) {
@@ -319,6 +334,8 @@ export function packComponents(manifest, {
         files: source.files,
         packageJsonSha256: source.files.find(({ path: file }) => file === WEB_PROJECT_PATH).sha256,
         packageLockSha256: source.files.find(({ path: file }) => file === WEB_LOCK_PATH).sha256,
+        hostProjectSha256: source.files.find(({ path: file }) => file === WEB_HOST_PROJECT_PATH).sha256,
+        hostLockSha256: source.files.find(({ path: file }) => file === WEB_HOST_LOCK_PATH).sha256,
         dockerfileSha256: source.files.find(({ path: file }) => file === 'apps/web/Dockerfile').sha256,
       });
       expectedArtifacts.set(artifactName, {
@@ -364,6 +381,7 @@ export function packComponents(manifest, {
     if (component.project === WEB_PROJECT_PATH) {
       const webDir = path.resolve(root, 'apps', 'web');
       const distDir = path.join(webDir, 'dist');
+      const hostPublishDir = path.join(resolvedOutDir, '.web-host-publish');
       const contextDir = path.join(resolvedOutDir, '.web-context');
       rejectLocalBuildInputs(webDir, readdir);
       let buildOutput;
@@ -371,14 +389,38 @@ export function packComponents(manifest, {
         runNpm(['ci', '--offline', '--no-audit', '--no-fund', '--no-progress'], webDir, buildEnvironment);
         runNpm(['run', 'build'], webDir, buildEnvironment);
         if (!existsImpl(distDir) || !lstatSync(distDir).isDirectory()) fail('apps/web/dist', 'npm run build did not produce a fresh dist directory');
+        runDotnet(['restore', path.resolve(root, WEB_HOST_PROJECT_PATH), '--locked-mode']);
+        runDotnet([
+          'publish', path.resolve(root, WEB_HOST_PROJECT_PATH),
+          '--configuration', 'Release', '--no-restore', '--output', hostPublishDir,
+          '-p:UseAppHost=false', '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`,
+        ]);
+        if (!existsImpl(hostPublishDir) || !lstatSync(hostPublishDir).isDirectory()) {
+          fail(WEB_HOST_PROJECT_PATH, 'dotnet publish did not produce the ASP.NET host output directory');
+        }
         if (status().trim() !== '') fail('git', 'web build left tracked or untracked output outside ignored build artifacts');
-        const files = listRegularWebFiles(distDir, readdir).sort()
+        const webFiles = listRegularWebFiles(distDir, readdir).sort()
           .map((file) => ({
             path: path.relative(distDir, file).replaceAll('\\', '/'),
             sha256: hashFile(file, readFile),
             size: stat(file).size,
           }));
-        if (files.length === 0) fail('apps/web/dist', 'npm run build produced no files');
+        if (webFiles.length === 0) fail('apps/web/dist', 'npm run build produced no files');
+        const hostFiles = listRegularWebFiles(hostPublishDir, readdir, WEB_HOST_PROJECT_PATH).sort()
+          .map((file) => ({
+            path: path.relative(hostPublishDir, file).replaceAll('\\', '/'),
+            sha256: hashFile(file, readFile),
+            size: stat(file).size,
+          }));
+        if (hostFiles.length === 0) fail(WEB_HOST_PROJECT_PATH, 'dotnet publish produced no files');
+        const hostBuildOutput = {
+          files: hostFiles,
+          sha256: createHash('sha256').update(JSON.stringify(hostFiles)).digest('hex'),
+        };
+        const files = [
+          ...webFiles.map((file) => ({ ...file, path: `wwwroot/${file.path}` })),
+          ...hostFiles.map((file) => ({ ...file, path: `publish/${file.path}` })),
+        ].sort((left, right) => left.path.localeCompare(right.path));
         buildOutput = {
           files,
           sha256: createHash('sha256').update(JSON.stringify(files)).digest('hex'),
@@ -387,7 +429,7 @@ export function packComponents(manifest, {
         const artifact = [...expectedArtifacts.values()].find(({ componentId }) => componentId === component.id);
         const webDockerfile = readFile(path.join(webDir, 'Dockerfile'), 'utf8');
         const baseImages = verifyPinnedBaseImages(parseWebDockerfile(webDockerfile), runDocker, webDir);
-        createWebDockerContext(root, webSources.get(component.id).files, distDir, contextDir, {
+        createWebDockerContext(root, webSources.get(component.id).files, distDir, hostPublishDir, contextDir, {
           readFile, readdir, stat, writeFile: writeFileImpl, mkdir: mkdirImpl,
         });
         runDocker([
@@ -420,9 +462,17 @@ export function packComponents(manifest, {
         artifact.buildOutput = buildOutput;
         artifact.baseImages = baseImages;
         webBuilds.set(component.id, {
-          tool: 'npm',
+          tool: 'npm+dotnet',
           install: ['npm', 'ci', '--offline', '--no-audit', '--no-fund', '--no-progress'],
           build: ['npm', 'run', 'build'],
+          dotnet: {
+            project: WEB_HOST_PROJECT_PATH,
+            lock: { path: WEB_HOST_LOCK_PATH, sha256: webSources.get(component.id).hostLockSha256 },
+            restoreMode: 'locked',
+            publishConfiguration: 'Release',
+            useAppHost: false,
+            output: hostBuildOutput,
+          },
           environment: 'ambient VITE_* removed; local .env files rejected',
           output: buildOutput,
           dockerfile: 'apps/web/Dockerfile',
@@ -434,6 +484,7 @@ export function packComponents(manifest, {
         });
       } finally {
         rmSync(distDir, { recursive: true, force: true });
+        rmSync(hostPublishDir, { recursive: true, force: true });
         rmSync(contextDir, { recursive: true, force: true });
       }
       if (!existsImpl(path.join(resolvedOutDir, `${component.id}.${component.version}.tar`))) {

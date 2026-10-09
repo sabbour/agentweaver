@@ -1,6 +1,7 @@
 extern alias EventsHost;
 extern alias OrchestratorHost;
 extern alias ProjectsConfig;
+extern alias WebHost;
 
 using System.Collections.Immutable;
 using System.Collections.Concurrent;
@@ -4712,6 +4713,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var port = BrowserIntegrationReverseProxy.GetAvailablePort();
         var brokerAuthority = $"https://broker.test:{port}";
         var identityProviderAuthority = FakeIdentityProvider.Authority;
+        var browserRedirectUri = $"{brokerAuthority}/auth/callback";
+        var scopes = string.Join(
+            " ",
+            IdentityBrokerWebApplicationFactory.TestClientScopes.Concat(ProjectScopes));
 
         await using var gateway = GatewayProductionResourceServer.Start(
             signingKey,
@@ -4723,8 +4728,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ForwardOwnerRequestAsync(request, orchestrator, cancellationToken),
             identityAudience: "https://api.test");
 
-        var webClient = await StartWebClientAsync(brokerAuthority);
-        var browserRedirectUri = $"{brokerAuthority}/auth/callback";
+        var webClient = await StartWebClientAsync(brokerAuthority, browserRedirectUri, scopes);
         try
         {
             _fakeIdp.Subject = "coordination-runner";
@@ -4743,11 +4747,27 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             {
                 BaseAddress = webClient.BaseAddress
             };
+            using var webCallbackFactory = new WebApplicationFactory<WebHost::Program>()
+                .WithWebHostBuilder(builder =>
+                {
+                    builder.UseWebRoot(Path.Combine(FindRepositoryRoot(), "apps", "web"));
+                    builder.ConfigureAppConfiguration((_, configuration) =>
+                        configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                        {
+                            ["VITE_OAUTH_REDIRECT_URI"] = browserRedirectUri,
+                        }));
+                });
+            using var webCallback = webCallbackFactory.CreateClient(
+                new WebApplicationFactoryClientOptions
+                {
+                    BaseAddress = new Uri($"https://web.broker.test:{port}")
+                });
             await using var reverseProxy = await BrowserIntegrationReverseProxy.StartAsync(
                 port,
                 brokerProxy,
                 gateway.Client,
-                viteProxy);
+                viteProxy,
+                webCallback);
             reverseProxy.UseIdentityProvider(fakeIdpProxy);
 
             using var browser = await Playwright.CreateAsync();
@@ -4771,9 +4791,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             page.RequestFailed += (_, request) =>
                 browserTrace.Enqueue($"request failed: {request.Method} {request.Url} ({request.Failure})");
 
-            var scopes = string.Join(
-                " ",
-                IdentityBrokerWebApplicationFactory.TestClientScopes.Concat(ProjectScopes));
             await page.AddInitScriptAsync($$"""
                 window.__AGENTWEAVER_CONFIG_BASE64__ = {
                   GATEWAY_URL: btoa('/api/v1'),
@@ -4837,6 +4854,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 .Select(part => part.Split('=', 2))
                 .FirstOrDefault(part => part.Length == 2 && part[0] == "view")?[1]);
             Assert.False(string.IsNullOrWhiteSpace(reverseProxy.BrokerAccessToken));
+            Assert.Contains(
+                reverseProxy.RequestTrace.Split(Environment.NewLine),
+                request => request.StartsWith("200 ", StringComparison.Ordinal) &&
+                    request.EndsWith("/auth/callback", StringComparison.Ordinal));
 
             using var ownerRequest = new HttpRequestMessage(
                 HttpMethod.Get,
@@ -4898,8 +4919,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             await applications.UpdateAsync(application, descriptor);
     }
 
-    private static async Task<WebClientProcess> StartWebClientAsync(
-        string identityBrokerAuthority = "https://broker.test")
+    internal static async Task<WebClientProcess> StartWebClientAsync(
+        string identityBrokerAuthority,
+        string oauthRedirectUri,
+        string oauthScopes)
     {
         var repositoryRoot = FindRepositoryRoot();
         var webDirectory = Path.Combine(repositoryRoot, "apps", "web");
@@ -4929,9 +4952,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         startInfo.Environment["VITE_GATEWAY_URL"] = "/api/v1";
         startInfo.Environment["VITE_IDENTITY_BROKER_URL"] = identityBrokerAuthority;
         startInfo.Environment["VITE_OAUTH_CLIENT_ID"] = IdentityBrokerWebApplicationFactory.TestClientId;
-        startInfo.Environment["VITE_OAUTH_REDIRECT_URI"] = $"{identityBrokerAuthority}/auth/callback";
-        startInfo.Environment["VITE_OAUTH_SCOPES"] =
-            string.Join(" ", IdentityBrokerWebApplicationFactory.TestClientScopes.Concat(ProjectScopes));
+        startInfo.Environment["VITE_OAUTH_REDIRECT_URI"] = oauthRedirectUri;
+        startInfo.Environment["VITE_OAUTH_SCOPES"] = oauthScopes;
 
         var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The web client Vite process did not start.");
@@ -5007,7 +5029,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             cancellationToken);
     }
 
-    private static async Task StopWebClientAsync(WebClientProcess webClient)
+    internal static async Task StopWebClientAsync(WebClientProcess webClient)
     {
         if (!webClient.Process.HasExited)
         {
@@ -5017,7 +5039,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         webClient.Process.Dispose();
     }
 
-    private sealed record WebClientProcess(
+    internal sealed record WebClientProcess(
         Process Process,
         Uri BaseAddress,
         Task<string> StandardOutput,

@@ -26,7 +26,8 @@ public sealed record GatewayRoute(
     bool RequiresTenantSelector = false,
     bool ForwardSetCookie = false,
     bool JsonBodyRequired = true,
-    long? MaximumRequestBodyBytes = null);
+    long? MaximumRequestBodyBytes = null,
+    bool ForwardTenantSelector = false);
 
 public static class GatewayRouteCatalog
 {
@@ -51,7 +52,8 @@ public static class GatewayRouteCatalog
             bool eventStream = false,
             bool requiresTenantSelector = false,
             bool jsonBodyRequired = true,
-            long? maximumRequestBodyBytes = null) =>
+            long? maximumRequestBodyBytes = null,
+            bool forwardTenantSelector = false) =>
             routes.Add(new GatewayRoute(
                 method,
                 VersionPrefix + publicSuffix,
@@ -65,34 +67,42 @@ public static class GatewayRouteCatalog
                 eventStream,
                 requiresTenantSelector,
                 JsonBodyRequired: jsonBodyRequired,
-                MaximumRequestBodyBytes: maximumRequestBodyBytes));
+                MaximumRequestBodyBytes: maximumRequestBodyBytes,
+                ForwardTenantSelector: forwardTenantSelector || requiresTenantSelector));
 
         Add("GET", GatewayOwner.Projects, "/projects", "/api/projects/",
-            "listProjects", "List projects");
+            "listProjects", "List projects", forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, "/projects", "/api/projects/",
-            "createProject", "Create a project", body: true);
+            "createProject", "Create a project", body: true, forwardTenantSelector: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}", "/api/projects/{projectId}",
-            "getProject", "Read a project", ["runId"]);
+            "getProject", "Read a project", ["runId"], forwardTenantSelector: true);
         Add("PATCH", GatewayOwner.Projects, "/projects/{projectId}", "/api/projects/{projectId}",
-            "updateProject", "Update a project", body: true);
+            "updateProject", "Update a project", body: true, forwardTenantSelector: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}/configuration",
             "/api/projects/{projectId}/configuration",
-            "getProjectConfiguration", "Read project configuration", ["revision"]);
+            "getProjectConfiguration", "Read project configuration", ["revision"],
+            forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/configuration",
             "/api/projects/{projectId}/configuration",
-            "updateProjectConfiguration", "Update project configuration", body: true);
+            "updateProjectConfiguration", "Update project configuration", body: true,
+            forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
-            "acceptRunSelection", "Accept a run selection", body: true);
+            "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);
         Add("GET", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
-            "getRunSelection", "Read the accepted run selection");
+            "getRunSelection", "Read the accepted run selection", forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/authorization/context", "/api/authorization/context",
+            "getAuthorizationContext", "Read the caller's current authorization context",
+            forwardTenantSelector: true);
         Add("GET", GatewayOwner.Projects, "/platform/runtime-defaults",
             "/api/platform/runtime-defaults/",
-            "getPlatformRuntimeDefaults", "Read platform runtime defaults");
+            "getPlatformRuntimeDefaults", "Read platform runtime defaults",
+            forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/platform/runtime-defaults",
             "/api/platform/runtime-defaults/",
-            "updatePlatformRuntimeDefaults", "Update platform runtime defaults", body: true);
+            "updatePlatformRuntimeDefaults", "Update platform runtime defaults", body: true,
+            forwardTenantSelector: true);
 
         var sourceControl = "/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}";
         void SourceControl(
@@ -154,7 +164,8 @@ public static class GatewayRouteCatalog
                 operationId,
                 summary,
                 body: body,
-                acceptsOnly: acceptsOnly);
+                acceptsOnly: acceptsOnly,
+                forwardTenantSelector: true);
 
         Coordination("POST", "/root", "acceptRunRoot", "Accept the run root", body: true);
         Coordination("POST", "/sessions/{sessionId}/decisions/outcome",
@@ -242,7 +253,8 @@ public static class GatewayRouteCatalog
                 summary,
                 query,
                 body,
-                maximumRequestBodyBytes: maximumRequestBodyBytes);
+                maximumRequestBodyBytes: maximumRequestBodyBytes,
+                forwardTenantSelector: true);
 
         Knowledge("POST", "/records", "createKnowledgeRecord", "Create a Knowledge record", body: true);
         Knowledge("GET", "/records", "searchKnowledge", "Search Knowledge records",
@@ -269,14 +281,16 @@ public static class GatewayRouteCatalog
         var run = "/projects/{projectId}/runs/{runId}";
         Add("GET", GatewayOwner.Events, run + "/events",
             "/internal" + run + "/events",
-            "replayRunEvents", "Replay committed run events", ["cursor", "limit"]);
+            "replayRunEvents", "Replay committed run events", ["cursor", "limit"],
+            forwardTenantSelector: true);
         Add("GET", GatewayOwner.Events, run + "/events/live",
             "/internal" + run + "/events",
             "streamRunEvents", "Stream committed run events using SSE", ["cursor"],
-            eventStream: true);
+            eventStream: true,
+            forwardTenantSelector: true);
         Add("GET", GatewayOwner.Events, run + "/usage",
             "/internal" + run + "/usage",
-            "readRunUsage", "Read run usage totals");
+            "readRunUsage", "Read run usage totals", forwardTenantSelector: true);
 
         return routes.ToImmutable();
     }

@@ -4,7 +4,13 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateFile, WEB_LOCK_PATH, WEB_PROJECT_PATH } from './validate.mjs';
+import {
+  validateFile,
+  WEB_HOST_LOCK_PATH,
+  WEB_HOST_PROJECT_PATH,
+  WEB_LOCK_PATH,
+  WEB_PROJECT_PATH,
+} from './validate.mjs';
 import { componentImageRepository } from './pack.mjs';
 import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
 import { runPublicationCommand as command } from './command.mjs';
@@ -19,6 +25,15 @@ const samplerProbeDigest = 'sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d
 const samplerProbeClaim = 'agentweaver-publication/foundation-probe-0.0.0-sampler-replacement';
 const contentHashPattern = /^[a-f0-9]{64}$/;
 const imageIdPattern = /^sha256:[a-f0-9]{64}$/;
+
+function validBuildOutput(output) {
+  return Array.isArray(output?.files) && output.files.length > 0 &&
+    output.files.every((file) => file && typeof file === 'object' && typeof file.path === 'string' &&
+      contentHashPattern.test(file.sha256 ?? '') &&
+      Number.isSafeInteger(file.size) && file.size >= 0) &&
+    contentHashPattern.test(output.sha256 ?? '') &&
+    hash(JSON.stringify(output.files)) === output.sha256;
+}
 
 function validateWebArtifact(component, artifact, componentProvenance, sourceSha, root, git) {
   const reject = () => fail('prepared web image provenance does not match the exact source, version, or linux/amd64 artifact');
@@ -67,6 +82,8 @@ function validateWebArtifact(component, artifact, componentProvenance, sourceSha
   if (source.treeSha256 !== treeSha256 ||
       source.packageJsonSha256 !== sourceByPath.get(WEB_PROJECT_PATH) ||
       source.packageLockSha256 !== sourceByPath.get(WEB_LOCK_PATH) ||
+      source.hostProjectSha256 !== sourceByPath.get(WEB_HOST_PROJECT_PATH) ||
+      source.hostLockSha256 !== sourceByPath.get(WEB_HOST_LOCK_PATH) ||
       source.dockerfileSha256 !== sourceByPath.get('apps/web/Dockerfile') ||
       componentProvenance?.lock?.path !== WEB_LOCK_PATH ||
       componentProvenance.lock.sha256 !== sourceByPath.get(WEB_LOCK_PATH)) {
@@ -75,18 +92,31 @@ function validateWebArtifact(component, artifact, componentProvenance, sourceSha
 
   const baseImages = artifact.baseImages;
   const output = artifact.buildOutput;
+  const dotnetBuild = build?.dotnet;
+  const hostOutput = dotnetBuild?.output;
+  const packagedOutputFiles = new Map((Array.isArray(output?.files) ? output.files : [])
+    .filter((file) => file && typeof file === 'object' && typeof file.path === 'string')
+    .map((file) => [file.path, file]));
+  const hostOutputMatches = validBuildOutput(hostOutput) && hostOutput.files.every((file) => {
+    const packaged = packagedOutputFiles.get(`publish/${file.path}`);
+    return packaged?.sha256 === file.sha256 && packaged.size === file.size;
+  });
   if (!Array.isArray(baseImages) || baseImages.length === 0 ||
       baseImages.some((image) => typeof image.reference !== 'string' ||
         !/@sha256:[a-f0-9]{64}$/.test(image.reference) ||
         image.repositoryDigest !== image.reference ||
         !imageIdPattern.test(image.imageId ?? '')) ||
-      !Array.isArray(output?.files) || output.files.length === 0 ||
-      output.files.some((file) => typeof file.path !== 'string' ||
-        !contentHashPattern.test(file.sha256 ?? '') ||
-        !Number.isSafeInteger(file.size) || file.size < 0) ||
-      !contentHashPattern.test(output.sha256 ?? '') ||
-      hash(JSON.stringify(output.files)) !== output.sha256 ||
-      build?.tool !== 'npm' || build.dockerfile !== 'apps/web/Dockerfile' ||
+      !validBuildOutput(output) || !validBuildOutput(hostOutput) ||
+      !hostOutputMatches ||
+      !output.files.some((file) => file.path === 'wwwroot/index.html') ||
+      !hostOutput.files.some((file) => file.path === 'Agentweaver.Web.Host.dll') ||
+      build?.tool !== 'npm+dotnet' || build.dockerfile !== 'apps/web/Dockerfile' ||
+      dotnetBuild?.project !== WEB_HOST_PROJECT_PATH ||
+      dotnetBuild?.lock?.path !== WEB_HOST_LOCK_PATH ||
+      dotnetBuild?.lock?.sha256 !== sourceByPath.get(WEB_HOST_LOCK_PATH) ||
+      dotnetBuild?.restoreMode !== 'locked' ||
+      dotnetBuild?.publishConfiguration !== 'Release' ||
+      dotnetBuild?.useAppHost !== false ||
       build.dockerBuildArguments?.IMAGE_TAG !== component.version ||
       build.dockerBuildArguments?.GIT_SHA !== sourceSha ||
       build.imageId !== artifact.imageId || build.imageReference !== imageReference ||

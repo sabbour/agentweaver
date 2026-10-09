@@ -1,7 +1,11 @@
+extern alias WebHost;
+
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Playwright;
 using Xunit;
 
@@ -9,6 +13,40 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class BrowserIntegrationReverseProxyTests
 {
+    [Fact]
+    public async Task BrowserCallbackUsesProductionNavigationRelayWithoutCors()
+    {
+        var port = BrowserIntegrationReverseProxy.GetAvailablePort();
+        using var broker = CreateClient("broker");
+        using var gateway = CreateClient("gateway");
+        using var webClient = CreateClient("vite");
+        using var webCallbackFactory = new WebApplicationFactory<WebHost::Program>()
+            .WithWebHostBuilder(builder =>
+                builder.UseWebRoot(Path.Combine(FindRepositoryRoot(), "apps", "web")));
+        using var webCallback = webCallbackFactory.CreateClient(
+            new WebApplicationFactoryClientOptions
+            {
+                BaseAddress = new Uri($"https://web.broker.test:{port}")
+            });
+        await using var proxy = await BrowserIntegrationReverseProxy.StartAsync(
+            port,
+            broker,
+            gateway,
+            webClient,
+            webCallback);
+        var origin = proxy.WebAuthority;
+        using var bridgeClient = CreateBridgeClient(origin);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/auth/callback?code=must-not-be-embedded&state=state-value");
+
+        using var response = await bridgeClient.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
+        Assert.Contains("agentweaver.identity.callback", await response.Content.ReadAsStringAsync());
+    }
+
     [Fact]
     public async Task BrowserFederationRedirectsUseTheEphemeralBridgePort()
     {
@@ -162,6 +200,20 @@ public sealed class BrowserIntegrationReverseProxyTests
             }
         };
         return new HttpClient(handler) { BaseAddress = new Uri(authority) };
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        foreach (var startingPath in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        {
+            for (var directory = new DirectoryInfo(startingPath); directory is not null; directory = directory.Parent)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "apps", "web", "package.json")))
+                    return directory.FullName;
+            }
+        }
+
+        throw new InvalidOperationException("Could not find the repository root for the Web callback test.");
     }
 
     private static HttpResponseMessage Redirect(string location) =>

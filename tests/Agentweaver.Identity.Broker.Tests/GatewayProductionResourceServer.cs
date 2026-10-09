@@ -99,6 +99,7 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
             SetEnvironment("Gateway__Owners__Knowledge", "https://knowledge.test");
             SetEnvironment("Gateway__Owners__Events", "https://events.test");
             SetEnvironment("Gateway__Owners__IdentityBrokerAddress", "https://identity-broker.test");
+            SetEnvironment("Gateway__WebOrigin", "https://web.test/");
             SetEnvironment("Gateway__OwnerRequestTimeoutSeconds", ownerRequestTimeoutSeconds.ToString());
         }
 

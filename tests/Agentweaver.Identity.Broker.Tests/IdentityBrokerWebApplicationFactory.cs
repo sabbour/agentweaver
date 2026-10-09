@@ -84,6 +84,7 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
             ["Logging__LogLevel__OpenIddict.Validation.OpenIddictValidationDispatcher"] = "Trace",
             ["Logging__LogLevel__Microsoft.AspNetCore.Authentication.OpenIdConnect.OpenIdConnectHandler"] = "Trace",
             ["IdentityBroker__Issuer"] = Issuer,
+            ["IdentityBroker__WebOrigin"] = "https://WEB.test/",
             ["IdentityBroker__Signing__PfxPath"] = _signingCertificate.PfxPath,
             ["IdentityBroker__Signing__PfxPassword"] = _signingCertificate.Password,
             ["IdentityBroker__DataProtectionKeyPath"] = _signingCertificate.PfxPath + ".keys",

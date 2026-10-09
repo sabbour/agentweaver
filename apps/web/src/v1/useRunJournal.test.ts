@@ -110,15 +110,21 @@ describe('run journal event merging', () => {
       },
     );
     const { result, rerender, unmount } = renderHook(
-      ({ runId }) => useRunJournal('broker-token', 'p1', runId),
-      { initialProps: { runId: 'r1' } },
+      ({ runId, tenantSelector }) => useRunJournal('broker-token', 'p1', runId, tenantSelector),
+      { initialProps: { runId: 'r1', tenantSelector: 'tenant-1' } },
     );
 
     await waitFor(() =>
-      expect(gatewayClient.replayEvents).toHaveBeenCalledWith('broker-token', 'p1', 'r1', null, 100));
-    rerender({ runId: 'r2' });
+      expect(gatewayClient.replayEvents).toHaveBeenCalledWith(
+        'broker-token', 'p1', 'r1', null, 100, 'tenant-1',
+      ));
+    rerender({ runId: 'r2', tenantSelector: 'tenant-1' });
     await waitFor(() =>
       expect(result.current.events.map((item) => item.eventId)).toEqual(['current-run']));
+    await waitFor(() =>
+      expect(gatewayClient.streamEvents).toHaveBeenCalledWith(
+        'broker-token', 'p1', 'r2', 'r2-cursor', expect.any(AbortSignal), 'tenant-1',
+      ));
 
     await act(async () => {
       oldReplay.resolve({

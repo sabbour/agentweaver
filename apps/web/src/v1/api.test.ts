@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AgentweaverGatewayClient } from './api';
+import type { KnowledgeRecordTransferBundle } from './contracts';
 
 describe('Gateway API client', () => {
   it('does not send a request without a Broker access token', async () => {
@@ -11,6 +12,52 @@ describe('Gateway API client', () => {
       code: 'unauthorized',
     });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('validates the owner authorization context and forwards only the explicit tenant selector', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({
+        contractVersion: 1,
+        issuer: 'https://identity.test/',
+        actorId: 'actor-1',
+        tenantId: 'tenant-1',
+        membershipRevision: 2,
+        boundProjectId: null,
+        boundRunId: null,
+        effectiveAuthority: [],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    const context = await client.getAuthorizationContext('broker-token', 'tenant-1');
+
+    expect(context.tenantId).toBe('tenant-1');
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe('https://gateway.example.test/api/v1/authorization/context');
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(init?.cache).toBe('no-store');
+  });
+
+  it('rejects an authorization context outside the exact owner DTO', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({
+        contractVersion: 1,
+        issuer: 'https://identity.test/',
+        actorId: 'actor-1',
+        tenantId: 'tenant-1',
+        membershipRevision: 2,
+        boundProjectId: null,
+        boundRunId: null,
+        effectiveAuthority: [],
+        role: 'tenantAdmin',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await expect(client.getAuthorizationContext('broker-token')).rejects.toMatchObject({
+      status: 502,
+      code: 'owner_contract_invalid',
+    });
   });
 
   it('preserves explicit project authorization errors from the Gateway', async () => {
@@ -99,6 +146,62 @@ describe('Gateway API client', () => {
     expect(init?.method).toBe('POST');
   });
 
+  it('uses the Knowledge revision, Decision lifecycle, and bounded transfer routes', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () => Response.json({}),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    const transfer: KnowledgeRecordTransferBundle = {
+      format: 'agentweaver.knowledge-transfer.v1',
+      schemaVersion: 1,
+      projectId: 'p1',
+      agentId: 'agent-1',
+      records: [],
+    };
+
+    await client.readKnowledgeRevisions(
+      'token', 'p1', 'r1', 'agent-1', 'record/1', { page: 2, pageSize: 25 },
+    );
+    await client.restoreKnowledgeRecord(
+      'token', 'p1', 'r1', 'agent-1', 'record/1', 8, 3, 'Restore reviewed revision', 'restore-intent',
+    );
+    await client.approveKnowledgeDecision(
+      'token', 'p1', 'r1', 'agent-1', 'decision-1', 9, null, 'approval-intent',
+    );
+    await client.exportKnowledgeRecords('token', 'p1', 'r1', 'agent-1');
+    await client.importKnowledgeRecords(
+      'token', 'p1', 'r1', 'agent-1', transfer, 'import-intent',
+    );
+
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+      'https://gateway.example.test/api/v1/projects/p1/runs/r1/agents/agent-1/records/record%2F1/revisions?page=2&pageSize=25',
+      'https://gateway.example.test/api/v1/projects/p1/runs/r1/agents/agent-1/records/record%2F1/restore',
+      'https://gateway.example.test/api/v1/projects/p1/runs/r1/agents/agent-1/records/decision-1/approve',
+      'https://gateway.example.test/api/v1/projects/p1/runs/r1/agents/agent-1/records/export',
+      'https://gateway.example.test/api/v1/projects/p1/runs/r1/agents/agent-1/records/import',
+    ]);
+
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).toEqual({
+      expectedRevision: 8,
+      revision: 3,
+      reason: 'Restore reviewed revision',
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[2][1]?.body))).toEqual({
+      expectedRevision: 9,
+      reason: null,
+    });
+    expect(JSON.parse(String(fetcher.mock.calls[4][1]?.body))).toEqual(transfer);
+    expect([
+      fetcher.mock.calls[1],
+      fetcher.mock.calls[2],
+      fetcher.mock.calls[4],
+    ].map(([, init]) => new Headers(init?.headers).get('Idempotency-Key'))).toEqual([
+      'restore-intent',
+      'approval-intent',
+      'import-intent',
+    ]);
+  });
+
   it('can replay a user intent with the same coordinator key', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => new Response('{}', { status: 200 }),
@@ -149,6 +252,7 @@ describe('Gateway API client', () => {
       'run-1',
       'cursor-11',
       new AbortController().signal,
+      'tenant-1',
     )) frames.push(frame);
 
     expect(frames).toEqual([{ cursor: 'cursor-12', event: envelope }]);
@@ -158,6 +262,7 @@ describe('Gateway API client', () => {
     );
     expect(new Headers(init?.headers).get('Accept')).toBe('text/event-stream');
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer broker-token');
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
     expect(init?.credentials).toBe('omit');
   });
 
@@ -220,21 +325,4 @@ describe('Gateway API client', () => {
     expect(legacyInit?.body).toBeUndefined();
   });
 
-  it('sends the run-bound App installation start with the exact tenant selector', async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 200 }));
-    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
-
-    await client.beginProjectGitHubAppInstallationAuthorization(
-      'broker-token', 'project-1', 'run-1', 'tenant-1',
-    );
-
-    const [url, init] = fetcher.mock.calls[0];
-    expect(String(url)).toBe(
-      'https://gateway.example.test/api/v1/projects/project-1/runs/run-1/source-control/github-app-installations/authorizations',
-    );
-    expect(init?.method).toBe('POST');
-    expect(init?.credentials).toBe('include');
-    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
-    expect(init?.body).toBeUndefined();
-  });
 });

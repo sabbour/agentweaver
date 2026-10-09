@@ -7,6 +7,107 @@ export interface Problem {
   [key: string]: unknown;
 }
 
+export type ProjectAuthorityResourceType = 'platform' | 'tenant' | 'project';
+
+export type ProjectAuthorizationPermission =
+  | 'readProjects'
+  | 'writeProjects'
+  | 'createProjects'
+  | 'readRunSelection'
+  | 'acceptRunSelection'
+  | 'accessPrivateKnowledge'
+  | 'readPlatformRuntimeDefaults'
+  | 'writePlatformRuntimeDefaults';
+
+export interface ProjectAuthorizationPermissionGrant {
+  permission: ProjectAuthorizationPermission;
+  roleRevision: number;
+}
+
+export interface EffectiveProjectAuthorization {
+  resourceType: ProjectAuthorityResourceType;
+  resourceId: string;
+  permissions: ProjectAuthorizationPermissionGrant[];
+}
+
+export interface ProjectAuthorizationContextResponse {
+  contractVersion: 1;
+  issuer: string;
+  actorId: string;
+  tenantId: string;
+  membershipRevision: number;
+  boundProjectId: string | null;
+  boundRunId: string | null;
+  effectiveAuthority: EffectiveProjectAuthorization[];
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+export function isProjectAuthorizationContextResponse(
+  value: unknown,
+): value is ProjectAuthorizationContextResponse {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const context = value as Record<string, unknown>;
+  const contextKeys = [
+    'contractVersion',
+    'issuer',
+    'actorId',
+    'tenantId',
+    'membershipRevision',
+    'boundProjectId',
+    'boundRunId',
+    'effectiveAuthority',
+  ] as const;
+  if (!hasExactKeys(context, contextKeys) ||
+      context.contractVersion !== 1 ||
+      !isNonEmptyString(context.issuer) ||
+      !isNonEmptyString(context.actorId) ||
+      !isNonEmptyString(context.tenantId) ||
+      !Number.isSafeInteger(context.membershipRevision) ||
+      (context.membershipRevision as number) < 1 ||
+      !(context.boundProjectId === null || isNonEmptyString(context.boundProjectId)) ||
+      !(context.boundRunId === null || isNonEmptyString(context.boundRunId)) ||
+      (context.boundRunId !== null && context.boundProjectId === null) ||
+      !Array.isArray(context.effectiveAuthority))
+    return false;
+
+  return context.effectiveAuthority.every((grantValue) => {
+    if (!grantValue || typeof grantValue !== 'object' || Array.isArray(grantValue)) return false;
+    const grant = grantValue as Record<string, unknown>;
+    if (!hasExactKeys(grant, ['resourceType', 'resourceId', 'permissions']) ||
+        !['platform', 'tenant', 'project'].includes(String(grant.resourceType)) ||
+        !isNonEmptyString(grant.resourceId) ||
+        !Array.isArray(grant.permissions))
+      return false;
+
+    return grant.permissions.every((permissionValue) => {
+      if (!permissionValue || typeof permissionValue !== 'object' || Array.isArray(permissionValue))
+        return false;
+      const permission = permissionValue as Record<string, unknown>;
+      return hasExactKeys(permission, ['permission', 'roleRevision']) &&
+        [
+          'readProjects',
+          'writeProjects',
+          'createProjects',
+          'readRunSelection',
+          'acceptRunSelection',
+          'accessPrivateKnowledge',
+          'readPlatformRuntimeDefaults',
+          'writePlatformRuntimeDefaults',
+        ].includes(String(permission.permission)) &&
+        Number.isSafeInteger(permission.roleRevision) &&
+        (permission.roleRevision as number) > 0;
+    });
+  });
+}
+
 export interface ProjectSummary {
   projectId: string;
   name: string;
@@ -20,6 +121,79 @@ export interface ProjectSummary {
 export interface ModelSelectionSettings {
   reference: string;
   credentialReference?: { id: string; version: string } | null;
+  connectionId?: string;
+}
+
+export type CopilotConnectionScope = 'project' | 'platform';
+
+export type CopilotConnectionState =
+  | 'pending'
+  | 'connected'
+  | 'refreshing'
+  | 'transientUnavailable'
+  | 'reconnectRequired'
+  | 'revoked'
+  | 'refreshIndeterminate';
+
+export interface CopilotConnectionReceipt {
+  connectionId: string;
+  revision: number;
+  scope: CopilotConnectionScope;
+  scopeId: string;
+  state: CopilotConnectionState;
+  freshUntil: string;
+}
+
+export interface CopilotConnectionBegin {
+  connection: CopilotConnectionReceipt;
+  authorizationUri: string;
+}
+
+export type CopilotAuthorizationCallback =
+  | { state: string; code: string; error?: never }
+  | { state: string; error: 'access_denied'; code?: never };
+
+export interface CopilotConnectionMutation {
+  connectionId: string;
+  expectedRevision: number;
+}
+
+export function isCopilotConnectionReceipt(value: unknown): value is CopilotConnectionReceipt {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const receipt = value as Record<string, unknown>;
+  return hasExactKeys(receipt, [
+    'connectionId',
+    'revision',
+    'scope',
+    'scopeId',
+    'state',
+    'freshUntil',
+  ]) &&
+    typeof receipt.connectionId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(receipt.connectionId) &&
+    Number.isSafeInteger(receipt.revision) &&
+    (receipt.revision as number) > 0 &&
+    (receipt.scope === 'project' || receipt.scope === 'platform') &&
+    isNonEmptyString(receipt.scopeId) &&
+    [
+      'pending',
+      'connected',
+      'refreshing',
+      'transientUnavailable',
+      'reconnectRequired',
+      'revoked',
+      'refreshIndeterminate',
+    ].includes(String(receipt.state)) &&
+    typeof receipt.freshUntil === 'string' &&
+    Number.isFinite(Date.parse(receipt.freshUntil));
+}
+
+export function isCopilotConnectionBegin(value: unknown): value is CopilotConnectionBegin {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const begin = value as Record<string, unknown>;
+  return hasExactKeys(begin, ['connection', 'authorizationUri']) &&
+    isCopilotConnectionReceipt(begin.connection) &&
+    isNonEmptyString(begin.authorizationUri);
 }
 
 export interface ProjectConfiguration {
@@ -92,12 +266,6 @@ export interface RepoAppRepositorySelectionList {
 
 export interface RepoAppRepositorySelectionCode {
   selectionCode: string;
-  expiresAt: string;
-}
-
-export interface RepoAppInstallationStart {
-  installationUrl: string;
-  transactionId: string;
   expiresAt: string;
 }
 
@@ -343,7 +511,7 @@ export interface UsageRunTotals {
 }
 
 export type KnowledgeKind = 'memory' | 'proposal' | 'decision' | 'sessionContext';
-export type KnowledgeRecordState = 'pending' | 'active' | 'rejected' | 'archived' | 'promoted';
+export type KnowledgeRecordState = 'pending' | 'active' | 'rejected' | 'archived' | 'promoted' | 'superseded';
 export type KnowledgeTrustState = 'pending' | 'approved' | 'rejected' | 'legacy';
 
 export interface KnowledgeRecord {
@@ -367,6 +535,7 @@ export interface KnowledgeRecord {
   promotedDecisionId?: string | null;
   createdAt: string;
   updatedAt: string;
+  supersededByRecordId?: string | null;
 }
 
 export interface KnowledgeRecordPage {
@@ -376,11 +545,79 @@ export interface KnowledgeRecordPage {
   pageSize: number;
 }
 
+export interface KnowledgeRecordRevision {
+  recordId: string;
+  revision: number;
+  revisionId: string;
+  previousRevisionId?: string | null;
+  kind: KnowledgeKind;
+  type: string;
+  title?: string | null;
+  content: string;
+  rationale?: string | null;
+  importance: string;
+  tags: string[];
+  state: KnowledgeRecordState;
+  trustState: KnowledgeTrustState;
+  reason?: string | null;
+  createdAt: string;
+  supersededByRecordId?: string | null;
+  sourceRunId?: string | null;
+  sourceSessionId?: string | null;
+  actorFingerprint?: string | null;
+  changeKind?: string | null;
+}
+
+export interface KnowledgeRecordRevisionPage {
+  items: KnowledgeRecordRevision[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface KnowledgeRecordTransferBundle {
+  format: 'agentweaver.knowledge-transfer.v1';
+  schemaVersion: 1;
+  projectId: string;
+  agentId: string;
+  records: KnowledgeRecordTransferEntry[];
+}
+
+export interface KnowledgeRecordTransferEntry {
+  record: KnowledgeRecord;
+  revisions: KnowledgeRecordRevision[];
+}
+
+export interface KnowledgeRecordImportResult {
+  records: KnowledgeRecord[];
+  isDuplicate: boolean;
+}
+
 export interface KnowledgeRecordWriteResult {
-  status: 'created' | 'updated' | 'notFound' | 'stale' | 'idempotencyConflict' | 'invalidState';
+  status:
+    | 'created'
+    | 'updated'
+    | 'notFound'
+    | 'stale'
+    | 'idempotencyConflict'
+    | 'invalidState'
+    | 'invalidReplacement'
+    | 'replacementCycle';
   record?: KnowledgeRecord | null;
   currentRevision?: number | null;
   isDuplicate: boolean;
+}
+
+export interface KnowledgeRecordUpdateInput {
+  type: string;
+  title?: string | null;
+  content: string;
+  rationale?: string | null;
+  importance: string;
+  tags: string[];
+  state: KnowledgeRecordState;
+  reason?: string | null;
+  supersededByRecordId?: string | null;
 }
 
 export interface KnowledgeProposalPromotionResult extends KnowledgeRecordWriteResult {

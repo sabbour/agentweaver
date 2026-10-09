@@ -17,7 +17,7 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class GatewayGitHubRepoAppBffTests
 {
     [Fact]
-    public async Task GitHubRepoAppBffKeepsHumanAndCallbackBoundaries()
+    public async Task GitHubRepoAppBffOmitsTenantSelectorAndKeepsHumanCallbackBoundaries()
     {
         using var rsa = RSA.Create(2048);
         var issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
@@ -32,8 +32,6 @@ public sealed class GatewayGitHubRepoAppBffTests
         var requests = new ConcurrentQueue<OwnerRequest>();
         const string userCookie =
             "__Host-agentweaver-repo-app-auth=oauth-nonce; Path=/; Max-Age=300; Secure; HttpOnly; SameSite=Lax";
-        const string installationCookie =
-            "__Host-agentweaver-repo-app-install-auth=install-nonce; Path=/; Max-Age=300; Secure; HttpOnly; SameSite=Lax";
         const string clearedUserCookie =
             "__Host-agentweaver-repo-app-auth=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax";
         const string clearedInstallationCookie =
@@ -95,8 +93,6 @@ public sealed class GatewayGitHubRepoAppBffTests
                         """{"repositories":[{"fullName":"octo/agentweaver","ownerLogin":"octo","isPrivate":true,"defaultBranch":"main","pushedAt":"2026-10-08T00:00:00+00:00"}],"installations":[{"accountLogin":"octo","accountType":"Organization","repositorySelection":"selected","managementUrl":"https://github.com/settings/installations"}]}""",
                     "/api/github/repository-selections" =>
                         """{"selectionCode":"opaque-selection-code","expiresAt":"2026-10-08T01:00:00+00:00"}""",
-                    "/api/projects/project-a/runs/run-a/source-control/github-app-installations/authorizations" =>
-                        """{"installationUrl":"https://github.com/apps/agentweaver/installations/new","transactionId":"install-tx-1","expiresAt":"2026-10-08T01:00:00+00:00"}""",
                     _ => """{"accepted":true}""",
                 };
                 var ownerResponse = new HttpResponseMessage(
@@ -109,8 +105,6 @@ public sealed class GatewayGitHubRepoAppBffTests
                 };
                 if (path == "/api/auth/github/repo-app/authorizations")
                     ownerResponse.Headers.TryAddWithoutValidation("Set-Cookie", userCookie);
-                if (path.EndsWith("/github-app-installations/authorizations", StringComparison.Ordinal))
-                    ownerResponse.Headers.TryAddWithoutValidation("Set-Cookie", installationCookie);
                 return ownerResponse;
             });
 
@@ -233,14 +227,16 @@ public sealed class GatewayGitHubRepoAppBffTests
                 Assert.Single(response.Headers.GetValues("Set-Cookie")));
         }
 
-        using (var install = new HttpRequestMessage(
+        using (var pin = new HttpRequestMessage(
                    HttpMethod.Post,
-                   "/api/v1/projects/project-a/runs/run-a/source-control/github-app-installations/authorizations"))
+                   "/api/v1/projects/project-a/runs/run-a/source-control/sessions/root-a/pin")
+               {
+                   Content = JsonContent.Create(new { selectionCode = "opaque-selection-code" }),
+               })
         {
-            AddCallerHeaders(install, token, includeTenant: true);
-            using var response = await gateway.Client.SendAsync(install);
+            AddCallerHeaders(pin, token, includeTenant: true);
+            using var response = await gateway.Client.SendAsync(pin);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            Assert.Equal(installationCookie, Assert.Single(response.Headers.GetValues("Set-Cookie")));
         }
 
         var forwarded = requests.ToArray();
@@ -257,7 +253,7 @@ public sealed class GatewayGitHubRepoAppBffTests
                 "/api/github/repository-selections",
                 "/auth/github/repo-app/callback",
                 "/auth/github/repo-app/installation/callback",
-                "/api/projects/project-a/runs/run-a/source-control/github-app-installations/authorizations",
+                "/api/projects/project-a/runs/run-a/source-control/sessions/root-a/pin",
             },
             forwarded.Select(request => request.Uri.AbsolutePath));
         Assert.All(forwarded.Take(7), request =>
@@ -276,9 +272,12 @@ public sealed class GatewayGitHubRepoAppBffTests
         Assert.Equal(
             "__Host-agentweaver-repo-app-install-auth=install-nonce",
             forwarded[8].Cookie);
+        Assert.Equal(GatewayOwner.Orchestrator, forwarded[9].Owner);
+        Assert.Equal(HttpMethod.Post, forwarded[9].Method);
         Assert.Equal(token, AuthenticationHeaderValue.Parse(forwarded[9].Authorization!).Parameter);
         Assert.Equal("tenant-1", forwarded[9].Tenant);
         Assert.Null(forwarded[9].Cookie);
+        Assert.Equal("""{"selectionCode":"opaque-selection-code"}""", forwarded[9].Body);
         Assert.Equal("""{"returnRouteKey":"settings"}""", forwarded[0].Body);
         Assert.Equal("""{"fullName":"octo/agentweaver"}""", forwarded[6].Body);
     }

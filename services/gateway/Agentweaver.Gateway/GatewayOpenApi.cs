@@ -22,6 +22,7 @@ internal static partial class GatewayOpenApi
             ["updateProject"] = C("UpdateProjectRequest", "ProjectSummary", "200"),
             ["getProjectConfiguration"] = C(null, "VersionedProjectConfiguration", "200"),
             ["updateProjectConfiguration"] = C("UpdateProjectConfigurationRequest", "VersionedProjectConfiguration", "200"),
+            ["getAuthorizationContext"] = C(null, "ProjectAuthorizationContext", "200"),
             ["acceptRunSelection"] = C("AcceptRunSelectionRequest", "EffectiveRunSelection", "200"),
             ["getRunSelection"] = C(null, "EffectiveRunSelection", "200"),
             ["getPlatformRuntimeDefaults"] = C(null, "VersionedPlatformRuntimeDefaults", "200"),
@@ -74,10 +75,10 @@ internal static partial class GatewayOpenApi
             ["searchKnowledge"] = C(null, "KnowledgeRecordPage", "200"),
             ["readKnowledgeRecord"] = C(null, "KnowledgeRecord", "200"),
             ["updateKnowledgeRecord"] = C("UpdateKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201"),
-            ["restoreKnowledgeRecord"] = C("RestoreKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201"),
-            ["approveKnowledgeDecision"] = C("ApproveKnowledgeDecisionRequest", "KnowledgeRecordWriteResult", "200", "201"),
+            ["restoreKnowledgeRecord"] = C("RestoreKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201", "409"),
+            ["approveKnowledgeDecision"] = C("ApproveKnowledgeDecisionRequest", "KnowledgeRecordWriteResult", "200", "201", "409"),
             ["exportKnowledgeRecords"] = C(null, "KnowledgeRecordTransferBundle", "200"),
-            ["importKnowledgeRecords"] = C("KnowledgeRecordTransferBundle", "KnowledgeRecordImportResult", "200", "201"),
+            ["importKnowledgeRecords"] = C("KnowledgeRecordTransferBundle", "KnowledgeRecordImportResult", "200", "201", "400", "409", "413"),
             ["readKnowledgeRevisions"] = C(null, "KnowledgeRecordRevisionPage", "200"),
             ["promoteKnowledgeProposal"] = C("PromoteKnowledgeProposalRequest", "KnowledgeProposalPromotionResult", "200", "201"),
             ["rejectKnowledgeProposal"] = C("RejectKnowledgeProposalRequest", "KnowledgeRecordWriteResult", "200", "201"),
@@ -168,14 +169,15 @@ internal static partial class GatewayOpenApi
                 required = false,
                 schema = QuerySchema(name),
             }))
-            .Append(new
+            .ToArray();
+        if (route.ForwardTenantSelector || route.RequiresTenantSelector)
+            parameters = parameters.Append(new
             {
                 name = "X-Agentweaver-Tenant",
                 @in = "header",
                 required = route.RequiresTenantSelector,
                 schema = new { type = "string" },
-            })
-            .ToArray();
+            }).ToArray();
 
         if (route.OperationId is
             "createKnowledgeRecord" or
@@ -378,6 +380,21 @@ internal static partial class GatewayOpenApi
         ["CreateProjectRequest"] = Obj(["name"], ("name", Str())),
         ["UpdateProjectRequest"] = Obj(["expectedRevision", "name", "state"],
             ("expectedRevision", Int()), ("name", Str()), ("state", Enum("active", "archived"))),
+        ["ProjectAuthorizationContext"] = Obj(
+            ["contractVersion", "issuer", "actorId", "tenantId", "membershipRevision", "boundProjectId", "boundRunId", "effectiveAuthority"],
+            ("contractVersion", Int()), ("issuer", Str()), ("actorId", Str()), ("tenantId", Str()),
+            ("membershipRevision", Int()), ("boundProjectId", NullableStr()), ("boundRunId", NullableStr()),
+            ("effectiveAuthority", Arr(Ref("EffectiveProjectAuthorization")))),
+        ["EffectiveProjectAuthorization"] = Obj(
+            ["resourceType", "resourceId", "permissions"],
+            ("resourceType", Enum("platform", "tenant", "project")), ("resourceId", Str()),
+            ("permissions", Arr(Ref("ProjectAuthorizationPermissionGrant")))),
+        ["ProjectAuthorizationPermissionGrant"] = Obj(
+            ["permission", "roleRevision"],
+            ("permission", Enum("readProjects", "writeProjects", "createProjects", "readRunSelection",
+                "acceptRunSelection", "accessPrivateKnowledge", "readPlatformRuntimeDefaults",
+                "writePlatformRuntimeDefaults")),
+            ("roleRevision", Int())),
         ["VersionedProjectConfiguration"] = Obj(["projectId", "revision", "configuration", "updatedByActorId", "createdAt"],
             ("projectId", Str()), ("revision", Int()), ("configuration", Ref("ProjectConfiguration")),
             ("updatedByActorId", Str()), ("createdAt", Date())),

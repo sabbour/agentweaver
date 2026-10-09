@@ -8,17 +8,6 @@ namespace Agentweaver.Gateway;
 
 public static class GatewayEndpoints
 {
-    private static readonly GatewayRoute GitHubAppInstallationAuthorizationRoute = new(
-        "POST",
-        "/api/v1/projects/{projectId}/runs/{runId}/source-control/github-app-installations/authorizations",
-        "/api/projects/{projectId}/runs/{runId}/source-control/github-app-installations/authorizations",
-        "beginGitHubAppInstallationAuthorization",
-        "Begin GitHub App installation authorization",
-        GatewayOwner.Orchestrator,
-        ImmutableArray<string>.Empty,
-        RequiresTenantSelector: true,
-        ForwardSetCookie: true);
-
     public static IEndpointRouteBuilder MapGatewayEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/health/live", () => Results.Ok(new { status = "live" }))
@@ -29,6 +18,7 @@ public static class GatewayEndpoints
                 "/openapi/v1.json",
                 () => Results.Json(GatewayOpenApi.CreateDocument(), GatewayOpenApi.JsonOptions))
             .AllowAnonymous()
+            .RequireCors(GatewayWebCors.OpenApiPolicyName)
             .WithName("getGatewayOpenApiV1");
 
         var repoApp = endpoints.MapGroup("/api/auth/github/repo-app").RequireAuthorization();
@@ -131,14 +121,9 @@ public static class GatewayEndpoints
                         cancellationToken))
             .AllowAnonymous();
 
-        endpoints.MapPost(
-                GitHubAppInstallationAuthorizationRoute.PublicPath,
-                (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
-                    owner.ProxyAsync(context, GitHubAppInstallationAuthorizationRoute, cancellationToken))
-            .RequireAuthorization();
-
         var copilotConnections = endpoints.MapGroup("/api/connections/copilot-user/v1")
-            .RequireAuthorization();
+            .RequireAuthorization()
+            .RequireCors(GatewayWebCors.CopilotConnectionsPolicyName);
         copilotConnections.MapPost(
             "/begin",
             (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
@@ -200,14 +185,23 @@ public static class GatewayEndpoints
             }
             else
             {
-                endpoint = endpoints.MapMethods(
-                    route.PublicPath,
-                    [route.Method],
-                    (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
-                        owner.ProxyAsync(context, route, cancellationToken));
+                endpoint = route.OperationId == "getAuthorizationContext"
+                    ? endpoints.MapGet(
+                        route.PublicPath,
+                        (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                            owner.ProxyAuthorizationContextAsync(context, route, cancellationToken))
+                    : endpoints.MapMethods(
+                        route.PublicPath,
+                        [route.Method],
+                        (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                            owner.ProxyAsync(context, route, cancellationToken));
             }
 
+            if (route.OperationId == "importKnowledgeRecords")
+                endpoint.WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
+
             endpoint.RequireAuthorization()
+                .RequireCors(GatewayWebCors.PolicyName(route))
                 .WithName(route.OperationId)
                 .WithSummary(route.Summary)
                 .WithDescription(

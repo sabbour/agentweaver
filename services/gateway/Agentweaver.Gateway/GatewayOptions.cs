@@ -8,6 +8,7 @@ public sealed record GatewayOptions(
     Uri KnowledgeOwnerBaseAddress,
     Uri EventsOwnerBaseAddress,
     Uri IdentityBrokerAddress,
+    Uri WebOrigin,
     TimeSpan OwnerRequestTimeout)
 {
     public const int EventPollIntervalMilliseconds = 1000;
@@ -40,6 +41,7 @@ public sealed record GatewayOptions(
             RequiredHttpsRoot(owners["Knowledge"], "Gateway:Owners:Knowledge"),
             RequiredHttpsRoot(owners["Events"], "Gateway:Owners:Events"),
             RequiredHttpsRoot(owners["IdentityBrokerAddress"], "Gateway:Owners:IdentityBrokerAddress"),
+            RequiredHttpsRoot(configuration["Gateway:WebOrigin"], "Gateway:WebOrigin"),
             TimeSpan.FromSeconds(timeoutSeconds));
     }
 

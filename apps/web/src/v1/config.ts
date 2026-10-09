@@ -3,6 +3,7 @@ const environment = import.meta.env;
 type RuntimeConfigKey =
   | 'GATEWAY_URL'
   | 'IDENTITY_BROKER_URL'
+  | 'IDENTITY_BROKER_ISSUER'
   | 'OAUTH_CLIENT_ID'
   | 'OAUTH_REDIRECT_URI'
   | 'OAUTH_SCOPES';
@@ -27,12 +28,34 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
+function defaultBrokerIssuer(value: string): string {
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    const authority = value.slice(value.indexOf(':') + 3).split(/[/?#]/, 1)[0];
+    return url.protocol === 'https:' &&
+      !url.username &&
+      !url.password &&
+      !authority.includes('@') &&
+      !value.includes('?') &&
+      !value.includes('#')
+      ? url.href
+      : '';
+  } catch {
+    return '';
+  }
+}
+
+const brokerUrlSetting =
+  runtimeSetting('IDENTITY_BROKER_URL') ?? environment.VITE_IDENTITY_BROKER_URL ?? '';
+
 export const gatewayBaseUrl = trimTrailingSlash(
   runtimeSetting('GATEWAY_URL') ?? environment.VITE_GATEWAY_URL ?? '/api/v1',
 );
-export const brokerBaseUrl = trimTrailingSlash(
-  runtimeSetting('IDENTITY_BROKER_URL') ?? environment.VITE_IDENTITY_BROKER_URL ?? '',
-);
+export const brokerBaseUrl = trimTrailingSlash(brokerUrlSetting);
+export const brokerIssuer =
+  runtimeSetting('IDENTITY_BROKER_ISSUER') ??
+  (environment.VITE_IDENTITY_BROKER_ISSUER || defaultBrokerIssuer(brokerUrlSetting));
 export const oauthClientId =
   runtimeSetting('OAUTH_CLIENT_ID') ?? environment.VITE_OAUTH_CLIENT_ID ?? '';
 export const oauthRedirectUri =

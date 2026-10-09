@@ -20,12 +20,14 @@ internal sealed class BrowserIntegrationReverseProxy : IAsyncDisposable
 {
     private const string BrokerHost = "broker.test";
     private const string IdentityProviderHost = "fake-idp.test";
+    private const string WebHost = "web.broker.test";
 
     private readonly WebApplication _application;
     private readonly X509Certificate2 _certificate;
     private readonly HttpClient _broker;
     private readonly HttpClient _gateway;
     private readonly HttpClient _webClient;
+    private readonly HttpClient? _webCallback;
     private readonly int _port;
     private readonly ConcurrentQueue<string> _requestTrace = new();
     private HttpClient? _identityProvider;
@@ -36,6 +38,7 @@ internal sealed class BrowserIntegrationReverseProxy : IAsyncDisposable
         HttpClient broker,
         HttpClient gateway,
         HttpClient webClient,
+        HttpClient? webCallback,
         int port)
     {
         _application = application;
@@ -43,17 +46,21 @@ internal sealed class BrowserIntegrationReverseProxy : IAsyncDisposable
         _broker = broker;
         _gateway = gateway;
         _webClient = webClient;
+        _webCallback = webCallback;
         _port = port;
         BrokerAuthority = $"https://{BrokerHost}:{port}";
         IdentityProviderAuthority = $"https://{IdentityProviderHost}:{port}";
+        WebAuthority = $"https://{WebHost}:{port}";
     }
 
     public string BrokerAuthority { get; }
 
     public string IdentityProviderAuthority { get; }
 
+    public string WebAuthority { get; }
+
     public string HostResolverRules =>
-        $"MAP {BrokerHost} 127.0.0.1 , MAP {IdentityProviderHost} 127.0.0.1";
+        $"MAP {BrokerHost} 127.0.0.1 , MAP {IdentityProviderHost} 127.0.0.1 , MAP {WebHost} 127.0.0.1";
 
     public string? BrokerAccessToken { get; private set; }
 
@@ -63,7 +70,8 @@ internal sealed class BrowserIntegrationReverseProxy : IAsyncDisposable
         int port,
         HttpClient broker,
         HttpClient gateway,
-        HttpClient webClient)
+        HttpClient webClient,
+        HttpClient? webCallback = null)
     {
         using var rsa = RSA.Create(2048);
         var request = new CertificateRequest(
@@ -74,6 +82,7 @@ internal sealed class BrowserIntegrationReverseProxy : IAsyncDisposable
         var subjectAlternativeNames = new SubjectAlternativeNameBuilder();
         subjectAlternativeNames.AddDnsName(BrokerHost);
         subjectAlternativeNames.AddDnsName(IdentityProviderHost);
+        subjectAlternativeNames.AddDnsName(WebHost);
         request.CertificateExtensions.Add(subjectAlternativeNames.Build());
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
         request.CertificateExtensions.Add(new X509KeyUsageExtension(
@@ -106,6 +115,7 @@ internal sealed class BrowserIntegrationReverseProxy : IAsyncDisposable
             broker,
             gateway,
             webClient,
+            webCallback,
             port);
         application.Run(proxy.ForwardAsync);
         try
@@ -136,7 +146,18 @@ internal sealed class BrowserIntegrationReverseProxy : IAsyncDisposable
         HttpClient? destination;
         var brokerRequest = false;
 
-        if (string.Equals(host, IdentityProviderHost, StringComparison.OrdinalIgnoreCase))
+        var webCallbackRequest = _webCallback is not null &&
+            string.Equals(host, WebHost, StringComparison.OrdinalIgnoreCase) &&
+            (string.Equals(path, "/auth/callback", StringComparison.Ordinal) ||
+             string.Equals(path, "/env-config.js", StringComparison.Ordinal) ||
+             path.StartsWith("/assets/", StringComparison.Ordinal));
+        if (webCallbackRequest)
+        {
+            if (string.Equals(path, "/auth/callback", StringComparison.Ordinal))
+                _requestTrace.Enqueue($"Web callback Origin: {context.Request.Headers.Origin}");
+            destination = _webCallback;
+        }
+        else if (string.Equals(host, IdentityProviderHost, StringComparison.OrdinalIgnoreCase))
         {
             destination = _identityProvider;
         }
@@ -150,10 +171,21 @@ internal sealed class BrowserIntegrationReverseProxy : IAsyncDisposable
                 destination = _broker;
                 brokerRequest = true;
             }
+            else if (path.StartsWith("/auth/github/repo-app", StringComparison.Ordinal))
+            {
+                destination = _broker;
+                brokerRequest = true;
+            }
             else
             {
                 destination = _webClient;
             }
+        }
+        else if (string.Equals(host, WebHost, StringComparison.OrdinalIgnoreCase))
+        {
+            destination = path.StartsWith("/api/v1", StringComparison.Ordinal)
+                ? _gateway
+                : _webClient;
         }
         else
         {
@@ -174,9 +206,12 @@ internal sealed class BrowserIntegrationReverseProxy : IAsyncDisposable
             return;
         }
 
+        var requestUri = webCallbackRequest
+            ? $"{context.Request.Scheme}://{context.Request.Host}{context.Request.PathBase}{context.Request.Path}{context.Request.QueryString}"
+            : $"{context.Request.PathBase}{context.Request.Path}{context.Request.QueryString}";
         using var request = new HttpRequestMessage(
             new HttpMethod(context.Request.Method),
-            $"{context.Request.PathBase}{context.Request.Path}{context.Request.QueryString}");
+            requestUri);
         if (context.Request.ContentLength is > 0 ||
             context.Request.Headers.ContainsKey("Transfer-Encoding") ||
             HttpMethods.IsPost(context.Request.Method) ||
@@ -241,7 +276,8 @@ internal sealed class BrowserIntegrationReverseProxy : IAsyncDisposable
         if (!Uri.TryCreate(value, UriKind.Absolute, out var location) ||
             !location.IsDefaultPort ||
             (!string.Equals(location.Host, BrokerHost, StringComparison.OrdinalIgnoreCase) &&
-             !string.Equals(location.Host, IdentityProviderHost, StringComparison.OrdinalIgnoreCase)))
+             !string.Equals(location.Host, IdentityProviderHost, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(location.Host, WebHost, StringComparison.OrdinalIgnoreCase)))
             return value;
 
         // The test issuer stays host-only; this port routes browser redirects to the local HTTPS bridge.

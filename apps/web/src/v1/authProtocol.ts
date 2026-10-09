@@ -1,5 +1,6 @@
 import {
   brokerBaseUrl,
+  brokerIssuer,
   oauthClientId,
   oauthRedirectUri,
   oauthScopes,
@@ -28,6 +29,35 @@ export interface AuthorizationConfig {
 export interface AuthorizationResult {
   code: string;
   state: string;
+}
+
+export const IDENTITY_CALLBACK_MESSAGE_TYPE = 'agentweaver.identity.callback';
+const IDENTITY_CALLBACK_PARAMETER_NAMES = new Set([
+  'state',
+  'code',
+  'error',
+  'error_description',
+  'iss',
+]);
+const IDENTITY_CALLBACK_STATE_LIMIT = 512;
+const IDENTITY_CALLBACK_CODE_LIMIT = 4096;
+const IDENTITY_CALLBACK_ERROR_LIMIT = 256;
+const IDENTITY_CALLBACK_DESCRIPTION_LIMIT = 2048;
+const IDENTITY_CALLBACK_ISSUER_LIMIT = 2048;
+
+export type AuthorizationCallbackMessage =
+  | { type: typeof IDENTITY_CALLBACK_MESSAGE_TYPE; state: string; code: string }
+  | {
+      type: typeof IDENTITY_CALLBACK_MESSAGE_TYPE;
+      state: string;
+      error: string;
+      error_description?: string;
+    };
+
+declare global {
+  interface Window {
+    __AGENTWEAVER_IDENTITY_CALLBACK__?: unknown;
+  }
 }
 
 export const AUTH_TRANSACTION_STORAGE_KEY = 'agentweaver.oauth.transaction';
@@ -99,6 +129,106 @@ export function parseAuthorizationResult(
     throw new Error('The Identity Broker returned an authorization response with an invalid state.');
   if (error) return { error, description: url.searchParams.get('error_description') ?? undefined };
   return { code: code!, state: state! };
+}
+
+export function parseAuthorizationCallbackMessage(
+  value: unknown,
+): AuthorizationCallbackMessage | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const message = value as Record<string, unknown>;
+  if (message.type !== IDENTITY_CALLBACK_MESSAGE_TYPE ||
+      !isBoundedCallbackValue(message.state, IDENTITY_CALLBACK_STATE_LIMIT))
+    return undefined;
+
+  const keys = Object.keys(message);
+  if (isBoundedCallbackValue(message.code, IDENTITY_CALLBACK_CODE_LIMIT) &&
+      keys.every((key) => ['type', 'state', 'code'].includes(key)))
+    return {
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: message.state,
+      code: message.code,
+    };
+
+  if (isBoundedCallbackValue(message.error, IDENTITY_CALLBACK_ERROR_LIMIT) &&
+      (message.error_description === undefined ||
+        isBoundedCallbackValue(message.error_description, IDENTITY_CALLBACK_DESCRIPTION_LIMIT)) &&
+      keys.every((key) => ['type', 'state', 'error', 'error_description'].includes(key)))
+    return {
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: message.state,
+      error: message.error,
+      ...(typeof message.error_description === 'string'
+        ? { error_description: message.error_description }
+        : {}),
+    };
+
+  return undefined;
+}
+
+export function parseAuthorizationCallbackParameters(
+  search: string,
+  expectedIssuer: string = brokerIssuer,
+): AuthorizationCallbackMessage | undefined {
+  const parameters = new URLSearchParams(search);
+  if ([...parameters.keys()].some((key) => !IDENTITY_CALLBACK_PARAMETER_NAMES.has(key)))
+    return undefined;
+
+  const states = parameters.getAll('state');
+  const codes = parameters.getAll('code');
+  const errors = parameters.getAll('error');
+  const descriptions = parameters.getAll('error_description');
+  const issuers = parameters.getAll('iss');
+  if (states.length !== 1 || issuers.length > 1) return undefined;
+  if (issuers.length === 1 &&
+      (!isHttpsIssuer(issuers[0]) ||
+        !isHttpsIssuer(expectedIssuer) ||
+        issuers[0] !== expectedIssuer))
+    return undefined;
+  if (codes.length === 1 && errors.length === 0 && descriptions.length === 0)
+    return parseAuthorizationCallbackMessage({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: states[0],
+      code: codes[0],
+    });
+  if (codes.length === 0 && errors.length === 1 && descriptions.length <= 1)
+    return parseAuthorizationCallbackMessage({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: states[0],
+      error: errors[0],
+      ...(descriptions.length ? { error_description: descriptions[0] } : {}),
+    });
+  return undefined;
+}
+
+function isBoundedCallbackValue(value: unknown, limit: number): value is string {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= limit &&
+    !value.split('').some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || code === 0x7f;
+    });
+}
+
+function isHttpsIssuer(value: unknown): value is string {
+  if (!isBoundedCallbackValue(value, IDENTITY_CALLBACK_ISSUER_LIMIT) ||
+      value.includes('?') ||
+      value.includes('#'))
+    return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  const authority = value.slice(value.indexOf(':') + 3).split(/[/?#]/, 1)[0];
+  return url.protocol === 'https:' &&
+    url.hostname.length > 0 &&
+    !url.username &&
+    !url.password &&
+    !authority.includes('@') &&
+    !url.search &&
+    !url.hash;
 }
 
 export function isConsentPrompt(value: unknown): value is BrokerConsentPrompt {

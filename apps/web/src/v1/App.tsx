@@ -30,16 +30,29 @@ import {
 import type { FormEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AuthProvider, useAuth } from './AuthContext';
+import {
+  parseAuthorizationCallbackParameters,
+} from './authProtocol';
 import { gatewayClient, GatewayError } from './api';
+import { CopilotPopupCallbackPage, CopilotUserConnectionPanel } from './CopilotUserConnectionPanel';
+import { COPILOT_CALLBACK_PATH } from './copilotCallback';
+import {
+  isCurrentRepoAppPopupCallback,
+  isRepoAppConnectedCallbackMessage,
+  REPO_APP_CALLBACK_MESSAGE_TYPE,
+  REPO_APP_CALLBACK_PATH,
+  repoAppBrokerClient,
+  RepoAppBrokerError,
+} from './repoApp';
+import type { RepoAppConnectionStatus, RepoAppRepository } from './repoApp';
 import type {
   CoordinatorDecisionStateView,
   EffectiveRunSelection,
   KnowledgeRecord,
+  KnowledgeRecordRevision,
+  KnowledgeRecordTransferBundle,
   ProjectConfiguration,
   ProjectSummary,
-  RepoAppRepositorySelectionList,
-  RepoAppAuthorizationStatus,
-  RepoAppRepositoryCandidate,
   SessionEventEnvelope,
   SessionStatusBlocker,
   SessionStatusSnapshot,
@@ -62,7 +75,9 @@ function errorMessage(error: unknown): string {
 }
 
 function errorCode(error: unknown): string | undefined {
-  return error instanceof GatewayError ? error.code : undefined;
+  return error instanceof GatewayError || error instanceof RepoAppBrokerError
+    ? error.code
+    : undefined;
 }
 
 function isSameBinding(
@@ -74,6 +89,8 @@ function isSameBinding(
 
 const RUN_TAB_VALUES = ['topology', 'chat', 'approvals', 'activity', 'selection', 'usage'] as const;
 type RunTab = typeof RUN_TAB_VALUES[number];
+const REPO_APP_POPUP_TIMEOUT_MS = 10 * 60 * 1000;
+const REPO_APP_POPUP_POLL_INTERVAL_MS = 500;
 
 function isRunTab(value: string | null): value is RunTab {
   return value !== null && RUN_TAB_VALUES.includes(value as RunTab);
@@ -270,7 +287,10 @@ function ProjectsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setProjects(await apiCall((token) => gatewayClient.listProjects(token), null));
+      setProjects(await apiCall(
+        (token, tenantSelector) => gatewayClient.listProjects(token, tenantSelector),
+        null,
+      ));
       setError(null);
     } catch (reason) {
       setError(reason);
@@ -290,7 +310,10 @@ function ProjectsPage() {
     setBusy(true);
     setError(null);
     try {
-      const created = await apiCall((token) => gatewayClient.createProject(token, projectName.trim()), null);
+      const created = await apiCall(
+        (token, tenantSelector) => gatewayClient.createProject(token, projectName.trim(), tenantSelector),
+        null,
+      );
       setProjectName('');
       setNotice(`Project ${created.projectId} was created. The source contract does not auto-assign an Owner; project access remains governed by Projects & Config.`);
       await load();
@@ -361,7 +384,10 @@ function ProjectOverviewPage() {
       setLoading(true);
       setError(null);
       setErrorScope(null);
-      void apiCall((token) => gatewayClient.getProject(token, projectId), null)
+      void apiCall(
+        (token, tenantSelector) => gatewayClient.getProject(token, projectId, tenantSelector),
+        null,
+      )
         .then((result) => {
           if (!active) return;
           if (result.projectId !== projectId)
@@ -432,31 +458,62 @@ function ProjectOverviewPage() {
 }
 
 function ProjectRepoAppConnectionPanel() {
-  const { apiCall } = useAuth();
-  const [connection, setConnection] = useState<RepoAppAuthorizationStatus | null>(null);
+  const [connection, setConnection] = useState<RepoAppConnectionStatus | null>(null);
+  const [repositories, setRepositories] = useState<RepoAppRepository[]>([]);
   const [statusLoading, setStatusLoading] = useState(true);
+  const [repositoriesLoading, setRepositoriesLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [notice, setNotice] = useState<{ intent: 'success' | 'warning'; text: string } | null>(null);
-  const popupRef = useRef<Window | null>(null);
+  const [notice, setNotice] = useState<{ intent: 'info' | 'success' | 'warning'; text: string } | null>(null);
+  const popupRequestRef = useRef<{
+    popup: Window;
+    generation: number;
+    abortController: AbortController;
+  } | null>(null);
+  const popupMonitorRef = useRef<number | null>(null);
+  const popupTimeoutRef = useRef<number | null>(null);
+  const connectGenerationRef = useRef(0);
+  const statusGenerationRef = useRef(0);
   const statusUnavailable = !statusLoading && connection === null && error != null;
+  const stopPopupMonitor = useCallback(() => {
+    if (popupMonitorRef.current !== null)
+      window.clearInterval(popupMonitorRef.current);
+    popupMonitorRef.current = null;
+    if (popupTimeoutRef.current !== null)
+      window.clearTimeout(popupTimeoutRef.current);
+    popupTimeoutRef.current = null;
+  }, []);
 
   const loadConnection = useCallback(async () => {
+    const generation = ++statusGenerationRef.current;
     setStatusLoading(true);
     try {
-      const result = await apiCall(
-        (token) => gatewayClient.getRepoAppAuthorizationStatus(token),
-        null,
-      );
+      const result = await repoAppBrokerClient.getStatus();
+      if (generation !== statusGenerationRef.current) return;
       setConnection(result);
       setError(null);
     } catch (reason) {
+      if (generation !== statusGenerationRef.current) return;
       setConnection(null);
       setError(reason);
     } finally {
-      setStatusLoading(false);
+      if (generation === statusGenerationRef.current) setStatusLoading(false);
     }
-  }, [apiCall]);
+  }, []);
+
+  const loadRepositories = useCallback(async () => {
+    setRepositoriesLoading(true);
+    setError(null);
+    try {
+      const result = await repoAppBrokerClient.getRepositories();
+      setRepositories(result.repositories);
+    } catch (reason) {
+      setRepositories([]);
+      setError(reason);
+    } finally {
+      setRepositoriesLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadConnection(); }, 0);
@@ -465,79 +522,152 @@ function ProjectRepoAppConnectionPanel() {
 
   useEffect(() => {
     const onMessage = (event: MessageEvent<unknown>) => {
-      if (event.origin !== window.location.origin ||
-          event.source !== popupRef.current ||
-          !isRepoAppCallbackMessage(event.data))
+      const pending = popupRequestRef.current;
+      if (!pending || !isCurrentRepoAppPopupCallback(
+        event,
+        window.location.origin,
+        pending.popup,
+        pending.generation,
+        connectGenerationRef.current,
+      ))
         return;
-      popupRef.current?.close();
-      popupRef.current = null;
+      pending.popup.close();
+      pending.abortController.abort();
+      popupRequestRef.current = null;
+      connectGenerationRef.current += 1;
+      stopPopupMonitor();
       setNotice({
-        intent: event.data.outcome === 'success' ? 'success' : 'warning',
-        text: `GitHub Repo App authorization finished: ${event.data.outcome}.`,
+        intent: 'info',
+        text: 'GitHub returned to Agentweaver. Checking the connection status with the Identity Broker.',
       });
       setBusy(false);
-      if (event.data.outcome === 'success') void loadConnection();
+      void loadConnection();
     };
     window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [loadConnection]);
+    return () => {
+      window.removeEventListener('message', onMessage);
+      connectGenerationRef.current += 1;
+      statusGenerationRef.current += 1;
+      const pending = popupRequestRef.current;
+      popupRequestRef.current = null;
+      if (pending) {
+        pending.abortController.abort();
+        if (!pending.popup.closed) pending.popup.close();
+      }
+      stopPopupMonitor();
+    };
+  }, [loadConnection, stopPopupMonitor]);
 
   const connect = async () => {
     if (statusUnavailable) return;
+    const generation = ++connectGenerationRef.current;
+    const requestId = `agentweaver-repo-app-${generation}-${window.crypto?.randomUUID?.() ?? Date.now().toString(36)}`;
     const popup = window.open(
       'about:blank',
-      'agentweaver-github-repo-app',
+      requestId,
       'popup,width=560,height=720',
     );
     if (!popup) {
       setError(new Error('Allow pop-ups to connect GitHub without losing this session.'));
       return;
     }
-    popupRef.current = popup;
+    popup.name = requestId;
+    const abortController = new AbortController();
+    popupRequestRef.current = { popup, generation, abortController };
     setBusy(true);
     setError(null);
     setNotice(null);
-    try {
-      const started = await apiCall(
-        (token) => gatewayClient.beginRepoAppAuthorization(token, 'projects'),
-        null,
-      );
-      popup.location.replace(started.authorizationUrl);
-    } catch (reason) {
-      popup.close();
-      popupRef.current = null;
+    popupTimeoutRef.current = window.setTimeout(() => {
+      const pending = popupRequestRef.current;
+      if (pending?.popup !== popup || pending.generation !== generation) return;
+      pending.abortController.abort();
+      if (!popup.closed) popup.close();
+      popupRequestRef.current = null;
+      connectGenerationRef.current += 1;
+      stopPopupMonitor();
       setBusy(false);
-      setError(reason);
+      setNotice({
+        intent: 'warning',
+        text: 'GitHub authorization timed out before the Identity Broker could start it. Start the connection again.',
+      });
+    }, REPO_APP_POPUP_TIMEOUT_MS);
+    popupMonitorRef.current = window.setInterval(() => {
+      const current = popupRequestRef.current;
+      if (popup.closed && current?.popup === popup && current.generation === generation) {
+        current.abortController.abort();
+        stopPopupMonitor();
+        popupRequestRef.current = null;
+        connectGenerationRef.current += 1;
+        setBusy(false);
+        setNotice({
+          intent: 'warning',
+          text: 'The GitHub popup closed before the Identity Broker completed the request. Start the connection again.',
+        });
+      }
+    }, REPO_APP_POPUP_POLL_INTERVAL_MS);
+    try {
+      await repoAppBrokerClient.beginConnect(popup, abortController.signal);
+      const pending = popupRequestRef.current;
+      if (pending?.generation === generation) {
+        setNotice({ intent: 'info', text: 'Complete GitHub authorization in the tracked browser window.' });
+      }
+    } catch (reason) {
+      const pending = popupRequestRef.current;
+      if (pending?.popup === popup && pending.generation === generation) {
+        popup.close();
+        pending.abortController.abort();
+        popupRequestRef.current = null;
+        stopPopupMonitor();
+        setBusy(false);
+        setError(reason);
+      }
     }
   };
 
-  const refreshAuthorization = async () => {
+  const disconnect = async () => {
+    if (!connection?.connectionId || !connection.connectionRevision) {
+      setError(new Error('The Broker did not return a connection revision; refresh status before disconnecting.'));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      await apiCall((token) => gatewayClient.refreshRepoAppAuthorization(token), null);
-      await loadConnection();
+      const next = await repoAppBrokerClient.disconnect(
+        connection.connectionId,
+        connection.connectionRevision,
+      );
+      setConnection(next);
+      setRepositories([]);
+      setNotice({ intent: 'success', text: 'GitHub Repo App was disconnected from this identity.' });
     } catch (reason) {
       setError(reason);
     } finally {
       setBusy(false);
     }
   };
+  const connected = connection?.state === 'connected';
 
   return (
     <Panel title="GitHub Repo App">
       <p className="v1-muted">
-        Connect a GitHub account for repository access. The Identity connection ID is a reference only; tokens and provider credentials stay with the owner.
+        Connect a GitHub account for repository access. Status, repository metadata, and selection codes come directly from the Identity Broker; provider credentials stay with the owner.
       </p>
       {statusLoading ? <Loading label="Checking GitHub Repo App connection…" /> : statusUnavailable ? (
         <p className="v1-muted">GitHub Repo App connection status is unavailable; no connection state is assumed.</p>
-      ) : connection?.connected ? (
+      ) : connected ? (
         <p>
           Connected as <strong>{connection.githubLogin ?? 'GitHub user'}</strong>
           {connection.connectionId && <> · Identity connection <code>{connection.connectionId}</code></>}
+          {connection.localReadiness !== 'access_token_available' && (
+            <> · {connection.localReadiness.replaceAll('_', ' ')}</>
+          )}
         </p>
       ) : (
-        <p className="v1-muted">No GitHub Repo App connection is available for this identity.</p>
+        <p className="v1-muted">
+          {connection?.state === 'not_connected'
+            ? 'No GitHub Repo App connection is available for this identity.'
+            : 'The GitHub Repo App connection requires attention before it can be used.'}
+        </p>
       )}
       <p className="v1-muted">
         To use this connection in a project, set <code>sourceControl.authMode</code> to <code>githubApp</code> and
@@ -552,17 +682,36 @@ function ProjectRepoAppConnectionPanel() {
           disabled={busy || statusLoading || statusUnavailable}
           onClick={() => void connect()}
         >
-          {statusUnavailable ? 'Connection status unavailable' : busy ? 'Opening GitHub…' : connection?.connected ? 'Reauthorize GitHub Repo App' : 'Connect GitHub Repo App'}
+          {statusUnavailable ? 'Connection status unavailable' : busy ? 'Opening GitHub…' : connected ? 'Reauthorize GitHub Repo App' : 'Connect GitHub Repo App'}
         </Button>
-        {connection?.connected && (
-          <Button appearance="secondary" disabled={busy || statusLoading} onClick={() => void refreshAuthorization()}>
-            Refresh GitHub authorization
-          </Button>
+        {connected && (
+          <>
+            <Button appearance="secondary" disabled={busy || statusLoading || repositoriesLoading} onClick={() => void loadRepositories()}>
+              {repositoriesLoading ? 'Loading repositories…' : 'Browse repositories'}
+            </Button>
+            <Button appearance="secondary" disabled={busy || statusLoading} onClick={() => void disconnect()}>
+              Disconnect GitHub
+            </Button>
+          </>
         )}
         <Button appearance="secondary" disabled={statusLoading || busy} onClick={() => void loadConnection()}>
           Refresh status
         </Button>
       </div>
+      {repositories.length > 0 && (
+        <ul className="v1-list" aria-label="GitHub repositories">
+          {repositories.map((repository) => (
+            <li key={`${repository.installationId}/${repository.repositoryId}`}>
+              <strong>{repository.fullName}</strong>
+              {repository.isPrivate ? ' · private' : ' · public'}
+              {' · default branch '}{repository.defaultBranch}
+            </li>
+          ))}
+        </ul>
+      )}
+      {!repositoriesLoading && repositories.length === 0 && connected && (
+        <p className="v1-muted">No repository metadata is currently loaded.</p>
+      )}
     </Panel>
   );
 }
@@ -593,7 +742,10 @@ function ProjectConfigurationPage() {
     setNotice(null);
     setNoticeScope(null);
     try {
-      const result = await apiCall((token) => gatewayClient.getProjectConfiguration(token, projectId), null);
+      const result = await apiCall(
+        (token, tenantSelector) => gatewayClient.getProjectConfiguration(token, projectId, tenantSelector),
+        null,
+      );
       if (activeScope.current !== scope || loadGeneration.current !== generation) return;
       if (result.projectId !== projectId)
         throw new Error('Projects & Config returned configuration for a different project.');
@@ -644,7 +796,9 @@ function ProjectConfigurationPage() {
     setNoticeScope(null);
     try {
       const updated = await apiCall(
-        (token) => gatewayClient.updateProjectConfiguration(token, projectId, versioned.revision, configuration),
+        (token, tenantSelector) => gatewayClient.updateProjectConfiguration(
+          token, projectId, versioned.revision, configuration, tenantSelector,
+        ),
         null,
       );
       if (activeScope.current !== scope) return;
@@ -675,6 +829,7 @@ function ProjectConfigurationPage() {
     <>
       <PageHeading title="Project configuration" description="Edit the owner-defined configuration document. This view does not supply or guess provider/model catalog options." />
       <ProjectRepoAppConnectionPanel />
+      <CopilotUserConnectionPanel projectId={projectId} />
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="success"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
       {currentLoading ? <Loading /> : currentConfiguration && (
@@ -707,6 +862,64 @@ function ProjectConfigurationPage() {
   );
 }
 
+function isKnowledgeRecordInScope(value: unknown, projectId: string, agentId: string): boolean {
+  return typeof value === 'object' && value !== null &&
+    (value as { projectId?: unknown }).projectId === projectId &&
+    (value as { agentId?: unknown }).agentId === agentId &&
+    typeof (value as { recordId?: unknown }).recordId === 'string' &&
+    (value as { recordId: string }).recordId.length > 0;
+}
+
+function assertKnowledgeRecordsInScope(records: unknown, projectId: string, agentId: string): asserts records is KnowledgeRecord[] {
+  if (!Array.isArray(records) || records.some((record) => !isKnowledgeRecordInScope(record, projectId, agentId)))
+    throw new Error('Knowledge returned records outside the exact project and agent scope.');
+}
+
+function assertKnowledgeMutationScope(
+  result: unknown,
+  projectId: string,
+  agentId: string,
+): asserts result is { record?: KnowledgeRecord | null; proposal?: KnowledgeRecord | null; decision?: KnowledgeRecord | null } {
+  if (typeof result !== 'object' || result === null)
+    throw new Error('Knowledge returned an invalid mutation result.');
+  const mutation = result as {
+    record?: unknown;
+    proposal?: unknown;
+    decision?: unknown;
+  };
+  for (const record of [mutation.record, mutation.proposal, mutation.decision]) {
+    if (record != null && !isKnowledgeRecordInScope(record, projectId, agentId))
+      throw new Error('Knowledge returned a mutation record outside the exact project and agent scope.');
+  }
+}
+
+function assertKnowledgeTransferBundleScope(
+  value: unknown,
+  projectId: string,
+  runId: string,
+  agentId: string,
+): asserts value is KnowledgeRecordTransferBundle {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new Error('Knowledge transfer bundle must be a versioned JSON object.');
+  const bundle = value as Partial<KnowledgeRecordTransferBundle> & { runId?: unknown };
+  if (bundle.format !== 'agentweaver.knowledge-transfer.v1' || bundle.schemaVersion !== 1)
+    throw new Error('Knowledge transfer bundle has an unsupported format or schema version.');
+  if (bundle.projectId !== projectId || bundle.agentId !== agentId ||
+    (bundle.runId !== undefined && bundle.runId !== runId))
+    throw new Error('Knowledge transfer bundle is outside the exact project, run, and agent scope.');
+  if (!Array.isArray(bundle.records) || bundle.records.some((entry) => {
+    if (typeof entry !== 'object' || entry === null || !('record' in entry) || !('revisions' in entry))
+      return true;
+    const transferEntry = entry as KnowledgeRecordTransferBundle['records'][number];
+    return !isKnowledgeRecordInScope(transferEntry.record, projectId, agentId) ||
+      typeof transferEntry.record.recordId !== 'string' ||
+      !Array.isArray(transferEntry.revisions) ||
+      transferEntry.revisions.some((revision) =>
+        typeof revision !== 'object' || revision === null || revision.recordId !== transferEntry.record.recordId);
+  }))
+    throw new Error('Knowledge transfer bundle contains records or revisions outside its exact scope.');
+}
+
 function KnowledgePage() {
   const { projectId = '' } = useParams();
   const { session, apiCall, authorize } = useAuth();
@@ -726,7 +939,31 @@ function KnowledgePage() {
   const [noticeScope, setNoticeScope] = useState<string | null>(null);
   const [recordsScope, setRecordsScope] = useState<string | null>(null);
   const [errorScope, setErrorScope] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ kind: 'memory', type: '', title: '', content: '', rationale: '', importance: 'normal', tags: '' });
+  const [draft, setDraft] = useState({ kind: 'memory', type: '', title: '', content: '', rationale: '', importance: 'medium', tags: '' });
+  const [editRecordId, setEditRecordId] = useState<string | null>(null);
+  const [editRecordScope, setEditRecordScope] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState({
+    type: '',
+    title: '',
+    content: '',
+    rationale: '',
+    importance: 'medium',
+    tags: '',
+    reason: '',
+  });
+  const [supersedeTargets, setSupersedeTargets] = useState<Record<string, string>>({});
+  const [revisionRecordId, setRevisionRecordId] = useState<string | null>(null);
+  const [revisionItems, setRevisionItems] = useState<KnowledgeRecordRevision[]>([]);
+  const [revisionTotalCount, setRevisionTotalCount] = useState(0);
+  const [revisionPage, setRevisionPage] = useState(1);
+  const [revisionRequestScope, setRevisionRequestScope] = useState<string | null>(null);
+  const [revisionScope, setRevisionScope] = useState<string | null>(null);
+  const [revisionLoading, setRevisionLoading] = useState(false);
+  const activeRevisionScope = useRef<string | null>(null);
+  const [transferText, setTransferText] = useState('');
+  const [importConfirmed, setImportConfirmed] = useState(false);
+  const [exportedBundleJson, setExportedBundleJson] = useState<string | null>(null);
+  const [transferScope, setTransferScope] = useState<string | null>(null);
   const binding = useMemo(
     () => runId.trim() ? { projectId, runId: runId.trim() } : null,
     [projectId, runId],
@@ -743,23 +980,39 @@ function KnowledgePage() {
     page,
   ]);
   const activeScope = useRef(requestScope);
+  const closeRevisionHistory = () => {
+    activeRevisionScope.current = null;
+    setRevisionRecordId(null);
+    setRevisionRequestScope(null);
+    setRevisionScope(null);
+    setRevisionLoading(false);
+  };
+  const closeCorrection = () => {
+    setEditRecordId(null);
+    setEditRecordScope(null);
+  };
+  const isCurrentRevisionRequest = (recordId: string) =>
+    revisionRecordId === recordId &&
+    revisionRequestScope === JSON.stringify([requestScope, recordId, revisionPage]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (preserveNotice = false) => {
     if (!binding || !agentId.trim() || !correctlyScoped) return;
     const scope = requestScope;
     setLoading(true);
     setRecords([]);
     setTotalCount(0);
     setRecordsScope(null);
-    setNotice(null);
-    setNoticeScope(null);
+    if (!preserveNotice) {
+      setNotice(null);
+      setNoticeScope(null);
+    }
     setError(null);
     setErrorScope(null);
     try {
       const resultPage = await apiCall(
-        (token) => gatewayClient.searchKnowledge(token, projectId, binding.runId, agentId.trim(), {
+        (token, tenantSelector) => gatewayClient.searchKnowledge(token, projectId, binding.runId, agentId.trim(), {
           query, kind: kind || undefined, includeInactive, page, pageSize,
-        }),
+        }, tenantSelector),
         binding,
       );
       if (activeScope.current !== scope) return;
@@ -797,6 +1050,10 @@ function KnowledgePage() {
     else next.delete('runId');
     if (agentId.trim()) next.set('agentId', agentId.trim());
     else next.delete('agentId');
+    setTransferText('');
+    setImportConfirmed(false);
+    setExportedBundleJson(null);
+    setTransferScope(null);
     setSearchParams(next);
   };
 
@@ -806,7 +1063,7 @@ function KnowledgePage() {
     const scope = requestScope;
     const idempotencyKey = crypto.randomUUID();
     try {
-      const result = await apiCall((token) => gatewayClient.createKnowledgeRecord(
+      const result = await apiCall((token, tenantSelector) => gatewayClient.createKnowledgeRecord(
         token,
         projectId,
         binding.runId,
@@ -821,11 +1078,14 @@ function KnowledgePage() {
           tags: draft.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
         },
         idempotencyKey,
+        tenantSelector,
       ), binding);
       if (activeScope.current !== scope) return;
+      assertKnowledgeMutationScope(result, projectId, agentId.trim());
       setNotice(`Knowledge owner returned ${result.status}; persisted trust and revision state are shown after refresh.`);
       setNoticeScope(scope);
-      await load();
+      closeRevisionHistory();
+      await load(true);
     } catch (reason) {
       if (activeScope.current !== scope) return;
       setError(reason);
@@ -839,16 +1099,18 @@ function KnowledgePage() {
     const idempotencyKey = crypto.randomUUID();
     try {
       const result = promote
-        ? await apiCall((token) => gatewayClient.promoteKnowledgeProposal(
-          token, projectId, binding.runId, agentId.trim(), record.recordId, record.revision, idempotencyKey,
+        ? await apiCall((token, tenantSelector) => gatewayClient.promoteKnowledgeProposal(
+          token, projectId, binding.runId, agentId.trim(), record.recordId, record.revision, idempotencyKey, tenantSelector,
         ), binding)
-        : await apiCall((token) => gatewayClient.rejectKnowledgeProposal(
-          token, projectId, binding.runId, agentId.trim(), record.recordId, record.revision, idempotencyKey,
+        : await apiCall((token, tenantSelector) => gatewayClient.rejectKnowledgeProposal(
+          token, projectId, binding.runId, agentId.trim(), record.recordId, record.revision, idempotencyKey, tenantSelector,
         ), binding);
       if (activeScope.current !== scope) return;
+      assertKnowledgeMutationScope(result, projectId, agentId.trim());
       setNotice(`Knowledge owner returned ${result.status}; proposal trust and delivery state remain owner-authoritative.`);
       setNoticeScope(scope);
-      await load();
+      closeRevisionHistory();
+      await load(true);
     } catch (reason) {
       if (activeScope.current !== scope) return;
       setError(reason);
@@ -861,7 +1123,7 @@ function KnowledgePage() {
     const scope = requestScope;
     const idempotencyKey = crypto.randomUUID();
     try {
-      const result = await apiCall((token) => gatewayClient.updateKnowledgeRecord(
+      const result = await apiCall((token, tenantSelector) => gatewayClient.updateKnowledgeRecord(
         token,
         projectId,
         binding.runId,
@@ -878,11 +1140,289 @@ function KnowledgePage() {
           state: 'archived',
         },
         idempotencyKey,
+        tenantSelector,
       ), binding);
       if (activeScope.current !== scope) return;
+      assertKnowledgeMutationScope(result, projectId, agentId.trim());
       setNotice(`Knowledge owner returned ${result.status}; the resulting record state is not inferred locally.`);
       setNoticeScope(scope);
-      await load();
+      closeCorrection();
+      closeRevisionHistory();
+      await load(true);
+    } catch (reason) {
+      if (activeScope.current !== scope) return;
+      setError(reason);
+      setErrorScope(scope);
+    }
+  };
+
+  const startCorrection = (record: KnowledgeRecord) => {
+    setEditRecordId(record.recordId);
+    setEditRecordScope(requestScope);
+    setEditDraft({
+      type: record.type,
+      title: record.title ?? '',
+      content: record.content,
+      rationale: record.rationale ?? '',
+      importance: ['low', 'medium', 'high'].includes(record.importance) ? record.importance : 'medium',
+      tags: record.tags.join(', '),
+      reason: '',
+    });
+  };
+
+  const saveCorrection = async (event: FormEvent, record: KnowledgeRecord) => {
+    event.preventDefault();
+    if (!binding || editRecordScope !== requestScope) return;
+    const scope = requestScope;
+    const idempotencyKey = crypto.randomUUID();
+    try {
+      const result = await apiCall((token, tenantSelector) => gatewayClient.updateKnowledgeRecord(
+        token,
+        projectId,
+        binding.runId,
+        agentId.trim(),
+        record.recordId,
+        record.revision,
+        {
+          type: editDraft.type.trim(),
+          title: editDraft.title.trim() || null,
+          content: editDraft.content,
+          rationale: editDraft.rationale.trim() || null,
+          importance: editDraft.importance,
+          tags: editDraft.tags.split(',').map((tag) => tag.trim()).filter(Boolean),
+          state: record.state,
+          reason: editDraft.reason.trim() || null,
+        },
+        idempotencyKey,
+        tenantSelector,
+      ), binding);
+      if (activeScope.current !== scope) return;
+      assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      setNotice(`Knowledge owner returned ${result.status}; the corrected record is shown after refresh.`);
+      setNoticeScope(scope);
+      closeCorrection();
+      closeRevisionHistory();
+      await load(true);
+    } catch (reason) {
+      if (activeScope.current !== scope) return;
+      setError(reason);
+      setErrorScope(scope);
+    }
+  };
+
+  const decideDecision = async (record: KnowledgeRecord) => {
+    if (!binding) return;
+    const scope = requestScope;
+    const idempotencyKey = crypto.randomUUID();
+    try {
+      const result = await apiCall((token, tenantSelector) => gatewayClient.approveKnowledgeDecision(
+        token,
+        projectId,
+        binding.runId,
+        agentId.trim(),
+        record.recordId,
+        record.revision,
+        null,
+        idempotencyKey,
+        tenantSelector,
+      ), binding);
+      if (activeScope.current !== scope) return;
+      assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      setNotice(`Knowledge owner returned ${result.status}; the Decision trust state is shown after refresh.`);
+      setNoticeScope(scope);
+      closeRevisionHistory();
+      await load(true);
+    } catch (reason) {
+      if (activeScope.current !== scope) return;
+      setError(reason);
+      setErrorScope(scope);
+    }
+  };
+
+  const supersedeDecision = async (record: KnowledgeRecord, replacement: KnowledgeRecord) => {
+    if (!binding) return;
+    if (record.kind !== 'decision' || record.state !== 'active' ||
+      replacement.kind !== 'decision' || replacement.state !== 'active' ||
+      replacement.recordId === record.recordId ||
+      !isKnowledgeRecordInScope(replacement, projectId, agentId.trim())) {
+      setError(new Error('Choose another Active Decision in the exact project and agent scope.'));
+      setErrorScope(requestScope);
+      return;
+    }
+    const scope = requestScope;
+    const idempotencyKey = crypto.randomUUID();
+    try {
+      const result = await apiCall((token, tenantSelector) => gatewayClient.updateKnowledgeRecord(
+        token,
+        projectId,
+        binding.runId,
+        agentId.trim(),
+        record.recordId,
+        record.revision,
+        {
+          type: record.type,
+          title: record.title,
+          content: record.content,
+          rationale: record.rationale,
+          importance: record.importance,
+          tags: record.tags,
+          state: 'superseded',
+          supersededByRecordId: replacement.recordId,
+        },
+        idempotencyKey,
+        tenantSelector,
+      ), binding);
+      if (activeScope.current !== scope) return;
+      assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      setNotice(`Knowledge owner returned ${result.status}; the superseding Decision link is shown after refresh.`);
+      setNoticeScope(scope);
+      closeRevisionHistory();
+      await load(true);
+    } catch (reason) {
+      if (activeScope.current !== scope) return;
+      setError(reason);
+      setErrorScope(scope);
+    }
+  };
+
+  const loadRevisions = async (record: KnowledgeRecord, requestedPage = 1) => {
+    if (!binding) return;
+    const scope = requestScope;
+    const revisionRequestScope = JSON.stringify([scope, record.recordId, requestedPage]);
+    activeRevisionScope.current = revisionRequestScope;
+    setRevisionRecordId(record.recordId);
+    setRevisionRequestScope(revisionRequestScope);
+    setRevisionItems([]);
+    setRevisionTotalCount(0);
+    setRevisionPage(requestedPage);
+    setRevisionScope(null);
+    setRevisionLoading(true);
+    try {
+      const resultPage = await apiCall((token, tenantSelector) => gatewayClient.readKnowledgeRevisions(
+        token,
+        projectId,
+        binding.runId,
+        agentId.trim(),
+        record.recordId,
+        { page: requestedPage, pageSize },
+        tenantSelector,
+      ), binding);
+      if (activeScope.current !== scope || activeRevisionScope.current !== revisionRequestScope) return;
+      if (resultPage.items.some((revision) => revision.recordId !== record.recordId))
+        throw new Error('Knowledge returned revisions outside the requested record scope.');
+      setRevisionItems(resultPage.items);
+      setRevisionTotalCount(resultPage.totalCount);
+      setRevisionScope(revisionRequestScope);
+      setError(null);
+      setErrorScope(scope);
+    } catch (reason) {
+      if (activeScope.current !== scope || activeRevisionScope.current !== revisionRequestScope) return;
+      setError(reason);
+      setErrorScope(scope);
+      setRevisionItems([]);
+      setRevisionTotalCount(0);
+      setRevisionScope(revisionRequestScope);
+    } finally {
+      if (activeScope.current === scope && activeRevisionScope.current === revisionRequestScope)
+        setRevisionLoading(false);
+    }
+  };
+
+  const restoreRevision = async (record: KnowledgeRecord, revision: KnowledgeRecordRevision) => {
+    if (!binding) return;
+    const scope = requestScope;
+    const idempotencyKey = crypto.randomUUID();
+    try {
+      const result = await apiCall((token, tenantSelector) => gatewayClient.restoreKnowledgeRecord(
+        token,
+        projectId,
+        binding.runId,
+        agentId.trim(),
+        record.recordId,
+        record.revision,
+        revision.revision,
+        null,
+        idempotencyKey,
+        tenantSelector,
+      ), binding);
+      if (activeScope.current !== scope) return;
+      assertKnowledgeMutationScope(result, projectId, agentId.trim());
+      setNotice(`Knowledge owner returned ${result.status}; the restored revision is shown after refresh.`);
+      setNoticeScope(scope);
+      closeRevisionHistory();
+      closeCorrection();
+      await load(true);
+    } catch (reason) {
+      if (activeScope.current !== scope) return;
+      setError(reason);
+      setErrorScope(scope);
+    }
+  };
+
+  const exportKnowledge = async () => {
+    if (!binding) return;
+    const scope = requestScope;
+    try {
+      const bundle = await apiCall((token, tenantSelector) => gatewayClient.exportKnowledgeRecords(
+        token,
+        projectId,
+        binding.runId,
+        agentId.trim(),
+        tenantSelector,
+      ), binding);
+      if (activeScope.current !== scope) return;
+      assertKnowledgeTransferBundleScope(bundle, projectId, binding.runId, agentId.trim());
+      const serialized = JSON.stringify(bundle);
+      if (new TextEncoder().encode(serialized).byteLength > 1024 * 1024)
+        throw new Error('The exported Knowledge bundle exceeds the 1 MiB transfer limit.');
+      setExportedBundleJson(serialized);
+      setTransferScope(scope);
+      setNotice('Exported a versioned Knowledge bundle for the exact project, run, and agent scope.');
+      setNoticeScope(scope);
+      setError(null);
+      setErrorScope(scope);
+    } catch (reason) {
+      if (activeScope.current !== scope) return;
+      setError(reason);
+      setErrorScope(scope);
+      setExportedBundleJson(null);
+      setTransferScope(null);
+    }
+  };
+
+  const importKnowledge = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!binding || !importConfirmed) return;
+    const scope = requestScope;
+    try {
+      if (new TextEncoder().encode(transferText).byteLength > 1024 * 1024)
+        throw new Error('The Knowledge import bundle exceeds the 1 MiB transfer limit.');
+      let bundle: unknown;
+      try {
+        bundle = JSON.parse(transferText);
+      } catch {
+        throw new Error('Enter a valid versioned Knowledge transfer bundle in JSON format.');
+      }
+      assertKnowledgeTransferBundleScope(bundle, projectId, binding.runId, agentId.trim());
+      if (new TextEncoder().encode(JSON.stringify(bundle)).byteLength > 1024 * 1024)
+        throw new Error('The Knowledge import bundle exceeds the 1 MiB transfer limit.');
+      const result = await apiCall((token, tenantSelector) => gatewayClient.importKnowledgeRecords(
+        token,
+        projectId,
+        binding.runId,
+        agentId.trim(),
+        bundle,
+        crypto.randomUUID(),
+        tenantSelector,
+      ), binding);
+      if (activeScope.current !== scope) return;
+      assertKnowledgeRecordsInScope(result.records, projectId, agentId.trim());
+      setNotice(`Knowledge owner returned ${result.records.length} imported record(s); persisted state is shown after refresh.`);
+      setNoticeScope(scope);
+      setImportConfirmed(false);
+      setTransferText('');
+      closeRevisionHistory();
+      await load(true);
     } catch (reason) {
       if (activeScope.current !== scope) return;
       setError(reason);
@@ -893,6 +1433,18 @@ function KnowledgePage() {
   const currentRecords = recordsScope === requestScope ? records : [];
   const currentError = errorScope === requestScope ? error : null;
   const currentNotice = noticeScope === requestScope ? notice : null;
+  const currentExportedBundle = transferScope === requestScope ? exportedBundleJson : null;
+  const downloadExportedBundle = () => {
+    if (!currentExportedBundle) return;
+    const objectUrl = URL.createObjectURL(new Blob([currentExportedBundle], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = `agentweaver-knowledge-${projectId}-${agentId.trim()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  };
 
   return (
     <>
@@ -918,7 +1470,7 @@ function KnowledgePage() {
             <form className="v1-form v1-inline-form" onSubmit={(event) => { event.preventDefault(); void load(); }}>
               <Field label="Search text"><Input value={query} onChange={(_, data) => { setPage(1); setQuery(data.value); }} /></Field>
               <Field label="Kind">
-                <select className="v1-select" value={kind} onChange={(event) => { setPage(1); setKind(event.target.value); }}>
+                <select className="v1-select" aria-label="Search Knowledge kind" value={kind} onChange={(event) => { setPage(1); setKind(event.target.value); }}>
                   <option value="">All kinds</option>
                   <option value="memory">Memory</option>
                   <option value="proposal">Proposal</option>
@@ -963,16 +1515,153 @@ function KnowledgePage() {
                     {record.rationale && <p className="v1-muted">Rationale: {record.rationale}</p>}
                     {record.tags.length > 0 && <p className="v1-muted">Tags: {record.tags.join(', ')}</p>}
                     <div className="v1-actions">
+                      {record.state === 'active' &&
+                        (record.kind === 'memory' || record.kind === 'sessionContext') && (
+                        <Button appearance="secondary" onClick={() => startCorrection(record)}>Correct record</Button>
+                      )}
                       {record.kind === 'proposal' && record.state === 'pending' && (
                         <>
                           <Button appearance="primary" onClick={() => void decideProposal(record, true)}>Promote proposal</Button>
                           <Button appearance="secondary" onClick={() => void decideProposal(record, false)}>Reject proposal</Button>
                         </>
                       )}
-                      {record.state === 'active' && (
+                      {record.kind === 'decision' && record.state === 'active' &&
+                        (record.trustState === 'pending' || record.trustState === 'legacy') && (
+                          <Button appearance="primary" onClick={() => void decideDecision(record)}>Approve Decision</Button>
+                        )}
+                      {record.kind === 'decision' && record.state === 'active' && (
+                        <div className="v1-inline-form">
+                          <Field label={`Replacement Decision for ${record.title || record.type}`}>
+                            <select
+                              className="v1-select"
+                              aria-label={`Replacement Decision for ${record.title || record.type}`}
+                              value={supersedeTargets[JSON.stringify([requestScope, record.recordId])] ?? ''}
+                              onChange={(event) => setSupersedeTargets((current) => ({
+                                ...current,
+                                [JSON.stringify([requestScope, record.recordId])]: event.target.value,
+                              }))}
+                            >
+                              <option value="">Select another active Decision</option>
+                              {currentRecords.filter((candidate) =>
+                                candidate.kind === 'decision' &&
+                                candidate.state === 'active' &&
+                                candidate.recordId !== record.recordId &&
+                                candidate.projectId === projectId &&
+                                candidate.agentId === agentId.trim()).map((candidate) => (
+                                  <option key={candidate.recordId} value={candidate.recordId}>
+                                    {candidate.title || candidate.type} · revision {candidate.revision}
+                                  </option>
+                                ))}
+                            </select>
+                          </Field>
+                          <Button
+                            appearance="secondary"
+                            disabled={!currentRecords.some((candidate) =>
+                              candidate.recordId === supersedeTargets[JSON.stringify([requestScope, record.recordId])] &&
+                              candidate.kind === 'decision' &&
+                              candidate.state === 'active' &&
+                              candidate.recordId !== record.recordId &&
+                              candidate.projectId === projectId &&
+                              candidate.agentId === agentId.trim())}
+                            onClick={() => {
+                              const replacement = currentRecords.find((candidate) =>
+                                candidate.recordId === supersedeTargets[JSON.stringify([requestScope, record.recordId])]);
+                              if (replacement) void supersedeDecision(record, replacement);
+                            }}
+                          >
+                            Supersede with selected Decision
+                          </Button>
+                        </div>
+                      )}
+                      {record.supersededByRecordId && (
+                        <p className="v1-muted">Superseded by Decision {record.supersededByRecordId}.</p>
+                      )}
+                      {record.state === 'active' &&
+                        (record.kind === 'memory' || record.kind === 'sessionContext') && (
                         <Button appearance="secondary" onClick={() => void archiveRecord(record)}>Archive record</Button>
                       )}
+                      <Button
+                        appearance="secondary"
+                        onClick={() => {
+                          if (isCurrentRevisionRequest(record.recordId)) {
+                            closeRevisionHistory();
+                          } else {
+                            void loadRevisions(record);
+                          }
+                        }}
+                      >
+                        {isCurrentRevisionRequest(record.recordId) ? 'Hide revision history' : 'View revision history'}
+                      </Button>
                     </div>
+                    {editRecordId === record.recordId && editRecordScope === requestScope && (
+                      <form className="v1-form" aria-label="Correct Knowledge record" onSubmit={(event) => void saveCorrection(event, record)}>
+                        <Field label="Correction type"><Input value={editDraft.type} onChange={(_, data) => setEditDraft({ ...editDraft, type: data.value })} /></Field>
+                        <Field label="Correction title"><Input value={editDraft.title} onChange={(_, data) => setEditDraft({ ...editDraft, title: data.value })} /></Field>
+                        <Field label="Correction content"><Textarea value={editDraft.content} onChange={(_, data) => setEditDraft({ ...editDraft, content: data.value })} rows={5} resize="vertical" /></Field>
+                        <Field label="Correction rationale"><Textarea value={editDraft.rationale} onChange={(_, data) => setEditDraft({ ...editDraft, rationale: data.value })} rows={3} resize="vertical" /></Field>
+                        <Field label="Correction importance">
+                          <select className="v1-select" aria-label="Correction importance" value={editDraft.importance} onChange={(event) => setEditDraft({ ...editDraft, importance: event.target.value })}>
+                            <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+                          </select>
+                        </Field>
+                        <Field label="Correction tags (comma-separated)"><Input value={editDraft.tags} onChange={(_, data) => setEditDraft({ ...editDraft, tags: data.value })} /></Field>
+                        <Field label="Correction reason"><Input value={editDraft.reason} onChange={(_, data) => setEditDraft({ ...editDraft, reason: data.value })} /></Field>
+                        <div className="v1-actions">
+                          <Button appearance="primary" type="submit" disabled={!editDraft.type.trim() || !editDraft.content.trim()}>Save correction</Button>
+                          <Button appearance="secondary" type="button" onClick={closeCorrection}>Cancel correction</Button>
+                        </div>
+                      </form>
+                    )}
+                    {isCurrentRevisionRequest(record.recordId) && (
+                      <section aria-label={`Revision history for ${record.title || record.type}`}>
+                        <h4>Revision history</h4>
+                        {revisionLoading || revisionScope !== JSON.stringify([requestScope, record.recordId, revisionPage]) ? <Loading /> : (
+                          <>
+                            <p className="v1-muted">
+                              {revisionTotalCount} revision(s) · Page {revisionPage} of {Math.max(1, Math.ceil(revisionTotalCount / pageSize))}
+                            </p>
+                            <div className="v1-actions">
+                              <Button
+                                appearance="secondary"
+                                disabled={revisionLoading || revisionPage <= 1}
+                                onClick={() => void loadRevisions(record, Math.max(1, revisionPage - 1))}
+                              >
+                                Previous revisions
+                              </Button>
+                              <Button
+                                appearance="secondary"
+                                disabled={revisionLoading || revisionPage >= Math.max(1, Math.ceil(revisionTotalCount / pageSize))}
+                                onClick={() => void loadRevisions(record, Math.min(Math.max(1, Math.ceil(revisionTotalCount / pageSize)), revisionPage + 1))}
+                              >
+                                Next revisions
+                              </Button>
+                            </div>
+                            {revisionItems.length === 0 ? <p className="v1-muted">No revisions were returned.</p> : (
+                              <div className="v1-record-list">
+                                {revisionItems.map((revision) => (
+                                  <article className="v1-record" key={revision.revisionId}>
+                                    <div className="v1-record-title">
+                                      <div><h5>Revision {revision.revision} · {revision.changeKind || revision.state}</h5><p className="v1-muted">{revision.createdAt}</p></div>
+                                      <Badge appearance="tint" color={revision.state === 'active' ? 'success' : 'subtle'}>{revision.state}</Badge>
+                                    </div>
+                                    <p className="v1-record-content">{revision.content}</p>
+                                    {revision.rationale && <p className="v1-muted">Rationale: {revision.rationale}</p>}
+                                    {revision.reason && <p className="v1-muted">Change reason: {revision.reason}</p>}
+                                    <Button
+                                      appearance="secondary"
+                                      disabled={revision.revision === record.revision}
+                                      onClick={() => void restoreRevision(record, revision)}
+                                    >
+                                      Restore revision {revision.revision}
+                                    </Button>
+                                  </article>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </section>
+                    )}
                   </article>
                 ))}
               </div>
@@ -982,19 +1671,54 @@ function KnowledgePage() {
             <form className="v1-form" onSubmit={(event) => void createRecord(event)}>
               <div className="v1-inline-form">
                 <Field label="Kind">
-                  <select className="v1-select" value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}>
+                  <select className="v1-select" aria-label="Knowledge record kind" value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}>
                     <option value="memory">Memory</option><option value="proposal">Proposal</option>
-                    <option value="decision">Decision</option><option value="sessionContext">Session context</option>
+                    <option value="sessionContext">Session context</option>
                   </select>
                 </Field>
                 <Field label="Type"><Input value={draft.type} onChange={(_, data) => setDraft({ ...draft, type: data.value })} /></Field>
-                <Field label="Importance"><Input value={draft.importance} onChange={(_, data) => setDraft({ ...draft, importance: data.value })} /></Field>
+                <Field label="Importance">
+                  <select className="v1-select" aria-label="Knowledge record importance" value={draft.importance} onChange={(event) => setDraft({ ...draft, importance: event.target.value })}>
+                    <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+                  </select>
+                </Field>
               </div>
               <Field label="Title"><Input value={draft.title} onChange={(_, data) => setDraft({ ...draft, title: data.value })} /></Field>
               <Field label="Content"><Textarea value={draft.content} onChange={(_, data) => setDraft({ ...draft, content: data.value })} rows={5} resize="vertical" /></Field>
               <Field label="Rationale"><Textarea value={draft.rationale} onChange={(_, data) => setDraft({ ...draft, rationale: data.value })} rows={3} resize="vertical" /></Field>
               <Field label="Tags (comma-separated)"><Input value={draft.tags} onChange={(_, data) => setDraft({ ...draft, tags: data.value })} /></Field>
               <Button appearance="primary" type="submit" disabled={!draft.type.trim() || !draft.content.trim() || !draft.importance.trim()}>Create record</Button>
+            </form>
+          </Panel>
+          <Panel title="Knowledge transfer">
+            <p className="v1-muted">Transfer uses a versioned bundle for the exact project and agent. The current run is included in each Gateway request; imports are limited to 1 MiB.</p>
+            <div className="v1-actions">
+              <Button appearance="secondary" onClick={() => void exportKnowledge()}>Export scoped Knowledge</Button>
+            </div>
+            {currentExportedBundle && (
+              <>
+                <Field label="Exported Knowledge bundle">
+                  <Textarea value={currentExportedBundle} readOnly rows={8} resize="vertical" />
+                </Field>
+                <Button appearance="secondary" onClick={downloadExportedBundle}>
+                  Download versioned bundle
+                </Button>
+              </>
+            )}
+            <form className="v1-form" onSubmit={(event) => void importKnowledge(event)}>
+              <Field label="Versioned Knowledge bundle JSON">
+                <Textarea
+                  value={transferText}
+                  onChange={(_, data) => { setTransferText(data.value); setImportConfirmed(false); }}
+                  rows={8}
+                  resize="vertical"
+                />
+              </Field>
+              <label className="v1-checkbox">
+                <input type="checkbox" checked={importConfirmed} onChange={(event) => setImportConfirmed(event.target.checked)} />
+                I confirm this versioned bundle matches the current project and agent scope.
+              </label>
+              <Button appearance="primary" type="submit" disabled={!importConfirmed || !transferText.trim()}>Import scoped Knowledge</Button>
             </form>
           </Panel>
         </>
@@ -1199,8 +1923,8 @@ function ChatView({
     setNotice(null);
     try {
       const idempotencyKey = crypto.randomUUID();
-      const result = await apiCall((token) => gatewayClient.sendMessage(
-        token, projectId, runId, fromSession, toSession, text.trim(), idempotencyKey, 'immediate',
+      const result = await apiCall((token, tenantSelector) => gatewayClient.sendMessage(
+        token, projectId, runId, fromSession, toSession, text.trim(), idempotencyKey, 'immediate', tenantSelector,
       ), { projectId, runId });
       setPending((items) => [...items, {
         id: result.ownerMessageId,
@@ -1312,14 +2036,14 @@ function BlockerAction({
       const idempotencyKey = crypto.randomUUID();
       let result: Awaited<ReturnType<typeof gatewayClient.answerGate>>;
       if (blocker.kind === 'awaitingInput') {
-        result = await apiCall((token) => gatewayClient.answerGate(
+        result = await apiCall((token, tenantSelector) => gatewayClient.answerGate(
           token, projectId, runId, status.identity.sessionId, blocker.requestId, decisions.stateVersion,
-          { choiceId, freeformAnswer }, idempotencyKey,
+          { choiceId, freeformAnswer }, idempotencyKey, tenantSelector,
         ), { projectId, runId });
       } else {
-        result = await apiCall((token) => gatewayClient.resolveGate(
+        result = await apiCall((token, tenantSelector) => gatewayClient.resolveGate(
           token, projectId, runId, status.identity.sessionId, blocker.requestId, decisions.stateVersion, Boolean(approve),
-          idempotencyKey,
+          idempotencyKey, tenantSelector,
         ), { projectId, runId });
       }
       if (!result.accepted) {
@@ -1505,24 +2229,25 @@ function UsageView({ usage }: { usage: UsageRunTotals | null }) {
   );
 }
 
+function repoAppRepositoryKey(repository: RepoAppRepository): string {
+  return `${repository.installationId}/${repository.repositoryId}`;
+}
+
 function RunGitHubAppPanel({
   projectId,
   runId,
   sessionId,
-  tenantId,
   appConnectionId,
 }: {
   projectId: string;
   runId: string;
   sessionId: string;
-  tenantId: string | null;
   appConnectionId: string;
 }) {
   const { apiCall } = useAuth();
   const binding = useMemo(() => ({ projectId, runId }), [projectId, runId]);
-  const [connection, setConnection] = useState<RepoAppAuthorizationStatus | null>(null);
-  const [repositories, setRepositories] = useState<RepoAppRepositoryCandidate[]>([]);
-  const [installations, setInstallations] = useState<RepoAppRepositorySelectionList['installations']>([]);
+  const [connection, setConnection] = useState<RepoAppConnectionStatus | null>(null);
+  const [repositories, setRepositories] = useState<RepoAppRepository[]>([]);
   const [repositoriesLoaded, setRepositoriesLoaded] = useState(false);
   const [selectedRepository, setSelectedRepository] = useState('');
   const [pinnedRepository, setPinnedRepository] = useState<SourceControlRepositoryPinView | null>(null);
@@ -1532,21 +2257,17 @@ function RunGitHubAppPanel({
   const [error, setError] = useState<unknown>(null);
   const [notice, setNotice] = useState<{ intent: 'info' | 'success' | 'warning'; text: string } | null>(null);
   const popupRef = useRef<Window | null>(null);
-  const connectionMatches = connection?.connected === true &&
+  const connectionMatches = connection?.state === 'connected' &&
     connection.connectionId === appConnectionId;
   const statusUnavailable = !statusLoading && connection === null && error != null;
 
-  const loadConnection = useCallback(async (): Promise<RepoAppAuthorizationStatus | null> => {
+  const loadConnection = useCallback(async (): Promise<RepoAppConnectionStatus | null> => {
     setStatusLoading(true);
     try {
-      const next = await apiCall(
-        (token) => gatewayClient.getRepoAppAuthorizationStatus(token),
-        binding,
-      );
+      const next = await repoAppBrokerClient.getStatus();
       setConnection(next);
-      if (!next.connected || next.connectionId !== appConnectionId) {
+      if (next.state !== 'connected' || next.connectionId !== appConnectionId) {
         setRepositories([]);
-        setInstallations([]);
         setRepositoriesLoaded(false);
       }
       setError(null);
@@ -1558,32 +2279,27 @@ function RunGitHubAppPanel({
     } finally {
       setStatusLoading(false);
     }
-  }, [apiCall, appConnectionId, binding]);
+  }, [appConnectionId]);
 
   const loadRepositories = useCallback(async () => {
     setRepositoriesLoading(true);
     setError(null);
     try {
-      const result = await apiCall(
-        (token) => gatewayClient.listRepoAppRepositorySelections(token),
-        binding,
-      );
+      const result = await repoAppBrokerClient.getRepositories();
       setRepositories(result.repositories);
-      setInstallations(result.installations);
       setRepositoriesLoaded(true);
       setSelectedRepository((current) =>
-        result.repositories.some((repository) => repository.fullName === current)
+        result.repositories.some((repository) => repoAppRepositoryKey(repository) === current)
           ? current
-          : result.repositories[0]?.fullName ?? '');
+          : result.repositories[0] ? repoAppRepositoryKey(result.repositories[0]) : '');
     } catch (reason) {
       setRepositories([]);
-      setInstallations([]);
       setRepositoriesLoaded(false);
       setError(reason);
     } finally {
       setRepositoriesLoading(false);
     }
-  }, [apiCall, binding]);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadConnection(); }, 0);
@@ -1594,24 +2310,24 @@ function RunGitHubAppPanel({
     const onMessage = (event: MessageEvent<unknown>) => {
       if (event.origin !== window.location.origin ||
           event.source !== popupRef.current ||
-          !isRepoAppCallbackMessage(event.data))
+          !isRepoAppConnectedCallbackMessage(event.data))
         return;
 
       popupRef.current?.close();
       popupRef.current = null;
-      const callback = event.data;
       setNotice({
-        intent: callback.outcome === 'success' ? 'success' : 'warning',
-        text: `GitHub App ${callback.kind} finished: ${callback.outcome}.`,
+        intent: 'info',
+        text: 'GitHub returned to Agentweaver. Refreshing repository access with the Identity Broker.',
       });
-      if (callback.kind === 'authorization') {
-        void loadConnection().then((next) => {
-          if (next?.connectionId === appConnectionId)
-            void loadRepositories();
-        });
-      } else {
-        void loadRepositories();
-      }
+      void loadConnection().then((next) => {
+        if (next?.state === 'connected' && next.connectionId === appConnectionId)
+          void loadRepositories();
+        else
+          setNotice({
+            intent: 'warning',
+            text: 'The installation callback was received, but the Identity Broker did not confirm the configured connection.',
+          });
+      });
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
@@ -1627,6 +2343,7 @@ function RunGitHubAppPanel({
       setError(new Error('Allow pop-ups to connect GitHub without losing this run session.'));
       return null;
     }
+    popup.name = 'agentweaver-github-repo-app';
     popupRef.current = popup;
     setError(null);
     setNotice(null);
@@ -1634,21 +2351,11 @@ function RunGitHubAppPanel({
   };
 
   const installRepoApp = async () => {
-    if (!tenantId) {
-      setError(new Error('The current run tenant selector is unavailable.'));
-      return;
-    }
     const popup = openPopup();
     if (!popup) return;
     setBusy(true);
     try {
-      const started = await apiCall(
-        (token) => gatewayClient.beginProjectGitHubAppInstallationAuthorization(
-          token, projectId, runId, tenantId,
-        ),
-        binding,
-      );
-      popup.location.replace(started.installationUrl);
+      await repoAppBrokerClient.beginInstallationSetup(popup);
       setNotice({ intent: 'info', text: 'Complete GitHub App installation in the new browser window.' });
     } catch (reason) {
       popup.close();
@@ -1661,21 +2368,21 @@ function RunGitHubAppPanel({
 
   const pinRepository = async () => {
     if (!selectedRepository) return;
-    if (!tenantId) {
-      setError(new Error('The current run tenant selector is unavailable.'));
-      return;
-    }
     setBusy(true);
     setError(null);
     setPinnedRepository(null);
     try {
-      const selection = await apiCall(
-        (token) => gatewayClient.issueRepoAppRepositorySelection(token, selectedRepository),
-        binding,
+      const repository = repositories.find(
+        (candidate) => repoAppRepositoryKey(candidate) === selectedRepository,
+      );
+      if (!repository) throw new Error('Select a repository returned by the Identity Broker.');
+      const selection = await repoAppBrokerClient.createRepositorySelection(
+        repository.installationId,
+        repository.repositoryId,
       );
       const pinned = await apiCall(
-        (token) => gatewayClient.pinSourceControlRepository(
-          token, projectId, runId, sessionId, tenantId, selection.selectionCode,
+        (token, tenantSelector) => gatewayClient.pinSourceControlRepository(
+          token, projectId, runId, sessionId, tenantSelector, selection.code,
         ),
         binding,
       );
@@ -1692,30 +2399,27 @@ function RunGitHubAppPanel({
     <Panel title="GitHub App repository access">
       <p className="v1-muted">
         The accepted run uses Identity App connection <code>{appConnectionId || 'not configured'}</code>.
-        Only the selected repository name and an opaque, short-lived selection code are sent to the owner.
+        Repository metadata and selection codes come from the Broker; the Gateway receives the opaque code only on this run-bound pin request.
       </p>
       {statusLoading ? <Loading label="Checking GitHub App connection…" /> : statusUnavailable ? (
         <p className="v1-muted">GitHub App connection status is unavailable; no connection state is assumed.</p>
-      ) : connection?.connected ? (
+      ) : connection?.state === 'connected' ? (
         <p>
           Connected as <strong>{connection.githubLogin ?? 'GitHub user'}</strong>
           {connection.connectionId && <> · Identity connection <code>{connection.connectionId}</code></>}
         </p>
       ) : (
-        <p className="v1-muted">No GitHub App user connection is available for this identity.</p>
+        <p className="v1-muted">
+          {connection?.state === 'not_connected'
+            ? 'No GitHub App user connection is available for this identity.'
+            : 'The GitHub App user connection requires attention before it can be used.'}
+        </p>
       )}
-      {connection?.connected && connection.connectionId !== appConnectionId && (
+      {connection?.state === 'connected' && connection.connectionId !== appConnectionId && (
         <MessageBar intent="warning">
           <MessageBarBody>
             This project references a different App connection. Update <code>sourceControl.appConnectionId</code> in{' '}
             <Link to={`/projects/${encodeURIComponent(projectId)}/settings`}>project settings</Link> to use the displayed Identity connection.
-          </MessageBarBody>
-        </MessageBar>
-      )}
-      {!tenantId && (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            The current run tenant selector is unavailable; run-bound App installation and pinning are disabled.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -1727,7 +2431,7 @@ function RunGitHubAppPanel({
         </Button>
         {connectionMatches && (
           <>
-            <Button appearance="secondary" disabled={busy || !tenantId} onClick={() => void installRepoApp()}>
+            <Button appearance="secondary" disabled={busy} onClick={() => void installRepoApp()}>
               Install GitHub App for this run
             </Button>
             <Button appearance="secondary" disabled={busy || repositoriesLoading} onClick={() => void loadRepositories()}>
@@ -1753,31 +2457,22 @@ function RunGitHubAppPanel({
               onChange={(event) => setSelectedRepository(event.currentTarget.value)}
             >
               {repositories.map((repository) => (
-                <option key={repository.fullName} value={repository.fullName}>
+                <option
+                  key={repoAppRepositoryKey(repository)}
+                  value={repoAppRepositoryKey(repository)}
+                >
                   {repository.fullName}{repository.isPrivate ? ' · private' : ''}
                 </option>
               ))}
             </select>
           </Field>
-          <Button appearance="primary" disabled={busy || !selectedRepository || !tenantId} onClick={() => void pinRepository()}>
+          <Button appearance="primary" disabled={busy || !selectedRepository} onClick={() => void pinRepository()}>
             {busy ? 'Pinning…' : 'Pin repository to this run'}
           </Button>
         </div>
       )}
       {repositoriesLoaded && repositories.length === 0 && connectionMatches && !repositoriesLoading && (
-        <p className="v1-muted">No accessible repositories have been loaded. Install the GitHub App for this run, then reload the repository list.</p>
-      )}
-      {installations.length > 0 && (
-        <ul className="v1-list">
-          {installations.map((installation) => (
-            <li key={`${installation.accountLogin}/${installation.accountType}`}>
-              <a href={installation.managementUrl} target="_blank" rel="noreferrer">
-                Manage GitHub App for {installation.accountLogin}
-              </a>
-              {' · '}{installation.accountType} · {installation.repositorySelection}
-            </li>
-          ))}
-        </ul>
+        <p className="v1-muted">No accessible repositories were returned by the Identity Broker. Install the GitHub App for this run, then reload the repository list.</p>
       )}
       {pinnedRepository && (
         <p className="v1-muted">Pinned repository: {pinnedRepository.repository} · {pinnedRepository.defaultBranch}</p>
@@ -1789,7 +2484,7 @@ function RunGitHubAppPanel({
 function RunPage() {
   const { projectId = '', runId = '' } = useParams();
   const binding = useMemo(() => ({ projectId, runId }), [projectId, runId]);
-  const { session, apiCall, authorize } = useAuth();
+  const { session, apiCall, authorize, authorizationContext } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('view');
   const tab: RunTab = isRunTab(requestedTab) ? requestedTab : 'topology';
@@ -1800,7 +2495,13 @@ function RunPage() {
     accessToken: session?.accessToken ?? '',
   }), [projectId, runId, session?.accessToken]);
   const activeSnapshotScope = useRef(snapshotScope);
-  const journal = useRunJournal(authorized ? session?.accessToken : undefined, projectId, runId);
+  const runTenantSelector = authorized ? authorizationContext?.tenantId : undefined;
+  const journal = useRunJournal(
+    authorized ? session?.accessToken : undefined,
+    projectId,
+    runId,
+    runTenantSelector,
+  );
   const [runStatus, setRunStatus] = useState<OwnerRunStatus | null>(null);
   const [tree, setTree] = useState<SessionTreeSnapshot | null>(null);
   const [statuses, setStatuses] = useState<Record<string, SessionStatusSnapshot>>({});
@@ -1836,9 +2537,9 @@ function RunPage() {
     setSnapshotBusy(true);
     const nextErrors: Record<string, string> = {};
     const [runResult, selectionResult, usageResult] = await Promise.allSettled([
-      apiCall((token) => gatewayClient.getRunStatus(token, projectId, runId), binding),
-      apiCall((token) => gatewayClient.getRunSelection(token, projectId, runId), binding),
-      apiCall((token) => gatewayClient.getRunUsage(token, projectId, runId), binding),
+      apiCall((token, tenantSelector) => gatewayClient.getRunStatus(token, projectId, runId, tenantSelector), binding),
+      apiCall((token, tenantSelector) => gatewayClient.getRunSelection(token, projectId, runId, tenantSelector), binding),
+      apiCall((token, tenantSelector) => gatewayClient.getRunUsage(token, projectId, runId, tenantSelector), binding),
     ]);
     if (!isCurrent()) return;
     if (runResult.status === 'rejected') {
@@ -1905,7 +2606,9 @@ function RunPage() {
 
     try {
       const nextTree = await apiCall(
-        (token) => gatewayClient.getSessionTree(token, projectId, runId, currentRun.rootSessionId),
+        (token, tenantSelector) => gatewayClient.getSessionTree(
+          token, projectId, runId, currentRun.rootSessionId, tenantSelector,
+        ),
         binding,
       );
       if (!isCurrent()) return;
@@ -1916,7 +2619,9 @@ function RunPage() {
       }
       setTree(nextTree);
       const sessionResults = await Promise.allSettled(nextTree.nodes.map((node) =>
-        apiCall((token) => gatewayClient.getSessionStatus(token, projectId, runId, node.identity.sessionId), binding)));
+        apiCall((token, tenantSelector) => gatewayClient.getSessionStatus(
+          token, projectId, runId, node.identity.sessionId, tenantSelector,
+        ), binding)));
       if (!isCurrent()) return;
       const nextStatuses: Record<string, SessionStatusSnapshot> = {};
       const decisionSessions: string[] = [];
@@ -1937,7 +2642,9 @@ function RunPage() {
       });
       setStatuses(nextStatuses);
       const decisionResults = await Promise.allSettled(decisionSessions.map((sessionId) =>
-        apiCall((token) => gatewayClient.getDecisions(token, projectId, runId, sessionId), binding)));
+        apiCall((token, tenantSelector) => gatewayClient.getDecisions(
+          token, projectId, runId, sessionId, tenantSelector,
+        ), binding)));
       if (!isCurrent()) return;
       const nextDecisions: Record<string, CoordinatorDecisionStateView> = {};
       decisionResults.forEach((result, index) => {
@@ -2014,12 +2721,12 @@ function RunPage() {
     setSnapshotMessage(null);
     try {
       if (action === 'detach') {
-        await apiCall((token) => gatewayClient.detachSession(
-          token, projectId, runId, node.identity.sessionId, currentRunStatus.executionFence, idempotencyKey,
+        await apiCall((token, tenantSelector) => gatewayClient.detachSession(
+          token, projectId, runId, node.identity.sessionId, currentRunStatus.executionFence, idempotencyKey, tenantSelector,
         ), binding);
       } else if (node.parentSessionId) {
-        await apiCall((token) => gatewayClient.archiveChild(
-          token, projectId, runId, node.parentSessionId!, node.identity.sessionId, currentRunStatus.executionFence, idempotencyKey,
+        await apiCall((token, tenantSelector) => gatewayClient.archiveChild(
+          token, projectId, runId, node.parentSessionId!, node.identity.sessionId, currentRunStatus.executionFence, idempotencyKey, tenantSelector,
         ), binding);
       }
       setSnapshotMessage(`${action} was accepted by the owner. The view waits for the next owner snapshot before displaying a state change.`);
@@ -2122,7 +2829,6 @@ function RunPage() {
                   projectId={projectId}
                   runId={runId}
                   sessionId={currentRunStatus.rootSessionId}
-                  tenantId={currentUsage?.tenantId ?? null}
                   appConnectionId={currentSelection.projectConfiguration.sourceControl.appConnectionId ?? ''}
                 />
               )}
@@ -2178,21 +2884,42 @@ function CallbackPage() {
   );
 }
 
-interface RepoAppCallbackMessage {
-  type: 'agentweaver.repo-app.callback';
-  kind: 'authorization' | 'installation';
-  outcome: string;
-}
+function IdentityPopupCallbackPage() {
+  const [callback] = useState(() => {
+    const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
+    const opener = window.opener;
+    if (!opener || opener === window || typeof callbackSearch !== 'string')
+      return { message: undefined, status: 'Sending the sign-in response to Agentweaver…' };
+    const message = parseAuthorizationCallbackParameters(callbackSearch);
+    return {
+      message,
+      status: message
+        ? 'Sending the sign-in response to Agentweaver…'
+        : 'The sign-in response is invalid. Return to Agentweaver and try again.',
+    };
+  });
 
-function isRepoAppCallbackMessage(value: unknown): value is RepoAppCallbackMessage {
-  return value !== null &&
-    typeof value === 'object' &&
-    'type' in value &&
-    value.type === 'agentweaver.repo-app.callback' &&
-    'kind' in value &&
-    (value.kind === 'authorization' || value.kind === 'installation') &&
-    'outcome' in value &&
-    typeof value.outcome === 'string';
+  useEffect(() => {
+    const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
+    window.__AGENTWEAVER_IDENTITY_CALLBACK__ = undefined;
+    const opener = window.opener;
+    if (!opener || opener === window || typeof callbackSearch !== 'string') return;
+
+    if (!callback.message) {
+      window.close();
+      return;
+    }
+    opener.postMessage(callback.message, window.location.origin);
+  }, [callback.message]);
+
+  return (
+    <div className="v1-auth-page">
+      <section className="v1-auth-card">
+        <h1>Completing sign-in</h1>
+        <p className="v1-muted">{callback.status}</p>
+      </section>
+    </div>
+  );
 }
 
 function RepoAppCallbackRelay() {
@@ -2216,6 +2943,38 @@ function RepoAppCallbackRelay() {
   }, [authorizationOutcome, installationOutcome]);
 
   return null;
+}
+
+function RepoAppPopupCallbackPage() {
+  const [message] = useState(() => {
+    const opener = window.opener;
+    return window.__AGENTWEAVER_REPO_APP_CALLBACK__ === true && opener && opener !== window
+      ? 'The callback is notifying its opener. Only the opener’s Identity Broker status check can confirm the connection.'
+      : 'The Broker callback was received, but no tracked account window is available. Connection status is unverified; return to account settings and refresh status.';
+  });
+
+  useEffect(() => {
+    const callbackWasCaptured = window.__AGENTWEAVER_REPO_APP_CALLBACK__ === true;
+    window.__AGENTWEAVER_REPO_APP_CALLBACK__ = undefined;
+    const opener = window.opener;
+    if (!callbackWasCaptured || !opener || opener === window) return;
+
+    const callback = {
+      type: REPO_APP_CALLBACK_MESSAGE_TYPE,
+    };
+    if (!isRepoAppConnectedCallbackMessage(callback)) return;
+    opener.postMessage(callback, window.location.origin);
+    window.close();
+  }, []);
+
+  return (
+    <div className="v1-auth-page">
+      <section className="v1-auth-card">
+        <h1>GitHub authorization returned</h1>
+        <p className="v1-muted">{message}</p>
+      </section>
+    </div>
+  );
 }
 
 function AuthenticatedRoutes() {
@@ -2243,14 +3002,26 @@ function CoordinatorRunRedirect() {
 }
 
 export default function App() {
+  const repoAppCallback = window.location.pathname === REPO_APP_CALLBACK_PATH &&
+    window.__AGENTWEAVER_REPO_APP_CALLBACK__ === true;
+  const identityPopupCallback = window.location.pathname === '/auth/callback' &&
+    window.opener && window.opener !== window;
   return (
     <FluentProvider theme={agentweaverLightTheme}>
-      <AuthProvider>
-        <BrowserRouter>
-          <RepoAppCallbackRelay />
-          <AuthenticatedRoutes />
-        </BrowserRouter>
-      </AuthProvider>
+      {window.location.pathname === COPILOT_CALLBACK_PATH
+        ? <CopilotPopupCallbackPage />
+        : repoAppCallback
+        ? <RepoAppPopupCallbackPage />
+        : identityPopupCallback
+          ? <IdentityPopupCallbackPage />
+        : (
+          <AuthProvider>
+            <BrowserRouter>
+              <RepoAppCallbackRelay />
+              <AuthenticatedRoutes />
+            </BrowserRouter>
+          </AuthProvider>
+        )}
     </FluentProvider>
   );
 }

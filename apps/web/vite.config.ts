@@ -12,7 +12,7 @@ function injectRuntimeConfigScript() {
           {
             tag: 'script',
             attrs: { src: '/env-config.js' },
-            injectTo: 'head-prepend',
+            injectTo: 'body-prepend',
           },
         ]
       },

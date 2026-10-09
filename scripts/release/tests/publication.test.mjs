@@ -8,7 +8,7 @@ import { packComponentsFromFile } from '../pack.mjs';
 import { publishArtifacts } from '../publish.mjs';
 import { resolveProbeImageSource } from '../../azure/build-foundation-probe-image.mjs';
 
-const webBaseImage = `nginxinc/nginx-unprivileged@sha256:${'a'.repeat(64)}`;
+const webBaseImage = `mcr.microsoft.com/dotnet/aspnet@sha256:${'a'.repeat(64)}`;
 const webImageId = `sha256:${'c'.repeat(64)}`;
 
 function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageXml,
@@ -41,7 +41,9 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   }
   if (web) {
     const webDirectory = path.join(root, 'apps', 'web');
+    const webHostDirectory = path.join(webDirectory, 'host');
     mkdirSync(path.join(webDirectory, 'src'), { recursive: true });
+    mkdirSync(webHostDirectory, { recursive: true });
     writeFileSync(path.join(webDirectory, 'package.json'), JSON.stringify({
       name: 'web', private: true, version: '0.1.0', scripts: { build: 'vite build' },
     }, null, 2) + '\n');
@@ -51,13 +53,20 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
     }, null, 2) + '\n');
     writeFileSync(path.join(webDirectory, 'index.html'), '<html>source web</html>\n');
     writeFileSync(path.join(webDirectory, 'src', 'main.ts'), 'export const app = "web";\n');
+    writeFileSync(path.join(webHostDirectory, 'Agentweaver.Web.Host.csproj'),
+      '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>\n');
+    writeFileSync(path.join(webHostDirectory, 'Program.cs'), 'var app = WebApplication.Create();\n');
+    writeFileSync(path.join(webHostDirectory, 'packages.lock.json'),
+      '{"version":1,"dependencies":{".NETCoreApp,Version=v10.0":{}}}\n');
     writeFileSync(path.join(webDirectory, 'Dockerfile'), [
       `FROM ${webBaseImage} AS runtime`,
       'ARG IMAGE_TAG',
       'ARG GIT_SHA',
       'LABEL org.opencontainers.image.version="${IMAGE_TAG}"',
       'LABEL org.opencontainers.image.revision="${GIT_SHA}"',
-      'COPY dist/ /usr/share/nginx/html/',
+      'COPY publish/ /app/',
+      'COPY wwwroot/ /app/wwwroot/',
+      'ENTRYPOINT ["dotnet", "Agentweaver.Web.Host.dll"]',
       '',
     ].join('\n'));
   }
@@ -78,8 +87,15 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
       calls.push(args);
       if (args[0] === 'pack') writeFileSync(path.join(outDir, 'Pkg.0.1.0.nupkg'), 'test package bytes');
       if (args[0] === 'publish') {
-        const output = args.find((arg) => arg.startsWith('-p:ContainerArchiveOutputPath=')).split('=').slice(1).join('=');
-        writeFileSync(output, 'test container archive bytes');
+        if (args[1].includes(path.join('apps', 'web', 'host', 'Agentweaver.Web.Host.csproj'))) {
+          const output = args[args.indexOf('--output') + 1];
+          mkdirSync(output, { recursive: true });
+          writeFileSync(path.join(output, 'Agentweaver.Web.Host.dll'), 'compiled ASP.NET host');
+          writeFileSync(path.join(output, 'Agentweaver.Web.Host.runtimeconfig.json'), '{"runtimeOptions":{}}');
+        } else {
+          const output = args.find((arg) => arg.startsWith('-p:ContainerArchiveOutputPath=')).split('=').slice(1).join('=');
+          writeFileSync(output, 'test container archive bytes');
+        }
       }
     },
     ...(web ? {
@@ -245,6 +261,21 @@ for (const [field, value] of [
     assert.deepEqual(f.externalCalls, []);
   });
 }
+
+test('web publication rejects altered ASP.NET host lock and framework-dependent output provenance', (t) => {
+  const f = fixture(t, { service: false, web: true });
+  f.prepare();
+  const provenancePath = path.join(f.outDir, 'provenance.json');
+  const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'));
+  const webBuild = provenance.components.find(({ id }) => id === 'Agentweaver.Web').build;
+  webBuild.dotnet.lock.sha256 = 'f'.repeat(64);
+  webBuild.dotnet.useAppHost = true;
+  writeFileSync(provenancePath, JSON.stringify(provenance, null, 2) + '\n');
+
+  assert.throws(() => f.publish(), /prepared web image provenance/);
+  assert.deepEqual(f.remoteCalls, []);
+  assert.deepEqual(f.externalCalls, []);
+});
 
 for (const options of [{ lock: false }, { pinnedBase: false }]) {
   test(`rejects unsafe preparation before build: ${JSON.stringify(options)}`, (t) => {

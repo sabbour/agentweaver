@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Knowledge accepted project facts",
-  "alt": "Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and delivery intent together through the selected Memory provider: native PostgreSQL by default or an existing Cosmos container or Redis primary. Current relay requests include project/run scope and Events reads from the pinned provider; the original three-field N-1 request uses the legacy unscoped native PostgreSQL receipt route. Partial scope is rejected and scoped reads never fall back. Events appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. The Knowledge run pin and Sessions journal remain in PostgreSQL.",
+  "alt": "Knowledge commits an accepted proposal, revisions, immutable redacted receipt, and delivery intent together through the selected Memory provider: native PostgreSQL by default or an existing Cosmos container or Redis primary. Current relay requests include project/run scope and Events reads from the pinned provider; the original three-field N-1 request uses the legacy unscoped native PostgreSQL receipt route. Partial scope is rejected and scoped reads never fall back. Events appends a separate project fact with sequence, inbox dedupe, and durable acknowledgment. The Knowledge run pin and Sessions journal remain in PostgreSQL. Separate record update, archive, supersession, restore, approval, and versioned transfer operations preserve immutable history; imported records return Active with Pending trust.",
   "autonumber": true,
   "participants": [
     {
@@ -54,7 +54,7 @@
     {
       "type": "note",
       "over": ["knowledge", "database"],
-      "label": "Caller bearer stays in memory. Check exact agent owner, source run, pending state, expected revisions, and fresh effective WriteProjects."
+      "label": "Caller bearer stays in memory. Check exact agent owner, source run, pending state, expected revisions, and fresh effective AccessPrivateKnowledge."
     },
     {
       "type": "note",
@@ -107,6 +107,11 @@
       "type": "note",
       "over": ["knowledge", "events"],
       "label": "Both routes verify caller bounds and fresh WriteProjects; responses are no-store. Partial scope is invalid; scoped reads never fall back."
+    },
+    {
+      "type": "note",
+      "over": ["knowledge", "events"],
+      "label": "Knowledge promotion requires AccessPrivateKnowledge; Events separately requires WriteProjects, so delivery may remain PENDING."
     },
     {
       "type": "message",

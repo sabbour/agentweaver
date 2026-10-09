@@ -93,6 +93,28 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task BrowserOriginSigninConsentTokenAndRefreshFlowRemainsAvailable()
+    {
+        _broker.DefaultRequestHeaders.Add("Origin", "https://web.test");
+
+        var (code, verifier) = await RunHappyPathAuthorizeAsync();
+        var tokens = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            _broker,
+            IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            code,
+            verifier);
+        var refreshToken = tokens.GetProperty("refresh_token").GetString()!;
+
+        var refresh = await BrokerFlowDriver.RefreshAsync(
+            _broker, IdentityBrokerWebApplicationFactory.TestClientId, refreshToken);
+
+        Assert.Equal(HttpStatusCode.OK, refresh.StatusCode);
+        var refreshed = await refresh.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(string.IsNullOrWhiteSpace(refreshed.GetProperty("access_token").GetString()));
+    }
+
+    [Fact]
     public async Task ExternalLoginSupportsPublicPkceAndConfiguredConfidentialClient()
     {
         var publicConnectionString = await _postgres.CreateMigratedDatabaseAsync();

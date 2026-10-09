@@ -19,6 +19,20 @@ configured audience before forwarding the original bearer token to the owning AP
 validation; it is not an identity or role claim. The owner remains authoritative for
 current project membership, role, binding, and operation-specific checks.
 
+### Browser CORS
+
+Set the required `Gateway:WebOrigin` to the Web application's exact HTTPS origin,
+for example `https://web.example.com`. It must be a service root, not a wildcard,
+path, or URI containing credentials, query, or fragment. The Gateway processes
+preflight requests before authentication and applies exact-origin, route-specific
+method and header allowlists; it does not use a global permissive CORS policy.
+Versioned API, OpenAPI, and run-bound GitHub App installation policies do not allow
+credentials. The Copilot connection BFF is the sole Gateway exception: its exact
+origin policy allows credentials for its callback cookie and only `GET`/`POST`
+with `Authorization`, `Accept`, `Content-Type`, and `X-Agentweaver-Tenant`.
+The direct Identity Broker Repo App browser endpoints have their own separate,
+credentialed CORS boundary and allowlist.
+
 The `createKnowledgeRecord`, `updateKnowledgeRecord`, `restoreKnowledgeRecord`,
 `approveKnowledgeDecision`, `importKnowledgeRecords`, `promoteKnowledgeProposal`,
 and `rejectKnowledgeProposal` operations require exactly one `Idempotency-Key`
@@ -27,8 +41,9 @@ or `:`. Reuse the same key when retrying the same write. The key is only for
 idempotency; it does not establish identity or approve an operation. Knowledge
 rejects missing, duplicate, blank, and invalid values. Reads, including
 `exportKnowledgeRecords`, and other Gateway operations do not require this header.
-Knowledge import bundles are limited to 1 MiB; MCP allows an additional 64 KiB for
-the JSON-RPC envelope.
+Gateway request bodies are limited to 64 KiB by default; the Knowledge import
+endpoint alone allows up to 1 MiB. MCP allows an additional 64 KiB for the
+JSON-RPC envelope.
 
 Responses preserve the owner's status and body. In particular, `202 Accepted` means
 only that the owner accepted work; it is not proof that an asynchronous effect
@@ -37,15 +52,34 @@ and structured error bodies pass through; an unavailable or redirected owner, in
 owner contract, or bounded-response violation returns `502`, and a finite owner
 request timeout returns `504`.
 
+### Authorization context and selector forwarding
+
+`GET /api/v1/authorization/context` delegates to the existing Projects & Config
+`GET /api/authorization/context` owner route. It accepts no query parameters,
+forwards the validated Broker bearer and optional `X-Agentweaver-Tenant` selector,
+and requires the owner's `api.read`, non-purpose context contract. The Gateway
+validates the response against the exact versioned JSON contract and returns it
+with `Cache-Control: no-store`; redirects, malformed or duplicate contract fields,
+wrong issuer, actor, signed project/run binding, explicit tenant selector, or
+cacheable responses are rejected rather than passed through.
+The result reports the current actor, selected tenant and membership revision,
+optional project/run bindings, and effective authority. It is advisory context for
+the client, not a permission grant or a cacheable authorization decision.
+
+The Web client supplies that selector only on the allow-listed Projects/configuration,
+run Coordination, Knowledge, run Selection/Usage, and finite journal replay calls.
+The live event SSE route and unrelated APIs do not receive it. Context and selector
+forwarding do not replace the owning service's authorization check.
+
 ## Identity Broker browser BFF
 
 The Gateway also exposes explicit, non-OpenAPI routes to the configured
 `Gateway:Owners:IdentityBrokerAddress`. These routes are not generic proxy
 operations and are not included in the MCP tool catalog.
-These source mappings do not prove owner availability: Repo App routes remain
-unavailable until the Identity/Source Control producers in #1907 are admitted
-and configured; Copilot routes require the #1906 producer. A missing owner
-address or incompatible audience is surfaced as an explicit owner failure.
+The Repo App source routes were released in #1934; runtime availability still
+depends on the optional producer and owner configuration. Copilot routes require
+the #1906 producer. A missing owner address or incompatible audience is surfaced
+as an explicit owner failure.
 
 ```mermaid
 sequenceDiagram
@@ -68,14 +102,14 @@ sequenceDiagram
     Web->>Gateway: GET status / repository metadata (current bearer)
     Gateway->>Identity: Same bearer; no tenant selector
     Identity-->>Web: Opaque connection ID + safe metadata
-    Web->>Gateway: POST run-bound installation start (bearer + tenant)
-    Gateway->>Orchestrator: Same bearer + tenant
-    Orchestrator-->>Web: Installation URL
-    Web->>GitHub: Install App for this run
+    Web->>Identity: POST /auth/github/repo-app/install (CSRF + session)
+    Identity-->>Web: 302 + host-only installation callback cookie
+    Web->>GitHub: Install App
     GitHub-->>Gateway: Installation callback + exact host-only cookie
     Gateway->>Identity: Allow-listed query + named cookie
-    Identity-->>Gateway: 302 + unchanged Location and clearing Set-Cookie
-    Gateway-->>Web: Allow-listed callback outcome
+    Identity-->>Web: 302 to configured Repo App callback page
+    Web->>Identity: Refresh status / repository metadata (current bearer)
+    Identity-->>Web: Broker-confirmed connection and repositories
     Web->>Gateway: POST existing run-bound pin {selectionCode}
     Gateway->>Orchestrator: Same bearer + tenant
 ```
@@ -105,12 +139,12 @@ its exact `__Host-agentweaver-repo-app-auth` or
 `Location` and every `Set-Cookie` value, and trusts the owner to consume its
 persisted single-use state and redirect only to a configured allow-listed route.
 
-The run-bound installation start is
-`POST /api/v1/projects/{projectId}/runs/{runId}/source-control/github-app-installations/authorizations`.
-It forwards the original Broker bearer and required `X-Agentweaver-Tenant`
-selector to Orchestrator and preserves the callback cookie. User-level
-authorization/discovery, callbacks, and this browser-only start are not MCP
-tools. Run-bound repository operations remain ordinary Gateway/MCP operations;
+Installation setup is a cookie-and-CSRF-protected browser POST to the
+Identity Broker's `/auth/github/repo-app/install` endpoint. The Broker owns
+the installation transaction and callback cookie. The callback alone does not
+confirm access; the browser refreshes Broker status and repository metadata
+before enabling run-bound repository operations. User-level
+authorization/discovery and callbacks are not MCP tools. Run-bound repository operations remain ordinary Gateway/MCP operations;
 `pinSourceControlRepository` accepts an optional `{ "selectionCode": "..." }`
 body for GitHub App mode and keeps its existing response and status behavior.
 Omitting the body preserves legacy secret-mode pin requests. Source Control
@@ -121,7 +155,9 @@ Copilot browser consent follows the same original-bearer rule at
 `/api/connections/copilot-user/v1/{begin,complete,refresh,revoke}` and
 `GET /api/connections/copilot-user/v1/{connectionId}`. Begin sets only the
 `__Host-agentweaver-copilot-link` callback cookie; complete forwards only that
-cookie with the unchanged validated bearer and tenant selector. Gateway and
+cookie with the unchanged validated bearer and optional tenant selector.
+Unlike the selector-free Repo App browser BFF, each Copilot lifecycle route
+forwards an explicitly supplied tenant selector unchanged. Gateway and
 Identity Broker audiences must already match the admitted client resource; the
 Gateway does not exchange or mint a different identity token. Where Projects &
 Core uses a separate resource, that same client token must also carry its

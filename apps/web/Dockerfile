@@ -1,4 +1,4 @@
-FROM nginxinc/nginx-unprivileged@sha256:35d4ff1b94af60250f296e07700038da6ac0ae9f482964b8e6b82c0291f8b2eb
+FROM mcr.microsoft.com/dotnet/aspnet@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4
 
 ARG IMAGE_TAG=dev
 ARG GIT_SHA=unknown
@@ -6,12 +6,12 @@ ARG GIT_SHA=unknown
 LABEL org.opencontainers.image.version="${IMAGE_TAG}" \
       org.opencontainers.image.revision="${GIT_SHA}"
 
-COPY --chown=101:101 dist/ /usr/share/nginx/html/
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY docker-entrypoint.sh /docker-entrypoint-web.sh
+WORKDIR /app
+COPY publish/ ./
+COPY wwwroot/ ./wwwroot/
 
-USER 101:101
+ENV ASPNETCORE_HTTP_PORTS=8080
 EXPOSE 8080
 
-ENTRYPOINT ["/bin/sh", "/docker-entrypoint-web.sh"]
-CMD ["nginx", "-g", "daemon off;"]
+USER $APP_UID
+ENTRYPOINT ["dotnet", "Agentweaver.Web.Host.dll"]

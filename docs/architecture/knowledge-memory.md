@@ -15,16 +15,22 @@ project-fact stream. Project facts are separate from the Sessions run journal.
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.drawio'">Open editable draw.io source</a></p>
 
+Edits, archive, supersession, restore, and approval append immutable revisions. Restore adds an Active+Pending head; it never rewinds history.
+
+Versioned transfers preserve Memory/Decision history. Imports are exact project/agent scoped, bounded, non-merging, and Active+Pending.
+
 ## Authority and ownership
 
 Projects & Config remains the sole owner of caller memberships and project roles.
 Before a record operation, Knowledge forwards the validated request's original bearer
 token and optional `X-Agentweaver-Tenant` selector to
 `GET /api/authorization/context`. Private record reads and writes both require fresh
-effective `WriteProjects` for the target project. `ReadProjects` is metadata-only and,
-even with `ReadRunSelection`, does not authorize record search, reads, revision
-history, or context composition. Projects & Config remains the source of the current
-project-admin permission; Knowledge does not infer it from the route's `agentId`.
+effective `AccessPrivateKnowledge` for the target project. A run-bound project Owner
+with `projects.admin` receives this Knowledge-specific permission without gaining
+generic `WriteProjects`; `ReadProjects` is metadata-only and, even with
+`ReadRunSelection`, does not authorize record search, reads, revision history, or
+context composition. Projects & Config remains the source of the current project-admin
+permission; Knowledge does not infer it from the route's `agentId`.
 A caller's existing signed project/run bindings, when present, must exactly match the
 requested project/run and the Projects authority response. Knowledge keeps no
 membership table, role table, authorization cache, or authorization pin.
@@ -36,10 +42,12 @@ binding a Memory provider. Redirects, owner errors, malformed or mismatched resp
 and missing permissions fail explicitly; Knowledge does not mint a token or infer
 authority from path values.
 
-Visibility is project-admin scoped, not agent-owned: a current project Owner has
-`WriteProjects` for that project, and a current TenantAdmin has tenant-scoped
-`WriteProjects` within the selected tenant. These admins may inspect any agent's
-records in an authorized project by explicitly selecting that agent. The route's
+Visibility is project-admin scoped, not agent-owned: a current project Owner receives
+`AccessPrivateKnowledge` for that project, including on an exact run-bound token;
+generic `WriteProjects` remains unbound-only. A TenantAdmin receives
+`AccessPrivateKnowledge` and `WriteProjects` at the tenant or project resource scope
+when the token is not run-bound. These admins may inspect any agent's records in an
+authorized project by explicitly selecting that agent. The route's
 `agentId` selects rows; it does not prove the caller is that agent, and an admin
 grant does not extend to another project or tenant. Before provider resolution,
 Knowledge also requires `ReadRunSelection` for the exact project and reads its
@@ -53,7 +61,7 @@ history. Context candidates are filtered by project, with active approved decisi
 available project-wide, agent memories kept agent-local unless approved and tagged
 `cross-team`, and SessionContext limited to the requested agent and run. The current
 runtime authority contract has no agent-to-principal visibility grant, so a runtime
-caller without current `WriteProjects` fails closed. Knowledge owns the authorization
+caller without current `AccessPrivateKnowledge` fails closed. Knowledge owns the authorization
 and data boundaries; the selected Memory provider stores records, revisions,
 idempotency receipts, and accepted-effect delivery state. The immutable run-provider
 binding and Knowledge service schema remain in PostgreSQL. Knowledge does not read or
@@ -160,8 +168,8 @@ run; imported records are Active with Pending trust and require explicit approva
 before Decisions are trusted. Unsupported formats and invalid input fail explicitly.
 
 New proposals are pending and cannot be edited like ordinary memory. Promotion
-requires the caller's current effective `WriteProjects` permission, the exact agent
-owner, source run, pending state, and expected revision. It marks the proposal
+requires the caller's current effective `AccessPrivateKnowledge` permission, the exact
+agent owner, source run, pending state, and expected revision. It marks the proposal
 promoted, creates an approved decision, appends both revision histories, and records
 an immutable redacted accepted-effect receipt and delivery intent atomically through
 the selected Memory provider. Native PostgreSQL uses its Knowledge database transaction;
@@ -205,8 +213,10 @@ authority, then constructs and commits a native project fact, project sequence, 
 inbox receipt in one Events PostgreSQL transaction. Knowledge marks the outbox
 delivered only after validating the persisted Events acknowledgment. A transport,
 authorization, or persistence failure leaves the accepted decision and receipt
-committed and reports delivery as `PENDING`; a fresh authorized caller can retry the
-same receipt. For Cosmos Memory, the accepted-effect receipt and delivery intent are
+committed and reports delivery as `PENDING`; for example, a caller with only
+`AccessPrivateKnowledge` can promote but Events may reject delivery without
+`WriteProjects`. A fresh authorized caller can retry the same receipt. For Cosmos
+Memory, the accepted-effect receipt and delivery intent are
 committed with the promoted records in the selected project's partition, and the
 relay claims and acknowledges delivery through that same provider. These project
 facts are not session events, do not enter the run journal, and do not create or

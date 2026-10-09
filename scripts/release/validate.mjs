@@ -10,6 +10,8 @@ const digest = /^sha256:[a-f0-9]{64}$/;
 const id = /^[A-Za-z][A-Za-z0-9.-]*$/;
 export const WEB_PROJECT_PATH = 'apps/web/package.json';
 export const WEB_LOCK_PATH = 'apps/web/package-lock.json';
+export const WEB_HOST_PROJECT_PATH = 'apps/web/host/Agentweaver.Web.Host.csproj';
+export const WEB_HOST_LOCK_PATH = 'apps/web/host/packages.lock.json';
 
 function fail(location, message) {
   throw new Error(`${location}: ${message}`);

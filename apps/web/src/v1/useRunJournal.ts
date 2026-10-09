@@ -36,8 +36,9 @@ export function useRunJournal(
   token: string | undefined,
   projectId: string,
   runId: string,
+  tenantSelector?: string,
 ): Omit<JournalState, 'scopeId'> {
-  const scopeId = JSON.stringify([token ?? null, projectId, runId]);
+  const scopeId = JSON.stringify([token ?? null, projectId, runId, tenantSelector ?? null]);
   const [state, setState] = useState<JournalState>({ ...initialState, scopeId: '' });
 
   useEffect(() => {
@@ -83,7 +84,9 @@ export function useRunJournal(
           if (!replayed) {
             let pageCount = 0;
             while (!signal.aborted) {
-              const page = await gatewayClient.replayEvents(token, projectId, runId, cursor, 100);
+              const page = await gatewayClient.replayEvents(
+                token, projectId, runId, cursor, 100, tenantSelector,
+              );
               if (!isActive()) return;
               addEvents(page.events);
               if (page.hasMore && (!page.nextCursor || page.nextCursor === cursor))
@@ -101,7 +104,7 @@ export function useRunJournal(
           try {
             updateState((current) => ({ ...current, connected: true, error: null }));
             for await (const frame of gatewayClient.streamEvents(
-              token, projectId, runId, cursor, signal,
+              token, projectId, runId, cursor, signal, tenantSelector,
             )) {
               if (!isActive()) return;
               addEvents([frame.event]);
@@ -146,7 +149,7 @@ export function useRunJournal(
       active = false;
       abortController.abort();
     };
-  }, [projectId, runId, scopeId, token]);
+  }, [projectId, runId, scopeId, tenantSelector, token]);
 
   const visibleState = state.scopeId === scopeId
     ? state

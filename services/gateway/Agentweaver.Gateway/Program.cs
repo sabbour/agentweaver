@@ -12,6 +12,7 @@ builder.Logging.AddFilter("OpenIddict", LogLevel.Warning);
 builder.Logging.AddFilter("OpenIddict.Validation.OpenIddictValidationDispatcher", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication", LogLevel.Warning);
 builder.Services.AddSingleton(options);
+builder.Services.AddGatewayWebCors(options);
 builder.Services.AddAgentweaverTelemetry("agentweaver.gateway");
 builder.Services.AddHttpClient(nameof(GatewayOwner.Projects), client =>
     client.Timeout = Timeout.InfiniteTimeSpan)
@@ -41,6 +42,8 @@ builder.Services.AddOpenIddict().AddValidation(validation =>
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+app.UseRouting();
+app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapGatewayEndpoints();

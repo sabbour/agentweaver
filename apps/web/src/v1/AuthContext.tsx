@@ -14,6 +14,8 @@ import {
   defaultAuthorizationConfig,
   exchangeAuthorizationCode,
   isConsentPrompt,
+  parseAuthorizationCallbackMessage,
+  parseAuthorizationCallbackParameters,
   parseAuthorizationResult,
   pkceChallenge,
   randomState,
@@ -25,8 +27,12 @@ import {
 } from './authProtocol';
 import type { AuthorizationTransaction, RunBinding } from './authProtocol';
 import { missingAuthConfiguration } from './config';
-import type { BrokerConsentPrompt, BrokerTokenResponse } from './contracts';
-import { GatewayError } from './api';
+import type {
+  BrokerConsentPrompt,
+  BrokerTokenResponse,
+  ProjectAuthorizationContextResponse,
+} from './contracts';
+import { gatewayClient, GatewayError } from './api';
 
 interface AuthSession {
   accessToken: string;
@@ -35,17 +41,26 @@ interface AuthSession {
   binding: RunBinding | null;
 }
 
+type ConfirmedAuthorizationContext = Pick<
+  ProjectAuthorizationContextResponse,
+  'tenantId' | 'membershipRevision'
+>;
+
 interface AuthContextValue {
   session: AuthSession | null;
+  authorizationContext: ConfirmedAuthorizationContext | null;
+  authorizationContextLoading: boolean;
+  authorizationContextError: unknown;
   busy: boolean;
   consent: BrokerConsentPrompt | null;
   error: string | null;
   configurationError: string | null;
   authorize: (binding?: RunBinding | null) => Promise<void>;
+  resolveAuthorizationContext: (tenantSelector?: string) => Promise<ConfirmedAuthorizationContext | null>;
   decideConsent: (approve: boolean) => Promise<void>;
   signOut: () => void;
   apiCall: <T>(
-    operation: (accessToken: string) => Promise<T>,
+    operation: (accessToken: string, tenantSelector: string | null) => Promise<T>,
     binding?: RunBinding | null,
   ) => Promise<T>;
 }
@@ -55,6 +70,15 @@ const AUTH_TIMEOUT_MS = 10 * 60 * 1000;
 
 function sameBinding(left: RunBinding | null, right: RunBinding | null): boolean {
   return left?.projectId === right?.projectId && left?.runId === right?.runId;
+}
+
+function contextMatchesBinding(
+  context: ProjectAuthorizationContextResponse,
+  binding: RunBinding | null,
+): boolean {
+  return binding
+    ? context.boundProjectId === binding.projectId && context.boundRunId === binding.runId
+    : context.boundProjectId === null && context.boundRunId === null;
 }
 
 function transactionFor(binding: RunBinding | null): AuthorizationTransaction {
@@ -75,21 +99,30 @@ function sessionFromToken(token: BrokerTokenResponse, binding: RunBinding | null
   };
 }
 
-function cleanCallbackUrl(): void {
-  const url = new URL(window.location.href);
-  url.searchParams.delete('code');
-  url.searchParams.delete('state');
-  url.searchParams.delete('error');
-  url.searchParams.delete('error_description');
-  window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSessionState] = useState<AuthSession | null>(null);
+  const [authorizationContext, setAuthorizationContextState] =
+    useState<ConfirmedAuthorizationContext | null>(null);
+  const [authorizationContextLoading, setAuthorizationContextLoading] = useState(false);
+  const [authorizationContextError, setAuthorizationContextError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [consent, setConsent] = useState<BrokerConsentPrompt | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => {
+    const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
+    return typeof callbackSearch === 'string' &&
+      !parseAuthorizationCallbackParameters(callbackSearch)
+      ? 'The Identity Broker sign-in response is invalid. Start sign-in again.'
+      : null;
+  });
   const sessionRef = useRef<AuthSession | null>(null);
+  const sessionGenerationRef = useRef(0);
+  const authorizationContextRequestRef = useRef(0);
+  const authorizationContextRef = useRef<{
+    value: ConfirmedAuthorizationContext;
+    accessToken: string;
+    binding: RunBinding | null;
+    sessionGeneration: number;
+  } | null>(null);
   const refreshPromiseRef = useRef<{
     session: AuthSession;
     promise: Promise<AuthSession | null>;
@@ -105,6 +138,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setSession = useCallback((next: AuthSession | null) => {
+    const current = sessionRef.current;
+    if (current?.accessToken !== next?.accessToken || !sameBinding(current?.binding ?? null, next?.binding ?? null)) {
+      sessionGenerationRef.current += 1;
+      authorizationContextRequestRef.current += 1;
+      authorizationContextRef.current = null;
+      setAuthorizationContextState(null);
+      setAuthorizationContextLoading(false);
+      setAuthorizationContextError(null);
+    }
     sessionRef.current = next;
     setSessionState(next);
   }, []);
@@ -136,21 +178,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [finishCode]);
 
   useEffect(() => {
-    const current = new URL(window.location.href);
-    if (!current.searchParams.has('code') && !current.searchParams.has('error')) return;
+    const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
+    if (typeof callbackSearch !== 'string') return;
+    window.__AGENTWEAVER_IDENTITY_CALLBACK__ = undefined;
+    const callback = parseAuthorizationCallbackParameters(callbackSearch);
+    if (!callback) return;
     let transaction: AuthorizationTransaction | null = transactionRef.current;
     try {
       transaction ??= readAuthorizationTransaction();
     } catch {
       transaction = null;
     }
-    cleanCallbackUrl();
     if (!transaction) {
       setError('The sign-in response has no matching in-progress PKCE transaction. Start sign-in again.');
       return;
     }
+    const responseUrl = new URL('/auth/callback', window.location.origin);
+    responseUrl.searchParams.set('state', callback.state);
+    if ('code' in callback) responseUrl.searchParams.set('code', callback.code);
+    else {
+      responseUrl.searchParams.set('error', callback.error);
+      if (callback.error_description)
+        responseUrl.searchParams.set('error_description', callback.error_description);
+    }
     setBusy(true);
-    void consumeAuthorizationResponse(current.toString(), transaction)
+    void consumeAuthorizationResponse(responseUrl.toString(), transaction)
       .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : 'Sign-in failed.'))
       .finally(() => setBusy(false));
   }, [consumeAuthorizationResponse, setBusy]);
@@ -173,6 +225,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pollAbortRef.current?.abort();
 
     let popup: Window | null = null;
+    let popupCallbackUrl: string | null = null;
+    let popupCallbackError: Error | null = null;
+    let popupCallbackReceived = false;
+    let popupMessageHandler: ((event: MessageEvent<unknown>) => void) | null = null;
     try {
       popup = popupOverride === undefined
         ? window.open('about:blank', 'agentweaver-identity', 'popup,width=560,height=720')
@@ -187,9 +243,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         window.location.assign(authorizeUrl);
         return;
       }
+      const callbackOrigin = new URL(transaction.redirectUri).origin;
+      popupMessageHandler = (event) => {
+        if (event.source !== popup ||
+            event.origin !== callbackOrigin ||
+            transactionRef.current !== transaction ||
+            popupCallbackReceived)
+          return;
+
+        const message = parseAuthorizationCallbackMessage(event.data);
+        if (!message) return;
+        popupCallbackReceived = true;
+        try {
+          const responseUrl = new URL(transaction.redirectUri);
+          responseUrl.searchParams.set('state', message.state);
+          if ('code' in message) responseUrl.searchParams.set('code', message.code);
+          else {
+            responseUrl.searchParams.set('error', message.error);
+            if (message.error_description)
+              responseUrl.searchParams.set('error_description', message.error_description);
+          }
+          parseAuthorizationResult(responseUrl.toString(), transaction.state);
+          popupCallbackUrl = responseUrl.toString();
+        } catch (reason) {
+          popupCallbackError = reason instanceof Error
+            ? reason
+            : new Error('The Identity Broker returned an invalid sign-in response.');
+        }
+        pollAbortRef.current?.abort();
+      };
+      window.addEventListener('message', popupMessageHandler);
 
       const startedAt = Date.now();
       while (Date.now() - startedAt < AUTH_TIMEOUT_MS) {
+        if (popupCallbackError) throw popupCallbackError;
+        if (popupCallbackUrl) {
+          if (!await consumeAuthorizationResponse(popupCallbackUrl, transaction))
+            throw new Error('The Identity Broker returned an invalid sign-in response.');
+          popup.close();
+          return;
+        }
         if (popup.closed) throw new Error('Identity Broker sign-in was closed before it completed.');
         const abortController = new AbortController();
         pollAbortRef.current = abortController;
@@ -198,39 +291,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const response = await fetch(authorizeUrl, {
             credentials: 'include',
             cache: 'no-store',
-            redirect: 'follow',
+            redirect: 'manual',
             signal: abortController.signal,
             headers: { Accept: 'application/json' },
           });
-          if (await consumeAuthorizationResponse(response.url, transaction)) {
-            popup.close();
-            return;
-          }
-          if (!response.ok) {
-            const problem = await response.json().catch(() => null) as {
-              error?: string;
-              error_description?: string;
-            } | null;
-            throw new Error(
-              problem?.error_description ??
-                (problem?.error
-                  ? `Identity Broker authorization failed: ${problem.error}.`
-                  : `Identity Broker authorization failed with HTTP ${response.status}.`),
-            );
-          }
-          const result: unknown = await response.json().catch(() => null);
-          if (isConsentPrompt(result)) {
-            if (result.client_id !== config.clientId ||
-                result.requested_scopes.some((scope) => !config.scopes.includes(scope))) {
-              throw new Error('The Broker consent response does not match this registered client and its configured scopes.');
+          if (response.type !== 'opaqueredirect') {
+            if (!response.ok) {
+              const problem = await response.json().catch(() => null) as {
+                error?: string;
+                error_description?: string;
+              } | null;
+              throw new Error(
+                problem?.error_description ??
+                  (problem?.error
+                    ? `Identity Broker authorization failed: ${problem.error}.`
+                    : `Identity Broker authorization failed with HTTP ${response.status}.`),
+              );
             }
-            popup.close();
-            setConsent(result);
-            return;
+            const result: unknown = await response.json().catch(() => null);
+            if (isConsentPrompt(result)) {
+              if (result.client_id !== config.clientId ||
+                  result.requested_scopes.some((scope) => !config.scopes.includes(scope))) {
+                throw new Error('The Broker consent response does not match this registered client and its configured scopes.');
+              }
+              popup.close();
+              setConsent(result);
+              return;
+            }
+            const body = result as { error?: string; error_description?: string } | null;
+            if (body?.error)
+              throw new Error(body.error_description ?? `Identity Broker authorization failed: ${body.error}.`);
           }
-          const body = result as { error?: string; error_description?: string } | null;
-          if (body?.error)
-            throw new Error(body.error_description ?? `Identity Broker authorization failed: ${body.error}.`);
         } catch (reason) {
           if (reason instanceof Error && !/aborted|load failed|failed to fetch/i.test(reason.message))
             throw reason;
@@ -247,6 +338,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearAuthorizationTransaction();
       transactionRef.current = null;
     } finally {
+      if (popupMessageHandler) window.removeEventListener('message', popupMessageHandler);
       setBusy(false);
     }
   }, [configurationError, consumeAuthorizationResponse, setSession]);
@@ -338,7 +430,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refresh, session]);
 
   const apiCall = useCallback(async <T,>(
-    operation: (accessToken: string) => Promise<T>,
+    operation: (accessToken: string, tenantSelector: string | null) => Promise<T>,
     requestedBinding: RunBinding | null = null,
   ): Promise<T> => {
     let current = sessionRef.current;
@@ -355,15 +447,114 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       current = await refresh(current);
       if (!current) throw new GatewayError(401, { code: 'unauthorized' }, 'Your Broker session expired.');
     }
+    const invoke = (active: AuthSession) => {
+      const confirmed = authorizationContextRef.current;
+      const tenantSelector =
+        confirmed &&
+        confirmed.accessToken === active.accessToken &&
+        confirmed.sessionGeneration === sessionGenerationRef.current &&
+        sameBinding(confirmed.binding, active.binding) &&
+        sameBinding(active.binding, requestedBinding)
+          ? confirmed.value.tenantId
+          : null;
+      return operation(active.accessToken, tenantSelector);
+    };
     try {
-      return await operation(current.accessToken);
+      return await invoke(current);
     } catch (reason) {
       if (!(reason instanceof GatewayError) || reason.status !== 401) throw reason;
       current = await refresh(current);
       if (!current) throw reason;
-      return await operation(current.accessToken);
+      return await invoke(current);
     }
   }, [refresh]);
+
+  const resolveAuthorizationContext = useCallback(async (
+    tenantSelector?: string,
+  ): Promise<ConfirmedAuthorizationContext | null> => {
+    const requestGeneration = ++authorizationContextRequestRef.current;
+    const startingSession = sessionRef.current;
+    authorizationContextRef.current = null;
+    setAuthorizationContextState(null);
+    setAuthorizationContextLoading(true);
+    setAuthorizationContextError(null);
+    if (!startingSession) {
+      const reason = new GatewayError(401, { code: 'unauthorized' }, 'Sign in to resolve a tenant context.');
+      setAuthorizationContextError(reason);
+      setAuthorizationContextLoading(false);
+      return null;
+    }
+
+    const requestIdentity: { current: {
+      accessToken: string;
+      binding: RunBinding | null;
+      sessionGeneration: number;
+    } | null } = { current: null };
+    try {
+      const result = await apiCall(
+        (accessToken) => {
+          const active = sessionRef.current;
+          if (!active ||
+              active.accessToken !== accessToken ||
+              !sameBinding(active.binding, startingSession.binding))
+            throw new GatewayError(401, { code: 'authorization_context_stale' }, 'The sign-in session changed while resolving tenant context.');
+          requestIdentity.current = {
+            accessToken,
+            binding: active.binding,
+            sessionGeneration: sessionGenerationRef.current,
+          };
+          return gatewayClient.getAuthorizationContext(accessToken, tenantSelector);
+        },
+        startingSession.binding,
+      );
+      const identity = requestIdentity.current;
+      const active = sessionRef.current;
+      if (requestGeneration !== authorizationContextRequestRef.current ||
+          !identity ||
+          !active ||
+          active.accessToken !== identity.accessToken ||
+          sessionGenerationRef.current !== identity.sessionGeneration ||
+          !sameBinding(active.binding, identity.binding))
+        return null;
+      if (!contextMatchesBinding(result, identity.binding))
+        throw new GatewayError(
+          502,
+          { code: 'authorization_context_binding_mismatch' },
+          'The Projects owner returned authorization context for a different binding.',
+        );
+
+      const confirmedContext: ConfirmedAuthorizationContext = {
+        tenantId: result.tenantId,
+        membershipRevision: result.membershipRevision,
+      };
+      authorizationContextRef.current = {
+        value: confirmedContext,
+        accessToken: identity.accessToken,
+        binding: identity.binding,
+        sessionGeneration: identity.sessionGeneration,
+      };
+      setAuthorizationContextState(confirmedContext);
+      return confirmedContext;
+    } catch (reason) {
+      if (requestGeneration === authorizationContextRequestRef.current) {
+        authorizationContextRef.current = null;
+        setAuthorizationContextState(null);
+        setAuthorizationContextError(reason);
+      }
+      return null;
+    } finally {
+      if (requestGeneration === authorizationContextRequestRef.current)
+        setAuthorizationContextLoading(false);
+    }
+  }, [apiCall]);
+
+  useEffect(() => {
+    if (!session) return;
+    const bootstrap = window.setTimeout(() => {
+      void resolveAuthorizationContext();
+    }, 0);
+    return () => window.clearTimeout(bootstrap);
+  }, [resolveAuthorizationContext, session]);
 
   const signOut = useCallback(() => {
     pollAbortRef.current?.abort();
@@ -384,7 +575,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     decideConsent,
     signOut,
     apiCall,
-  }), [apiCall, authorize, busy, configurationError, consent, decideConsent, error, session, signOut]);
+    authorizationContext,
+    authorizationContextLoading,
+    authorizationContextError,
+    resolveAuthorizationContext,
+  }), [
+    apiCall,
+    authorizationContext,
+    authorizationContextError,
+    authorizationContextLoading,
+    authorize,
+    busy,
+    configurationError,
+    consent,
+    decideConsent,
+    error,
+    resolveAuthorizationContext,
+    session,
+    signOut,
+  ]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

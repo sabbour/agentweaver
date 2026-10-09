@@ -439,7 +439,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal((int)HttpStatusCode.Forbidden,
             denied.GetProperty("structuredContent").GetProperty("status").GetInt32());
         Assert.Equal(
-            "missing_effective_writeprojects",
+            "missing_effective_accessprivateknowledge",
             denied.GetProperty("structuredContent").GetProperty("ownerResponse")
                 .GetProperty("code").GetString());
         Assert.Equal(1L, await CountKnowledgeRecordsAsync());

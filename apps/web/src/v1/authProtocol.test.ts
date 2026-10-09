@@ -4,6 +4,9 @@ import {
   buildAuthorizeUrl,
   clearAuthorizationTransaction,
   exchangeAuthorizationCode,
+  IDENTITY_CALLBACK_MESSAGE_TYPE,
+  parseAuthorizationCallbackMessage,
+  parseAuthorizationCallbackParameters,
   parseAuthorizationResult,
   pkceChallenge,
   readAuthorizationTransaction,
@@ -54,6 +57,109 @@ describe('Identity Broker authorization', () => {
       'https://app.example.test/auth/callback?code=one&state=wrong',
       'expected',
     )).toThrow(/invalid state/i);
+  });
+
+  it('accepts only a single bounded identity callback response shape', () => {
+    expect(parseAuthorizationCallbackParameters('?code=code-value&state=state-value')).toEqual({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: 'state-value',
+      code: 'code-value',
+    });
+    expect(parseAuthorizationCallbackParameters(
+      '?error=access_denied&error_description=Denied&state=state-value',
+    )).toEqual({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: 'state-value',
+      error: 'access_denied',
+      error_description: 'Denied',
+    });
+    expect(parseAuthorizationCallbackParameters(
+      '?code=code-value&state=state-value&state=duplicate',
+    )).toBeUndefined();
+    expect(parseAuthorizationCallbackParameters(
+      '?code=code-value&state=state-value&unexpected=parameter',
+    )).toBeUndefined();
+  });
+
+  it('accepts the exact configured Broker issuer on code and error callbacks', () => {
+    const issuer = 'https://identity.example.test/';
+    expect(parseAuthorizationCallbackParameters(
+      `?code=code-value&state=state-value&iss=${encodeURIComponent(issuer)}`,
+      issuer,
+    )).toEqual({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: 'state-value',
+      code: 'code-value',
+    });
+    expect(parseAuthorizationCallbackParameters(
+      `?error=access_denied&error_description=Denied&state=state-value&iss=${encodeURIComponent(issuer)}`,
+      issuer,
+    )).toEqual({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: 'state-value',
+      error: 'access_denied',
+      error_description: 'Denied',
+    });
+  });
+
+  it.each([
+    ['wrong host', 'https://other.example.test/'],
+    ['wrong path', 'https://identity.example.test/other'],
+    ['different port', 'https://identity.example.test:8443/'],
+    ['missing trailing slash', 'https://identity.example.test'],
+    ['non-HTTPS scheme', 'http://identity.example.test/'],
+    ['credentials', 'https://user@identity.example.test/'],
+    ['query', 'https://identity.example.test/?x=1'],
+    ['fragment', 'https://identity.example.test/#x'],
+    ['empty value', ''],
+    ['malformed URI', 'https://identity.example.test:invalid/'],
+    ['oversized value', `https://identity.example.test/${'x'.repeat(2048)}`],
+  ])('rejects an issuer that is not an exact HTTPS match (%s)', (_name, issuer) => {
+    expect(parseAuthorizationCallbackParameters(
+      `?code=code-value&state=state-value&iss=${encodeURIComponent(issuer)}`,
+      'https://identity.example.test/',
+    )).toBeUndefined();
+  });
+
+  it('rejects duplicate or unconfigured issuer parameters', () => {
+    const issuer = encodeURIComponent('https://identity.example.test/');
+    expect(parseAuthorizationCallbackParameters(
+      `?code=code-value&state=state-value&iss=${issuer}&iss=${issuer}`,
+      'https://identity.example.test/',
+    )).toBeUndefined();
+    expect(parseAuthorizationCallbackParameters(
+      `?code=code-value&state=state-value&iss=${issuer}`,
+      '',
+    )).toBeUndefined();
+  });
+
+  it('accepts only bounded callback messages with an exact shape', () => {
+    expect(parseAuthorizationCallbackMessage({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: 'state-value',
+      code: 'single-use-code',
+    })).toEqual({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: 'state-value',
+      code: 'single-use-code',
+    });
+    expect(parseAuthorizationCallbackMessage({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: 'state-value',
+      code: 'single-use-code',
+      access_token: 'must-not-be-forwarded',
+    })).toBeUndefined();
+    expect(parseAuthorizationCallbackMessage({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: '',
+      code: 'single-use-code',
+    })).toBeUndefined();
+    expect(parseAuthorizationCallbackMessage({
+      type: IDENTITY_CALLBACK_MESSAGE_TYPE,
+      state: 'state-value',
+      code: 'single-use-code',
+      error: 'access_denied',
+    })).toBeUndefined();
   });
 
   it('recovers only the PKCE transaction from session storage, never tokens', () => {

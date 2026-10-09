@@ -16,7 +16,7 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class GatewayCopilotConnectionBffTests
 {
     [Fact]
-    public async Task CopilotConnectionBffForwardsCurrentBearerAndOnlyLinkCookie()
+    public async Task CopilotConnectionBffForwardsOptionalTenantSelectorAndOnlyLinkCookie()
     {
         using var rsa = RSA.Create(2048);
         var issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
@@ -141,8 +141,17 @@ public sealed class GatewayCopilotConnectionBffTests
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
 
+        using (var getWithoutTenant = new HttpRequestMessage(
+                   HttpMethod.Get,
+                   $"/api/connections/copilot-user/v1/{connectionId}"))
+        {
+            getWithoutTenant.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var response = await gateway.Client.SendAsync(getWithoutTenant);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
         var forwarded = requests.ToArray();
-        Assert.Equal(5, forwarded.Length);
+        Assert.Equal(6, forwarded.Length);
         Assert.Equal(
             new[]
             {
@@ -151,18 +160,22 @@ public sealed class GatewayCopilotConnectionBffTests
                 "/internal/connections/copilot-user/refresh",
                 "/internal/connections/copilot-user/revoke",
                 $"/internal/connections/copilot-user/{connectionId}",
+                $"/internal/connections/copilot-user/{connectionId}",
             },
             forwarded.Select(request => request.Uri.AbsolutePath));
-        Assert.All(forwarded, request =>
+        Assert.All(forwarded.Take(5), request =>
         {
             Assert.Equal(token, AuthenticationHeaderValue.Parse(request.Authorization!).Parameter);
             Assert.Equal("tenant-1", request.Tenant);
         });
+        Assert.Equal(token, AuthenticationHeaderValue.Parse(forwarded[5].Authorization!).Parameter);
+        Assert.Null(forwarded[5].Tenant);
         Assert.Null(forwarded[0].Cookie);
         Assert.Equal("__Host-agentweaver-copilot-link=nonce-token", forwarded[1].Cookie);
         Assert.Null(forwarded[2].Cookie);
         Assert.Null(forwarded[3].Cookie);
         Assert.Null(forwarded[4].Cookie);
+        Assert.Null(forwarded[5].Cookie);
         Assert.Equal(expectedMutationBody, forwarded[2].Body);
         Assert.Equal(expectedMutationBody, forwarded[3].Body);
     }

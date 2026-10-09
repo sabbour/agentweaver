@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\services\mcp\Agentweaver.Mcp\Agentweaver.Mcp.csproj" Aliases="McpHost" />
     <ProjectReference Include="..\..\packages\Agentweaver.AgentRuntime\Agentweaver.AgentRuntime.csproj" />
     <ProjectReference Include="..\..\services\agenthost\Agentweaver.AgentHost\Agentweaver.AgentHost.csproj" Aliases="AgentHostService" />
+    <ProjectReference Include="..\..\apps\web\host\Agentweaver.Web.Host.csproj" Aliases="WebHost" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Migrations\runtime_registration.sql" LogicalName="Agentweaver.Identity.Broker.Tests.runtime_registration.sql" />
