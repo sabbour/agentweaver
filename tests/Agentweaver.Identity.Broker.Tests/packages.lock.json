@@ -191,8 +191,8 @@
       },
       "GitHub.Copilot.SDK": {
         "type": "Transitive",
-        "resolved": "1.0.11",
-        "contentHash": "92CcbAoPQ60Lr7ho7uO5uNYkkxlVux6AhsoZv2WbZz6DcXfvUihHaX8rxNdxM5xv1bIa/WrBE4EadZgJakp3Lw==",
+        "resolved": "1.0.18",
+        "contentHash": "7Nm7/LTWo0Fat8SL/iKSBdm+UV4tx4q1k+0AiL8xRUaV5UBKk8dTUhK0qA6S2V00yrvGq63n2avmRqi6Kq2zEQ==",
         "dependencies": {
           "Microsoft.Extensions.AI.Abstractions": "10.2.0",
           "Microsoft.Extensions.Logging.Abstractions": "10.0.2"
@@ -1420,7 +1420,7 @@
         "dependencies": {
           "Agentweaver.Abstractions": "[0.0.0, )",
           "Agentweaver.Identity": "[0.0.0, )",
-          "GitHub.Copilot.SDK": "[1.0.11, )"
+          "GitHub.Copilot.SDK": "[1.0.18, )"
         }
       },
       "agentweaver.environment": {

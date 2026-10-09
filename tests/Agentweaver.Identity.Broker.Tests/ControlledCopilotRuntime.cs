@@ -281,6 +281,10 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                                 await _turnStop.CancelAsync();
                             result = new { success = true };
                             break;
+                        case "session.detach":
+                            Assert.Equal(_sessionId, parameters.GetProperty("sessionId").GetString());
+                            result = new { success = true };
+                            break;
                         default:
                             throw new InvalidOperationException($"Unexpected actual SDK method: {method}");
                     }

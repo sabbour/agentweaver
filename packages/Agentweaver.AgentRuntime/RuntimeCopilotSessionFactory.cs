@@ -89,7 +89,7 @@ public sealed class RuntimeCopilotSessionFactory
             Mode = CopilotClientMode.Empty,
             Connection = _connection,
             BaseDirectory = _baseDirectory,
-#pragma warning disable GHCP001 // Session filesystem RPC options are pinned to SDK 1.0.11.
+#pragma warning disable GHCP001 // Session filesystem RPC options are pinned to SDK 1.0.18.
             SessionFs = new SessionFsConfig
             {
                 InitialWorkingDirectory = "/workspace",
@@ -125,7 +125,8 @@ public sealed class RuntimeCopilotSessionFactory
 #pragma warning disable GHCP001 // The pinned SDK marks its RPC policy and permission types as experimental.
             if (model.SourceMode == ModelSourceMode.HostedCopilot)
             {
-                var catalog = await client.Rpc.Models.ListAsync(token, cancellationToken);
+                var catalog = await client.Rpc.Models.ListAsync(
+                    selectionId: null, gitHubToken: token, cancellationToken: cancellationToken);
                 var matches = catalog.Models.Where(item => item.Id == model.ModelId).Take(2).ToArray();
                 if (matches.Length != 1 || matches[0].Policy?.State != GitHub.Copilot.Rpc.ModelPolicyState.Enabled)
                     throw new RuntimeAuthorizationException("runtime_sdk_model_unavailable");
