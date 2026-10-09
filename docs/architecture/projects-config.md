@@ -37,6 +37,18 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PATCH /api/projects/{projectId}` | Change project name or lifecycle state using an expected project revision. Archive rather than physically delete. |
 | `GET /api/projects/{projectId}/configuration?revision={n}` | Read the current or a retained configuration revision. |
 | `PUT /api/projects/{projectId}/configuration` | Append a configuration revision using an expected configuration revision. |
+| `GET /api/casting/templates` | List the built-in scenario templates available to seed a reviewed team proposal. |
+| `GET /api/catalog/roles` | List the role definitions available to scenario and manual team proposals. |
+| `POST /api/projects/{projectId}/casting/proposals` | Create a reviewed proposal from a complete project configuration draft. |
+| `POST /api/projects/{projectId}/casting/proposals/scenario` | Create a version-bound proposal from a scenario template. |
+| `POST /api/projects/{projectId}/casting/proposals/manual` | Create a version-bound proposal from selected role IDs. |
+| `GET /api/projects/{projectId}/casting/proposals` | List casting proposals for an authorized project. |
+| `GET /api/projects/{projectId}/casting/proposals/{proposalId}` | Read a proposal and its draft for review. |
+| `PATCH /api/projects/{projectId}/casting/proposals/{proposalId}` | Amend a pending proposal against its expected draft revision. |
+| `POST /api/projects/{projectId}/casting/proposals/{proposalId}/confirm` | Atomically confirm a current proposal as a new configuration revision. |
+| `POST /api/projects/{projectId}/casting/proposals/{proposalId}/reject` | Reject a proposal without changing project configuration or run state. |
+| `GET /api/projects/{projectId}/casting/export?revision={n}` | Export charter/casting configuration from the current or a retained revision. |
+| `POST /api/projects/{projectId}/casting/import` | Stage an explicit owner-authorized charter/casting import for review. |
 | `GET /api/platform/runtime-defaults` | Read the platform administrator's current defaults. |
 | `PUT /api/platform/runtime-defaults` | Append platform defaults using an expected revision. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
@@ -44,6 +56,14 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
+
+### Reviewed casting proposals and explicit transfers
+
+Casting templates and role definitions are authenticated catalog reads. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both create a pending proposal from the configuration at that revision, replacing only the proposed `AgentCharters` and `Casting` while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
+
+Authorized project readers can list and read proposals; project writers can amend a draft using its expected draft revision and explicitly confirm or reject it. Confirmation rechecks current project authority and the base configuration revision while holding the project lock, then appends the configuration revision and marks the proposal confirmed in the same transaction. A changed project revision conflicts rather than silently replacing a newer roster. Rejection records only the proposal transition; it does not write configuration or run state. Accepted run selections continue to refer to their immutable configuration revision.
+
+Charter/casting transfer is a separate explicit owner operation. Export identifies the source project and configuration revision and includes a format version and content digest. Import checks that format and digest, validates the proposed configuration through the ordinary owner-authorized configuration validator, preserves target settings outside charters/casting, and creates a pending proposal rather than applying it. Incompatible or tampered transfers return an actionable client error. The service does not mirror Squad files, reconcile them in pre-commit hooks, or export them after runs.
 
 The authorization-context route requires `api.read`, accepts the existing optional `X-Agentweaver-Tenant` selector, and resolves only the authenticated issuer and subject. It rejects query parameters, including caller-subject and role selectors, and purpose-bound tokens. It applies the validated service audience, OAuth scopes, and optional project/run bindings before returning grouped effective permissions with membership and role revisions; it does not return assignment rows or a transferable credential. Responses use `Cache-Control: no-store`. Resource services request this context for each privileged operation and do not maintain separate membership/role records, caches, or authorization pins. The contract-1 wire DTOs are shared in `Agentweaver.Abstractions`; this shares serialization types, not authority data or database access.
 
@@ -61,7 +81,7 @@ The authorization-context route requires `api.read`, accepts the existing option
 - The service requires project egress rules to be a subset of the platform baseline and checks each run's required destinations. Project run limits may only reduce configured platform limits.
 - The immutable run-selection snapshot carries typed platform egress baseline, optional project narrowing, admitted run needs, the effective allowlist, and each layered Network Policy provider's layer, options revision, and required/advertised capabilities. The Environment consumer rechecks the current authorization context before reading this snapshot and compiles the final intent.
 - Project configuration revisions, platform runtime revisions, and run-selection snapshots are append-only at the database boundary. Project metadata and revision heads remain mutable under optimistic revision checks.
-- Memberships and role assignments live in this service's schema and are provisioned or revoked only through a privileged source path; public APIs cannot self-grant roles. Revocation uses expected revisions, records an immutable audit event, and cannot remove the last explicit project Owner. Runtime database credentials have SELECT-only access to membership, assignment, and audit tables.
+- Memberships and role assignments live in this service's schema and are provisioned or revoked only through a privileged source path; public APIs cannot self-grant roles. Revocation uses expected revisions, records an immutable audit event, and cannot remove the last explicit project Owner. Runtime database credentials have SELECT-only access to membership, assignment, and audit tables; casting row locks use the fixed security-definer authority function, whose exact EXECUTE grant is checked at startup.
 - Run-selection acceptance serializes a run ID and rechecks the current Orchestrator assignment before committing. Replays return the originally stored snapshot, but still require current authorization; snapshots never pin membership or roles.
 - Provider resolution returns candidates, not resource bindings. Resource identity, generation, negotiated capabilities, and final pins are owned by the consumer after provisioning.
 

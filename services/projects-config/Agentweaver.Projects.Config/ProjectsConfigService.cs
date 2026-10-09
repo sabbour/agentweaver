@@ -50,12 +50,25 @@ public sealed record EffectiveRunSelection(
     ImmutableArray<NetworkEgressRule>? ProjectEgressNarrowing,
     ImmutableArray<NetworkEgressRule> RequiredEgress);
 
-public sealed class ProjectsConfigService(
-    ProjectsConfigDbContext db,
-    ProviderCatalog providerCatalog,
-    TimeProvider timeProvider)
+public sealed partial class ProjectsConfigService
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private readonly ProjectsConfigDbContext db;
+    private readonly ProviderCatalog providerCatalog;
+    private readonly TimeProvider timeProvider;
+    private readonly IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory;
+
+    public ProjectsConfigService(
+        ProjectsConfigDbContext db,
+        ProviderCatalog providerCatalog,
+        TimeProvider timeProvider,
+        IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory = null)
+    {
+        this.db = db;
+        this.providerCatalog = providerCatalog;
+        this.timeProvider = timeProvider;
+        this.dbContextFactory = dbContextFactory;
+    }
 
     public async Task<ProjectSummary> CreateProjectAsync(
         ProjectAuthorizationContext caller,

@@ -184,10 +184,12 @@ public static class ProjectConfigurationValidator
         foreach (var item in configuration.Casting)
         {
             ValidateIdentifier(item.AgentId, "casting.agentId");
-            ValidateText(item.Role, 120, "casting.role");
+            ValidateIdentifier(item.Role, "casting.role");
             if (item.Order < 0)
                 throw Invalid("Casting order cannot be negative.");
         }
+
+        ValidateCastingProjection(configuration.AgentCharters, configuration.Casting);
 
         if (configuration.BlueprintWorkflowReferences.Any(item => item is null))
             throw Invalid("Configuration contains a null blueprint reference.");
@@ -217,6 +219,32 @@ public static class ProjectConfigurationValidator
         ValidateSourceControl(configuration.SourceControl);
         return configuration with { EgressNarrowing = normalizedEgress };
     }
+
+    private static void ValidateCastingProjection(
+        ImmutableArray<ProjectAgentCharter> charters,
+        ImmutableArray<ProjectAgentCast> casting)
+    {
+        var chartersByAgent = charters.ToDictionary(item => item.AgentId, StringComparer.Ordinal);
+        var castingByAgent = casting.ToDictionary(item => item.AgentId, StringComparer.Ordinal);
+        if (chartersByAgent.Count != castingByAgent.Count)
+            throw Invalid("Every cast agent must have exactly one matching agent charter, and every charter must be cast.");
+
+        foreach (var cast in casting)
+        {
+            if (IsReservedOrchestrationRole(cast.AgentId) || IsReservedOrchestrationRole(cast.Role))
+                throw Invalid($"Casting agent '{cast.AgentId}' uses reserved orchestration role '{cast.Role}'.");
+            if (!chartersByAgent.TryGetValue(cast.AgentId, out var charter) ||
+                !string.Equals(charter.Role, cast.Role, StringComparison.Ordinal))
+                throw Invalid(
+                    $"Casting agent '{cast.AgentId}' role '{cast.Role}' must exactly match its agent charter role.");
+        }
+    }
+
+    private static bool IsReservedOrchestrationRole(string value) =>
+        value.Equals("scribe", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("work-monitor", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("coordinator", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("rai", StringComparison.OrdinalIgnoreCase);
 
     private static void ValidateSourceControl(SourceControlProjectSettings? sourceControl)
     {
