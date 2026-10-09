@@ -257,7 +257,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     {
                         MaxModelTurns = 12,
                         MaxToolCalls = 100,
-                        MaxChildren = 5,
+                        MaxChildren = 6,
                         MaxConcurrentChildren = 2,
                         MaxWallTimeSeconds = 3600,
                         MaxPromptTokens = 20000
