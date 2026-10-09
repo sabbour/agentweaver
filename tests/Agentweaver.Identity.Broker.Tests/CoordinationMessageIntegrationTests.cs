@@ -257,7 +257,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     {
                         MaxModelTurns = 12,
                         MaxToolCalls = 100,
-                        MaxChildren = 4,
+                        MaxChildren = 5,
                         MaxConcurrentChildren = 2,
                         MaxWallTimeSeconds = 3600,
                         MaxPromptTokens = 20000
@@ -3126,7 +3126,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         "Should the approved work item continue?",
                         ["continue"],
                         true));
-                Assert.Equal(HttpStatusCode.OK, pendingOwnerContextGate.StatusCode);
+                await AssertStatusAsync(pendingOwnerContextGate, HttpStatusCode.OK);
                 var pendingGateResult =
                     await ReadJsonAsync<CoordinatorDecisionOperationResponse>(pendingOwnerContextGate);
                 Assert.True(pendingGateResult.Accepted);
