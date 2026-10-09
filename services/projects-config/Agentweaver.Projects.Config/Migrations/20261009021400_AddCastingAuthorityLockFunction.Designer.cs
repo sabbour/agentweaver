@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Projects.Config;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Projects.Config.Migrations
 {
     [DbContext(typeof(ProjectsConfigDbContext))]
-    partial class ProjectsConfigDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261009021400_AddCastingAuthorityLockFunction")]
+    partial class AddCastingAuthorityLockFunction
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

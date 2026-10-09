@@ -8,6 +8,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.Providers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 using Testcontainers.PostgreSql;
@@ -789,6 +790,736 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         }
     }
 
+    [Fact]
+    public async Task CastingProposalsRequireCurrentRevisionsAndRejectWithoutChangingProjectConfiguration()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "casting-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "casting-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(owner, "Casting lifecycle", CancellationToken.None);
+        var initial = await service.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            CastingConfiguration("agent-a", "Initial charter"),
+            CancellationToken.None);
+
+        var rejected = await service.CreateCastingProposalAsync(
+            owner,
+            project.ProjectId,
+            initial.Revision,
+            CastingConfiguration("agent-a", "Rejected draft"),
+            CancellationToken.None);
+        var amended = await service.UpdateCastingProposalAsync(
+            owner,
+            project.ProjectId,
+            rejected.ProposalId,
+            rejected.DraftRevision,
+            CastingConfiguration("agent-a", "Amended draft"),
+            CancellationToken.None);
+        Assert.Equal(2, amended.DraftRevision);
+
+        var staleDraft = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.ConfirmCastingProposalAsync(
+                owner, project.ProjectId, amended.ProposalId, rejected.DraftRevision, CancellationToken.None));
+        Assert.Equal("stale_casting_proposal", staleDraft.Code);
+
+        var historyBeforeReject = await db.ProjectConfigurationRevisions.AsNoTracking()
+            .CountAsync(item => item.ProjectId == project.ProjectId);
+        var runsBeforeReject = await db.RunSelections.AsNoTracking()
+            .CountAsync(item => item.ProjectId == project.ProjectId);
+        var rejection = await service.RejectCastingProposalAsync(
+            owner, project.ProjectId, amended.ProposalId, amended.DraftRevision, CancellationToken.None);
+        var rejectionReplay = await service.RejectCastingProposalAsync(
+            owner, project.ProjectId, amended.ProposalId, amended.DraftRevision, CancellationToken.None);
+        Assert.Equal(ProjectCastingProposalState.Rejected, rejection.State);
+        Assert.Equal(rejection.State, rejectionReplay.State);
+        Assert.Equal(historyBeforeReject, await db.ProjectConfigurationRevisions.AsNoTracking()
+            .CountAsync(item => item.ProjectId == project.ProjectId));
+        Assert.Equal(runsBeforeReject, await db.RunSelections.AsNoTracking()
+            .CountAsync(item => item.ProjectId == project.ProjectId));
+
+        var rejectedConfirm = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.ConfirmCastingProposalAsync(
+                owner, project.ProjectId, amended.ProposalId, amended.DraftRevision, CancellationToken.None));
+        Assert.Equal("casting_proposal_conflict", rejectedConfirm.Code);
+
+        var pending = await service.CreateCastingProposalAsync(
+            owner,
+            project.ProjectId,
+            initial.Revision,
+            CastingConfiguration("agent-b", "Confirmed charter"),
+            CancellationToken.None);
+        var confirmed = await service.ConfirmCastingProposalAsync(
+            owner, project.ProjectId, pending.ProposalId, pending.DraftRevision, CancellationToken.None);
+        var confirmReplay = await service.ConfirmCastingProposalAsync(
+            owner, project.ProjectId, pending.ProposalId, pending.DraftRevision, CancellationToken.None);
+        var confirmedRevision = confirmed.ConfirmedConfigurationRevision
+            ?? throw new InvalidOperationException("Confirming the proposal did not return its configuration revision.");
+        Assert.Equal(ProjectCastingProposalState.Confirmed, confirmed.State);
+        Assert.Equal(initial.Revision + 1, confirmedRevision);
+        Assert.Equal(confirmedRevision, confirmReplay.ConfirmedConfigurationRevision);
+        Assert.Equal(confirmed.Result?.Casting.ToArray(), confirmReplay.Result?.Casting.ToArray());
+        Assert.Equal(historyBeforeReject + 1, await db.ProjectConfigurationRevisions.AsNoTracking()
+            .CountAsync(item => item.ProjectId == project.ProjectId));
+
+        var staleBase = await service.CreateCastingProposalAsync(
+            owner,
+            project.ProjectId,
+            confirmedRevision,
+            CastingConfiguration("agent-c", "Stale base"),
+            CancellationToken.None);
+        await using var updateDb = CreateDbContext();
+        var updateService = CreateCastingProposalService(updateDb);
+        await updateService.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            confirmedRevision,
+            CastingConfiguration("agent-d", "Current configuration"),
+            CancellationToken.None);
+        var staleConfiguration = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.ConfirmCastingProposalAsync(
+                owner, project.ProjectId, staleBase.ProposalId, staleBase.DraftRevision, CancellationToken.None));
+        Assert.Equal("stale_project_configuration", staleConfiguration.Code);
+        Assert.Equal(ProjectCastingProposalState.Pending,
+            (await service.GetCastingProposalAsync(owner, project.ProjectId, staleBase.ProposalId, CancellationToken.None)).State);
+    }
+
+    [Fact]
+    public async Task ScenarioCastingProposalBuildsCatalogRosterPreservesUnrelatedSettingsAndConfirms()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "scenario-casting-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "scenario-casting-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(owner, "Scenario casting", CancellationToken.None);
+        var initial = await service.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            new ProjectConfiguration
+            {
+                AgentCharters = [new ProjectAgentCharter("existing-agent", "Existing", "builder", "Existing charter")],
+                Casting = [new ProjectAgentCast("existing-agent", "builder", 0)],
+                DefaultWorkflowId = "baseline-workflow",
+                Skills = [new SkillCatalogSetting("existing-skill", true, 0)],
+            },
+            CancellationToken.None);
+        var revisionsBeforeProposal = await db.ProjectConfigurationRevisions.AsNoTracking()
+            .CountAsync(item => item.ProjectId == project.ProjectId);
+
+        var proposal = await service.CreateScenarioCastingProposalAsync(
+            owner,
+            project.ProjectId,
+            initial.Revision,
+            "quick-software-development",
+            CancellationToken.None);
+
+        Assert.Equal(ProjectCastingProposalState.Pending, proposal.State);
+        Assert.Equal(initial.Revision, proposal.BaseConfigurationRevision);
+        Assert.Equal(
+            new[] { "frontend-engineer", "backend-engineer", "security-engineer", "devops-engineer", "qa-engineer" },
+            proposal.Draft.Casting.Select(item => item.AgentId));
+        Assert.Equal("baseline-workflow", proposal.Draft.DefaultWorkflowId);
+        Assert.Equal(initial.Configuration.Skills.ToArray(), proposal.Draft.Skills.ToArray());
+        Assert.Contains("Responsibilities:", proposal.Draft.AgentCharters[1].Charter, StringComparison.Ordinal);
+        Assert.Equal(revisionsBeforeProposal, await db.ProjectConfigurationRevisions.AsNoTracking()
+            .CountAsync(item => item.ProjectId == project.ProjectId));
+
+        var listed = await service.ListCastingProposalsAsync(
+            owner, project.ProjectId, 10, CancellationToken.None);
+        var reviewed = await service.GetCastingProposalAsync(
+            owner, project.ProjectId, proposal.ProposalId, CancellationToken.None);
+        Assert.Contains(listed, item => item.ProposalId == proposal.ProposalId);
+        Assert.Equal(proposal.Draft.AgentCharters.ToArray(), reviewed.Draft.AgentCharters.ToArray());
+        Assert.Equal(proposal.Draft.Casting.ToArray(), reviewed.Draft.Casting.ToArray());
+        Assert.Equal(proposal.Draft.Skills.ToArray(), reviewed.Draft.Skills.ToArray());
+
+        var confirmed = await service.ConfirmCastingProposalAsync(
+            owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+        Assert.Equal(ProjectCastingProposalState.Confirmed, confirmed.State);
+        Assert.Equal("baseline-workflow", confirmed.Result?.DefaultWorkflowId);
+        Assert.Equal(initial.Configuration.Skills.ToArray(), confirmed.Result?.Skills.ToArray());
+    }
+
+    [Fact]
+    public async Task ManualCastingProposalRejectsInvalidRolesAndRejectLeavesConfigurationUnchanged()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "manual-casting-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "manual-casting-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(owner, "Manual casting", CancellationToken.None);
+        var initial = await service.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            CastingConfiguration("existing-agent", "Existing charter"),
+            CancellationToken.None);
+
+        foreach (var invalidRoles in new[]
+        {
+            ImmutableArray<string>.Empty,
+            ImmutableArray.Create("writer", "writer"),
+            ImmutableArray.Create("writer", "missing-role"),
+            ImmutableArray.Create("writer", "coordinator"),
+        })
+        {
+            var invalid = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                service.CreateManualCastingProposalAsync(
+                    owner, project.ProjectId, initial.Revision, invalidRoles, CancellationToken.None));
+            Assert.Equal(400, invalid.StatusCode);
+        }
+
+        var proposal = await service.CreateManualCastingProposalAsync(
+            owner,
+            project.ProjectId,
+            initial.Revision,
+            ["writer", "editor"],
+            CancellationToken.None);
+        Assert.Equal(new[] { "writer", "editor" }, proposal.Draft.Casting.Select(item => item.Role));
+        Assert.Equal(new[] { 0, 1 }, proposal.Draft.Casting.Select(item => item.Order));
+        Assert.Equal(new[] { "Writer", "Editor" }, proposal.Draft.AgentCharters.Select(item => item.Name));
+
+        var rejection = await service.RejectCastingProposalAsync(
+            owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+        Assert.Equal(ProjectCastingProposalState.Rejected, rejection.State);
+        Assert.Equal(initial.Revision, (await service.GetProjectConfigurationAsync(
+            owner, project.ProjectId, null, CancellationToken.None)).Revision);
+        Assert.Equal(initial.Configuration.Casting.ToArray(),
+            (await service.GetProjectConfigurationAsync(
+                owner, project.ProjectId, null, CancellationToken.None)).Configuration.Casting.ToArray());
+    }
+
+    [Fact]
+    public async Task CastingTransferRoundTripPreservesUnrelatedConfigurationAndRecordsProvenance()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "transfer-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "transfer-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var source = await service.CreateProjectAsync(owner, "Transfer source", CancellationToken.None);
+        var sourceConfiguration = await service.UpdateProjectConfigurationAsync(
+            owner,
+            source.ProjectId,
+            source.ConfigurationRevision,
+            CastingConfiguration(
+                "source-agent",
+                "Source charter",
+                [new SkillCatalogSetting("source-skill", true, 0)]) with
+            {
+                DefaultWorkflowId = "source-workflow",
+            },
+            CancellationToken.None);
+        var transfer = await service.ExportCastingTransferAsync(
+            owner, source.ProjectId, sourceConfiguration.Revision, CancellationToken.None);
+        Assert.Equal(ProjectCastingTransfer.CurrentFormatVersion, transfer.FormatVersion);
+        Assert.Equal(source.ProjectId, transfer.SourceProjectId);
+        Assert.Equal(sourceConfiguration.Revision, transfer.SourceConfigurationRevision);
+        Assert.Equal(64, transfer.ContentDigest.Length);
+
+        var target = await service.CreateProjectAsync(owner, "Transfer target", CancellationToken.None);
+        var targetConfiguration = await service.UpdateProjectConfigurationAsync(
+            owner,
+            target.ProjectId,
+            target.ConfigurationRevision,
+            CastingConfiguration(
+                "target-agent",
+                "Target charter",
+                [new SkillCatalogSetting("target-skill", true, 0)]) with
+            {
+                DefaultWorkflowId = "target-workflow",
+            },
+            CancellationToken.None);
+        var imported = await service.ImportCastingTransferAsync(
+            owner,
+            target.ProjectId,
+            new ImportProjectCastingTransferRequest
+            {
+                ExpectedConfigurationRevision = targetConfiguration.Revision,
+                Transfer = transfer,
+            },
+            CancellationToken.None);
+
+        Assert.Equal(targetConfiguration.Revision, imported.BaseConfigurationRevision);
+        Assert.Equal(transfer.AgentCharters.ToArray(), imported.Draft.AgentCharters.ToArray());
+        Assert.Equal(transfer.Casting.ToArray(), imported.Draft.Casting.ToArray());
+        Assert.Equal(targetConfiguration.Configuration.Skills.ToArray(), imported.Draft.Skills.ToArray());
+        Assert.Equal("target-workflow", imported.Draft.DefaultWorkflowId);
+        Assert.Equal(source.ProjectId, imported.TransferProvenance?.SourceProjectId);
+        Assert.Equal(sourceConfiguration.Revision, imported.TransferProvenance?.SourceConfigurationRevision);
+        Assert.Equal(targetConfiguration.Revision,
+            (await service.GetProjectConfigurationAsync(owner, target.ProjectId, null, CancellationToken.None)).Revision);
+
+        var confirmed = await service.ConfirmCastingProposalAsync(
+            owner, target.ProjectId, imported.ProposalId, imported.DraftRevision, CancellationToken.None);
+        Assert.Equal(
+            targetConfiguration.Configuration.Skills.ToArray(),
+            confirmed.Result?.Skills.ToArray());
+        Assert.Equal("target-workflow", confirmed.Result?.DefaultWorkflowId);
+        var confirmedRevision = confirmed.ConfirmedConfigurationRevision
+            ?? throw new InvalidOperationException("Confirming the proposal did not return its configuration revision.");
+
+        var tampered = transfer with
+        {
+            Casting = [transfer.Casting[0] with { Order = transfer.Casting[0].Order + 1 }],
+        };
+        var digestMismatch = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.ImportCastingTransferAsync(
+                owner,
+                target.ProjectId,
+                new ImportProjectCastingTransferRequest
+                {
+                    ExpectedConfigurationRevision = confirmedRevision,
+                    Transfer = tampered,
+                },
+                CancellationToken.None));
+        Assert.Equal("casting_transfer_digest_mismatch", digestMismatch.Code);
+
+        var unsupported = transfer with { FormatVersion = ProjectCastingTransfer.CurrentFormatVersion + 1 };
+        var unsupportedVersion = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.ImportCastingTransferAsync(
+                owner,
+                target.ProjectId,
+                new ImportProjectCastingTransferRequest
+                {
+                    ExpectedConfigurationRevision = confirmedRevision,
+                    Transfer = unsupported,
+                },
+                CancellationToken.None));
+        Assert.Equal("unsupported_casting_transfer_version", unsupportedVersion.Code);
+        Assert.Equal(StatusCodes.Status422UnprocessableEntity, unsupportedVersion.StatusCode);
+    }
+
+    [Fact]
+    public async Task ConcurrentCastingProposalConfirmationAcceptsOnlyOneCurrentRoster()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "concurrent-casting-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "concurrent-casting-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(owner, "Concurrent casting", CancellationToken.None);
+        var initial = await service.UpdateProjectConfigurationAsync(
+            owner, project.ProjectId, project.ConfigurationRevision,
+            CastingConfiguration("agent-initial", "Initial"), CancellationToken.None);
+        var first = await service.CreateCastingProposalAsync(
+            owner, project.ProjectId, initial.Revision,
+            CastingConfiguration("agent-first", "First"), CancellationToken.None);
+        var second = await service.CreateCastingProposalAsync(
+            owner, project.ProjectId, initial.Revision,
+            CastingConfiguration("agent-second", "Second"), CancellationToken.None);
+
+        async Task<ProjectConfigException?> TryConfirmAsync(ProjectCastingProposal proposal)
+        {
+            try
+            {
+                await service.ConfirmCastingProposalAsync(
+                    owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+                return null;
+            }
+            catch (ProjectConfigException exception)
+            {
+                return exception;
+            }
+        }
+
+        var outcomes = await Task.WhenAll(TryConfirmAsync(first), TryConfirmAsync(second));
+        Assert.Single(outcomes, exception => exception is null);
+        var conflict = Assert.IsType<ProjectConfigException>(Assert.Single(outcomes, item => item is not null));
+        Assert.Equal("stale_project_configuration", conflict.Code);
+        await using var currentDb = CreateDbContext();
+        var currentService = CreateCastingProposalService(currentDb);
+        Assert.Equal(initial.Revision + 1,
+            (await currentService.GetProjectConfigurationAsync(
+                owner, project.ProjectId, null, CancellationToken.None)).Revision);
+    }
+
+    [Fact]
+    public async Task AcceptedRunRetainsTheCastingRevisionAfterLaterProposalConfirmation()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "run-casting-tenant-" + suffix;
+        var platformAdmin = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "run-casting-platform-admin-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        var platformHead = await service.GetPlatformRuntimeDefaultsAsync(platformAdmin, CancellationToken.None);
+        var platform = await service.UpdatePlatformRuntimeDefaultsAsync(
+            platformAdmin, platformHead.Revision, PlatformDefaults(), CancellationToken.None);
+        var tenantAdmin = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "run-casting-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(tenantAdmin, "Run casting affinity", CancellationToken.None);
+        var initial = await service.UpdateProjectConfigurationAsync(
+            tenantAdmin, project.ProjectId, project.ConfigurationRevision,
+            CastingConfiguration("agent-before-run", "Before run"), CancellationToken.None);
+        var orchestratorSubject = "run-casting-orchestrator-" + suffix;
+        var orchestratorMembership = await SeedMembershipAsync(authorityStore, orchestratorSubject, tenantId);
+        await authorityStore.AssignRoleAsync(
+            orchestratorMembership,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator,
+            "fixture");
+        var orchestrator = await ResolveCallerAsync(
+            db, orchestratorSubject, tenantId, ["api.read", "projects.orchestrator"]);
+        var request = RunRequest(initial.Revision, platform.Revision);
+        var runId = "casting-affinity-" + suffix;
+        var accepted = await service.AcceptRunSelectionAsync(
+            orchestrator, project.ProjectId, runId, request, CancellationToken.None);
+
+        var proposal = await service.CreateCastingProposalAsync(
+            tenantAdmin,
+            project.ProjectId,
+            initial.Revision,
+            CastingConfiguration("agent-after-run", "After run"),
+            CancellationToken.None);
+        await service.ConfirmCastingProposalAsync(
+            tenantAdmin, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+
+        var replay = await service.AcceptRunSelectionAsync(
+            orchestrator, project.ProjectId, runId, request, CancellationToken.None);
+        var read = await service.GetRunSelectionAsync(
+            orchestrator, project.ProjectId, runId, CancellationToken.None);
+        Assert.Equal(initial.Revision, accepted.ProjectConfigurationRevision);
+        Assert.Equal(accepted.ProjectConfigurationRevision, replay.ProjectConfigurationRevision);
+        Assert.Equal(accepted.ProjectConfiguration.Casting.ToArray(), replay.ProjectConfiguration.Casting.ToArray());
+        Assert.Equal(accepted.ProjectConfiguration.Casting.ToArray(), read.ProjectConfiguration.Casting.ToArray());
+        Assert.Equal("agent-before-run", Assert.Single(read.ProjectConfiguration.Casting).AgentId);
+    }
+
+    [Fact]
+    public async Task CastingProposalConfirmationFailsAfterCurrentOwnerAuthorityIsRevoked()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var service = CreateCastingProposalService(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "revoked-casting-tenant-" + suffix;
+        var caller = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "revoked-casting-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await service.CreateProjectAsync(caller, "Revoked casting owner", CancellationToken.None);
+        var proposal = await service.CreateCastingProposalAsync(
+            caller,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            CastingConfiguration("agent-revoked", "Should not confirm"),
+            CancellationToken.None);
+        _ = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "remaining-casting-admin-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var currentAssignment = await db.RoleAssignments.AsNoTracking()
+            .SingleAsync(item =>
+                item.MembershipId == caller.MembershipId &&
+                item.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                item.Role == ProjectAuthorityRole.TenantAdmin &&
+                item.State == ProjectAuthorityRecordState.Active);
+        await authorityStore.RevokeRoleAssignmentAsync(currentAssignment.AssignmentId, 1, "fixture");
+
+        var forbidden = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.ConfirmCastingProposalAsync(
+                caller, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, forbidden.StatusCode);
+        Assert.Equal(ProjectCastingProposalState.Pending,
+            (await service.GetCastingProposalAsync(
+                (await ResolveCallerAsync(
+                    db, "remaining-casting-admin-" + suffix, tenantId, ["api.read", "projects.admin"])),
+                project.ProjectId,
+                proposal.ProposalId,
+                CancellationToken.None)).State);
+        Assert.Equal(project.ConfigurationRevision,
+            (await service.GetProjectConfigurationAsync(
+                (await ResolveCallerAsync(
+                    db, "remaining-casting-admin-" + suffix, tenantId, ["api.read", "projects.admin"])),
+                project.ProjectId,
+                null,
+                CancellationToken.None)).Revision);
+    }
+
+    [Fact]
+    public async Task CastingProposalsUseLockFunctionWithSelectOnlyRuntimeAuthorityTables()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var ownerService = CreateCastingProposalService(db);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "runtime-casting-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "runtime-casting-owner-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await ownerService.CreateProjectAsync(owner, "Runtime casting locks", CancellationToken.None);
+        var initial = await ownerService.UpdateProjectConfigurationAsync(
+            owner, project.ProjectId, project.ConfigurationRevision,
+            CastingConfiguration("agent-initial", "Initial"), CancellationToken.None);
+        var assignment = await db.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == owner.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Tenant &&
+            item.ResourceId == tenantId &&
+            item.Role == ProjectAuthorityRole.TenantAdmin &&
+            item.State == ProjectAuthorityRecordState.Active);
+
+        var roleName = "aw_casting_runtime_" + suffix;
+        var password = Guid.NewGuid().ToString("N");
+        var roleCreated = false;
+        async Task ExecuteOwnerSqlAsync(string sql)
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand(sql, connection);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            await ExecuteOwnerSqlAsync(
+                $"CREATE ROLE \"{roleName}\" LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT");
+            roleCreated = true;
+            await ExecuteOwnerSqlAsync($"GRANT USAGE ON SCHEMA projects_config TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync($"GRANT SELECT, UPDATE ON projects_config.projects TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT ON projects_config.project_configuration_revisions TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT, INSERT, UPDATE ON projects_config.project_casting_proposals TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT ON projects_config.tenant_memberships, projects_config.project_role_assignments TO \"{roleName}\"");
+            await ExecuteOwnerSqlAsync(
+                $"GRANT SELECT ON projects_config.authority_audit TO \"{roleName}\"");
+
+            var runtimeConnectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+            {
+                Username = roleName,
+                Password = password,
+                Pooling = false,
+            }.ConnectionString;
+            await using var runtimeDataSource = NpgsqlDataSource.Create(runtimeConnectionString);
+            var runtimeOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
+                .UseNpgsql(runtimeDataSource, npgsql => npgsql.MigrationsHistoryTable(
+                    "__ef_migrations_history", ProjectsConfigDbContext.Schema))
+                .Options;
+            await using var runtimeDb = new ProjectsConfigDbContext(runtimeOptions);
+            var missingExecute = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(runtimeDataSource));
+            Assert.Contains(
+                "EXECUTE on projects_config.lock_casting_authority",
+                missingExecute.Message);
+            await ExecuteOwnerSqlAsync($"""
+                GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(
+                    uuid, text, text, text, bigint, text, boolean) TO "{roleName}"
+                """);
+            await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(runtimeDataSource);
+
+            await using var privilegeCheck = await fixture.DataSource.OpenConnectionAsync();
+            await using (var command = new NpgsqlCommand(
+                """
+                SELECT has_table_privilege(@role, 'projects_config.tenant_memberships', 'SELECT')
+                   AND NOT has_table_privilege(@role, 'projects_config.tenant_memberships', 'UPDATE')
+                   AND has_table_privilege(@role, 'projects_config.project_role_assignments', 'SELECT')
+                   AND NOT has_table_privilege(@role, 'projects_config.project_role_assignments', 'UPDATE')
+                   AND has_function_privilege(
+                       @role,
+                       'projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
+                       'EXECUTE')
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM pg_catalog.pg_proc AS routine
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                           COALESCE(routine.proacl, pg_catalog.acldefault('f', routine.proowner))) AS acl
+                       WHERE routine.oid = pg_catalog.to_regprocedure(
+                           'projects_config.lock_casting_authority(uuid,text,text,text,bigint,text,boolean)')
+                         AND acl.grantee = 0
+                         AND acl.privilege_type = 'EXECUTE')
+                """,
+                privilegeCheck))
+            {
+                command.Parameters.AddWithValue("role", roleName);
+                Assert.True((bool)(await command.ExecuteScalarAsync()
+                    ?? throw new InvalidOperationException("Runtime privilege check returned no result.")));
+            }
+
+            var runtimeService = new ProjectsConfigService(
+                runtimeDb,
+                CreateProviderCatalog(),
+                TimeProvider.System,
+                new PooledDbContextFactory<ProjectsConfigDbContext>(runtimeOptions));
+
+            var proposal = await runtimeService.CreateCastingProposalAsync(
+                owner,
+                project.ProjectId,
+                initial.Revision,
+                CastingConfiguration("agent-runtime", "Approved at runtime"),
+                CancellationToken.None);
+            var confirmed = await runtimeService.ConfirmCastingProposalAsync(
+                owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+            var replay = await runtimeService.ConfirmCastingProposalAsync(
+                owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+            Assert.Equal(ProjectCastingProposalState.Confirmed, confirmed.State);
+            Assert.Equal(confirmed.ConfirmedConfigurationRevision, replay.ConfirmedConfigurationRevision);
+
+            await using (var lockConnection = await runtimeDataSource.OpenConnectionAsync())
+            await using (var lockTransaction = await lockConnection.BeginTransactionAsync())
+            await using (var lockCommand = new NpgsqlCommand(
+                """
+                SELECT projects_config.lock_casting_authority(
+                    @membership_id, @issuer, @subject, @tenant_id, @revision, @project_id, true)
+                """,
+                lockConnection,
+                lockTransaction))
+            {
+                lockCommand.Parameters.AddWithValue("membership_id", owner.MembershipId);
+                lockCommand.Parameters.AddWithValue("issuer", owner.Issuer);
+                lockCommand.Parameters.AddWithValue("subject", owner.ActorId);
+                lockCommand.Parameters.AddWithValue("tenant_id", owner.TenantId);
+                lockCommand.Parameters.AddWithValue("revision", owner.MembershipRevision);
+                lockCommand.Parameters.AddWithValue("project_id", project.ProjectId);
+                Assert.Equal("authorized", await lockCommand.ExecuteScalarAsync());
+
+                await using var revokeConnection = await fixture.DataSource.OpenConnectionAsync();
+                await using (var timeout = new NpgsqlCommand("SET lock_timeout = '1s'", revokeConnection))
+                    await timeout.ExecuteNonQueryAsync();
+                await using var revokeCommand = new NpgsqlCommand(
+                    """
+                    UPDATE projects_config.project_role_assignments
+                    SET state = 'Revoked', revision = revision + 1
+                    WHERE assignment_id = @assignment_id
+                    """,
+                    revokeConnection);
+                revokeCommand.Parameters.AddWithValue("assignment_id", assignment.AssignmentId);
+                var blockedRevoke = await Assert.ThrowsAsync<PostgresException>(
+                    () => revokeCommand.ExecuteNonQueryAsync());
+                Assert.Equal("55P03", blockedRevoke.SqlState);
+
+                await lockTransaction.CommitAsync();
+            }
+
+            await authorityStore.RevokeRoleAssignmentAsync(assignment.AssignmentId, 1, "fixture");
+            var denied = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+                runtimeService.CreateCastingProposalAsync(
+                    owner,
+                    project.ProjectId,
+                    confirmed.ConfirmedConfigurationRevision!.Value,
+                    CastingConfiguration("agent-revoked", "Must not be accepted"),
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status403Forbidden, denied.StatusCode);
+        }
+        finally
+        {
+            if (roleCreated)
+            {
+                await ExecuteOwnerSqlAsync($"DROP OWNED BY \"{roleName}\"");
+                await ExecuteOwnerSqlAsync($"DROP ROLE \"{roleName}\"");
+            }
+        }
+    }
+
+    private ProjectsConfigService CreateCastingProposalService(ProjectsConfigDbContext db) =>
+        new(
+            db,
+            CreateProviderCatalog(),
+            TimeProvider.System,
+            new PooledDbContextFactory<ProjectsConfigDbContext>(CreateDbContextOptions()));
+
+    private static ProjectConfiguration CastingConfiguration(
+        string agentId,
+        string charter,
+        ImmutableArray<SkillCatalogSetting> skills = default) =>
+        new()
+        {
+            AgentCharters = [new ProjectAgentCharter(agentId, agentId, "builder", charter)],
+            Casting = [new ProjectAgentCast(agentId, "builder", 0)],
+            Skills = skills.IsDefault ? [] : skills,
+        };
+
     private async Task WithFirstSerializationFailureAsync(
         RetryTriggerTarget target,
         Func<Task> operation)
@@ -1142,6 +1873,7 @@ public sealed class ProjectsConfigPostgresFixture : IAsyncLifetime
     private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:16-alpine").Build();
 
     public NpgsqlDataSource DataSource { get; private set; } = null!;
+    public string ConnectionString => _container.GetConnectionString();
 
     public async Task InitializeAsync()
     {
