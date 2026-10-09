@@ -120,10 +120,15 @@ or invalid stored data fails closed without provider fallback.
 Redis tests use a controlled command-client fake to cover selection and negotiation,
 durability/eviction/topology rejection, expiry checks, prevalidated single-write
 batches, CAS conflicts, idempotent replay after a lost response, server-time lease
-fencing, and backend-loss behavior. They do not prove live Redis permissions,
-durability, availability, or deployment. Neither optional Memory source candidate
-replaces the PostgreSQL Sessions journal or the PostgreSQL state owned by other
-services.
+fencing, and backend-loss behavior. A separate opt-in native suite uses the production
+Redis command client and document store to exercise Lua batch atomicity, concurrent
+CAS, and promotion/receipt/idempotency plus server-time lease fencing across a restart
+of one explicitly test-owned, digest-pinned, loopback-TLS Redis instance with AOF on a
+dedicated labeled volume. It never creates or pulls an instance or flushes keys; the
+restart case restarts only the validated test-owned instance. These tests do not prove
+production Redis permissions, availability, or deployment.
+Neither optional Memory source candidate replaces the PostgreSQL Sessions journal or
+the PostgreSQL state owned by other services.
 
 ## Records and revisions
 
