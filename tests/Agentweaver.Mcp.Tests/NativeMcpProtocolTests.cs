@@ -1061,6 +1061,7 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
             builder.UseSetting("Gateway:Owners:Knowledge", "https://knowledge.test");
             builder.UseSetting("Gateway:Owners:Events", "https://events.test");
             builder.UseSetting("Gateway:Owners:IdentityBrokerAddress", "https://identity-broker.test");
+            builder.UseSetting("Gateway:WebOrigin", "https://web.test/");
             builder.ConfigureTestServices(services =>
             {
                 services.AddAuthentication(TestAuthenticationHandler.TestScheme)

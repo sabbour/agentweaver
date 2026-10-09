@@ -14,7 +14,7 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class BrowserIntegrationReverseProxyTests
 {
     [Fact]
-    public async Task BrowserCallbackUsesProductionNavigationRelayWithoutCors()
+    public async Task BrowserCallbackUsesScrubbedAppShellWithoutCors()
     {
         var port = BrowserIntegrationReverseProxy.GetAvailablePort();
         using var broker = CreateClient("broker");
@@ -41,10 +41,23 @@ public sealed class BrowserIntegrationReverseProxyTests
             "/auth/callback?code=must-not-be-embedded&state=state-value");
 
         using var response = await bridgeClient.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+        Assert.Equal("no-referrer", response.Headers.GetValues("Referrer-Policy").Single());
         Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
-        Assert.Contains("agentweaver.identity.callback", await response.Content.ReadAsStringAsync());
+        Assert.False(response.Headers.Contains("Access-Control-Allow-Credentials"));
+        Assert.Contains(
+            "window.__AGENTWEAVER_IDENTITY_CALLBACK__ = window.location.search;",
+            body,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "window.history.replaceState(null, '', identityCallbackPath);",
+            body,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("returnUrl.search", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("must-not-be-embedded", body, StringComparison.Ordinal);
     }
 
     [Fact]
