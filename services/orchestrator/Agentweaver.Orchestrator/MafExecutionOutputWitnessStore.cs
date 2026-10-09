@@ -191,7 +191,11 @@ internal sealed partial class MafExecutionOutputWitnessStore
                 connection, transaction, checkpointBinding, cancellationToken).ConfigureAwait(false)
             : await checkpointStore.ReadLatestCheckpointInTransactionAsync(
                 connection, transaction, checkpointBinding, cancellationToken).ConfigureAwait(false);
-        if (latest is null || latest.Value.Info != checkpoint.Info)
+        if (latest is null ||
+            !string.Equals(
+                latest.Value.Info.SessionId, checkpoint.Info.SessionId, StringComparison.Ordinal) ||
+            !string.Equals(
+                latest.Value.Info.CheckpointId, checkpoint.Info.CheckpointId, StringComparison.Ordinal))
             throw new CoordinationException(
                 "maf_execution_output_witness_stale", StatusCodes.Status409Conflict);
         var current = MafExecutionCheckpointContract.Deserialize(latest.Value.Value);

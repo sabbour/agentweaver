@@ -1,6 +1,7 @@
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Orchestrator;
@@ -124,7 +125,7 @@ public static partial class CoordinationEndpoints
         string runId,
         string taskId,
         string prerequisiteTaskId,
-        BacklogGraphRevisionRequest request,
+        [FromBody] BacklogGraphRevisionRequest request,
         HttpContext context,
         OrchestratorOptions options,
         ProjectsRunSelectionClient projects,
