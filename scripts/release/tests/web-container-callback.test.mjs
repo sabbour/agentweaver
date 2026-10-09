@@ -176,8 +176,8 @@ test('pinned amd64 Web image serves and sanitizes the Copilot callback', {
   const encodedConfig = JSON.parse(serializedConfig);
   assert.deepEqual(Object.keys(encodedConfig).sort(), [
     'GATEWAY_URL',
-    'IDENTITY_BROKER_URL',
     'IDENTITY_BROKER_ISSUER',
+    'IDENTITY_BROKER_URL',
     'OAUTH_CLIENT_ID',
     'OAUTH_REDIRECT_URI',
     'OAUTH_SCOPES',

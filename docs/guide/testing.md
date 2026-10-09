@@ -41,6 +41,10 @@ Use the .NET 10 SDK selected by `global.json`, Node.js 24, and a Docker-compatib
 CI installs Chromium for broker browser integration tests from the Release-built
 `tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/playwright.ps1` before
 `npm run coverage:dotnet`.
+Browser callback fixtures also require the locked Web production shell in `apps/web/dist`;
+prepare it with `npm ci --prefix apps/web --no-audit --no-fund` and
+`npm --prefix apps/web run build` before running those fixtures. They configure the
+normalized Broker issuer separately from the ephemeral transport URL.
 
 Run these commands from the repository root:
 

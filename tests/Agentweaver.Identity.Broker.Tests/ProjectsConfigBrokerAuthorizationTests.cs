@@ -1187,6 +1187,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
 
         var brokerAuthority = $"https://broker.test:{_browserPort}";
         var webAuthority = $"https://web.broker.test:{_browserPort}";
+        var brokerIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
         var browserRedirectUri = $"{webAuthority}/auth/callback";
         var scopes = string.Join(
             " ",
@@ -1214,10 +1215,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             using var webCallbackFactory = new WebApplicationFactory<WebHost::Program>()
                 .WithWebHostBuilder(builder =>
                 {
-                    builder.UseWebRoot(Path.Combine(FindRepositoryRootForWebHost(), "apps", "web"));
+                    builder.UseWebRoot(Path.Combine(FindRepositoryRootForWebHost(), "apps", "web", "dist"));
                     builder.ConfigureAppConfiguration((_, configuration) =>
                         configuration.AddInMemoryCollection(new Dictionary<string, string?>
                         {
+                            ["VITE_IDENTITY_BROKER_URL"] = brokerAuthority,
+                            ["VITE_IDENTITY_BROKER_ISSUER"] = brokerIssuer,
                             ["VITE_OAUTH_REDIRECT_URI"] = browserRedirectUri,
                         }));
                 });
@@ -1260,6 +1263,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                     window.__AGENTWEAVER_CONFIG_BASE64__ = {
                       GATEWAY_URL: btoa('/api/v1'),
                       IDENTITY_BROKER_URL: btoa('{{brokerAuthority}}'),
+                      IDENTITY_BROKER_ISSUER: btoa('{{brokerIssuer}}'),
                       OAUTH_CLIENT_ID: btoa('{{IdentityBrokerWebApplicationFactory.TestClientId}}'),
                       OAUTH_REDIRECT_URI: btoa('{{browserRedirectUri}}'),
                       OAUTH_SCOPES: btoa('{{scopes}}')

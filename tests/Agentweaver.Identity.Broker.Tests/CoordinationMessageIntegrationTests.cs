@@ -4712,6 +4712,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         const string outcomeGateRequestId = "outcome-gate-1";
         var port = BrowserIntegrationReverseProxy.GetAvailablePort();
         var brokerAuthority = $"https://broker.test:{port}";
+        var brokerIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
         var identityProviderAuthority = FakeIdentityProvider.Authority;
         var browserRedirectUri = $"{brokerAuthority}/auth/callback";
         var scopes = string.Join(
@@ -4750,10 +4751,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             using var webCallbackFactory = new WebApplicationFactory<WebHost::Program>()
                 .WithWebHostBuilder(builder =>
                 {
-                    builder.UseWebRoot(Path.Combine(FindRepositoryRoot(), "apps", "web"));
+                    builder.UseWebRoot(Path.Combine(FindRepositoryRoot(), "apps", "web", "dist"));
                     builder.ConfigureAppConfiguration((_, configuration) =>
                         configuration.AddInMemoryCollection(new Dictionary<string, string?>
                         {
+                            ["VITE_IDENTITY_BROKER_URL"] = brokerAuthority,
+                            ["VITE_IDENTITY_BROKER_ISSUER"] = brokerIssuer,
                             ["VITE_OAUTH_REDIRECT_URI"] = browserRedirectUri,
                         }));
                 });
@@ -4795,6 +4798,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 window.__AGENTWEAVER_CONFIG_BASE64__ = {
                   GATEWAY_URL: btoa('/api/v1'),
                   IDENTITY_BROKER_URL: btoa('{{brokerAuthority}}'),
+                  IDENTITY_BROKER_ISSUER: btoa('{{brokerIssuer}}'),
                   OAUTH_CLIENT_ID: btoa('{{IdentityBrokerWebApplicationFactory.TestClientId}}'),
                   OAUTH_REDIRECT_URI: btoa('{{brokerAuthority}}/auth/callback'),
                   OAUTH_SCOPES: btoa('{{scopes}}')
@@ -4949,8 +4953,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         startInfo.ArgumentList.Add("--port");
         startInfo.ArgumentList.Add(port.ToString(CultureInfo.InvariantCulture));
         startInfo.ArgumentList.Add("--strictPort");
+        var brokerIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
         startInfo.Environment["VITE_GATEWAY_URL"] = "/api/v1";
         startInfo.Environment["VITE_IDENTITY_BROKER_URL"] = identityBrokerAuthority;
+        startInfo.Environment["VITE_IDENTITY_BROKER_ISSUER"] = brokerIssuer;
         startInfo.Environment["VITE_OAUTH_CLIENT_ID"] = IdentityBrokerWebApplicationFactory.TestClientId;
         startInfo.Environment["VITE_OAUTH_REDIRECT_URI"] = oauthRedirectUri;
         startInfo.Environment["VITE_OAUTH_SCOPES"] = oauthScopes;
