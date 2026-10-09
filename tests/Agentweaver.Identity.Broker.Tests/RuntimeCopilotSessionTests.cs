@@ -154,7 +154,7 @@ public sealed class RuntimeCopilotSessionTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => turn);
         await Task.WhenAll(disposal, repeatedDisposal).WaitAsync(timeout.Token);
         Assert.True(session.UsageCompletion.IsCompletedSuccessfully);
-        Assert.Single(external.Requests, request => request.Method == "session.destroy");
+        Assert.Single(external.Requests, request => request.Method == "session.detach");
         await Assert.ThrowsAsync<ObjectDisposedException>(() =>
             session.SendTurnAsync("A bounded user request.", timeout.Token));
     }
@@ -169,7 +169,7 @@ public sealed class RuntimeCopilotSessionTests
             Factory(external).CreateAsync(registration,
                 registration.Binding.ModelSelectionReference!, SdkCredential(), _ => Task.CompletedTask, timeout.Token));
         Assert.Equal("runtime_sdk_effective_model_mismatch", error.Code);
-        Assert.Contains(external.Requests, request => request.Method == "session.destroy");
+        Assert.Contains(external.Requests, request => request.Method == "session.detach");
     }
 
     [Fact]
@@ -211,7 +211,7 @@ public sealed class RuntimeCopilotSessionTests
             Factory(external).CreateAsync(
                 registration, registration.Binding.ModelSelectionReference!, credential, _ => Task.CompletedTask, timeout.Token));
         Assert.Equal("runtime_sdk_credential_unavailable", failure.Code);
-        Assert.Contains(external.Requests, request => request.Method == "session.destroy");
+        Assert.Contains(external.Requests, request => request.Method == "session.detach");
         Assert.False(credential.IsUsable());
     }
 

@@ -1,7 +1,7 @@
 # AgentHost source candidate
 
 The unpublished AgentHost executable runs the sole model harness inside the selected Sandbox.
-It uses `GitHub.Copilot.SDK` 1.0.11 and the compatible native runtime 1.0.79.
+It uses `GitHub.Copilot.SDK` 1.0.18 and the compatible native runtime 1.0.79.
 Microsoft Agent Framework remains an Orchestrator dependency, not an AgentHost runtime.
 This source does not provide an automatic scheduler, deployment, live OAuth acceptance, or paid model evidence.
 

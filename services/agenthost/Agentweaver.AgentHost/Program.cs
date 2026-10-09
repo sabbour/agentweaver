@@ -26,7 +26,7 @@ if (args.SequenceEqual(["--verify-native-runtime"]))
         throw new InvalidOperationException("The native runtime extracted executable packages into private session state.");
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
     {
-        sdkVersion = "1.0.11", runtimeVersion = status.Version, status.ProtocolVersion,
+        sdkVersion = "1.0.18", runtimeVersion = status.Version, status.ProtocolVersion,
         nativeDistribution = Path.GetDirectoryName(verified.ExecutablePath),
         privatePackageCacheAbsent = true
     }));
