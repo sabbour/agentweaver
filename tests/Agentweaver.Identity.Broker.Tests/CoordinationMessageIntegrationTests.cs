@@ -1535,7 +1535,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "Implement an accepted item using the selected isolation provider.",
                     WorkflowStepMode.Open,
                     0,
-                    new WorkflowCardinality(1, 1),
+                    new WorkflowCardinality(1, 3),
                     [],
                     ["implementer"],
                     ["implementation"],
@@ -1956,6 +1956,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "implement",
                     "Implement the accepted change",
                     "Implement the accepted change and verify it with targeted tests.",
+                    "implementer",
+                    "test-agent",
+                    "implementation",
+                    "platform-model",
+                    "sandbox-platform",
+                    "isolated-worktree",
+                    [],
+                    []),
+                new WorkPlanItem(
+                    "implement-2",
+                    "implement",
+                    "Implement the second accepted change",
+                    "Implement the second accepted change and verify it with targeted tests.",
+                    "implementer",
+                    "test-agent",
+                    "implementation",
+                    "platform-model",
+                    "sandbox-platform",
+                    "isolated-worktree",
+                    [],
+                    []),
+                new WorkPlanItem(
+                    "implement-3",
+                    "implement",
+                    "Implement the third accepted change",
+                    "Implement the third accepted change and verify it with targeted tests.",
                     "implementer",
                     "test-agent",
                     "implementation",
@@ -3016,7 +3042,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 CoordinationSessionKind.ChildWork,
                 "child-two-spawn",
                 "Execute the confirmed work item.",
-                WorkPlanItemId: "implement-1"));
+                WorkPlanItemId: "implement-2"));
         await AssertStatusAsync(secondChildResponse, HttpStatusCode.Accepted);
         var spawnedChildTwo = await ReadJsonAsync<SpawnedSession>(secondChildResponse);
         var childTwo = new RegisteredChild(
@@ -3047,7 +3073,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
             runToken,
-            new RegisterChildRequest("child-three"));
+            new RegisterChildRequest("child-three", "implement-3"));
         Assert.Equal(HttpStatusCode.Conflict, overConcurrentLimit.StatusCode);
         Assert.Contains(
             "run_concurrent_child_limit_exceeded",
@@ -3079,7 +3105,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 await selectionPause.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
                 var ownerBeforeDecisionChange = await ReadRuntimeOwnerRowAsync(
                     _connectionString, ownerSchema, project.ProjectId, "child-two");
-                Assert.Equal("implement-1", ownerBeforeDecisionChange.WorkPlanItemId);
+                Assert.Equal("implement-2", ownerBeforeDecisionChange.WorkPlanItemId);
 
                 using var runtimeOwnerDecisionStateResponse = await SendAsync(
                     orchestrator, HttpMethod.Get, decisionStatePath, runToken, [TenantId]);
@@ -3142,7 +3168,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         var mappedActiveChild = await ReadRuntimeOwnerRowAsync(
             _connectionString, ownerSchema, project.ProjectId, "child-two");
-        Assert.Equal("implement-1", mappedActiveChild.WorkPlanItemId);
+        Assert.Equal("implement-2", mappedActiveChild.WorkPlanItemId);
         await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
         await using (var connection = await ownerDatabase.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand($"""
