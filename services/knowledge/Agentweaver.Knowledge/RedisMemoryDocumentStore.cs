@@ -669,7 +669,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
                 !string.IsNullOrWhiteSpace(revision.Type) &&
                 revision.Content is not null &&
                 !string.IsNullOrWhiteSpace(revision.Importance) &&
-                !string.IsNullOrWhiteSpace(revision.Reason) &&
                 !revision.Tags.IsDefault &&
                 Enum.IsDefined(revision.Kind) &&
                 Enum.IsDefined(revision.State) &&

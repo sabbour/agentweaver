@@ -314,6 +314,21 @@ public sealed class RedisMemoryProviderTests
             UpdateInput(created.Record!.RecordId, "after transfer"),
             "transfer-update");
         var bundle = await source.ExportAsync("project-a", "agent-a");
+        var entry = Assert.Single(bundle.Records);
+        bundle = bundle with
+        {
+            Records = bundle.Records.SetItem(
+                0,
+                entry with
+                {
+                    Revisions = entry.Revisions
+                        .Select((revision, index) => revision with
+                        {
+                            Reason = index == 0 ? null : string.Empty
+                        })
+                        .ToImmutableArray()
+                })
+        };
 
         var destinationClient = new FakeRedisMemoryCommandClient();
         var destination = new RedisMemoryProvider(
@@ -334,6 +349,8 @@ public sealed class RedisMemoryProviderTests
         Assert.Equal(KnowledgeTrustState.Pending, importedRecord.TrustState);
         Assert.Equal(3, history.TotalCount);
         Assert.Equal("imported", history.Items[0].ChangeKind);
+        Assert.Contains(history.Items, revision => revision.Reason is null);
+        Assert.Contains(history.Items, revision => revision.Reason == string.Empty);
     }
 
     [Fact]
