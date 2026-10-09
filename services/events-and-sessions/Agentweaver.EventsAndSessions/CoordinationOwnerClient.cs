@@ -50,7 +50,8 @@ public interface ICoordinationOwnerClient
         HttpContext context,
         SessionIdentity identity,
         string captureId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool notFoundIsMissing = false);
 }
 
 public sealed class CoordinationOwnerClientException(
@@ -197,14 +198,16 @@ public sealed class CoordinationOwnerClient(
         HttpContext context,
         SessionIdentity identity,
         string captureId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool notFoundIsMissing = false)
     {
         var proof = await SendAsync<ProducedRunCaptureProof>(
             context,
             HttpMethod.Get,
             $"/internal/projects/{Uri.EscapeDataString(identity.ProjectId)}/runs/{Uri.EscapeDataString(identity.RunId)}/source-control/sessions/{Uri.EscapeDataString(identity.SessionId)}/output-captures/{Uri.EscapeDataString(captureId)}/proof",
             content: null,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            notFoundIsMissing: notFoundIsMissing).ConfigureAwait(false);
         var tenant = ReadTenantSelector(context);
         try
         {
@@ -230,7 +233,8 @@ public sealed class CoordinationOwnerClient(
         string path,
         object? content,
         CancellationToken cancellationToken,
-        bool conflictIsDenied = false)
+        bool conflictIsDenied = false,
+        bool notFoundIsMissing = false)
     {
         ArgumentNullException.ThrowIfNull(context);
         var owner = RequireOwnerUri();
@@ -274,6 +278,9 @@ public sealed class CoordinationOwnerClient(
             if (conflictIsDenied && response.StatusCode == HttpStatusCode.Conflict)
                 throw new CoordinationOwnerClientException(
                     "coordination_owner_admission_denied", StatusCodes.Status409Conflict);
+            if (notFoundIsMissing && response.StatusCode == HttpStatusCode.NotFound)
+                throw new CoordinationOwnerClientException(
+                    "source_control_output_capture_not_found", StatusCodes.Status404NotFound);
             if (response.StatusCode != HttpStatusCode.OK ||
                 response.Headers.CacheControl?.NoStore != true)
                 throw new CoordinationOwnerClientException(

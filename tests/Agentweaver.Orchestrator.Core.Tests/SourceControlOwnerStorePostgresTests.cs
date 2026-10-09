@@ -53,6 +53,23 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             Assert.Equal("pending", pending.State);
             Assert.Null(pending.ObjectKey);
             Assert.Null(pending.EventPosition);
+            Assert.Equal(
+                document.PackageBytes,
+                (await sourceControl.ReadPendingOutputCaptureAsync(
+                    identity,
+                    document.Manifest.WorkspaceId,
+                    selectionHash,
+                    CancellationToken.None))!.PackageBytes);
+            var pendingConflict = await Assert.ThrowsAsync<CoordinationException>(() =>
+                sourceControl.RegisterOutputCaptureAsync(
+                    actor,
+                    identity,
+                    selection,
+                    pin,
+                    current.StateVersion,
+                    CreateCaptureDocument(identity, pin, "changed pending output", new string('c', 40)),
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status409Conflict, pendingConflict.StatusCode);
             Assert.Empty(await sourceControl.ReadOutputCapturePageAsync(
                 identity, selectionHash, null, null, 10, CancellationToken.None));
             Assert.Equal(pending.Proof, await sourceControl.ReadOutputCaptureProofForEventsAsync(
@@ -60,9 +77,11 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
 
             var journalEntry = new ProducedRunCaptureJournalEntry(pending.Proof, 19);
             var admitted = await sourceControl.AdmitOutputCaptureAsync(
-                identity, pending.Proof.CaptureId, journalEntry, CancellationToken.None);
+                actor, identity, selection, pin, current.StateVersion,
+                pending.Proof.CaptureId, journalEntry, CancellationToken.None);
             var replay = await sourceControl.AdmitOutputCaptureAsync(
-                identity, pending.Proof.CaptureId, journalEntry, CancellationToken.None);
+                actor, identity, selection, pin, current.StateVersion,
+                pending.Proof.CaptureId, journalEntry, CancellationToken.None);
             var loaded = await sourceControl.ReadOutputCaptureAsync(
                 identity, pending.Proof.CaptureId, selectionHash, CancellationToken.None);
 
@@ -76,6 +95,7 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             Assert.Equal(admitted.EventPosition, replay.EventPosition);
             Assert.Equal(admitted.Proof, loaded!.Proof);
             Assert.Equal(admitted.State, loaded.State);
+            Assert.Equal(document.PackageBytes, loaded.PackageBytes);
             var secondDocument = CreateCaptureDocument(identity, pin, "second output", new string('c', 40));
             var secondPending = await sourceControl.RegisterOutputCaptureAsync(
                 actor,
@@ -86,7 +106,11 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
                 secondDocument,
                 CancellationToken.None);
             await sourceControl.AdmitOutputCaptureAsync(
+                actor,
                 identity,
+                selection,
+                pin,
+                current.StateVersion,
                 secondPending.Proof.CaptureId,
                 new ProducedRunCaptureJournalEntry(secondPending.Proof, 20),
                 CancellationToken.None);
@@ -107,7 +131,11 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
 
             var wrongPosition = await Assert.ThrowsAsync<CoordinationException>(() =>
                 sourceControl.AdmitOutputCaptureAsync(
+                    actor,
                     identity,
+                    selection,
+                    pin,
+                    current.StateVersion,
                     pending.Proof.CaptureId,
                     journalEntry with { Position = 20 },
                     CancellationToken.None));

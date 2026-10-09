@@ -19,7 +19,6 @@ test('parses draw.io source names, extra formats, and CLI override', () => {
       drawioFormats: ['png', 'svg', 'pdf'],
       drawioCli: 'C:\\tools\\draw.io.exe',
       embed: true,
-      allowVersionMismatch: false,
     },
   );
 });
@@ -34,14 +33,13 @@ test('keeps check mode browser-free and validates option values', () => {
     drawioFormats: ['png'],
     drawioCli: undefined,
     embed: true,
-    allowVersionMismatch: false,
   });
   assert.throws(() => parseArgs(['--drawio-format', 'gif']), /png, svg, or pdf/);
   assert.throws(() => parseArgs(['--drawio-cli']), /executable path/);
 });
 
-test('parses embedding and deterministic-version overrides', () => {
-  assert.deepEqual(parseArgs(['--no-embed', '--allow-version-mismatch']), {
+test('parses embedding without requiring a renderer version override', () => {
+  assert.deepEqual(parseArgs(['--no-embed']), {
     checkMode: false,
     listMode: false,
     specs: [],
@@ -50,8 +48,8 @@ test('parses embedding and deterministic-version overrides', () => {
     drawioFormats: ['png'],
     drawioCli: undefined,
     embed: false,
-    allowVersionMismatch: true,
   });
+  assert.throws(() => parseArgs(['--allow-version-mismatch']), /Unknown argument/);
 });
 
 test('parses repeatable area and disposition filters for parallel bulk work', () => {
@@ -69,6 +67,5 @@ test('parses repeatable area and disposition filters for parallel bulk work', ()
     drawioFormats: ['png'],
     drawioCli: undefined,
     embed: true,
-    allowVersionMismatch: false,
   });
 });

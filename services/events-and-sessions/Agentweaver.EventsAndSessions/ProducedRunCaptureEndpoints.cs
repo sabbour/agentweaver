@@ -102,7 +102,11 @@ internal sealed class ProducedRunCaptureApplicationService(
         var entry = await journal.ReadProducedRunCaptureEventAsync(
             context.User, sessionId, eventId, cancellationToken).ConfigureAwait(false);
         var proof = await owner.ReadProducedRunCaptureProofAsync(
-            context, identity, entry.Capture.CaptureId, cancellationToken).ConfigureAwait(false);
+            context,
+            identity,
+            entry.Capture.CaptureId,
+            cancellationToken,
+            notFoundIsMissing: true).ConfigureAwait(false);
         RequireProofAuthority(proof, identity, entry.Capture.CaptureId, authority, requireActorMatch: false);
         if (proof != entry.Capture || entry.Position < 1)
             throw new ProducedRunCaptureIntegrityException(

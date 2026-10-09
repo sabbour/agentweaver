@@ -389,19 +389,35 @@ internal sealed class SourceControlOwnerStore(
                 "source_control_output_capture_authority_changed", StatusCodes.Status409Conflict);
 
         var manifest = document.Manifest;
+        var unresolved = await ReadPendingOutputCaptureForWorkspaceAsync(
+            connection,
+            transaction,
+            identity,
+            manifest.WorkspaceId,
+            selectionHash,
+            cancellationToken).ConfigureAwait(false);
+        if (unresolved is not null)
+        {
+            if (!CaptureMatchesDocument(unresolved, actor, selection, pin, document, captureIdentity))
+                throw new CoordinationException(
+                    "source_control_output_capture_pending_conflict", StatusCodes.Status409Conflict);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return unresolved;
+        }
+
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {OutputCaptures}
                 (project_id, run_id, session_id, capture_id, event_id, pin_id, issuer, actor_id,
                  tenant_id, accepted_selection_hash, workspace_id, workspace_incarnation_id,
                  repository_id, resource_generation, base_sha, output_tree_sha, manifest_sha256,
                  manifest_byte_length, manifest_bytes, patch_sha256, patch_byte_length, patch_bytes,
-                 package_sha256, package_byte_length)
+                 package_sha256, package_byte_length, package_bytes)
             VALUES
                 (@project, @run, @session, @capture, @event, @pin, @issuer, @actor,
                  @tenant, @selectionHash, @workspace, @incarnation,
                  @repository, @generation, @baseSha, @treeSha, @manifestSha,
                  @manifestLength, @manifest, @patchSha, @patchLength, @patch,
-                 @packageSha, @packageLength)
+                 @packageSha, @packageLength, @package)
             ON CONFLICT (project_id, run_id, session_id, capture_id) DO NOTHING
             """, connection, transaction))
         {
@@ -430,6 +446,7 @@ internal sealed class SourceControlOwnerStore(
             insert.Parameters.AddWithValue("patch", NpgsqlDbType.Bytea, document.PatchBytes);
             insert.Parameters.AddWithValue("packageSha", NpgsqlDbType.Char, document.PackageSha256);
             insert.Parameters.AddWithValue("packageLength", NpgsqlDbType.Bigint, document.PackageBytes.LongLength);
+            insert.Parameters.AddWithValue("package", NpgsqlDbType.Bytea, document.PackageBytes);
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -442,6 +459,73 @@ internal sealed class SourceControlOwnerStore(
             throw new CoordinationException(
                 "source_control_output_capture_conflict", StatusCodes.Status409Conflict);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return record;
+    }
+
+    internal async Task<SourceControlOutputCaptureRecord?> ReadPendingOutputCaptureAsync(
+        SessionIdentity identity,
+        string workspaceId,
+        string acceptedSelectionHash,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var record = await ReadPendingOutputCaptureForWorkspaceAsync(
+            connection,
+            transaction: null,
+            identity,
+            workspaceId,
+            acceptedSelectionHash,
+            cancellationToken).ConfigureAwait(false);
+        if (record is not null)
+            ValidateOutputCaptureRecord(record);
+        return record;
+    }
+
+    private async Task<SourceControlOutputCaptureRecord?> ReadPendingOutputCaptureForWorkspaceAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        SessionIdentity identity,
+        string workspaceId,
+        string acceptedSelectionHash,
+        CancellationToken cancellationToken)
+    {
+        var lockSuffix = transaction is null ? string.Empty : " FOR UPDATE";
+        var captureIds = new List<string>(2);
+        await using (var command = new NpgsqlCommand($"""
+            SELECT capture_id
+            FROM {OutputCaptures}
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+              AND workspace_id = @workspace AND accepted_selection_hash = @selectionHash
+              AND capture_state = 'pending'
+            ORDER BY captured_at, capture_id
+            LIMIT 2
+            {lockSuffix}
+            """, connection, transaction))
+        {
+            AddScope(command, identity);
+            command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+            command.Parameters.AddWithValue("workspace", NpgsqlDbType.Varchar, workspaceId);
+            command.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, acceptedSelectionHash);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                captureIds.Add(reader.GetString(0));
+        }
+
+        if (captureIds.Count > 1)
+            throw new CoordinationException(
+                "source_control_output_capture_pending_ambiguous", StatusCodes.Status409Conflict);
+        if (captureIds.Count == 0)
+            return null;
+
+        var record = await ReadOutputCaptureRowAsync(
+            connection, transaction, identity, captureIds[0], forUpdate: transaction is not null, cancellationToken)
+            .ConfigureAwait(false);
+        if (record is null ||
+            record.State != "pending" ||
+            record.Proof.WorkspaceId != workspaceId ||
+            record.Proof.AcceptedSelectionHash != acceptedSelectionHash)
+            throw new CoordinationException(
+                "source_control_output_capture_corrupt", StatusCodes.Status503ServiceUnavailable);
         return record;
     }
 
@@ -486,7 +570,7 @@ internal sealed class SourceControlOwnerStore(
                 repository_id, resource_generation, base_sha, output_tree_sha, manifest_sha256,
                 manifest_byte_length, manifest_bytes, patch_sha256, patch_byte_length, patch_bytes,
                 package_sha256, package_byte_length, capture_state, object_key, event_position,
-                captured_at, admitted_at
+                captured_at, admitted_at, package_bytes
             FROM {OutputCaptures}
             WHERE project_id = @project AND run_id = @run AND session_id = @session
               AND accepted_selection_hash = @selectionHash AND capture_state = 'admitted'
@@ -529,7 +613,11 @@ internal sealed class SourceControlOwnerStore(
     }
 
     internal async Task<SourceControlOutputCaptureRecord> AdmitOutputCaptureAsync(
+        CoordinationActor actor,
         SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        SourceControlRepositoryPin pin,
+        long expectedStateVersion,
         string captureId,
         ProducedRunCaptureJournalEntry entry,
         CancellationToken cancellationToken)
@@ -544,6 +632,29 @@ internal sealed class SourceControlOwnerStore(
         var package = ProducedRunCaptureContractValidation.CreatePackageReference(entry.Capture);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var selectionHash = HashSelection(selection.Selection);
+        var owner = await ReadOwnerBindingAsync(
+            connection,
+            transaction,
+            actor,
+            identity,
+            selection.Authorization.TenantId,
+            selectionHash,
+            forUpdate: true,
+            cancellationToken).ConfigureAwait(false);
+        if (owner.ExecutionState is not ("idle" or "active" or "blocked"))
+            throw new CoordinationException(
+                "source_control_output_run_unavailable", StatusCodes.Status409Conflict);
+        var storedPin = await ReadPinAsync(
+            connection, transaction, identity, selectionHash, cancellationToken).ConfigureAwait(false);
+        if (storedPin is null || !SamePin(storedPin, pin))
+            throw new CoordinationException(
+                "source_control_output_capture_pin_changed", StatusCodes.Status409Conflict);
+        EnsureCurrentBinding(owner, selection, pin.AcceptedRun);
+        if (owner.StateVersion != expectedStateVersion || owner.DecisionState != "accepted")
+            throw new CoordinationException(
+                "source_control_output_capture_authority_changed", StatusCodes.Status409Conflict);
+
         var record = await ReadOutputCaptureRowAsync(
             connection, transaction, identity, captureId, forUpdate: true, cancellationToken)
             .ConfigureAwait(false)
@@ -1080,7 +1191,7 @@ internal sealed class SourceControlOwnerStore(
                 repository_id, resource_generation, base_sha, output_tree_sha, manifest_sha256,
                 manifest_byte_length, manifest_bytes, patch_sha256, patch_byte_length, patch_bytes,
                 package_sha256, package_byte_length, capture_state, object_key, event_position, captured_at,
-                admitted_at
+                admitted_at, package_bytes
             FROM {OutputCaptures}
             WHERE project_id = @project AND run_id = @run
               AND session_id = @session AND capture_id = @capture
@@ -1132,7 +1243,8 @@ internal sealed class SourceControlOwnerStore(
             reader.IsDBNull(26) ? null : reader.GetInt64(26),
             reader.IsDBNull(28) ? null : reader.GetFieldValue<DateTimeOffset>(28),
             reader.GetFieldValue<byte[]>(18),
-            reader.GetFieldValue<byte[]>(21));
+            reader.GetFieldValue<byte[]>(21),
+            reader.GetFieldValue<byte[]>(29));
     }
 
     private static void ValidateOutputCaptureRecord(SourceControlOutputCaptureRecord record)
@@ -1162,6 +1274,8 @@ internal sealed class SourceControlOwnerStore(
                 throw new ArgumentException("The stored capture manifest or patch digest is invalid.");
 
             var manifest = GitWorkspaceCapturePackage.ParseManifest(record.ManifestBytes);
+            GitWorkspaceCapturePackage.VerifyPackage(
+                record.PackageBytes, manifest, proof.PackageSha256);
             if (manifest.RunId != proof.Identity.RunId ||
                 manifest.WorkspaceId != proof.WorkspaceId ||
                 manifest.WorkspaceIncarnationId != proof.WorkspaceIncarnationId ||
@@ -1213,7 +1327,8 @@ internal sealed class SourceControlOwnerStore(
             proof.PackageSha256 == document.PackageSha256 &&
             proof.PackageByteLength == document.PackageBytes.LongLength &&
             record.ManifestBytes.AsSpan().SequenceEqual(document.ManifestBytes) &&
-            record.PatchBytes.AsSpan().SequenceEqual(document.PatchBytes);
+            record.PatchBytes.AsSpan().SequenceEqual(document.PatchBytes) &&
+            record.PackageBytes.AsSpan().SequenceEqual(document.PackageBytes);
     }
 
     private static long PackageLength(GitWorkspaceCapturedOutputManifest manifest)
@@ -1922,7 +2037,8 @@ internal sealed record SourceControlOutputCaptureRecord(
     long? EventPosition,
     DateTimeOffset? AdmittedAt,
     byte[] ManifestBytes,
-    byte[] PatchBytes);
+    byte[] PatchBytes,
+    byte[] PackageBytes);
 
 internal sealed record SourceControlMergeIntentSnapshot(
     string IntentId,

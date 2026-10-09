@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "Source Control owner flow",
-  "alt": "Agentweaver's Source Control owner flow. Accepted project configuration selects either exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. The short-lived repository-selection code is submitted only in the initial run-scoped pin request; the durable pin stores only its hash and actual permission digest. Identity owns user OAuth and installation callbacks, rechecks the active run and exact repository binding, and returns a temporary token scoped to one repository; token and App private-key values are not stored. IssueWrite is retained only when the GitHub token response confirms issues:write. Typed issue, pull-request, review, and checkout operations use the pinned provider binding. Workspaces isolate each run and return a bounded diff. GitHub webhooks are accepted only through an authenticated project/run relay, with raw-byte HMAC verification, pinned repository checks, and durable delivery deduplication; direct GitHub posts are rejected. Merge requires a server-read pull request, immutable intent, typed approval, current authority and grant, exact-head required checks, and a repository-scoped PostgreSQL lock. Pre-effect revocation is a persisted conflict without a merge write; post-effect revocation retains the true merge SHA for replay. Expected base is a preflight only, and uncertain remote outcomes remain explicit. Produced-run output is sealed by Source Control, committed as a typed Events journal entry with package bytes in Object Store, and readable only through current-authority checks and journal-backed verification; completed-run history is retained while failed, indeterminate, and pending captures are withheld.",
+  "alt": "Agentweaver's Source Control owner flow. Accepted project configuration selects either exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. The short-lived repository-selection code is submitted only in the initial run-scoped pin request; the durable pin stores only its hash and actual permission digest. Identity owns user OAuth and installation callbacks, rechecks the active run and exact repository binding, and returns a temporary token scoped to one repository; token and App private-key values are not stored. IssueWrite is retained only when the GitHub token response confirms issues:write. Typed issue, pull-request, review, and checkout operations use the pinned provider binding. Workspaces isolate each run and return a bounded diff. GitHub webhooks are accepted only through an authenticated project/run relay, with raw-byte HMAC verification, pinned repository checks, and durable delivery deduplication; direct GitHub posts are rejected. Merge requires a server-read pull request, immutable intent, typed approval, current authority and grant, exact-head required checks, and a repository-scoped PostgreSQL lock. Pre-effect revocation is a persisted conflict without a merge write; post-effect revocation retains the true merge SHA for replay. Expected base is a preflight only, and uncertain remote outcomes remain explicit. Source Control persists exact pending output bytes for retry across restart; Events journal IDs and Object Store bytes provide provenance for admitted output. Admission and historical reads recheck current authority and run state; completed history is retained while failed, indeterminate, and pending captures are withheld.",
   "direction": "LR",
   "layoutSnapshot": {
     "canvasWidth": 1900,
@@ -13,7 +13,7 @@
       { "id": "projects", "type": "card", "position": { "x": 1230, "y": 60 }, "data": { "label": "Projects & Core", "subLabel": "Accepted repo config; fresh tenant authority, run selection, approval, and fence." } },
       { "id": "broker", "type": "card", "position": { "x": 850, "y": 275 }, "data": { "label": "Identity.Broker", "subLabel": "Owner-bound Repo App OAuth; transient pin code; hash-bound token mint." } },
       { "id": "github", "type": "card", "position": { "x": 850, "y": 490 }, "data": { "label": "GitHub API", "subLabel": "Exact-repository token; typed operations, checks, and merge." } },
-      { "id": "postgres", "type": "card", "position": { "x": 50, "y": 60 }, "data": { "label": "Orchestrator PostgreSQL", "subLabel": "Pins, pending/admitted capture proofs, and merge outcomes." } },
+      { "id": "postgres", "type": "card", "position": { "x": 50, "y": 60 }, "data": { "label": "Orchestrator PostgreSQL", "subLabel": "Pins, sealed retry bytes, proofs, and merge outcomes." } },
       { "id": "events", "type": "card", "position": { "x": 1230, "y": 275 }, "data": { "label": "Events & Sessions", "subLabel": "Typed journal event and event-ID package reads." } },
       { "id": "object-store", "type": "card", "position": { "x": 1230, "y": 490 }, "data": { "label": "Object Store", "subLabel": "Immutable package bytes; digest-verified." } },
       { "id": "workspace", "type": "card", "position": { "x": 1230, "y": 700 }, "data": { "label": "Isolated workspace", "subLabel": "Sealed Git tree; HEAD base, tracked edits, and untracked output." } }
@@ -135,13 +135,14 @@
         "data": {
           "points": [
             { "x": 790, "y": 341 },
-            { "x": 850, "y": 341 },
-            { "x": 850, "y": 327 },
-            { "x": 1230, "y": 327 }
+            { "x": 820, "y": 341 },
+            { "x": 820, "y": 420 },
+            { "x": 1230, "y": 420 },
+            { "x": 1230, "y": 341 }
           ],
           "loopback": false,
           "junctions": [],
-          "labelPos": { "x": 1050, "y": 260 }
+          "labelPos": { "x": 1050, "y": 450 }
         }
       },
       {
@@ -206,7 +207,7 @@
     {
       "id": "postgres",
       "label": "Orchestrator PostgreSQL",
-      "subLabel": "Pins, pending/admitted capture proofs, and merge outcomes.",
+      "subLabel": "Pins, sealed retry bytes, proofs, and merge outcomes.",
       "icon": "database",
       "fluentIcon": "state",
       "badge": { "text": "Owner store", "tone": "green", "visible": true }

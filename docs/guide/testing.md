@@ -173,6 +173,11 @@ npm run test:docs-diagrams
 
 The build rejects broken internal links. The link checker verifies local pages, anchors, images, and editable diagram files. The diagram checks compare JSON, draw.io XML, PNG, and hash stamps.
 
+VitePress uses a compatible dependency range; `docs/package-lock.json` preserves reproducible installs.
+Reuse an existing compatible installation instead of reinstalling it for a version check.
+Diagram export accepts compatible installed draw.io Desktop versions and records the detected version in each hash stamp.
+Source, XML, PNG, and rendering-recipe integrity checks remain required.
+
 ## Azure acceptance boundary
 
 The Bicep compiler and Kustomize checks run offline. The Foundation Probe runs in tests with local fixtures. Neither operation proves a deployed AKS cluster.

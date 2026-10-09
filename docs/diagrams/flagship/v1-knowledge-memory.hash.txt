@@ -6,17 +6,17 @@
   },
   "drawio": {
     "file": "v1-knowledge-memory.drawio",
-    "sha256": "9386b0bbbf3be318dc56cdaec75e8a0bff796a83c8b5810de7be66c06259972e"
+    "sha256": "6b74489db5a2e7ff84981f99ef20b30fa0a2ad4c9e8ebfcead35972f19b1b620"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
-    "rendererVersion": "31.4.5",
     "format": "png",
     "border": 16,
-    "scale": 2
+    "scale": 2,
+    "rendererVersion": "31.5.3"
   },
   "png": {
     "file": "v1-knowledge-memory.png",
-    "sha256": "9ba532defe5cf35e65fa8ca9c18a37194227f20716cbeac1937af1a6633dcf7f"
+    "sha256": "f7b3db1cecf04fd5b385fbf8a0d2b409dcc58569c4fff07a8ece200990d14f85"
   }
 }
