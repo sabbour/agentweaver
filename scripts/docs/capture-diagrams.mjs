@@ -21,7 +21,7 @@ import {
   validateUncompressedDrawio,
   verifyDrawioVersion,
 } from './diagram-sources.mjs';
-import { DRAWIO_CLI_VERSION, jsonFileToDrawio } from './drawio-generator.mjs';
+import { jsonFileToDrawio } from './drawio-generator.mjs';
 import { requireFluentSource } from './fluent-validation.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,7 +60,7 @@ function exportDrawio(drawioPath, source, formats, commandInfo, { embed = true, 
       execute(commandInfo.command, args, { cwd: repoRoot, stdio: 'inherit', shell: false });
     } catch (error) {
       if (error?.code === 'ENOENT') {
-        throw new Error('draw.io Desktop CLI was not found. Install the pinned version or pass --drawio-cli <path>.');
+        throw new Error('draw.io Desktop CLI was not found. Pass --drawio-cli <path> to an installed renderer.');
       }
       throw error;
     }
@@ -74,22 +74,12 @@ export async function render(
     drawioFormats = ['png'],
     drawioCli,
     embed = true,
-    allowVersionMismatch = false,
     execute = execFileSync,
   } = {},
 ) {
   const sources = selectDiagramSources(await listDiagramSources(specsDir), requestedNames);
   const commandInfo = resolveDrawioCommand({ explicitPath: drawioCli });
-  const rendererVersion = verifyDrawioVersion(
-    commandInfo,
-    { execute, allowMismatch: allowVersionMismatch },
-  );
-  if (rendererVersion !== DRAWIO_CLI_VERSION) {
-    throw new Error(
-      `draw.io Desktop CLI ${rendererVersion} cannot write canonical diagram outputs or stamps; `
-      + `use the pinned ${DRAWIO_CLI_VERSION} renderer. --allow-version-mismatch is for version probes only.`,
-    );
-  }
+  const rendererVersion = verifyDrawioVersion(commandInfo, { execute });
 
   // Validate the entire selected batch before materializing or replacing any output.
   const blocked=[];

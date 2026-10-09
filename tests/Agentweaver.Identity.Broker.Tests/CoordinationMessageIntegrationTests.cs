@@ -37,6 +37,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Playwright;
 using Npgsql;
+using NpgsqlTypes;
 using OpenIddict.Abstractions;
 using OrchestratorHost::Agentweaver.Orchestrator;
 using ProjectsConfig::Agentweaver.Projects.Config;
@@ -84,15 +85,33 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     [Fact]
     public Task CopilotConnectionRotationPreservesAcceptedSelectionThroughNativeSdkAccounting() =>
-        BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(false, null);
+        RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            false, null, false, OwnerRunFailureState.Indeterminate);
 
     [Theory]
     [InlineData(true, null)]
     [InlineData(false, "grant")]
     [InlineData(false, "head")]
     [InlineData(false, "lease")]
-    public async Task BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
-        bool revokeSourceBeforeSdk, string? sourceLoss)
+    public Task BrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+        bool revokeSourceBeforeSdk,
+        string? sourceLoss) =>
+        RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            revokeSourceBeforeSdk, sourceLoss, false, OwnerRunFailureState.Indeterminate);
+
+    [Theory]
+    [InlineData(OwnerRunFailureState.Failed)]
+    [InlineData(OwnerRunFailureState.Indeterminate)]
+    public Task ProducedRunOutputCaptureUsesAuthenticatedOwnersAndWithholdsCurrentReads(
+        OwnerRunFailureState failureState) =>
+        RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            false, null, true, failureState);
+
+    private async Task RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+        bool revokeSourceBeforeSdk,
+        string? sourceLoss,
+        bool stopAfterProducedRunCapture,
+        OwnerRunFailureState captureFailureState)
     {
         var sourceControlSecretBackend = new RecordingSecretRedemption();
         await RestartBrokerForSourceControlAsync(sourceControlSecretBackend);
@@ -375,6 +394,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var forkAdmissionGate = new ForkAdmissionGate();
         var ownerForkRaceGate = new OwnerForkRaceGate();
         var cacheObjectStore = new InMemoryObjectStore();
+        var captureObjectStore = new InMemoryObjectStore();
+        var captureAckBarrier = new ControlledRequestBarrier();
+        var loseNextCaptureAck = 0;
         var sandboxProvider = new ControlledSandboxResourceProvider();
         var sourceControlGitHub = new ControlledGitHubApi(sourceControlSecretBackend.Value);
         var sourceControlRequestBarrier = new ControlledRequestBarrier();
@@ -407,7 +429,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             () => new OwnerForkRaceHandler(
                 new CapturingHandler(
                     eventsFactoryReference!.Server.CreateHandler(),
-                    (status, noStore, body) => admissions.Add((status, noStore, body))),
+                    (status, noStore, body) => admissions.Add((status, noStore, body)),
+                    async (request, _, token) =>
+                    {
+                        if (request.Method != HttpMethod.Post ||
+                            request.RequestUri?.AbsolutePath.Contains(
+                                "/produced-run-captures/", StringComparison.Ordinal) != true)
+                            return;
+                        if (Interlocked.Exchange(ref loseNextCaptureAck, 0) == 1)
+                            throw new HttpRequestException("Simulated lost Events acknowledgment.");
+                        await captureAckBarrier.PauseIfMatchedAsync(request, token).ConfigureAwait(false);
+                    }),
                 ownerForkRaceGate),
             cacheObjectStore,
             sandboxProvider,
@@ -422,7 +454,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             signingKey,
             projects.CreateHandler,
             () => new ForkAdmissionBarrierHandler(
-                orchestratorFactory.Server.CreateHandler(), forkAdmissionGate));
+                orchestratorFactory.Server.CreateHandler(), forkAdmissionGate),
+            sessionMaterialObjects: captureObjectStore);
         eventsFactoryReference = eventsFactory;
 
         using var orchestrator = orchestratorFactory.CreateClient(new WebApplicationFactoryClientOptions
@@ -600,7 +633,37 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         const string sourceControlWorkspaceId = "source-control-owner-proof";
         const string sourceControlWorkspaceBranch = "agent/source-control-owner";
+        var outputCapturePath = sourceControlBasePath + "/workspaces/" +
+            sourceControlWorkspaceId + "/output-captures";
         string sourceControlWorkspacePath;
+        async Task<(string CaptureId, Guid EventId, string State, byte[] PackageBytes)> ReadCaptureRowAsync(
+            string? state = null)
+        {
+            await using var captureDatabase = NpgsqlDataSource.Create(_connectionString);
+            await using var connection = await captureDatabase.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand($"""
+                SELECT capture_id, event_id, capture_state, package_bytes
+                FROM "{ownerSchema}".source_control_output_captures
+                WHERE project_id = @project AND run_id = @run AND session_id = @session
+                  AND workspace_id = @workspace
+                  AND (@state IS NULL OR capture_state = @state)
+                ORDER BY captured_at DESC, capture_id DESC
+                LIMIT 1
+                """, connection);
+            command.Parameters.AddWithValue("project", project.ProjectId);
+            command.Parameters.AddWithValue("run", RunId);
+            command.Parameters.AddWithValue("session", root.RootSessionId);
+            command.Parameters.AddWithValue("workspace", sourceControlWorkspaceId);
+            command.Parameters.AddWithValue("state", NpgsqlDbType.Text, (object?)state ?? DBNull.Value);
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            return (
+                reader.GetString(0),
+                reader.GetGuid(1),
+                reader.GetString(2),
+                reader.GetFieldValue<byte[]>(3));
+        }
+
         using (var prepareWorkspace = await SendJsonAsync(
                    gateway.Client,
                    HttpMethod.Post,
@@ -686,6 +749,364 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 await File.ReadAllTextAsync(Path.Combine(
                     sourceControlWorkspacePath, ".git", "config")),
                 StringComparison.Ordinal);
+        }
+
+        Interlocked.Exchange(ref loseNextCaptureAck, 1);
+        using (var lostCaptureAck = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   outputCapturePath,
+                   runToken,
+                   new OrchestratorHost::Agentweaver.Orchestrator.PrepareSourceControlWorkspaceRevisionRequest(
+                       checkoutBaseSha,
+                       sourceControlWorkspaceBranch)))
+            Assert.Equal(HttpStatusCode.BadGateway, lostCaptureAck.StatusCode);
+
+        var originalCapture = await ReadCaptureRowAsync("pending");
+        Assert.Equal("pending", originalCapture.State);
+        var originalCaptureContent = Encoding.UTF8.GetString(originalCapture.PackageBytes);
+        Assert.Contains("updated through the authorized owner route", originalCaptureContent, StringComparison.Ordinal);
+        var originalCaptureFilePath = sourceControlBasePath + "/output-captures/" +
+            originalCapture.CaptureId + "/files?path=README.md";
+        using (var pendingCaptureFile = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   originalCaptureFilePath,
+                   runToken,
+                   [TenantId]))
+            Assert.Equal(HttpStatusCode.NotFound, pendingCaptureFile.StatusCode);
+        using (var journalReplayWhilePending = await SendAsync(
+                   events,
+                   HttpMethod.Get,
+                   $"/internal/sessions/{root.RootSessionId}/produced-run-captures/events/{originalCapture.EventId:D}",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, journalReplayWhilePending.StatusCode);
+            Assert.Equal(
+                originalCapture.PackageBytes,
+                await journalReplayWhilePending.Content.ReadAsByteArrayAsync());
+        }
+
+        using (var changedBranchRetry = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   outputCapturePath,
+                   runToken,
+                   new OrchestratorHost::Agentweaver.Orchestrator.PrepareSourceControlWorkspaceRevisionRequest(
+                       checkoutBaseSha,
+                       "agent/other-source-control-owner")))
+            Assert.Equal(HttpStatusCode.Conflict, changedBranchRetry.StatusCode);
+        var unchangedPendingCapture = await ReadCaptureRowAsync("pending");
+        Assert.Equal(originalCapture.CaptureId, unchangedPendingCapture.CaptureId);
+        Assert.Equal(originalCapture.EventId, unchangedPendingCapture.EventId);
+        Assert.Equal(originalCapture.PackageBytes, unchangedPendingCapture.PackageBytes);
+
+        await File.WriteAllTextAsync(
+            Path.Combine(sourceControlWorkspacePath, "README.md"),
+            "changed after the lost acknowledgment\n");
+        await using (var captureRetryOwnerFactory = new OrchestratorIntegrationFactory(
+                         _connectionString,
+                         ownerSchema,
+                         signingKey,
+                         projects.CreateHandler,
+                         () => eventsFactory.Server.CreateHandler(),
+                         cacheObjectStore,
+                         sandboxProvider,
+                         providerCatalog: CreateSourceControlProviderCatalog()))
+        using (var captureRetryOrchestrator = captureRetryOwnerFactory.CreateClient(
+                   new WebApplicationFactoryClientOptions
+                   {
+                       BaseAddress = new Uri("https://orchestrator.test")
+                   }))
+        using (var retriedCapture = await SendJsonAsync(
+                   captureRetryOrchestrator,
+                   HttpMethod.Post,
+                   outputCapturePath,
+                   runToken,
+                   new OrchestratorHost::Agentweaver.Orchestrator.PrepareSourceControlWorkspaceRevisionRequest(
+                       checkoutBaseSha,
+                       sourceControlWorkspaceBranch)))
+        {
+            var retryBody = await retriedCapture.Content.ReadAsStringAsync();
+            Assert.True(
+                retriedCapture.StatusCode == HttpStatusCode.OK,
+                $"Pending capture retry returned {(int)retriedCapture.StatusCode}: {retryBody}");
+            using var retryDocument = JsonDocument.Parse(retryBody);
+            Assert.Equal(
+                originalCapture.CaptureId,
+                retryDocument.RootElement.GetProperty("captureId").GetString());
+        }
+
+        var replayedCapture = await ReadCaptureRowAsync("admitted");
+        Assert.Equal("admitted", replayedCapture.State);
+        Assert.Equal(originalCapture.CaptureId, replayedCapture.CaptureId);
+        Assert.Equal(originalCapture.PackageBytes, replayedCapture.PackageBytes);
+        using (var replayedJournalRead = await SendAsync(
+                   events,
+                   HttpMethod.Get,
+                   $"/internal/sessions/{root.RootSessionId}/produced-run-captures/events/{originalCapture.EventId:D}",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, replayedJournalRead.StatusCode);
+            var replayedBytes = await replayedJournalRead.Content.ReadAsByteArrayAsync();
+            Assert.Equal(originalCapture.PackageBytes, replayedBytes);
+            Assert.Contains(
+                "updated through the authorized owner route",
+                Encoding.UTF8.GetString(replayedBytes),
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "changed after the lost acknowledgment",
+                Encoding.UTF8.GetString(replayedBytes),
+                StringComparison.Ordinal);
+        }
+
+        using (var capturePageResponse = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   sourceControlBasePath + "/output-captures?limit=20",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, capturePageResponse.StatusCode);
+            using var capturePage = JsonDocument.Parse(await capturePageResponse.Content.ReadAsStringAsync());
+            Assert.Contains(
+                capturePage.RootElement.GetProperty("captures").EnumerateArray(),
+                capture => capture.GetProperty("captureId").GetString() == originalCapture.CaptureId);
+        }
+        using (var captureDetailResponse = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   sourceControlBasePath + "/output-captures/" + originalCapture.CaptureId,
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, captureDetailResponse.StatusCode);
+            using var captureDetail = JsonDocument.Parse(
+                await captureDetailResponse.Content.ReadAsStringAsync());
+            Assert.Equal(
+                originalCapture.CaptureId,
+                captureDetail.RootElement.GetProperty("capture").GetProperty("captureId").GetString());
+            Assert.Contains(
+                captureDetail.RootElement.GetProperty("manifest")
+                    .GetProperty("files").EnumerateArray(),
+                file => file.GetProperty("path").GetString() == "README.md");
+        }
+        using (var capturedFileResponse = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   originalCaptureFilePath,
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, capturedFileResponse.StatusCode);
+            var capturedFile = await capturedFileResponse.Content.ReadAsByteArrayAsync();
+            Assert.Equal(
+                "updated through the authorized owner route\n",
+                Encoding.UTF8.GetString(capturedFile));
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(capturedFile)).ToLowerInvariant(),
+                Assert.Single(capturedFileResponse.Headers.GetValues(
+                    "X-Source-Control-Output-Sha256")));
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(sourceControlWorkspacePath, "README.md"),
+            "changed during membership race\n");
+        captureAckBarrier.Arm((request, _) => Task.FromResult(
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath.Contains(
+                "/produced-run-captures/", StringComparison.Ordinal) == true));
+        var membershipRaceCaptureTask = SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            outputCapturePath,
+            runToken,
+            new OrchestratorHost::Agentweaver.Orchestrator.PrepareSourceControlWorkspaceRevisionRequest(
+                checkoutBaseSha,
+                sourceControlWorkspaceBranch));
+        await captureAckBarrier.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        var membershipRaceCapture = await ReadCaptureRowAsync("pending");
+        HttpStatusCode revokedHistoricalReadStatus;
+        try
+        {
+            await RevokeRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerRole.AssignmentId,
+                runnerRole.Revision);
+            using var revokedHistoricalRead = await SendAsync(
+                orchestrator,
+                HttpMethod.Get,
+                originalCaptureFilePath,
+                runToken,
+                [TenantId]);
+            revokedHistoricalReadStatus = revokedHistoricalRead.StatusCode;
+        }
+        finally
+        {
+            captureAckBarrier.Release();
+        }
+        using (var membershipRaceResponse = await membershipRaceCaptureTask)
+            Assert.Equal(HttpStatusCode.Forbidden, membershipRaceResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, revokedHistoricalReadStatus);
+        Assert.Equal("pending", (await ReadCaptureRowAsync("pending")).State);
+        using (var directEventsReadAfterRevocation = await SendAsync(
+                   events,
+                   HttpMethod.Get,
+                   $"/internal/sessions/{root.RootSessionId}/produced-run-captures/events/{membershipRaceCapture.EventId:D}",
+                   runToken,
+                   [TenantId]))
+            Assert.Equal(HttpStatusCode.Forbidden, directEventsReadAfterRevocation.StatusCode);
+
+        runnerRole = await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            runnerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+        await using (var captureRetryOwnerFactory = new OrchestratorIntegrationFactory(
+                         _connectionString,
+                         ownerSchema,
+                         signingKey,
+                         projects.CreateHandler,
+                         () => eventsFactory.Server.CreateHandler(),
+                         cacheObjectStore,
+                         sandboxProvider,
+                         providerCatalog: CreateSourceControlProviderCatalog()))
+        using (var captureRetryOrchestrator = captureRetryOwnerFactory.CreateClient(
+                   new WebApplicationFactoryClientOptions
+                   {
+                       BaseAddress = new Uri("https://orchestrator.test")
+                   }))
+        using (var retriedCapture = await SendJsonAsync(
+                   captureRetryOrchestrator,
+                   HttpMethod.Post,
+                   outputCapturePath,
+                   runToken,
+                   new OrchestratorHost::Agentweaver.Orchestrator.PrepareSourceControlWorkspaceRevisionRequest(
+                       checkoutBaseSha,
+                       sourceControlWorkspaceBranch)))
+        {
+            Assert.Equal(HttpStatusCode.OK, retriedCapture.StatusCode);
+            using var retryDocument = JsonDocument.Parse(await retriedCapture.Content.ReadAsStringAsync());
+            Assert.Equal(
+                membershipRaceCapture.CaptureId,
+                retryDocument.RootElement.GetProperty("captureId").GetString());
+        }
+        Assert.Equal("admitted", (await ReadCaptureRowAsync("admitted")).State);
+
+        if (stopAfterProducedRunCapture)
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(sourceControlWorkspacePath, "README.md"),
+                "changed during run failure race\n");
+            captureAckBarrier.Arm((request, _) => Task.FromResult(
+                request.Method == HttpMethod.Post &&
+                request.RequestUri?.AbsolutePath.Contains(
+                    "/produced-run-captures/", StringComparison.Ordinal) == true));
+            var focusedStateRaceCaptureTask = SendJsonAsync(
+                orchestrator,
+                HttpMethod.Post,
+                outputCapturePath,
+                runToken,
+                new OrchestratorHost::Agentweaver.Orchestrator.PrepareSourceControlWorkspaceRevisionRequest(
+                    checkoutBaseSha,
+                    sourceControlWorkspaceBranch));
+            await captureAckBarrier.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            var focusedStateRaceCapture = await ReadCaptureRowAsync("pending");
+            Assert.Equal("pending", focusedStateRaceCapture.State);
+            using (var journalReadBeforeFailure = await SendAsync(
+                       events,
+                       HttpMethod.Get,
+                       $"/internal/sessions/{root.RootSessionId}/produced-run-captures/events/{focusedStateRaceCapture.EventId:D}",
+                       runToken,
+                       [TenantId]))
+            {
+                Assert.Equal(HttpStatusCode.OK, journalReadBeforeFailure.StatusCode);
+                Assert.Equal(
+                    focusedStateRaceCapture.PackageBytes,
+                    await journalReadBeforeFailure.Content.ReadAsByteArrayAsync());
+            }
+
+            HttpResponseMessage focusedFailureResponse;
+            try
+            {
+                using var focusedRootStatusResponse = await SendAsync(
+                    orchestrator,
+                    HttpMethod.Get,
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/status",
+                    runToken,
+                    [TenantId]);
+                await AssertStatusAsync(focusedRootStatusResponse, HttpStatusCode.OK);
+                var focusedRootStatus = await ReadJsonAsync<SessionStatusSnapshot>(focusedRootStatusResponse);
+                using var turnBoundaryResponse = await SendJsonAsync(
+                    orchestrator,
+                    HttpMethod.Post,
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/turn-boundary",
+                    runToken,
+                    new TurnBoundaryRequest(focusedRootStatus.ExecutionFence, focusedRootStatus.StateVersion));
+                await AssertStatusAsync(turnBoundaryResponse, HttpStatusCode.OK);
+                var turnBoundary = await ReadJsonAsync<TurnBoundaryResult>(turnBoundaryResponse);
+                using var focusedRunStatusResponse = await SendAsync(
+                    orchestrator,
+                    HttpMethod.Get,
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/status",
+                    runToken,
+                    [TenantId]);
+                await AssertStatusAsync(focusedRunStatusResponse, HttpStatusCode.OK);
+                var focusedRunStatus = await ReadJsonAsync<OwnerRunStatus>(focusedRunStatusResponse);
+                focusedFailureResponse = await SendJsonAsync(
+                    orchestrator,
+                    HttpMethod.Post,
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/turn-failure",
+                    runToken,
+                    new ReportRunFailureRequest(
+                        focusedRunStatus.ExecutionFence,
+                        focusedRunStatus.StateVersion,
+                        turnBoundary.StateVersion,
+                        "output-capture-failure-" + Guid.NewGuid().ToString("N"),
+                        captureFailureState,
+                        "runtime_lost",
+                        "capture-ack-held"));
+            }
+            finally
+            {
+                captureAckBarrier.Release();
+            }
+
+            using (focusedFailureResponse)
+            {
+                await AssertStatusAsync(focusedFailureResponse, HttpStatusCode.OK);
+                var focusedFailure = await ReadJsonAsync<RunExecutionTransitionResult>(focusedFailureResponse);
+                Assert.Equal(captureFailureState.ToString().ToLowerInvariant(), focusedFailure.State);
+            }
+            using (var withheldCaptureResponse = await focusedStateRaceCaptureTask)
+                Assert.Equal(HttpStatusCode.Conflict, withheldCaptureResponse.StatusCode);
+            var focusedWithheldCapture = await ReadCaptureRowAsync("pending");
+            Assert.Equal(focusedStateRaceCapture.CaptureId, focusedWithheldCapture.CaptureId);
+            using (var deniedHistoricalRead = await SendAsync(
+                       orchestrator,
+                       HttpMethod.Get,
+                       originalCaptureFilePath,
+                       runToken,
+                       [TenantId]))
+                Assert.Equal(HttpStatusCode.NotFound, deniedHistoricalRead.StatusCode);
+            using (var deniedJournalRead = await SendAsync(
+                       events,
+                       HttpMethod.Get,
+                       $"/internal/sessions/{root.RootSessionId}/produced-run-captures/events/{originalCapture.EventId:D}",
+                       runToken,
+                       [TenantId]))
+                Assert.Equal(HttpStatusCode.NotFound, deniedJournalRead.StatusCode);
+            using (var withheldJournalRead = await SendAsync(
+                       events,
+                       HttpMethod.Get,
+                       $"/internal/sessions/{root.RootSessionId}/produced-run-captures/events/{focusedStateRaceCapture.EventId:D}",
+                       runToken,
+                       [TenantId]))
+                Assert.Equal(HttpStatusCode.NotFound, withheldJournalRead.StatusCode);
+            return;
         }
 
         using (var issueResponse = await SendJsonAsync(
@@ -859,7 +1280,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         kestrelBuilder.Services.AddSingleton(
             sourceControlOwnerServices.GetRequiredService<CoordinatorDecisionOwnerStore>());
         kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<CoordinationOwnerStore>());
+        kestrelBuilder.Services.AddSingleton(
             sourceControlOwnerServices.GetRequiredService<SourceControlOwnerStore>());
+        kestrelBuilder.Services.AddSingleton(
+            sourceControlOwnerServices.GetRequiredService<EventsAddressedMessageClient>());
         kestrelBuilder.Services.AddSingleton(
             sourceControlOwnerServices.GetRequiredService<SourceControlSecretRedemptionClient>());
         kestrelBuilder.Services.AddSingleton(
@@ -1387,7 +1812,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             [TenantId]);
         await AssertStatusAsync(policyReplay, HttpStatusCode.OK);
         using var policyJournalPage = JsonDocument.Parse(await policyReplay.Content.ReadAsStringAsync());
-        var policyJournalEvent = Assert.Single(policyJournalPage.RootElement.GetProperty("events").EnumerateArray());
+        var policyJournalEvent = Assert.Single(
+            policyJournalPage.RootElement.GetProperty("events").EnumerateArray(),
+            item => item.GetProperty("kind").GetString() == "policyEvaluation");
         Assert.Equal("policyEvaluation", policyJournalEvent.GetProperty("kind").GetString());
         Assert.Equal(receiptId, policyJournalEvent.GetProperty("eventId").GetGuid());
         using var receiptRetry = await SendJsonAsync(
@@ -3512,6 +3939,37 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             OwnerRunFailureState.Indeterminate,
             "runtime_lost",
             "sdk-turn-unknown");
+        await File.WriteAllTextAsync(
+            Path.Combine(sourceControlWorkspacePath, "README.md"),
+            "changed before run-state race\n");
+        captureAckBarrier.Arm((request, _) => Task.FromResult(
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath.Contains(
+                "/produced-run-captures/", StringComparison.Ordinal) == true));
+        var stateRaceCaptureTask = SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            outputCapturePath,
+            runToken,
+            new OrchestratorHost::Agentweaver.Orchestrator.PrepareSourceControlWorkspaceRevisionRequest(
+                checkoutBaseSha,
+                sourceControlWorkspaceBranch));
+        await captureAckBarrier.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        var stateRaceCapture = await ReadCaptureRowAsync();
+        Assert.Equal("pending", stateRaceCapture.State);
+        using (var captureReadBeforeFailure = await SendAsync(
+                   events,
+                   HttpMethod.Get,
+                   $"/internal/sessions/{root.RootSessionId}/produced-run-captures/events/{stateRaceCapture.EventId:D}",
+                   runToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, captureReadBeforeFailure.StatusCode);
+            Assert.Equal(
+                stateRaceCapture.PackageBytes,
+                await captureReadBeforeFailure.Content.ReadAsByteArrayAsync());
+        }
+
         HttpResponseMessage failureResponse;
         try
         {
@@ -3533,7 +3991,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Assert.True((bool)(await releaseFenceRepositoryLock.ExecuteScalarAsync())!);
                 fenceLockHeld = false;
             }
+            captureAckBarrier.Release();
         }
+        using (var stateRaceCaptureResponse = await stateRaceCaptureTask)
+            Assert.Equal(HttpStatusCode.Conflict, stateRaceCaptureResponse.StatusCode);
+        var withheldCapture = await ReadCaptureRowAsync();
+        Assert.Equal("pending", withheldCapture.State);
+        Assert.Equal(stateRaceCapture.CaptureId, withheldCapture.CaptureId);
+        using (var directEventsReadAfterFailure = await SendAsync(
+                   events,
+                   HttpMethod.Get,
+                   $"/internal/sessions/{root.RootSessionId}/produced-run-captures/events/{stateRaceCapture.EventId:D}",
+                   runToken,
+                   [TenantId]))
+            Assert.Equal(HttpStatusCode.NotFound, directEventsReadAfterFailure.StatusCode);
+
         RunExecutionTransitionResult failure;
         using (failureResponse)
         {
@@ -4810,7 +5282,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     private sealed class CapturingHandler(
         HttpMessageHandler innerHandler,
-        Action<HttpStatusCode, bool, string> capture) : DelegatingHandler(innerHandler)
+        Action<HttpStatusCode, bool, string> capture,
+        Func<HttpRequestMessage, HttpResponseMessage, CancellationToken, Task>? afterResponse = null)
+        : DelegatingHandler(innerHandler)
     {
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -4833,6 +5307,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     Encoding.UTF8.GetString(bytes));
             }
 
+            if (afterResponse is not null)
+            {
+                try
+                {
+                    await afterResponse(request, response, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    response.Dispose();
+                    throw;
+                }
+            }
             return response;
         }
     }

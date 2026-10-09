@@ -14,7 +14,7 @@ The flagship list is in `docs/diagrams/flagship-diagrams.json`. The source map c
    npm run docs:build-flagship-specs
    ```
 
-3. Render the figure with draw.io Desktop 31.4.5:
+3. Render the figure with an installed compatible draw.io Desktop version:
 
    ```powershell
    npm run docs:render-diagrams -- --spec <diagram-name>
@@ -29,6 +29,12 @@ The flagship list is in `docs/diagrams/flagship-diagrams.json`. The source map c
    ```
 
 Keep each figure readable at a 960-pixel embed width. Add a factual alt description, caption, nearby explanation, full-size PNG link, and editable source link to its page. Add each public figure to `flagship-diagrams.json` and map its source to the maintained page in `docs-source-map.json`.
+
+The renderer has no exact-version gate. Each hash stamp records the detected
+draw.io Desktop version, including the Windows product-version suffix when present.
+Keep the source, editable XML, PNG, and actual renderer provenance together.
+Missing renderer provenance, changed bytes, and incompatible export recipes still fail.
+No version-override flag is required.
 
 The checks validate committed JSON, draw.io geometry, PNG output, and hash stamps. They do not require draw.io Desktop. Python 3 is required for draw.io normalization.
 

@@ -3,9 +3,9 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { checkSourceArtifacts, render } from './capture-diagrams.mjs';
+import { checkSourceArtifacts } from './capture-diagrams.mjs';
 import { createDiagramStamp, parseDiagramStamp } from './diagram-sources.mjs';
-import { DRAWIO_CLI_VERSION, jsonFileToDrawio } from './drawio-generator.mjs';
+import { jsonFileToDrawio } from './drawio-generator.mjs';
 
 test('detects missing, stale, and current generated draw.io artifacts', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-drawio-check-'));
@@ -33,7 +33,7 @@ test('detects missing, stale, and current generated draw.io artifacts', async ()
         source,
         path.join(generatedDirectory, 'sample.drawio'),
         path.join(outputDirectory, 'sample.png'),
-        { rendererVersion: DRAWIO_CLI_VERSION },
+        { rendererVersion: '31.4.5' },
       )),
     );
     assert.match((await checkSourceArtifacts(source, { outputDirectory, generatedDirectory })).message, /stale/);
@@ -44,7 +44,7 @@ test('detects missing, stale, and current generated draw.io artifacts', async ()
         source,
         path.join(generatedDirectory, 'sample.drawio'),
         path.join(outputDirectory, 'sample.png'),
-        { rendererVersion: DRAWIO_CLI_VERSION },
+        { rendererVersion: '31.4.5' },
       )),
     );
     assert.equal((await checkSourceArtifacts(source, { outputDirectory, generatedDirectory })).ok, true);
@@ -55,19 +55,7 @@ test('detects missing, stale, and current generated draw.io artifacts', async ()
   }
 });
 
-test('cannot accept a mismatched renderer as canonical provenance', async () => {
-  await assert.rejects(
-    () => render(
-      ['v1-foundation-dependencies'],
-      {
-        drawioCli: 'fake-draw.io',
-        allowVersionMismatch: true,
-        execute: () => 'draw.io 99.8.7',
-      },
-    ),
-    /99\.8\.7 cannot write canonical diagram outputs or stamps/,
-  );
-
+test('records the actual renderer version while preserving rendering recipe checks', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-drawio-version-'));
   const sourcePath = path.join(root, 'sample.json');
   const drawioPath = path.join(root, 'sample.drawio');
@@ -83,13 +71,25 @@ test('cannot accept a mismatched renderer as canonical provenance', async () => 
       source,
       drawioPath,
       pngPath,
-      { rendererVersion: '99.8.7' },
+      { rendererVersion: '31.5.3.0' },
     );
-    assert.equal(stamp.renderer.rendererVersion, '99.8.7');
-    assert.throws(
-      () => parseDiagramStamp(JSON.stringify(stamp), 'fake.hash.txt'),
-      /does not match the current draw.io rendering recipe/,
-    );
+    assert.equal(stamp.renderer.rendererVersion, '31.5.3.0');
+    assert.deepEqual(parseDiagramStamp(JSON.stringify(stamp)), stamp);
+    assert.equal(parseDiagramStamp(JSON.stringify({
+      ...stamp, renderer: { ...stamp.renderer, rendererVersion: '31.4.5' },
+    })).renderer.rendererVersion, '31.4.5');
+    for (const renderer of [
+      { ...stamp.renderer, rendererVersion: undefined },
+      { ...stamp.renderer, rendererVersion: 'unknown' },
+      { ...stamp.renderer, scale: 1 },
+      { ...stamp.renderer, border: 0 },
+      { ...stamp.renderer, format: 'svg' },
+    ]) {
+      assert.throws(
+        () => parseDiagramStamp(JSON.stringify({ ...stamp, renderer })),
+        /does not match the current draw.io rendering recipe/,
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

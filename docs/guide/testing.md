@@ -18,7 +18,7 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 | Events & Sessions tests | Provider-neutral contracts and the P0 Identity Broker principal profile; explicit runtime/migration Entra configuration with no identity fallback; PostgreSQL token refresh and password rejection; project/run-scoped IDs; append, deduplication/conflicts, PolicyEvaluation redaction and provenance checks, receipt-reference admission/no-store acknowledgments/transaction rollback, legacy capability pins, fork prefix lineage and authenticated idempotent retries, owner-admission revocation, migration, and rollback. Addressed-message tests cover idempotency, ordering, leases/fencing, transactional outbox, acknowledgments, expiry, and undeliverable state. PostgreSQL coverage uses disposable containers. | Workload-identity federation, production Entra grants, live cloud migration, AgentHost integration, protected-effect call-site enforcement, or production-scale replica behavior. |
 | Environment egress tests | Purpose-aware FQDN/CIDR intersection, Projects authorization freshness, Cilium options and policy rendering, resource-version/generation fencing, object readback, and provider pinning with fake Kubernetes resources. | Sandbox claim/template labels, Kubernetes RBAC/workload identity, a deployed Cilium datapath, actual network reachability, or public HTTPS/Remote MCP L7 mediation. |
 | Environment Sandbox tests | See the [Sandbox testing guide](./environment-sandbox-testing.md) for owner-fenced lease, selected-provider, readiness, and recovery coverage. | Live AKS or RuntimeClass behavior, Cilium datapath enforcement, AgentHost configuration, Core run pins, or deployed service configuration. |
-| Knowledge tests | Knowledge-owned PostgreSQL migrations and least-privilege runtime grants; project/agent isolation; immutable revision history, CAS conflicts, idempotent retries, explicit proposal decisions and outbox persistence; context filtering/restart; TestServer checks for fresh Projects authority and original-token forwarding; Cosmos adapter option/provider tests with a fake document store, including negotiation rejection for an expiring TTL or missing search index, batch timeout/size/throttle failures, immutable run-pin checks, and no fallback when Cosmos is unavailable; deterministic identical-retry races for update, reject, and promote; current scoped receipt reads, legacy three-field N-1 delivery/replay, partial-scope rejection, and a missing-pin lookup that verifies no binding is created. Identity Broker integration tests use broker-issued minimal-profile tokens, live Core membership/role lookup, the Knowledge API, and PostgreSQL to verify the private-content `WriteProjects` boundary. PostgreSQL uses disposable containers. | A deployed Knowledge service, production workload identity, live Cosmos permissions/throughput/availability, or delivery from either Memory adapter to a deployed Events & Sessions journal. |
+| Knowledge tests | Knowledge-owned PostgreSQL migrations and least-privilege runtime grants; project/agent isolation; immutable revision history, CAS conflicts, idempotent retries, explicit proposal decisions and outbox persistence; context filtering/restart; TestServer checks for fresh Projects authority and original-token forwarding; Cosmos adapter option/provider tests with a fake document store, including negotiation rejection for an expiring TTL or missing search index, batch timeout/size/throttle failures, immutable run-pin checks, and no fallback when Cosmos is unavailable; Redis adapter tests with a controlled command-client fake for TLS/options and provider selection, AOF/eviction/topology rejection, persistent-key and hash-field checks, malformed typed-payload rejection during negotiation and scans, single-write batch prevalidation, CAS, lost-response idempotency, server-time lease fencing, and backend-loss behavior; opt-in native Redis tests use the production client/store for real-Lua batch atomicity, concurrent CAS, and promotion/receipt/idempotency plus server-time lease fencing across an AOF-backed restart of one digest-pinned, test-owned instance; deterministic identical-retry races for update, reject, and promote; current scoped receipt reads, legacy three-field N-1 delivery/replay, partial-scope rejection, and a missing-pin lookup that verifies no binding is created. Identity Broker integration tests use broker-issued minimal-profile tokens, live Core membership/role lookup, the Knowledge API, and PostgreSQL to verify the private-content `WriteProjects` boundary. PostgreSQL uses disposable containers. | A deployed Knowledge service, production workload identity, live Cosmos or Redis permissions/durability/availability, or delivery from either Memory adapter to a deployed Events & Sessions journal. |
 | Key Vault tests | Azure SDK authentication and secret requests through in-memory HTTP transports. Workload identity tests use generated token files and fake OAuth and Key Vault endpoints. | Live token exchange, Key Vault RBAC, or an Azure deployment. |
 | Blob tests | Azure SDK requests, streamed data, create-only writes, and missing-object results through a fake HTTP transport. | Live credentials, permissions, durability, or cloud access. |
 | Telemetry tests | In-process OpenTelemetry setup and Azure Monitor exporter behavior through an injected transport. | Azure Monitor ingestion. |
@@ -58,6 +58,40 @@ npm run test:release
 ```
 
 Missing Docker, image-pull permission, or PostgreSQL startup fails the integration suite. Testcontainers does not clean up unrelated containers or contact production resources.
+
+### Opt-in native Redis Memory tests
+
+`RedisMemoryNativeIntegrationTests` are skipped unless
+`AGENTWEAVER_REDIS_MEMORY_NATIVE=1`. They do not create, pull, or delete a container.
+The restart case restarts only the validated dedicated test instance.
+Supply an already-running instance through these variables:
+
+| Variable | Requirement |
+| --- | --- |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_ENDPOINT` | A loopback `rediss://127.0.0.1:<published-port>/` endpoint. The certificate must be trusted by the test host and valid for the endpoint host; certificate validation is not bypassed. |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_CONTAINER_ID` | The full 64-character ID of the dedicated container. |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_OWNER_ID` | A unique 32-character run GUID. The container and AOF volume must both have labels `io.agentweaver.redis-memory.native-test=true` and `io.agentweaver.redis-memory.native-test-owner=<run-guid>`. |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_IMAGE` | The exact cached image reference, including `@sha256:<64 lowercase hex digits>`. The inspected container image must match it; tests do not pull missing images. |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_ENGINE` | `docker` or `podman`, used only to inspect the labeled instance and, in the restart case, restart its exact ID. |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_USERNAME` and `AGENTWEAVER_REDIS_MEMORY_NATIVE_PASSWORD` | Optional existing ACL credentials. Set both or neither; the test does not create credentials or print their values. |
+
+Publish TLS port `6380/tcp` only on the loopback host port in the endpoint. Put Redis's
+active AOF directory (`dir` plus `appenddirname`, when present) on a dedicated named
+volume with the same test-owner labels. Redis must pass normal provider negotiation,
+including AOF-always, healthy AOF, standalone-primary, and `noeviction` checks. The
+helper verifies the container ID, image, loopback binding, AOF path, and volume labels
+before any write. The restart case rechecks ownership immediately before restarting
+only that container, then reconnects to the same ID and pinned image. Every test uses a
+fresh key prefix; there is no `FLUSHALL` or namespace-wide cleanup.
+
+After the controlled test-owned instance is allocated, run only the native filter:
+
+```powershell
+dotnet test tests\Agentweaver.Knowledge.Tests\Agentweaver.Knowledge.Tests.csproj --no-restore --configuration Release --filter FullyQualifiedName~RedisMemoryNativeIntegrationTests
+```
+
+Do not set the opt-in flag until all instance, image, volume, endpoint, and ownership
+values are confirmed. The native filter is not part of offline test runs.
 
 ## Meter-keyed Cost source selection
 
@@ -173,6 +207,11 @@ npm run test:docs-diagrams
 ```
 
 The build rejects broken internal links. The link checker verifies local pages, anchors, images, and editable diagram files. The diagram checks compare JSON, draw.io XML, PNG, and hash stamps.
+
+VitePress uses a compatible dependency range; `docs/package-lock.json` preserves reproducible installs.
+Reuse an existing compatible installation instead of reinstalling it for a version check.
+Diagram export accepts compatible installed draw.io Desktop versions and records the detected version in each hash stamp.
+Source, XML, PNG, and rendering-recipe integrity checks remain required.
 
 ## Azure acceptance boundary
 

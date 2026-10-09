@@ -260,7 +260,7 @@ other services.
 | Snapshots | Capture and explicitly restore environments | Environment manager | `None` at cutover; gated AKS Blob-backed pod snapshots | OpenSandbox-native; managed-runtime snapshots after Azure support | Exclusive, paired |
 | Sandbox | Provision, observe, fence, and release AgentHost environments | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; Container Apps Sandboxes (P3 evaluation) | Exclusive |
 | Storage | Durable agent workspace volumes and bindings | Environment manager | Azure Files CSI | Elastic SAN deferred outside P2; future agent filesystem providers | Exclusive |
-| Memory | Authoritative knowledge records and retrieval | Knowledge | Native Postgres | Cosmos source candidate; Redis (P2) | Exclusive |
+| Memory | Authoritative knowledge records and retrieval | Knowledge | Native Postgres | Cosmos and Redis source candidates (P2) | Exclusive |
 | Policy | Decide permitted actions through AGT | Orchestrator | AGT .NET kernel, YAML rules | —; other rule languages configure AGT, not another adapter | Platform-singleton |
 | Guardrails | Classify untrusted model inputs/results/output | Orchestrator | Azure AI Content Safety Prompt Shields for supported checks | Purview DLP; Llama Guard/Prompt Guard; NeMo Guardrails | Ordered composite |
 | Network Policy | Materialize and verify egress intent | Environment manager | Cilium L3/L4/FQDN; own Tool & MCP gateway L7 | Plain Kubernetes NetworkPolicy where sufficient; agentgateway L7 | Layered |
@@ -572,19 +572,22 @@ contract absorbs changes to future volume APIs
 ## Memory
 
 **Owner:** Knowledge. **Cardinality:** exclusive. Native Postgres remains the default.
-The optional `cosmos.memory` source candidate joins it behind the same Memory contract;
-Redis remains planned P2 work. Each selected provider owns its authoritative memory
-records, decisions, session context, revisions, and accepted-effect delivery state.
-Knowledge keeps the authorization, context composition, and provider-binding boundary.
-The Sessions journal and transactional control-plane state remain in PostgreSQL.
+The optional `cosmos.memory` and `redis.memory` source candidates join it behind the
+same Memory contract. Each selected provider owns its authoritative memory records,
+decisions, session context, revisions, and accepted-effect delivery state. Knowledge
+keeps the authorization, context composition, and provider-binding boundary. The
+Sessions journal and transactional control-plane state remain in PostgreSQL.
 
 The contract reads, writes, searches, and versions records within project and agent
 authorization. Every adapter must preserve revision checks, idempotency, proposal
 promotion, scope isolation, and durable retention before enablement. Cosmos validates
 an existing `/projectId`-partitioned container, its required search composite index,
-and its non-expiring default TTL; it never provisions the container. Redis is a Memory
-provider, not merely a cache in front of PostgreSQL; its persistence and eviction policy
-must not discard authoritative records. No run silently switches providers after a failure.
+and its non-expiring default TTL; it never provisions the container. Redis requires a
+TLS endpoint and negotiates a standalone primary with healthy AOF-always persistence,
+`noeviction`, no replicas or cluster, and non-expiring namespace data. Redis is a
+Memory provider, not merely a cache in front of PostgreSQL; its persistence and eviction
+policy must not discard authoritative records. No run silently switches providers
+after a failure.
 Read-only workspace projections remain views, not another writable store. No particular
 preview toolkit or remote Python service is required
 ([R7](../decisions/0001-platform-architecture.md#risk-register)).
@@ -933,6 +936,39 @@ workspace routes. If it is absent, those routes return unavailable rather than u
 directory. Workspace diffs are bounded; absolute workspace paths are returned only to the authenticated
 run-scoped caller and are not persisted in owner records.
 
+Produced-run output capture is also owned by Source Control. The authenticated caller captures an
+existing bound workspace as one sealed Git tree: the requested base is `HEAD`, and tracked edits and
+untracked files in the resulting tree are included. The canonical manifest and proof bind the actual
+workspace branch; it contributes to the deterministic capture identity. A retry for an unresolved
+capture must use the original base and branch. A mismatch conflicts without reopening or rereading the
+workspace. The manifest also binds each safe relative path, Git mode, SHA-256 digest, and byte length;
+the bounded diff and packed file bytes are hashed as well. Limits are 10,000 files, 16 MiB per file,
+64 MiB total file content, a 32 MiB manifest, and an 8 MiB diff. This is a sealed tree capture, not
+an atomic filesystem snapshot.
+
+Source Control persists the capture proof and exact sealed package bytes as pending before sending
+the package to Events & Sessions. This durable copy lets a retry after a lost response or process
+restart resend the same bytes without reading the live checkout. A different snapshot conflicts
+while that workspace has an unresolved capture. Events verifies the proof and package, stores the
+immutable package in Object Store, and appends the typed capture event to the session journal. The
+journal event ID and position are the provenance for authorized historical reads; Source Control
+makes its owner record readable only after the exact acknowledgement is admitted. Admission rechecks
+current Projects authority and run state, then locks the owner/session rows before reading the latest
+decision in a new statement in the same transaction. This prevents a decision committed during a lock
+wait from being missed. Reads recheck current authority and run state after the journal/object fetch.
+Replays must match the original proof and journal entry. A pending or unadmitted capture is not visible,
+and there is no fallback to the live workspace or a caller-supplied event ID.
+
+Capture is allowed only while the run is active, idle, or blocked. Authorized history reads recheck
+current Projects authority, accepted selection, and run state before and after fetching file bytes by
+the journal event ID, verifying journal position, package digest, manifest, and file digest before
+returning them. Completed runs remain readable; failed or indeterminate runs and pending captures are
+withheld as not found.
+Paged history validates captures one row at a time and returns summary metadata and cursor fields,
+not package, manifest, or patch bytes. Single-capture detail/diff/file reads continue to validate the
+full record. These routes support later retained-UI browsing; they do not add a browser UI or change
+the current UI surface.
+
 The authenticated run-bound webhook relay accepts raw payloads up to 1 MiB plus GitHub delivery, event,
 and signature headers. It verifies HMAC over those exact bytes, matches the repository name and provider ID
 to the immutable pin, refreshes Projects/Core authority, and records a durable repository-scoped delivery
@@ -942,12 +978,12 @@ delivery only; it does not start a workflow. The public GitHub POST path is deni
 because the base has no trusted relay identity; deployment and direct GitHub delivery remain unavailable
 until such a relay is separately approved and deployed.
 
-The pin, webhook, and merge owner flow is summarized below. It describes the unpublished source candidate,
-not a deployed service or public webhook endpoint.
+The pin, webhook, merge, and produced-output capture owner flow is summarized below. It describes the
+unpublished source candidate, not a deployed service or public webhook endpoint.
 
 <p align="center">
   <a href="../../diagrams/flagship/v1-source-control-owner-flow.png">
-    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration selects exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. The short-lived selection code is sent only in the initial run-scoped pin request; the durable pin keeps its hash and actual permission digest. Identity owns OAuth/install callbacks and run-bound exact-repository token mint; token and private-key values are not stored. IssueWrite is retained only when the returned permission map confirms issues:write. Typed operations and checkout use the pinned provider binding. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay." />
+    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration selects exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. The short-lived selection code is sent only in the initial run-scoped pin request; the durable pin keeps its hash and actual permission digest. Identity owns OAuth/install callbacks and run-bound exact-repository token mint; token and private-key values are not stored. IssueWrite is retained only when the returned permission map confirms issues:write. Typed operations and checkout use the pinned provider binding. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay. Source Control persists exact pending output bytes for retry across restart; Events journal IDs and Object Store bytes provide provenance for admitted output. Admission and historical reads recheck current authority and run state; completed history is retained while failed, indeterminate, and pending captures are withheld." />
   </a>
 </p>
 <p align="center" class="aw-diagram-links"><a href="../../diagrams/flagship/v1-source-control-owner-flow.png">Open full-size PNG</a> · <a href="../../diagrams/drawio/generated/flagship/v1-source-control-owner-flow.drawio">Open editable draw.io source</a></p>

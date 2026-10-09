@@ -8,7 +8,6 @@ import { groupCaptionMetrics } from './fluent-group-label.mjs';
 import { resolveFluentIcon } from './fluent-icon-catalog.mjs';
 
 export { DESIGN_TOKENS };
-export const DRAWIO_CLI_VERSION = DESIGN_SYSTEM.drawioCliVersion;
 export const NATIVE_LIBRARY_REFERENCES = Object.freeze(DESIGN_SYSTEM.nativeLibraries);
 const C = DESIGN_TOKENS.colors;
 const G = DESIGN_TOKENS.geometry;
@@ -40,7 +39,7 @@ function document(name,title,width,height,cells,bounds) {
   const content=cell('fluent-content','layout','group;connectable=0;',
     rect((canvasWidth-width)/2,(canvasHeight-height)/2,width,height));
   return `<?xml version="1.0" encoding="UTF-8"?>
-<mxfile host="Agentweaver" version="${DRAWIO_CLI_VERSION}" compressed="false" fluentProfile="${DESIGN_SYSTEM.calibration.profile}">
+<mxfile host="Agentweaver" compressed="false" fluentProfile="${DESIGN_SYSTEM.calibration.profile}">
 <diagram id="${escape(name)}" name="${escape(title)}"><mxGraphModel page="1" pageScale="${scale}" pageWidth="${paper.width}" pageHeight="${paper.height}" background="${C.canvas}" grid="0"><root>
 <mxCell id="0"/><mxCell id="1" parent="0"/>
 ${background}

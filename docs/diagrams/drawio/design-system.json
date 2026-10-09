@@ -1,7 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "name": "Agentweaver draw.io design system",
-  "drawioCliVersion": "31.4.5",
   "canonicalFormat": "uncompressed editable draw.io XML",
   "renderer": "official draw.io Desktop CLI",
   "calibration": {

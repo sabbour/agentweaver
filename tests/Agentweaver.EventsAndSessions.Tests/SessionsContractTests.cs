@@ -43,6 +43,7 @@ public sealed class SessionsContractTests
                 Guid.NewGuid(),
                 1,
                 AddressedMessagePurpose.Handoff),
+            CapturePayload(),
         };
 
         Assert.Equal(Enum.GetValues<SessionEventKind>(),
@@ -304,6 +305,50 @@ public sealed class SessionsContractTests
 
     private static SessionObjectReference Ref(string key) =>
         new(new ObjectKey(key), "transcript", 10);
+
+    private static ProducedRunCaptureSessionPayload CapturePayload()
+    {
+        var identity = new SessionIdentity("project-1", "run-1", "session-1");
+        var acceptedSelectionHash = new string('A', 64);
+        var manifestHash = new string('c', 64);
+        var captureIdentity = ProducedRunCaptureContractValidation.CreateIdentity(
+            identity,
+            "pin-1",
+            acceptedSelectionHash,
+            "workspace-1",
+            Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            "main",
+            "repo-1",
+            1,
+            new string('a', 40),
+            new string('b', 40),
+            manifestHash);
+        var proof = new ProducedRunCaptureProof(
+            ProducedRunCaptureLimits.ContractVersion,
+            identity,
+            captureIdentity.CaptureId,
+            captureIdentity.EventId,
+            "https://identity.test",
+            "actor-1",
+            "tenant-1",
+            "pin-1",
+            acceptedSelectionHash,
+            "workspace-1",
+            Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            "main",
+            "repo-1",
+            1,
+            new string('a', 40),
+            new string('b', 40),
+            manifestHash,
+            1,
+            new string('d', 64),
+            0,
+            new string('e', 64),
+            ProducedRunCaptureLimits.PackageHeaderBytes,
+            DateTimeOffset.UnixEpoch);
+        return new(proof, ProducedRunCaptureContractValidation.CreatePackageReference(proof));
+    }
 
     private static PolicyEvaluationSessionPayload PolicyEvaluation() =>
         new(
