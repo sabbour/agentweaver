@@ -99,7 +99,8 @@ public sealed class SessionsEndpointFakeTests
             HttpContext context,
             SessionIdentity identity,
             string captureId,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default,
+            bool notFoundIsMissing = false) =>
             throw new NotSupportedException();
 
         public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(

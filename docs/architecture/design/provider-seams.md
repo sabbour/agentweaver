@@ -932,17 +932,24 @@ path, Git mode, SHA-256 digest, and byte length; the bounded diff and packed fil
 well. Limits are 10,000 files, 16 MiB per file, 64 MiB total file content, a 32 MiB manifest, and an
 8 MiB diff. This is a sealed tree capture, not an atomic filesystem snapshot.
 
-Source Control persists the capture proof as pending before sending the package to Events & Sessions.
-Events verifies the proof and package, stores the immutable package in Object Store, and appends the
-typed capture event to the session journal. The journal event ID and position are the provenance for
-the bytes; Source Control makes its owner record readable only after the exact acknowledgement is
-admitted. Replays must match the original proof and journal entry. A pending or unadmitted capture is
-not visible, and there is no fallback to the live workspace or a caller-supplied event ID.
+Source Control persists the capture proof and exact sealed package bytes as pending before sending
+the package to Events & Sessions. This durable copy lets a retry after a lost response or process
+restart resend the same bytes without reading the live checkout. A different snapshot conflicts
+while that workspace has an unresolved capture. Events verifies the proof and package, stores the
+immutable package in Object Store, and appends the typed capture event to the session journal. The
+journal event ID and position are the provenance for authorized historical reads; Source Control
+makes its owner record readable only after the exact acknowledgement is admitted. Admission rechecks
+current Projects authority and run state, then locks and checks the current owner/session fence,
+accepted pin, and decision in the owner transaction. Reads recheck current authority and run state
+after the journal/object fetch. Replays must match the original proof and journal entry. A pending or
+unadmitted capture is not visible, and there is no fallback to the live workspace or a caller-supplied
+event ID.
 
 Capture is allowed only while the run is active, idle, or blocked. Authorized history reads recheck
-current Projects authority and accepted selection and fetch file bytes by the journal event ID,
-verifying journal position, package digest, manifest, and file digest before returning them. Completed
-runs remain readable; failed or indeterminate runs and pending captures are withheld as not found.
+current Projects authority, accepted selection, and run state before and after fetching file bytes by
+the journal event ID, verifying journal position, package digest, manifest, and file digest before
+returning them. Completed runs remain readable; failed or indeterminate runs and pending captures are
+withheld as not found.
 The paged history and detail/diff/file routes support later retained-UI browsing; they do not add a
 browser UI or change the current UI surface.
 
@@ -960,7 +967,7 @@ unpublished source candidate, not a deployed service or public webhook endpoint.
 
 <p align="center">
   <a href="../../diagrams/flagship/v1-source-control-owner-flow.png">
-    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration selects exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. The short-lived selection code is sent only in the initial run-scoped pin request; the durable pin keeps its hash and actual permission digest. Identity owns OAuth/install callbacks and run-bound exact-repository token mint; token and private-key values are not stored. IssueWrite is retained only when the returned permission map confirms issues:write. Typed operations and checkout use the pinned provider binding. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay. Produced-run output is sealed by Source Control, committed as a typed Events journal entry with package bytes in Object Store, and readable only through current-authority checks and journal-backed verification; completed-run history is retained while failed, indeterminate, and pending captures are withheld." />
+    <img src="../../diagrams/flagship/v1-source-control-owner-flow.png" alt="Source Control owner map. Accepted project configuration selects exact API/checkout/webhook SecretRefs or an Identity GitHub App connection and repository. The short-lived selection code is sent only in the initial run-scoped pin request; the durable pin keeps its hash and actual permission digest. Identity owns OAuth/install callbacks and run-bound exact-repository token mint; token and private-key values are not stored. IssueWrite is retained only when the returned permission map confirms issues:write. Typed operations and checkout use the pinned provider binding. Webhooks require an authenticated project/run relay, raw-byte HMAC, pinned repository checks, and durable delivery deduplication; the relay accepts up to 1 MiB and direct GitHub posts are rejected. Merge requires immutable intent, typed approval, current authority and grant, exact-head checks from rulesets and classic branch protection, and a PostgreSQL repository lock. After GitHub accepts a merge, bounded owner-controlled settlement preserves the true merged SHA despite caller cancellation for safe replay. Source Control persists exact pending output bytes for retry across restart; Events journal IDs and Object Store bytes provide provenance for admitted output. Admission and historical reads recheck current authority and run state; completed history is retained while failed, indeterminate, and pending captures are withheld." />
   </a>
 </p>
 <p align="center" class="aw-diagram-links"><a href="../../diagrams/flagship/v1-source-control-owner-flow.png">Open full-size PNG</a> · <a href="../../diagrams/drawio/generated/flagship/v1-source-control-owner-flow.drawio">Open editable draw.io source</a></p>

@@ -23,6 +23,7 @@ CREATE TABLE {schema}.source_control_output_captures (
     patch_bytes bytea NOT NULL CHECK (octet_length(patch_bytes) BETWEEN 0 AND 8388608),
     package_sha256 char(64) NOT NULL,
     package_byte_length bigint NOT NULL CHECK (package_byte_length BETWEEN 12 AND 67188876),
+    package_bytes bytea NOT NULL CHECK (octet_length(package_bytes) BETWEEN 12 AND 67188876),
     capture_state varchar(16) NOT NULL DEFAULT 'pending'
         CHECK (capture_state IN ('pending', 'admitted')),
     object_key varchar(1024),
@@ -80,6 +81,7 @@ BEGIN
        OLD.patch_bytes IS NOT DISTINCT FROM NEW.patch_bytes AND
        OLD.package_sha256 IS NOT DISTINCT FROM NEW.package_sha256 AND
        OLD.package_byte_length IS NOT DISTINCT FROM NEW.package_byte_length AND
+       OLD.package_bytes IS NOT DISTINCT FROM NEW.package_bytes AND
        OLD.captured_at IS NOT DISTINCT FROM NEW.captured_at AND
        OLD.object_key IS NULL AND OLD.event_position IS NULL AND OLD.admitted_at IS NULL AND
        NEW.object_key IS NOT NULL AND NEW.event_position IS NOT NULL AND NEW.admitted_at IS NOT NULL THEN

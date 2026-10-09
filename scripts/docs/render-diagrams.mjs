@@ -17,7 +17,6 @@
 //   node scripts/docs/render-diagrams.mjs --spec name --drawio-format svg
 //   node scripts/docs/render-diagrams.mjs --spec name --drawio-cli C:\\tools\\draw.io.exe
 //   node scripts/docs/render-diagrams.mjs --spec name --drawio-format pdf --no-embed
-//   node scripts/docs/render-diagrams.mjs --spec name --allow-version-mismatch
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +31,6 @@ export function parseArgs(args) {
   const drawioFormats = new Set(['png']);
   let drawioCli;
   let embed = true;
-  let allowVersionMismatch = false;
   let checkMode = false;
   let listMode = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -82,10 +80,6 @@ export function parseArgs(args) {
       embed = false;
       continue;
     }
-    if (arg === '--allow-version-mismatch') {
-      allowVersionMismatch = true;
-      continue;
-    }
     throw new Error(`Unknown argument: ${arg}`);
   }
   return {
@@ -97,7 +91,6 @@ export function parseArgs(args) {
     drawioFormats: [...drawioFormats],
     drawioCli,
     embed,
-    allowVersionMismatch,
   };
 }
 
@@ -111,7 +104,6 @@ async function main() {
     drawioFormats,
     drawioCli,
     embed,
-    allowVersionMismatch,
   } = parseArgs(process.argv.slice(2));
   let selectedSpecs = specs;
   if (areas.length || dispositions.length || listMode) {
@@ -131,7 +123,7 @@ async function main() {
     if (!ok) process.exitCode = 1;
     return;
   }
-  await render(selectedSpecs, { drawioFormats, drawioCli, embed, allowVersionMismatch });
+  await render(selectedSpecs, { drawioFormats, drawioCli, embed });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

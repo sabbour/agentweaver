@@ -13,7 +13,6 @@ import {
   validateUncompressedDrawio,
   verifyDrawioVersion,
 } from './diagram-sources.mjs';
-import { DRAWIO_CLI_VERSION } from './drawio-generator.mjs';
 
 test('discovers JSON and draw.io sources while excluding schemas', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-diagrams-'));
@@ -101,23 +100,21 @@ test('respects explicit draw.io command and wraps headless Linux exports', () =>
   });
 });
 
-test('validates editable XML and enforces the pinned draw.io Desktop version', () => {
+test('validates editable XML and detects installed draw.io Desktop versions', () => {
   assert.equal(validateUncompressedDrawio('<mxfile compressed="false"><diagram><mxGraphModel/></diagram></mxfile>'), true);
   assert.throws(() => validateUncompressedDrawio('<mxfile compressed="true"><diagram><mxGraphModel/></diagram></mxfile>'), /uncompressed/);
   assert.throws(() => validateUncompressedDrawio('<svg/>'), /not editable/);
 
-  const execute = (_command, args) => {
-    assert.deepEqual(args, ['--version']);
-    return `draw.io ${DRAWIO_CLI_VERSION}\n`;
-  };
-  assert.equal(verifyDrawioVersion({ command: 'draw.io' }, { execute }), DRAWIO_CLI_VERSION);
+  for (const version of ['31.4.5', '31.5.3', '31.5.3.0']) {
+    const execute = (_command, args) => {
+      assert.deepEqual(args, ['--version']);
+      return `draw.io ${version}\n`;
+    };
+    assert.equal(verifyDrawioVersion({ command: 'draw.io' }, { execute }), version);
+  }
   assert.throws(
-    () => verifyDrawioVersion({ command: 'draw.io' }, { execute: () => 'draw.io 1.2.3' }),
-    /required for deterministic exports/,
-  );
-  assert.equal(
-    verifyDrawioVersion({ command: 'draw.io' }, { execute: () => 'draw.io 1.2.3', allowMismatch: true }),
-    '1.2.3',
+    () => verifyDrawioVersion({ command: 'draw.io' }, { execute: () => 'version unavailable' }),
+    /Could not determine draw.io Desktop CLI version/,
   );
   const calls = [];
   assert.equal(verifyDrawioVersion(
@@ -126,10 +123,10 @@ test('validates editable XML and enforces the pinned draw.io Desktop version', (
       platform: 'win32',
       execute: (command, args) => {
         calls.push({ command, args });
-        return command === 'powershell.exe' ? `${DRAWIO_CLI_VERSION}.0` : '';
+        return command === 'powershell.exe' ? '31.5.3.0' : '';
       },
     },
-  ), DRAWIO_CLI_VERSION);
+  ), '31.5.3.0');
   assert.equal(calls[1].command, 'powershell.exe');
 });
 
@@ -145,10 +142,12 @@ test('requires actual renderer provenance when creating stamps', async () => {
       writeFile(drawioPath, '<mxfile><mxGraphModel/></mxfile>'),
       writeFile(pngPath, 'png'),
     ]);
-    await assert.rejects(
-      () => createDiagramStamp(source, drawioPath, pngPath),
-      /detected draw.io Desktop version is required/,
-    );
+    for (const rendererVersion of [undefined, '', 'unknown', 31]) {
+      await assert.rejects(
+        () => createDiagramStamp(source, drawioPath, pngPath, { rendererVersion }),
+        /detected draw.io Desktop version is required/,
+      );
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

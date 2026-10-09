@@ -3,17 +3,16 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { DRAWIO_CLI_VERSION } from './drawio-generator.mjs';
 
 export const DRAWIO_FORMATS = new Set(['png', 'svg', 'pdf']);
 export const DIAGRAM_STAMP_VERSION = 2;
 export const PNG_EXPORT_RECIPE = Object.freeze({
   renderer: 'draw.io Desktop',
-  rendererVersion: DRAWIO_CLI_VERSION,
   format: 'png',
   border: 16,
   scale: 2,
 });
+const DRAWIO_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:\.\d+)?$/;
 
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -84,7 +83,7 @@ export async function createDiagramStamp(
   pngPath,
   { rendererVersion } = {},
 ) {
-  if (!rendererVersion) {
+  if (typeof rendererVersion !== 'string' || !DRAWIO_VERSION_PATTERN.test(rendererVersion)) {
     throw new Error('The detected draw.io Desktop version is required when creating a diagram stamp');
   }
   return {
@@ -121,7 +120,8 @@ export function parseDiagramStamp(contents, stampPath = 'diagram stamp') {
     || !stamp.drawio?.sha256
     || !stamp.png?.sha256
     || stamp.renderer?.renderer !== PNG_EXPORT_RECIPE.renderer
-    || stamp.renderer?.rendererVersion !== PNG_EXPORT_RECIPE.rendererVersion
+    || typeof stamp.renderer?.rendererVersion !== 'string'
+    || !DRAWIO_VERSION_PATTERN.test(stamp.renderer.rendererVersion)
     || stamp.renderer?.format !== 'png'
     || stamp.renderer?.border !== 16
     || stamp.renderer?.scale !== 2
@@ -173,17 +173,17 @@ export function resolveDrawioCommand({ explicitPath, env = process.env, platform
 
 export function verifyDrawioVersion(
   { command, prefixArgs = [] },
-  { execute, expected = DRAWIO_CLI_VERSION, allowMismatch = false, platform = process.platform } = {},
+  { execute, platform = process.platform } = {},
 ) {
   const run = execute ?? execFileSync;
   let output;
   try {
     output = run(command, [...prefixArgs, '--version'], { encoding: 'utf8', shell: false });
   } catch (error) {
-    if (error?.code === 'ENOENT') throw new Error('draw.io Desktop CLI was not found. Install it or pass --drawio-cli <path>.');
+    if (error?.code === 'ENOENT') throw new Error('draw.io Desktop CLI was not found. Pass --drawio-cli <path> to an installed renderer.');
     throw error;
   }
-  let match = String(output).match(/\d+\.\d+\.\d+/);
+  let match = String(output).match(/\d+\.\d+\.\d+(?:\.\d+)?/);
   if (!match && platform === 'win32' && path.extname(command).toLowerCase() === '.exe') {
     const escaped = command.replaceAll("'", "''");
     output = run(
@@ -191,11 +191,8 @@ export function verifyDrawioVersion(
       ['-NoProfile', '-Command', `(Get-Item -LiteralPath '${escaped}').VersionInfo.ProductVersion`],
       { encoding: 'utf8', shell: false },
     );
-    match = String(output).match(/\d+\.\d+\.\d+/);
+    match = String(output).match(/\d+\.\d+\.\d+(?:\.\d+)?/);
   }
   if (!match) throw new Error(`Could not determine draw.io Desktop CLI version from: ${String(output).trim()}`);
-  if (match[0] !== expected && !allowMismatch) {
-    throw new Error(`draw.io Desktop CLI ${expected} is required for deterministic exports; found ${match[0]}. Pass --allow-version-mismatch only for local inspection.`);
-  }
   return match[0];
 }

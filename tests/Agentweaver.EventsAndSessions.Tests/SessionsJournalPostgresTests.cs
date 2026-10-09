@@ -1618,7 +1618,8 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             HttpContext context,
             SessionIdentity identity,
             string captureId,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default,
+            bool notFoundIsMissing = false) =>
             throw new NotSupportedException();
 
         public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
@@ -1765,7 +1766,8 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             HttpContext context,
             SessionIdentity identity,
             string captureId,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default,
+            bool notFoundIsMissing = false) =>
             proof.Identity == identity && proof.CaptureId == captureId
                 ? Task.FromResult(proof)
                 : Task.FromException<ProducedRunCaptureProof>(
@@ -1885,7 +1887,8 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             HttpContext context,
             SessionIdentity identity,
             string captureId,
-            CancellationToken cancellationToken = default) =>
+            CancellationToken cancellationToken = default,
+            bool notFoundIsMissing = false) =>
             throw new InvalidOperationException("The legacy policy route must reject before owner admission.");
 
         public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(

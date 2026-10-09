@@ -64,6 +64,7 @@ internal static class SourceControlEndpoints
         string captureId,
         OrchestratorOptions options,
         ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore coordinationOwner,
         SourceControlOwnerStore sourceControlOwner,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
@@ -71,14 +72,18 @@ internal static class SourceControlEndpoints
             context.Response.Headers.CacheControl = "no-store";
             _ = RequireOwnerActor(context, options, projectId, runId);
             var identity = new SessionIdentity(projectId, runId, sessionId);
-            var selection = await projects.ReadSelectionForReadWithAuthorityAsync(
-                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var authorized = await ReadAuthorizedOutputCaptureScopeAsync(
+                context, identity, options, projects, coordinationOwner, cancellationToken)
+                .ConfigureAwait(false);
             var proof = await sourceControlOwner.ReadOutputCaptureProofForEventsAsync(
                 identity,
                 captureId,
-                SourceControlOwnerStore.HashSelection(selection.Selection),
-                selection.Authorization.TenantId,
+                SourceControlOwnerStore.HashSelection(authorized.Selection.Selection),
+                authorized.Selection.Authorization.TenantId,
                 cancellationToken).ConfigureAwait(false);
+            await RevalidateOutputCaptureReadAsync(
+                context, identity, authorized, options, projects, coordinationOwner, cancellationToken)
+                .ConfigureAwait(false);
             return Results.Json(proof, ProviderSelectionJsonOptions);
         }, cancellationToken);
 
@@ -587,9 +592,6 @@ internal static class SourceControlEndpoints
         {
             context.Response.Headers.CacheControl = "no-store";
             ValidateWorkspaceRequest(workspaceId, request.BaseSha, request.BranchName);
-            var workspaceManager = services.GetService<GitWorkspaceManager>()
-                ?? throw new CoordinationException(
-                    "source_control_workspace_unconfigured", StatusCodes.Status503ServiceUnavailable);
             var run = await ReadPinnedSourceControlRunAsync(
                 context,
                 projectId,
@@ -605,6 +607,23 @@ internal static class SourceControlEndpoints
             await RequireCapturableOutputRunStateAsync(
                 coordinationOwner, run.Identity, cancellationToken).ConfigureAwait(false);
 
+            var existingPending = await sourceControlOwner.ReadPendingOutputCaptureAsync(
+                run.Identity,
+                workspaceId,
+                SourceControlOwnerStore.HashSelection(run.Selection.Selection),
+                cancellationToken).ConfigureAwait(false);
+            if (existingPending is not null)
+            {
+                if (!string.Equals(
+                        existingPending.Proof.BaseSha, request.BaseSha, StringComparison.OrdinalIgnoreCase))
+                    throw new CoordinationException(
+                        "source_control_output_capture_pending_conflict", StatusCodes.Status409Conflict);
+                return await WriteAndAdmitOutputCaptureAsync(existingPending).ConfigureAwait(false);
+            }
+
+            var workspaceManager = services.GetService<GitWorkspaceManager>()
+                ?? throw new CoordinationException(
+                    "source_control_workspace_unconfigured", StatusCodes.Status503ServiceUnavailable);
             var workspaceRequest = new GitWorkspaceCaptureRequest(
                 run.Pin.ProviderBinding,
                 run.Pin.Repository,
@@ -621,7 +640,7 @@ internal static class SourceControlEndpoints
                 context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
             await RequireCapturableOutputRunStateAsync(
                 coordinationOwner, run.Identity, cancellationToken).ConfigureAwait(false);
-            var pending = await sourceControlOwner.RegisterOutputCaptureAsync(
+            var registered = await sourceControlOwner.RegisterOutputCaptureAsync(
                 run.Actor,
                 run.Identity,
                 run.Selection,
@@ -630,23 +649,35 @@ internal static class SourceControlEndpoints
                 document,
                 cancellationToken).ConfigureAwait(false);
 
-            await RequireCurrentSourceControlRunAsync(
-                context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
-            await RequireCapturableOutputRunStateAsync(
-                coordinationOwner, run.Identity, cancellationToken).ConfigureAwait(false);
-            var acknowledgment = await events.WriteProducedRunCaptureAsync(
-                context, pending.Proof, document.PackageBytes, cancellationToken).ConfigureAwait(false);
-            var admitted = await sourceControlOwner.AdmitOutputCaptureAsync(
-                run.Identity,
-                pending.Proof.CaptureId,
-                acknowledgment.Entry,
-                cancellationToken).ConfigureAwait(false);
-            var view = ToOutputCaptureSummary(admitted);
-            return Results.Json(
-                view,
-                statusCode: acknowledgment.IsDuplicate
-                    ? StatusCodes.Status200OK
-                    : StatusCodes.Status201Created);
+            return await WriteAndAdmitOutputCaptureAsync(registered).ConfigureAwait(false);
+
+            async Task<IResult> WriteAndAdmitOutputCaptureAsync(SourceControlOutputCaptureRecord capture)
+            {
+                await RequireCurrentSourceControlRunAsync(
+                    context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
+                await RequireCapturableOutputRunStateAsync(
+                    coordinationOwner, run.Identity, cancellationToken).ConfigureAwait(false);
+                var acknowledgment = await events.WriteProducedRunCaptureAsync(
+                    context, capture.Proof, capture.PackageBytes, cancellationToken).ConfigureAwait(false);
+                await RequireCurrentSourceControlRunAsync(
+                    context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
+                await RequireCapturableOutputRunStateAsync(
+                    coordinationOwner, run.Identity, cancellationToken).ConfigureAwait(false);
+                var admitted = await sourceControlOwner.AdmitOutputCaptureAsync(
+                    run.Actor,
+                    run.Identity,
+                    run.Selection,
+                    run.Pin,
+                    run.DecisionStateVersion,
+                    capture.Proof.CaptureId,
+                    acknowledgment.Entry,
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Json(
+                    ToOutputCaptureSummary(admitted),
+                    statusCode: acknowledgment.IsDuplicate
+                        ? StatusCodes.Status200OK
+                        : StatusCodes.Status201Created);
+            }
         }, cancellationToken);
 
     private static Task<IResult> ReadOutputCapturePageAsync(

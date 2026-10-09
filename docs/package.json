@@ -9,6 +9,6 @@
     "preview": "node ../scripts/docs/prepare-v1-diagrams.mjs && vitepress preview ."
   },
   "devDependencies": {
-    "vitepress": "1.6.4"
+    "vitepress": "^1.6.4"
   }
 }
