@@ -63,33 +63,33 @@ internal sealed partial class CoordinationOwnerStore
         string sessionId,
         CancellationToken cancellationToken)
     {
+        ValidateAcceptRootInput(actor, selection, sessionId);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var accepted = await AcceptRootInTransactionAsync(
+            connection, transaction, actor, selection, sessionId, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return accepted;
+    }
+
+    internal async Task<AcceptedRoot> AcceptRootInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        AuthorizedRunSelection selection,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (!ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
+        ValidateAcceptRootInput(actor, selection, sessionId);
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(selection);
         var effectiveSelection = selection.Selection;
-        if (selection.Authorization.ContractVersion != 1 ||
-            selection.Authorization.Issuer != actor.Issuer ||
-            selection.Authorization.ActorId != actor.Subject ||
-            string.IsNullOrWhiteSpace(selection.Authorization.TenantId) ||
-            selection.Authorization.BoundProjectId != effectiveSelection.ProjectId ||
-            selection.Authorization.BoundRunId != effectiveSelection.RunId ||
-            selection.Authorization.MembershipRevision < 1 ||
-            selection.Authorization.EffectiveAuthority.IsDefault ||
-            !selection.Authorization.EffectiveAuthority.Any(authority =>
-                authority.ResourceType == "project" &&
-                authority.ResourceId == effectiveSelection.ProjectId &&
-                !authority.Permissions.IsDefault &&
-                authority.Permissions.Any(permission =>
-                    permission.Permission == "acceptRunSelection" &&
-                    permission.RoleRevision > 0)))
-            throw new CoordinationException(
-                "run_selection_permission_denied", StatusCodes.Status403Forbidden);
-        CoordinationIdentity.ValidateIdentity(sessionId, nameof(sessionId));
-        ValidateSelection(effectiveSelection);
-
         var snapshot = effectiveSelection.Snapshot.GetRawText();
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(snapshot)));
-        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_runs}
                 (project_id, run_id, accepted_selection, accepted_selection_hash,
@@ -173,7 +173,6 @@ internal sealed partial class CoordinationOwnerStore
             root.WriterIssuer != actor.Issuer || root.WriterSubject != actor.Subject)
             throw new CoordinationException("root_session_conflict", StatusCodes.Status409Conflict);
 
-        await transaction.CommitAsync(cancellationToken);
         return new AcceptedRoot(
             effectiveSelection.ProjectId,
             effectiveSelection.RunId,
@@ -182,6 +181,199 @@ internal sealed partial class CoordinationOwnerStore
             acceptedRun.StateVersion,
             acceptedRun.LogicalTurnOrdinal,
             acceptedRun.ExecutionState);
+    }
+
+    internal async Task<(
+        AcceptedRoot Root,
+        CoordinationActor Actor,
+        string TenantId,
+        EffectiveRunSelection Selection,
+        string AcceptedSelectionHash,
+        long DecisionStateVersion)> ReadPrerequisiteRootBindingInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string projectId,
+        string runId,
+        string rootSessionId,
+        string expectedSelectionHash,
+        long expectedFence,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (!ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
+        CoordinationIdentity.ValidateIdentity(projectId, nameof(projectId));
+        CoordinationIdentity.ValidateIdentity(runId, nameof(runId));
+        CoordinationIdentity.ValidateIdentity(rootSessionId, nameof(rootSessionId));
+        if (string.IsNullOrWhiteSpace(expectedSelectionHash) ||
+            expectedSelectionHash.Length != 64 ||
+            expectedFence <= 0)
+            throw new CoordinationException(
+                "backlog_prerequisite_binding_invalid", StatusCodes.Status409Conflict);
+
+        await using var command = new NpgsqlCommand($"""
+            SELECT r.accepted_selection::text, r.accepted_selection_hash,
+                   r.accepted_by_issuer, r.accepted_by_subject, r.tenant_id,
+                   r.execution_fence, r.logical_turn_ordinal, r.execution_state, r.state_version,
+                   s.session_id, s.root_session_id, s.node_kind, s.writer_issuer, s.writer_subject,
+                   s.execution_fence, s.lifecycle_state,
+                   latest.state_version, latest.decision::text
+            FROM {_runs} AS r
+            INNER JOIN {_sessions} AS s
+              ON s.project_id = r.project_id AND s.run_id = r.run_id
+            LEFT JOIN LATERAL (
+                SELECT d.state_version, d.decision
+                FROM {_decisions} AS d
+                WHERE d.project_id = r.project_id AND d.run_id = r.run_id
+                  AND d.session_id = s.session_id
+                ORDER BY d.state_version DESC
+                LIMIT 1
+            ) AS latest ON true
+            WHERE r.project_id = @project AND r.run_id = @run
+              AND s.session_id = @root_session AND s.parent_session_id IS NULL
+            FOR UPDATE OF r, s
+            """, connection, transaction);
+        AddRunScope(command, projectId, runId);
+        command.Parameters.AddWithValue("root_session", NpgsqlDbType.Varchar, rootSessionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "backlog_prerequisite_binding_unavailable", StatusCodes.Status409Conflict);
+
+        var selectionHash = reader.GetString(1).TrimEnd();
+        var issuer = reader.GetString(2);
+        var subject = reader.GetString(3);
+        var tenantId = reader.IsDBNull(4) ? null : reader.GetString(4);
+        var runFence = reader.GetInt64(5);
+        var logicalTurnOrdinal = reader.GetInt64(6);
+        var executionState = reader.GetString(7);
+        var stateVersion = reader.GetInt64(8);
+        var sessionId = reader.GetString(9);
+        var persistedRootId = reader.GetString(10);
+        var nodeKind = reader.GetString(11);
+        var writerIssuer = reader.GetString(12);
+        var writerSubject = reader.GetString(13);
+        var sessionFence = reader.GetInt64(14);
+        var lifecycleState = reader.GetString(15);
+        var selectionJson = reader.GetString(0);
+        var decisionStateVersion = reader.IsDBNull(16) ? 0 : reader.GetInt64(16);
+        var decisionPayload = reader.IsDBNull(17) ? null : reader.GetString(17);
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            tenantId is null ||
+            selectionHash.Length != 64 ||
+            !string.Equals(selectionHash, expectedSelectionHash, StringComparison.Ordinal) ||
+            runFence != expectedFence ||
+            sessionFence != expectedFence ||
+            stateVersion < 1 ||
+            logicalTurnOrdinal < 0 ||
+            sessionId != rootSessionId ||
+            persistedRootId != rootSessionId ||
+            nodeKind != "coordinator" ||
+            issuer != writerIssuer ||
+            subject != writerSubject ||
+            lifecycleState == "cancelled")
+            throw new CoordinationException(
+                "backlog_prerequisite_binding_stale", StatusCodes.Status409Conflict);
+
+        if (decisionStateVersion < 1 || decisionPayload is null)
+            throw new CoordinationException(
+                "backlog_prerequisite_binding_unavailable", StatusCodes.Status409Conflict);
+        CoordinatorDecisionStateEnvelope? envelope;
+        try
+        {
+            using var decisionDocument = JsonDocument.Parse(decisionPayload);
+            envelope = decisionDocument.RootElement.TryGetProperty("envelope", out var persistedEnvelope)
+                ? JsonSerializer.Deserialize<CoordinatorDecisionStateEnvelope>(
+                    persistedEnvelope.GetRawText(), JsonOptions)
+                : null;
+        }
+        catch (JsonException exception)
+        {
+            throw new CoordinationException(
+                "backlog_prerequisite_binding_corrupt",
+                StatusCodes.Status503ServiceUnavailable,
+                exception);
+        }
+        if (envelope is null ||
+            envelope.Version != CoordinatorDecisionStateEnvelope.CurrentVersion ||
+            envelope.ProjectId != projectId ||
+            envelope.RunId != runId ||
+            envelope.RootSessionId != rootSessionId ||
+            envelope.Issuer != issuer ||
+            envelope.Subject != subject ||
+            envelope.TenantId != tenantId ||
+            envelope.AcceptedSelectionHash != selectionHash ||
+            envelope.Fence != expectedFence ||
+            envelope.ProjectRevision < 1 ||
+            envelope.ProjectConfigurationRevision < 1 ||
+            envelope.PlatformRuntimeRevision < 1 ||
+            string.IsNullOrWhiteSpace(envelope.ContextRevision))
+            throw new CoordinationException(
+                "backlog_prerequisite_binding_corrupt", StatusCodes.Status503ServiceUnavailable);
+
+        JsonElement snapshot;
+        try
+        {
+            using var selectionDocument = JsonDocument.Parse(selectionJson);
+            snapshot = selectionDocument.RootElement.Clone();
+        }
+        catch (JsonException exception)
+        {
+            throw new CoordinationException(
+                "backlog_prerequisite_binding_corrupt",
+                StatusCodes.Status503ServiceUnavailable,
+                exception);
+        }
+        var selection = new EffectiveRunSelection(
+            projectId,
+            runId,
+            envelope.ProjectRevision,
+            envelope.ProjectConfigurationRevision,
+            envelope.PlatformRuntimeRevision,
+            envelope.ContextRevision,
+            snapshot);
+        ValidateSelection(selection);
+
+        var actor = new CoordinationActor(issuer, subject);
+        var root = new AcceptedRoot(
+            projectId,
+            runId,
+            rootSessionId,
+            runFence,
+            stateVersion,
+            logicalTurnOrdinal,
+            executionState);
+        return (root, actor, tenantId, selection, selectionHash, decisionStateVersion);
+    }
+
+    private static void ValidateAcceptRootInput(
+        CoordinationActor actor,
+        AuthorizedRunSelection selection,
+        string sessionId)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(selection);
+        var effectiveSelection = selection.Selection;
+        if (selection.Authorization.ContractVersion != 1 ||
+            selection.Authorization.Issuer != actor.Issuer ||
+            selection.Authorization.ActorId != actor.Subject ||
+            string.IsNullOrWhiteSpace(selection.Authorization.TenantId) ||
+            selection.Authorization.BoundProjectId != effectiveSelection.ProjectId ||
+            selection.Authorization.BoundRunId != effectiveSelection.RunId ||
+            selection.Authorization.MembershipRevision < 1 ||
+            selection.Authorization.EffectiveAuthority.IsDefault ||
+            !selection.Authorization.EffectiveAuthority.Any(authority =>
+                authority.ResourceType == "project" &&
+                authority.ResourceId == effectiveSelection.ProjectId &&
+                !authority.Permissions.IsDefault &&
+                authority.Permissions.Any(permission =>
+                    permission.Permission == "acceptRunSelection" &&
+                    permission.RoleRevision > 0)))
+            throw new CoordinationException(
+                "run_selection_permission_denied", StatusCodes.Status403Forbidden);
+        CoordinationIdentity.ValidateIdentity(sessionId, nameof(sessionId));
+        ValidateSelection(effectiveSelection);
     }
 
     public async Task<RegisteredChild> RegisterChildAsync(
@@ -209,13 +401,16 @@ internal sealed partial class CoordinationOwnerStore
         int maxConcurrentChildren,
         CancellationToken cancellationToken,
         ConfirmedWorkPlanItemAssociation? workPlanItemAssociation = null,
-        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null,
+        Func<NpgsqlConnection, NpgsqlTransaction, SpawnedSession, CancellationToken, Task>?
+            persistSpawnedInTransaction = null)
     {
         ValidateSpawnRequest(request);
         var result = await RegisterChildCoreAsync(
             actor, parent, request.SessionId, request.Kind, request,
             workPlanItemAssociation, maxChildren, maxConcurrentChildren, cancellationToken,
-            revalidateCurrentAuthority).ConfigureAwait(false);
+            revalidateCurrentAuthority,
+            persistSpawnedInTransaction).ConfigureAwait(false);
         return result.Spawned
             ?? throw new CoordinationException("session_spawn_unavailable", StatusCodes.Status503ServiceUnavailable);
     }
@@ -344,7 +539,9 @@ internal sealed partial class CoordinationOwnerStore
         int maxChildren,
         int maxConcurrentChildren,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null,
+        Func<NpgsqlConnection, NpgsqlTransaction, SpawnedSession, CancellationToken, Task>?
+            persistSpawnedInTransaction = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ValidateForkRequest(request);
@@ -752,7 +949,9 @@ internal sealed partial class CoordinationOwnerStore
         int maxChildren,
         int maxConcurrentChildren,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null,
+        Func<NpgsqlConnection, NpgsqlTransaction, SpawnedSession, CancellationToken, Task>?
+            persistSpawnedInTransaction = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         CoordinationIdentity.ValidateIdentity(childSessionId, nameof(childSessionId));
@@ -845,6 +1044,9 @@ internal sealed partial class CoordinationOwnerStore
                 cancellationToken).ConfigureAwait(false);
             if (replay is not null)
             {
+                if (persistSpawnedInTransaction is not null)
+                    await persistSpawnedInTransaction(
+                        connection, transaction, replay, cancellationToken).ConfigureAwait(false);
                 if (revalidateCurrentAuthority is not null)
                     await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -898,6 +1100,25 @@ internal sealed partial class CoordinationOwnerStore
             if (spawnRequest is not null)
                 throw new CoordinationException("session_spawn_conflict", StatusCodes.Status409Conflict);
             return new SessionRegistrationResult(registered, null);
+        }
+
+        if (workPlanItemAssociation is { } association)
+        {
+            await using var existingWorkItem = new NpgsqlCommand($"""
+                SELECT session_id
+                FROM {_sessions}
+                WHERE project_id = @project AND run_id = @run
+                  AND parent_session_id = @parent AND work_plan_item_id = @item
+                LIMIT 1
+                FOR UPDATE
+                """, connection, transaction);
+            AddRunScope(existingWorkItem, parent.ProjectId, parent.RunId);
+            existingWorkItem.Parameters.AddWithValue("parent", NpgsqlDbType.Varchar, parent.SessionId);
+            existingWorkItem.Parameters.AddWithValue(
+                "item", NpgsqlDbType.Varchar, association.WorkPlanItemId);
+            if (await existingWorkItem.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                throw new CoordinationException(
+                    "session_work_plan_item_conflict", StatusCodes.Status409Conflict);
         }
 
         await using (var countChildren = new NpgsqlCommand($"""
@@ -1023,6 +1244,9 @@ internal sealed partial class CoordinationOwnerStore
                 _timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
 
+        if (spawned is not null && persistSpawnedInTransaction is not null)
+            await persistSpawnedInTransaction(
+                connection, transaction, spawned, cancellationToken).ConfigureAwait(false);
         if (revalidateCurrentAuthority is not null)
             await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken);
@@ -1218,6 +1442,115 @@ internal sealed partial class CoordinationOwnerStore
             .ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new SessionTreeSnapshot(session.RootSessionId, nodes);
+    }
+
+    internal async Task<ImmutableArray<MafExecutionChildSnapshot>> ReadMafExecutionChildrenAsync(
+        CoordinationActor actor,
+        SessionIdentity parent,
+        CancellationToken cancellationToken,
+        ImmutableDictionary<string, MafExecutionFixedWorkAssociation>? fixedWorkAssociations = null)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        fixedWorkAssociations ??= ImmutableDictionary<string, MafExecutionFixedWorkAssociation>.Empty
+            .WithComparers(StringComparer.Ordinal);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var run = await ReadAcceptedRunAsync(
+            connection, transaction, parent.ProjectId, parent.RunId, forUpdate: false, cancellationToken)
+            .ConfigureAwait(false);
+        var session = await ReadSessionAsync(
+            connection, transaction, parent, forUpdate: false, cancellationToken).ConfigureAwait(false);
+        RequireWriter(session, actor);
+        RequireCurrentActiveSession(session, run);
+        if (session.NodeKind != "coordinator" || session.RootSessionId != session.SessionId)
+            throw new CoordinationException(
+                "maf_execution_coordinator_unavailable", StatusCodes.Status409Conflict);
+
+        await using var command = new NpgsqlCommand($"""
+            SELECT session_id, work_plan_item_id, lifecycle_state, execution_fence, detached
+            FROM {_sessions}
+            WHERE project_id = @project AND run_id = @run
+              AND parent_session_id = @parent AND root_session_id = @root
+              AND node_kind = 'child_work'
+              AND (work_plan_item_id IS NOT NULL OR session_id = ANY(@fixedChildren))
+            ORDER BY COALESCE(work_plan_item_id, session_id), created_at, session_id
+            """, connection, transaction);
+        AddRunScope(command, parent.ProjectId, parent.RunId);
+        command.Parameters.AddWithValue("parent", NpgsqlDbType.Varchar, parent.SessionId);
+        command.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, session.RootSessionId);
+        command.Parameters.AddWithValue(
+            "fixedChildren",
+            NpgsqlDbType.Array | NpgsqlDbType.Varchar,
+            fixedWorkAssociations.Values.Select(association => association.ChildSessionId).ToArray());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var children = ImmutableArray.CreateBuilder<MafExecutionChildSnapshot>();
+        var associationIds = new HashSet<string>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var childSessionId = reader.GetString(0);
+            var workPlanItemId = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var associationId = workPlanItemId ?? fixedWorkAssociations.Values
+                .SingleOrDefault(association =>
+                    string.Equals(association.ChildSessionId, childSessionId, StringComparison.Ordinal))
+                ?.AssociationId;
+            if (associationId is null)
+                throw new CoordinationException(
+                    "maf_execution_child_identity_conflict", StatusCodes.Status409Conflict);
+            if (!associationIds.Add(associationId))
+                throw new CoordinationException(
+                    "maf_execution_child_duplicate", StatusCodes.Status409Conflict);
+            children.Add(new MafExecutionChildSnapshot(
+                associationId,
+                new SessionIdentity(parent.ProjectId, parent.RunId, childSessionId),
+                ParseLifecycle(reader.GetString(2)),
+                reader.GetInt64(3))
+            {
+                Detached = reader.GetBoolean(4)
+            });
+        }
+
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return children.ToImmutable();
+    }
+
+    internal async Task<(int RegisteredChildren, int ActiveChildren)> ReadMafExecutionCapacityAsync(
+        CoordinationActor actor,
+        SessionIdentity parent,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var run = await ReadAcceptedRunAsync(
+            connection, transaction, parent.ProjectId, parent.RunId, forUpdate: false, cancellationToken)
+            .ConfigureAwait(false);
+        var session = await ReadSessionAsync(
+            connection, transaction, parent, forUpdate: false, cancellationToken).ConfigureAwait(false);
+        RequireWriter(session, actor);
+        RequireCurrentActiveSession(session, run);
+        if (session.NodeKind != "coordinator" || session.RootSessionId != session.SessionId)
+            throw new CoordinationException(
+                "maf_execution_coordinator_unavailable", StatusCodes.Status409Conflict);
+
+        var pendingForks = await ReadPendingForkCountAsync(
+            connection, transaction, parent.ProjectId, parent.RunId, cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT count(*) FILTER (WHERE parent_session_id IS NOT NULL)::integer,
+                   count(*) FILTER (
+                       WHERE parent_session_id IS NOT NULL AND lifecycle_state = 'active')::integer
+            FROM {_sessions}
+            WHERE project_id = @project AND run_id = @run
+            """, connection, transaction);
+        AddRunScope(command, parent.ProjectId, parent.RunId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new InvalidOperationException("Run child capacity could not be read.");
+        var registeredChildren = checked(reader.GetInt32(0) + pendingForks);
+        var activeChildren = checked(reader.GetInt32(1) + pendingForks);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return (registeredChildren, activeChildren);
     }
 
     public async Task<SessionStatusSnapshot> ReadSessionStatusAsync(
@@ -2125,6 +2458,56 @@ internal sealed partial class CoordinationOwnerStore
         if (nodes.Count == 0)
             throw new CoordinationException("session_tree_unavailable", StatusCodes.Status503ServiceUnavailable);
         return nodes.ToImmutable();
+    }
+
+    internal async Task<ImmutableArray<(string SessionId, string WorkPlanItemId)>>
+        ReadBacklogWorkPlanChildBindingsInTransactionAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            string projectId,
+            string runId,
+            string rootSessionId,
+            CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (!ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
+        CoordinationIdentity.ValidateIdentity(projectId, nameof(projectId));
+        CoordinationIdentity.ValidateIdentity(runId, nameof(runId));
+        CoordinationIdentity.ValidateIdentity(rootSessionId, nameof(rootSessionId));
+
+        await using var command = new NpgsqlCommand($"""
+            SELECT session_id, work_plan_item_id
+            FROM {_sessions}
+            WHERE project_id = @project AND run_id = @run AND root_session_id = @root
+              AND node_kind = 'child_work' AND work_plan_item_id IS NOT NULL
+            ORDER BY work_plan_item_id, session_id
+            FOR SHARE
+            """, connection, transaction);
+        AddRunScope(command, projectId, runId);
+        command.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, rootSessionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var bindings = ImmutableArray.CreateBuilder<(string SessionId, string WorkPlanItemId)>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var sessionId = reader.GetString(0);
+            var workPlanItemId = reader.GetString(1);
+            try
+            {
+                CoordinationIdentity.ValidateIdentity(sessionId, nameof(sessionId));
+                CoordinationIdentity.ValidateIdentity(workPlanItemId, nameof(workPlanItemId));
+            }
+            catch (CoordinationException exception)
+            {
+                throw new CoordinationException(
+                    "backlog_prerequisite_binding_corrupt",
+                    StatusCodes.Status503ServiceUnavailable,
+                    exception);
+            }
+            bindings.Add((sessionId, workPlanItemId));
+        }
+        return bindings.ToImmutable();
     }
 
     public async Task<MessageRouteBinding> ValidateMessageRouteAsync(
@@ -3134,7 +3517,8 @@ internal sealed partial class CoordinationOwnerStore
         CoordinationActor actor,
         SessionIdentity identity,
         FinishTurnRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task>? afterFinish = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(request);
@@ -3197,6 +3581,8 @@ internal sealed partial class CoordinationOwnerStore
                 result.LogicalTurnOrdinal,
                 result.StateVersion,
                 cancellationToken).ConfigureAwait(false);
+        else if (request.Completion == LogicalTurnCompletion.Completed && afterFinish is not null)
+            await afterFinish(connection, transaction, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken);
         return result;
     }

@@ -16,7 +16,8 @@ internal sealed record MafCheckpointBinding(
     long ExecutionFence,
     string SdkVersion,
     string PinnedModelReference,
-    ObjectKey? CacheReference);
+    ObjectKey? CacheReference,
+    string StoreName = "coordinator");
 
 internal enum CheckpointCacheRecovery
 {
@@ -75,6 +76,70 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
     internal PostgresMafCheckpointStore ForRun(MafCheckpointBinding binding) =>
         new(_dataSource, _schema.Trim('"'), _objectStore, _timeProvider, ValidateBinding(binding));
 
+    internal ValueTask<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
+        _dataSource.OpenConnectionAsync(cancellationToken);
+
+    internal async Task<CheckpointInfo> AppendInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        MafCheckpointBinding binding,
+        string sessionId,
+        string checkpointId,
+        JsonElement value,
+        CheckpointInfo? parent,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var validatedBinding = ValidateBinding(binding);
+        if (RequireBinding(sessionId) != validatedBinding)
+            throw new InvalidOperationException("A checkpoint can only be appended through its bound run store.");
+        ValidateCheckpoint(value, sessionId, parent);
+        if (!IsIdentifier(checkpointId))
+            throw new ArgumentException("A stable checkpoint identifier is required.", nameof(checkpointId));
+
+        if (validatedBinding.CacheReference is { } cacheReference)
+            await RequireCacheObjectAsync(cacheReference, cancellationToken).ConfigureAwait(false);
+
+        var selection = await ReadCurrentBindingAsync(
+            connection, transaction, validatedBinding, lockRows: true, cancellationToken).ConfigureAwait(false);
+        if (parent is not null && !await CheckpointExistsAsync(
+                connection, transaction, validatedBinding, parent.CheckpointId, cancellationToken)
+                .ConfigureAwait(false))
+            throw new CoordinationException("checkpoint_parent_not_found", StatusCodes.Status409Conflict);
+
+        var payload = value.GetRawText();
+        if (await FindExistingCheckpointAsync(
+                connection, transaction, validatedBinding, selection.SelectionHash, checkpointId,
+                parent?.CheckpointId, payload, cancellationToken).ConfigureAwait(false) is { } existing)
+            return existing;
+
+        await using var insert = new NpgsqlCommand($"""
+            INSERT INTO {_schema}.maf_workflow_checkpoints
+                (project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
+                 payload, cache_object_key, cache_sdk_version, pinned_model_reference,
+                 accepted_selection_hash, execution_fence, created_at)
+            VALUES
+                (@project, @run, @session, @store, @checkpoint, @parent, @payload, @cache,
+                 @sdk, @model, @selectionHash, @fence, @createdAt)
+            """, connection, transaction);
+        AddBinding(insert, validatedBinding);
+        insert.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, validatedBinding.StoreName);
+        insert.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, checkpointId);
+        insert.Parameters.AddWithValue("parent", NpgsqlDbType.Varchar,
+            (object?)parent?.CheckpointId ?? DBNull.Value);
+        insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, payload);
+        insert.Parameters.AddWithValue("cache", NpgsqlDbType.Varchar,
+            (object?)validatedBinding.CacheReference?.Value ?? DBNull.Value);
+        insert.Parameters.AddWithValue("sdk", NpgsqlDbType.Varchar, validatedBinding.SdkVersion);
+        insert.Parameters.AddWithValue("model", NpgsqlDbType.Varchar, validatedBinding.PinnedModelReference);
+        insert.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, selection.SelectionHash);
+        insert.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, validatedBinding.ExecutionFence);
+        insert.Parameters.AddWithValue("createdAt", NpgsqlDbType.TimestampTz, _timeProvider.GetUtcNow());
+        await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return new CheckpointInfo(sessionId, checkpointId);
+    }
+
     internal PostgresMafCheckpointStore ForCacheReference(ObjectKey? cacheReference)
     {
         var binding = RequireBinding();
@@ -87,48 +152,23 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         CheckpointInfo? parent = null)
     {
         var binding = RequireBinding(sessionId);
-        if (value.ValueKind != JsonValueKind.Object ||
-            Encoding.UTF8.GetByteCount(value.GetRawText()) > MaximumCheckpointPayloadBytes)
-            throw new InvalidOperationException("A bounded MAF checkpoint object is required.");
-
+        ValidateCheckpoint(value, sessionId, parent);
+        var checkpointId = Guid.NewGuid().ToString("N");
         if (binding.CacheReference is { } cacheReference)
             await RequireCacheObjectAsync(cacheReference, CancellationToken.None).ConfigureAwait(false);
-
-        var checkpointId = Guid.NewGuid().ToString("N");
-        var payload = value.GetRawText();
         await using var connection = await _dataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
-        var selection = await ReadCurrentBindingAsync(
-            connection, transaction, binding, lockRows: true, CancellationToken.None).ConfigureAwait(false);
-        if (parent is not null && !await CheckpointExistsAsync(
-                connection, transaction, binding, parent.CheckpointId, CancellationToken.None).ConfigureAwait(false))
-            throw new CoordinationException("checkpoint_parent_not_found", StatusCodes.Status409Conflict);
-
-        await using var insert = new NpgsqlCommand($"""
-            INSERT INTO {_schema}.maf_workflow_checkpoints
-                (project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
-                 payload, cache_object_key, cache_sdk_version, pinned_model_reference,
-                 accepted_selection_hash, execution_fence, created_at)
-            VALUES
-                (@project, @run, @session, @store, @checkpoint, @parent, @payload, @cache,
-                 @sdk, @model, @selectionHash, @fence, @createdAt)
-            """, connection, transaction);
-        AddBinding(insert, binding);
-        insert.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, "coordinator");
-        insert.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, checkpointId);
-        insert.Parameters.AddWithValue("parent", NpgsqlDbType.Varchar,
-            (object?)parent?.CheckpointId ?? DBNull.Value);
-        insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, payload);
-        insert.Parameters.AddWithValue("cache", NpgsqlDbType.Varchar,
-            (object?)binding.CacheReference?.Value ?? DBNull.Value);
-        insert.Parameters.AddWithValue("sdk", NpgsqlDbType.Varchar, binding.SdkVersion);
-        insert.Parameters.AddWithValue("model", NpgsqlDbType.Varchar, binding.PinnedModelReference);
-        insert.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, selection.SelectionHash);
-        insert.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
-        insert.Parameters.AddWithValue("createdAt", NpgsqlDbType.TimestampTz, _timeProvider.GetUtcNow());
-        await insert.ExecuteNonQueryAsync().ConfigureAwait(false);
+        var checkpoint = await AppendInTransactionAsync(
+            connection,
+            transaction,
+            binding,
+            sessionId,
+            checkpointId,
+            value,
+            parent,
+            CancellationToken.None).ConfigureAwait(false);
         await transaction.CommitAsync().ConfigureAwait(false);
-        return new CheckpointInfo(sessionId, checkpointId);
+        return checkpoint;
     }
 
     public override async ValueTask<JsonElement> RetrieveCheckpointAsync(string sessionId, CheckpointInfo key)
@@ -153,7 +193,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
                 AND store_name = @store AND checkpoint_id = @checkpoint AND execution_fence = @fence
             """, connection, transaction);
         AddBinding(command, binding);
-        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, "coordinator");
+        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, binding.StoreName);
         command.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, key.CheckpointId);
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
         var payload = (string?)await command.ExecuteScalarAsync().ConfigureAwait(false)
@@ -181,7 +221,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             ORDER BY created_at, checkpoint_id
             """, connection, transaction);
         AddBinding(command, binding);
-        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, "coordinator");
+        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, binding.StoreName);
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
         await using var reader = await command.ExecuteReaderAsync();
         var checkpoints = new List<CheckpointInfo>();
@@ -196,6 +236,91 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         await reader.DisposeAsync().ConfigureAwait(false);
         await transaction.CommitAsync().ConfigureAwait(false);
         return checkpoints;
+    }
+
+    internal async Task<(CheckpointInfo Info, JsonElement Value)?> ReadLatestCheckpointAsync(
+        MafCheckpointBinding binding,
+        CancellationToken cancellationToken)
+    {
+        var validatedBinding = ValidateBinding(binding);
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var latest = await ReadLatestCheckpointInTransactionAsync(
+            connection, transaction, validatedBinding, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return latest;
+    }
+
+    internal async Task<(CheckpointInfo Info, JsonElement Value)?> ReadLatestCheckpointInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        MafCheckpointBinding binding,
+        CancellationToken cancellationToken) =>
+        await ReadLatestCheckpointInTransactionCoreAsync(
+            connection, transaction, binding, requireCompletedRootEvidence: false, cancellationToken)
+            .ConfigureAwait(false);
+
+    internal Task<(CheckpointInfo Info, JsonElement Value)?> ReadLatestCheckpointForCompletedRootEvidenceInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        MafCheckpointBinding binding,
+        CancellationToken cancellationToken) =>
+        ReadLatestCheckpointInTransactionCoreAsync(
+            connection, transaction, binding, requireCompletedRootEvidence: true, cancellationToken);
+
+    private async Task<(CheckpointInfo Info, JsonElement Value)?> ReadLatestCheckpointInTransactionCoreAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        MafCheckpointBinding binding,
+        bool requireCompletedRootEvidence,
+        CancellationToken cancellationToken)
+    {
+        var validatedBinding = ValidateBinding(binding);
+        if (requireCompletedRootEvidence &&
+            !string.Equals(
+                validatedBinding.StoreName, MafExecutionCheckpointContract.StoreName, StringComparison.Ordinal))
+            throw new CoordinationException(
+                "checkpoint_session_unavailable", StatusCodes.Status409Conflict);
+        var currentBinding = await ReadCurrentBindingAsync(
+            connection, transaction, validatedBinding, lockRows: true,
+            requireCompletedRootEvidence, cancellationToken).ConfigureAwait(false);
+        var selectionHashPredicate = requireCompletedRootEvidence
+            ? "AND checkpoint.accepted_selection_hash = @selectionHash"
+            : string.Empty;
+        await using var command = new NpgsqlCommand($"""
+            SELECT checkpoint.checkpoint_id, checkpoint.payload
+            FROM {_schema}.maf_workflow_checkpoints checkpoint
+            WHERE checkpoint.project_id = @project AND checkpoint.run_id = @run
+                AND checkpoint.session_id = @session AND checkpoint.store_name = @store
+                AND checkpoint.execution_fence = @fence
+                {selectionHashPredicate}
+                AND NOT EXISTS (
+                    SELECT 1 FROM {_schema}.maf_workflow_checkpoints child
+                    WHERE child.project_id = checkpoint.project_id
+                        AND child.run_id = checkpoint.run_id
+                        AND child.session_id = checkpoint.session_id
+                        AND child.store_name = checkpoint.store_name
+                        AND child.execution_fence = checkpoint.execution_fence
+                        AND child.parent_checkpoint_id = checkpoint.checkpoint_id)
+            ORDER BY checkpoint.created_at DESC, checkpoint.checkpoint_id
+            LIMIT 2
+            """, connection, transaction);
+        AddBinding(command, validatedBinding);
+        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, validatedBinding.StoreName);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, validatedBinding.ExecutionFence);
+        if (requireCompletedRootEvidence)
+            command.Parameters.AddWithValue(
+                "selectionHash", NpgsqlDbType.Char, currentBinding.SelectionHash);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+        var checkpointId = reader.GetString(0);
+        using var document = JsonDocument.Parse(reader.GetString(1));
+        var value = document.RootElement.Clone();
+        if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "maf_execution_checkpoint_forked", StatusCodes.Status409Conflict);
+        return (new CheckpointInfo(validatedBinding.Identity.SessionId, checkpointId), value);
     }
 
     internal async Task<CheckpointRecoveryDecision> GetRecoveryDecisionAsync(
@@ -222,7 +347,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
                 AND execution_fence = @fence
             """, connection, transaction);
         AddBinding(command, binding);
-        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, "coordinator");
+        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, binding.StoreName);
         command.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, checkpointId);
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -279,12 +404,24 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         NpgsqlTransaction transaction,
         MafCheckpointBinding binding,
         bool lockRows,
+        CancellationToken cancellationToken) =>
+        await ReadCurrentBindingAsync(
+            connection, transaction, binding, lockRows,
+            requireCompletedRootEvidence: false, cancellationToken).ConfigureAwait(false);
+
+    private async Task<CurrentBinding> ReadCurrentBindingAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        MafCheckpointBinding binding,
+        bool lockRows,
+        bool requireCompletedRootEvidence,
         CancellationToken cancellationToken)
     {
         var lockClause = lockRows ? "FOR SHARE OF r, s" : string.Empty;
         await using var command = new NpgsqlCommand($"""
             SELECT r.accepted_selection, r.accepted_selection_hash, r.execution_fence,
-                s.writer_issuer, s.writer_subject, s.execution_fence, s.lifecycle_state
+                s.writer_issuer, s.writer_subject, s.execution_fence, s.lifecycle_state,
+                s.parent_session_id, s.turn_state
             FROM {_schema}.accepted_runs r
             JOIN {_schema}.coordination_sessions s
               ON s.project_id = r.project_id AND s.run_id = r.run_id
@@ -303,6 +440,8 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         var writerSubject = reader.GetString(4);
         var sessionFence = reader.GetInt64(5);
         var lifecycle = reader.GetString(6);
+        var parentSessionId = reader.IsDBNull(7) ? null : reader.GetString(7);
+        var turnState = reader.GetString(8);
         var modelReference = ReadSelectedModelReference(selection.RootElement);
         selection.Dispose();
 
@@ -310,7 +449,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             throw new CoordinationException("checkpoint_owner_actor_mismatch", StatusCodes.Status403Forbidden);
         if (runFence != binding.ExecutionFence || sessionFence != binding.ExecutionFence)
             throw new CoordinationException("checkpoint_execution_fence_stale", StatusCodes.Status409Conflict);
-        if (lifecycle != "active")
+        if (requireCompletedRootEvidence
+            ? parentSessionId is not null || lifecycle != "completed" || turnState != "completed"
+            : lifecycle != "active")
             throw new CoordinationException("checkpoint_session_unavailable", StatusCodes.Status409Conflict);
         if (modelReference != binding.PinnedModelReference)
             throw new CoordinationException("checkpoint_model_binding_mismatch", StatusCodes.Status409Conflict);
@@ -334,14 +475,72 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             )
             """, connection, transaction);
         AddBinding(command, binding);
-        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, "coordinator");
+        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, binding.StoreName);
         command.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, checkpointId);
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
             ?? false);
     }
 
-    private static string ReadSelectedModelReference(JsonElement selection)
+    private async Task<CheckpointInfo?> FindExistingCheckpointAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        MafCheckpointBinding binding,
+        string selectionHash,
+        string checkpointId,
+        string? parentCheckpointId,
+        string payload,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT payload = @payload, parent_checkpoint_id, cache_object_key,
+                   cache_sdk_version, pinned_model_reference, accepted_selection_hash, execution_fence
+            FROM {_schema}.maf_workflow_checkpoints
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND store_name = @store AND checkpoint_id = @checkpoint
+            FOR UPDATE
+            """, connection, transaction);
+        AddBinding(command, binding);
+        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, binding.StoreName);
+        command.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, checkpointId);
+        command.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, payload);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+
+        var samePayload = reader.GetBoolean(0);
+        var storedParent = reader.IsDBNull(1) ? null : reader.GetString(1);
+        var storedCache = reader.IsDBNull(2) ? null : reader.GetString(2);
+        var storedSelectionHash = reader.GetString(5).TrimEnd();
+        if (!samePayload ||
+            !string.Equals(storedParent, parentCheckpointId, StringComparison.Ordinal) ||
+            !string.Equals(storedCache, binding.CacheReference?.Value, StringComparison.Ordinal) ||
+            !string.Equals(reader.GetString(3), binding.SdkVersion, StringComparison.Ordinal) ||
+            !string.Equals(reader.GetString(4), binding.PinnedModelReference, StringComparison.Ordinal) ||
+            !string.Equals(storedSelectionHash, selectionHash, StringComparison.Ordinal) ||
+            reader.GetInt64(6) != binding.ExecutionFence)
+            throw new CoordinationException("checkpoint_idempotency_conflict", StatusCodes.Status409Conflict);
+
+        return new CheckpointInfo(binding.Identity.SessionId, checkpointId);
+    }
+
+    private static void ValidateCheckpoint(
+        JsonElement value,
+        string sessionId,
+        CheckpointInfo? parent)
+    {
+        if (!IsMetadataValue(sessionId, 256))
+            throw new ArgumentException("A checkpoint session identifier is required.", nameof(sessionId));
+        if (value.ValueKind != JsonValueKind.Object ||
+            Encoding.UTF8.GetByteCount(value.GetRawText()) > MaximumCheckpointPayloadBytes)
+            throw new InvalidOperationException("A bounded MAF checkpoint object is required.");
+        if (parent is not null &&
+            (!string.Equals(parent.SessionId, sessionId, StringComparison.Ordinal) ||
+             !IsIdentifier(parent.CheckpointId)))
+            throw new CoordinationException("checkpoint_parent_not_found", StatusCodes.Status409Conflict);
+    }
+
+    internal static string ReadSelectedModelReference(JsonElement selection)
     {
         if (selection.ValueKind == JsonValueKind.Object &&
             selection.TryGetProperty("modelSelection", out var model) &&
@@ -371,7 +570,8 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             !IsMetadataValue(binding.Actor.Subject, 256) ||
             binding.ExecutionFence < 1 ||
             !IsMetadataValue(binding.SdkVersion, 128) ||
-            !IsMetadataValue(binding.PinnedModelReference, 256))
+            !IsMetadataValue(binding.PinnedModelReference, 256) ||
+            !IsIdentifier(binding.StoreName))
             throw new ArgumentException("A complete accepted run checkpoint binding is required.", nameof(binding));
         return binding;
     }

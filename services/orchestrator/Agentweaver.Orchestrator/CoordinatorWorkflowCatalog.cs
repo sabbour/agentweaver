@@ -93,15 +93,28 @@ internal static class CoordinatorWorkflowCatalog
     }
 
     public static int ReadMaxChildren(JsonElement selection)
-        => ReadRunLimit(selection, "maxChildren", allowZero: true, maximum: 100);
+        => ReadRunLimit(selection, "maxChildren", minimum: 0, maximum: 100);
 
     public static int ReadMaxConcurrentChildren(JsonElement selection)
-        => ReadRunLimit(selection, "maxConcurrentChildren", allowZero: false, maximum: 32);
+        => ReadRunLimit(selection, "maxConcurrentChildren", minimum: 1, maximum: 32);
+
+    public static int ReadMaxWallTimeSeconds(JsonElement selection)
+        => ReadRunLimit(selection, "maxWallTimeSeconds", minimum: 60, maximum: 86400);
+
+    public static bool IsWallTimeLimitReached(
+        DateTimeOffset runStartedAt,
+        int maxWallTimeSeconds,
+        DateTimeOffset now)
+    {
+        if (runStartedAt == default)
+            throw new ArgumentOutOfRangeException(nameof(runStartedAt));
+        return now >= runStartedAt.AddSeconds(maxWallTimeSeconds);
+    }
 
     private static int ReadRunLimit(
         JsonElement selection,
         string propertyName,
-        bool allowZero,
+        int minimum,
         int maximum)
     {
         if (selection.ValueKind != JsonValueKind.Object ||
@@ -109,7 +122,7 @@ internal static class CoordinatorWorkflowCatalog
             runLimits.ValueKind != JsonValueKind.Object ||
             !runLimits.TryGetProperty(propertyName, out var maxChildren) ||
             !maxChildren.TryGetInt32(out var value) ||
-            value < (allowZero ? 0 : 1) ||
+            value < minimum ||
             value > maximum)
             throw new CoordinationException(
                 "projects_run_selection_contract_invalid",

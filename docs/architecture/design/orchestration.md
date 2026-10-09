@@ -108,6 +108,73 @@ owner persists accepted definitions and decisions, exact-request gate state, wor
 position, and MAF checkpoints in its own PostgreSQL schema. The full dispatch engine
 remains a separate slice.
 
+The Core models a project-scoped, revisioned backlog dependency graph. It rejects
+cross-project, self, missing, duplicate, and cyclic edges; only unclaimed, unarchived,
+non-provisional tasks can have their dependencies edited. Effective edge changes
+advance the graph revision, while idempotent no-ops preserve it. Readiness evaluation
+binds graph and task revisions to owner-projected prerequisite task/execution
+revisions. A successful Merge gate uses the `Merged` state; a fully evidenced workflow
+without a Merge gate uses `Completed` instead. Both states require current task and
+execution evidence. Captured outputs require verified proof; explicit no-output
+completion requires a current owner seal and no Merge gate. Incomplete,
+archived, cancelled, delegated, failed, indeterminate, or stale prerequisites block
+readiness. The evaluator does not make snapshots current; its owner must re-read and
+recheck them after waits. Required output proof is accepted only as an owner-supplied
+verified reference; Core neither creates nor verifies it.
+
+The Orchestrator owner candidate persists these tasks and dependencies and exposes
+run-scoped routes under `/api/projects/{projectId}/runs/{runId}/backlog` for graph
+reads, task creation/state/archive, dependency edits, and claims. Mutations carry the
+expected graph revision; task state and archive operations also carry the task
+revision, while claims include an idempotency key. A claim locks graph and task rows
+before accepted-run and decision state, then commits the task's exact revision with
+its accepted root/run, selection hash, fence, decision version, and token-free intent.
+The route revalidates current authority immediately before commit; if that check fails,
+the claim, accepted root, decision, and outbox intent roll back together.
+Prerequisite evidence must join the task to that exact accepted root and the whole
+confirmed WorkPlan, including every required output; one merged item cannot satisfy
+the task. Missing,
+legacy, or unknown plan, capture, merge, or acknowledgment evidence is indeterminate.
+Closed-root evidence uses a dedicated read-only checkpoint path; ordinary checkpoint
+reads remain active-only. The claim transaction rechecks the closed-root checkpoint,
+complete output set, and witness integrity. Migration 015 defines
+`owner_evidence_json` as a bounded JSON array. Its SQL is packaged as an embedded
+resource and registered with the explicit migrator; this source change does not apply
+it to a shared or live database. The MAF dispatch candidate now
+appends a completed-plan witness before returning: an explicit empty witness when
+there are no output obligations, or typed capture rows and, when selected, a typed
+Merge intent for non-empty output sets. The bounded C3/MAF source composition is
+admitted. Whole-producer runtime acceptance remains pending. Positive evidence is
+accepted only after current owner rereads and exact serializer reconstruction.
+For each claim, the current owner lock covers enumeration of all admitted captures
+for the accepted root and selection, then each typed proof and pin is reread in the
+same transaction. A non-empty witness must name the sole admitted capture; a second
+or differently named capture blocks it. A no-output witness is rebuilt from the
+actual capture inventory, so a late capture with a non-empty manifest invalidates it.
+An inventory above the 100-capture bound rejects evaluation with an explicit limit
+error; it is not truncated.
+The admitted contract requires complete root-scoped 014 capture manifests to match
+the whole WorkPlan output obligations exactly by unique path and path/hash/length;
+ambiguous paths, extra or missing files, and partial evidence remain indeterminate.
+When the accepted workflow selects one Merge platform operation, each output row
+binds to that operation's current 012 intent for the same accepted workflow,
+WorkPlan, and root. The consumer must recheck the current owner binding, repository
+pin, persisted merged state, MergeSha, and current typed approval receipt; approval
+alone is not proof. `mergeIntentId` must be present on every output row. Explicit
+`null` is valid only with source-owned proof that no Merge operation was selected;
+omitted fields, ambiguous or optional/conditional activation without an absence
+proof, and missing or stale owner rows remain indeterminate. Empty outputs or an
+empty evidence array cannot bypass required platform owner operations. Capture
+admission and Merge completion remain separate facts: neither proves that the
+captured OutputTreeSha is included in the intent HeadSha or MergeSha.
+`NotRequired` requires explicit owner-derived absence evidence, not merely an empty
+output contract.
+Migration 016 remains unregistered, and whole-producer runtime acceptance remains
+pending. The bounded C3/MAF source composition is admitted, but these routes are not
+yet deployable. The 015 schema source is packaged and registered. This source change
+does not apply it to a shared or live database. No child dispatch or successful
+output verification is implied.
+
 Non-empty or fixed-work plans also require a trusted Sandbox binding. The owner
 validates the accepted candidate against the server catalog, asks its registered
 resource adapter to resolve an existing resource and return the original

@@ -97,6 +97,9 @@ builder.Services.AddSingleton(services => new CoordinatorDecisionOwnerStore(
     options.Schema,
     services.GetRequiredService<CoordinatorRunSelectionContextStore>(),
     services.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(services => new BacklogOwnerStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
 builder.Services.AddSingleton(services => new SourceControlOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
@@ -113,6 +116,17 @@ builder.Services.AddSingleton(services => new PostgresMafCheckpointStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
     services.GetService<IObjectStore>()));
+builder.Services.AddSingleton(services => new MafExecutionOutputWitnessStore(options.Schema));
+builder.Services.AddSingleton<IBacklogPrerequisiteEvidenceReader>(services =>
+    new MafBacklogPrerequisiteEvidenceReader(
+        services.GetRequiredService<NpgsqlDataSource>(),
+        services.GetRequiredService<BacklogOwnerStore>(),
+        services.GetRequiredService<CoordinationOwnerStore>(),
+        services.GetRequiredService<CoordinatorDecisionOwnerStore>(),
+        services.GetRequiredService<CoordinatorRunSelectionContextStore>(),
+        services.GetRequiredService<SourceControlOwnerStore>(),
+        services.GetRequiredService<PostgresMafCheckpointStore>(),
+        services.GetRequiredService<MafExecutionOutputWitnessStore>()));
 builder.Services.AddHttpClient<ProjectsRunSelectionClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient<EventsAddressedMessageClient>()
@@ -182,6 +196,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
 });
 app.MapCoordinationEndpoints();
+app.MapBacklogEndpoints();
 app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)
     app.MapRuntimeRegistrationEndpoints();
