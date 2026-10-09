@@ -28,11 +28,14 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
     private IHost _host = null!;
     private readonly RsaSecurityKey _signingKey;
     private readonly RsaSecurityKey _attackerKey;
+    private readonly string _authority;
     private readonly Dictionary<string, PendingCode> _codes = new();
     public List<string> SensitiveValues { get; } = [];
     public List<(bool HasClientSecret, string? ClientSecret, bool HasCodeVerifier)> TokenRequests { get; } = [];
 
     public IdTokenTampering Tampering { get; set; } = IdTokenTampering.None;
+
+    public string AuthorityUri => _authority;
 
     /// <summary>Overrides the subject claim minted into the next id_token(s).</summary>
     public string Subject { get; set; } = "external-subject-1";
@@ -45,15 +48,16 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
 
     public string? Name { get; set; } = "Test User";
 
-    private FakeIdentityProvider(RsaSecurityKey signingKey, RsaSecurityKey attackerKey)
+    private FakeIdentityProvider(RsaSecurityKey signingKey, RsaSecurityKey attackerKey, string authority)
     {
         _signingKey = signingKey;
         _attackerKey = attackerKey;
+        _authority = authority.TrimEnd('/');
     }
 
     public TestServer Server => _host.GetTestServer();
 
-    public static async Task<FakeIdentityProvider> StartAsync()
+    public static async Task<FakeIdentityProvider> StartAsync(string authority = Authority)
     {
         using var signingRsa = RSA.Create(2048);
         var signingKey = new RsaSecurityKey(signingRsa.ExportParameters(includePrivateParameters: true))
@@ -66,7 +70,7 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
             KeyId = "attacker-key",
         };
 
-        var provider = new FakeIdentityProvider(signingKey, attackerKey);
+        var provider = new FakeIdentityProvider(signingKey, attackerKey, authority);
         var hostBuilder = new HostBuilder()
             .ConfigureWebHost(web =>
             {
@@ -87,10 +91,10 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
                 case "/.well-known/openid-configuration":
                     await WriteJsonAsync(context, new
                     {
-                        issuer = Authority,
-                        authorization_endpoint = $"{Authority}/connect/authorize",
-                        token_endpoint = $"{Authority}/connect/token",
-                        jwks_uri = $"{Authority}/connect/jwks",
+                        issuer = _authority,
+                        authorization_endpoint = $"{_authority}/connect/authorize",
+                        token_endpoint = $"{_authority}/connect/token",
+                        jwks_uri = $"{_authority}/connect/jwks",
                         response_types_supported = new[] { "code" },
                         subject_types_supported = new[] { "public" },
                         id_token_signing_alg_values_supported = new[] { "RS256" },
@@ -192,7 +196,7 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
             : now.AddMinutes(10);
         var issuer = pending.Tampering == IdTokenTampering.WrongIssuer
             ? "https://attacker-idp.test"
-            : Authority;
+            : _authority;
         var signingKey = pending.Tampering == IdTokenTampering.WrongSignature ? _attackerKey : _signingKey;
 
         var claims = new List<Claim>

@@ -895,26 +895,34 @@ superseded, and the original grant is superseded and not current. This handling 
 to merge execution; ordinary intent reads do not expose stale intents, and no merge request
 is sent.
 
-Projects stores one repository identity and either legacy API/checkout `SecretRef`s or
-`authMode: "githubApp"` with an Identity connection ID; the optional webhook `SecretRef`
-remains separate. App mode has no API or checkout `SecretRef`. The short-lived
-repository-selection code is submitted only in the initial authorized Orchestrator
-`/pin` request; it is never persisted in project/run configuration or the durable pin.
-Identity binds the code's first use to that project and run, stores only its hash, and
-allows later mint requests for the same project using the hash. The durable Orchestrator
-pin contains only the Identity connection/revision, installation and repository IDs,
-selection hash, actual permission digest, and the verified `IssueWriteGranted` bit.
-Legacy secret mode continues to redeem its API reference through Identity.Broker. In
-App mode, each GitHub API or checkout operation instead requests a fresh installation
-token from Identity, which rechecks the active run grant and exact repository binding.
-The token is limited to one repository with `contents:write` and
-`pull_requests:write`; `issues:write` is requested only when required by the pinned
-provider and must be present in GitHub's returned permission map before IssueWrite is
-retained. A denied requested permission fails closed without a narrower retry. The
-digest is computed from the actual returned permissions, historical remints preserve
-the accepted scope, GitHub's expiry is honored, and the token is invalidated after the
-operation. The default Orchestrator audience remains unchanged; the internal Identity
-endpoint requires the validated run-bound Broker bearer.
+Projects stores one repository identity and an explicit Source Control authentication
+mode. Legacy secret mode uses versioned API and checkout `SecretRef`s plus an optional
+webhook `SecretRef`; configurations that omit `authMode` remain in secret mode.
+GitHub App mode uses a stable Identity-owned `appConnectionId`, has no API or checkout
+`SecretRef`, and does not store provider tokens or numeric installation/repository IDs.
+The short-lived, actor-bound repository-selection code is submitted only in the initial
+authorized Orchestrator `/pin` request; it is never persisted in project/run
+configuration or the durable pin. Identity binds its first use to that project and run,
+stores only its hash, and allows later mint requests for the same project using the
+hash. The durable Orchestrator pin contains only the Identity connection/revision,
+installation and repository IDs, selection hash, actual permission digest, and the
+verified `IssueWriteGranted` bit. After resolving the exact provider from the accepted
+run selection, Orchestrator rechecks current Projects and Core authority and persists
+the provider/resource generation and negotiated capabilities against the accepted
+selection hash and execution fence.
+
+Legacy secret mode redeems its API reference through Identity.Broker; secret values
+are operation-scoped and invalidated. In GitHub App mode, each API or checkout
+operation instead requests a fresh installation token from Identity, which rechecks
+the active run grant and exact repository binding. The token is limited to one
+repository with `contents:write` and `pull_requests:write`; `issues:write` is requested
+only when required by the pinned provider and must be present in GitHub's returned
+permission map before IssueWrite is retained. A denied requested permission fails
+closed without a narrower retry. The digest is computed from the actual returned
+permissions, historical remints preserve the accepted scope, GitHub's expiry is
+honored, and the token is invalidated after the operation. The default Orchestrator
+audience remains unchanged; the internal Identity endpoint requires the validated
+run-bound Broker bearer.
 
 The authenticated run-scoped Orchestrator API exposes issue creation, exact-head/base pull-request
 create-or-reuse, review reads, workspace preparation/diff, typed merge intents, and the relay endpoint.
@@ -979,6 +987,29 @@ unpublished source candidate, not a deployed service or public webhook endpoint.
   </a>
 </p>
 <p align="center" class="aw-diagram-links"><a href="../../diagrams/flagship/v1-source-control-owner-flow.png">Open full-size PNG</a> · <a href="../../diagrams/drawio/generated/flagship/v1-source-control-owner-flow.drawio">Open editable draw.io source</a></p>
+
+The drawing above focuses on the legacy `SecretRef` owner path. GitHub App mode
+uses the following separate source contract; it does not establish that the
+Identity or Source Control owner routes are admitted or deployed:
+
+```mermaid
+flowchart LR
+    Browser["Retained v1 browser"]
+    Gateway["Gateway BFF"]
+    Identity["Identity Broker"]
+    Config["Accepted config: githubApp + appConnectionId"]
+    Source["Source Control owner"]
+    Core["Projects & Core"]
+    Store["Source Control owner store"]
+    Browser -->|"Current user bearer; safe repository selection"| Gateway
+    Gateway -->|"Same bearer; no tenant selector"| Identity
+    Identity -->|"Metadata + single-use selectionCode"| Browser
+    Config --> Source
+    Browser -->|"Run bearer + tenant + selectionCode"| Gateway
+    Gateway -->|"Same run bearer and tenant"| Source
+    Source -->|"Current authority and accepted repository"| Core
+    Source -->|"Pin exact provider IDs server-side"| Store
+```
 
 ## Telemetry
 

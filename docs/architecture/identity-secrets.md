@@ -98,6 +98,16 @@ The private key and installation token are never stored in PostgreSQL. The Orche
 receives the token only for the current operation and invalidates it afterward; later
 operations repeat Identity's binding and permission checks.
 
+The browser integration uses one configured HTTPS Web origin. When GitHub Repo App
+support is enabled, `IdentityBroker:WebOrigin` is required and is the only origin
+allowed to send credentialed requests to the Broker's browser OAuth and Repo App fetch
+routes. CORS preflight is handled before authentication; owner authentication,
+antiforgery, and callback-cookie checks remain unchanged. Internal token redemption,
+runtime, health, and diagnostics routes are not browser CORS surfaces. The Broker's
+GitHub callback URI stays on the Broker origin, and successful completion redirects
+to the fixed Web settings path. The Gateway uses the same explicit Web origin but
+remains bearer-only and does not accept cookie credentials.
+
 These source routes and tests do not mean that the Broker, settings surface, GitHub
 App, Key Vault writer permissions, or any cloud service have been deployed. The
 connection does not create a Projects role, broaden OAuth authority, or enable paid

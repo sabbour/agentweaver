@@ -52,9 +52,11 @@ grant/receipt records. Non-empty or fixed-work plans require a server-registered
 Sandbox resource adapter; without one, the host fails closed with `503`. This source
 does not include a production Sandbox provisioner or the full dispatch engine, and
 the positive Events receipt consumer remains separate work. These services can be
-built and tested, but are not deployed or published; the source does not provision
-Azure resources. The unpublished [AgentHost candidate](docs/architecture/agenthost.md)
-adds authenticated runtime execution, not automatic scheduling or a deployed platform.
+built and tested, but are not deployed or published. The repository also contains
+the versioned Gateway/BFF and v1 browser client source; neither is deployed. The
+unpublished [AgentHost candidate](docs/architecture/agenthost.md) adds authenticated
+runtime execution, not automatic scheduling or a deployed platform. The source does
+not provision Azure resources or include the AgentHost scheduler or product MCP server.
 
 See the [Events & Sessions journal](docs/architecture/events-sessions.md) for its
 implemented contract, PostgreSQL ownership, provider pin, and current limits.

@@ -28,6 +28,14 @@ jobs:
         run: |
           mkdir -p artifacts/coverage
           node --input-type=module -e 'import fs from "node:fs"; fs.writeFileSync("artifacts/coverage/source.json", JSON.stringify({ testedSourceSha: process.env.GITHUB_SHA, headSha: process.env.PR_HEAD_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT }, null, 2) + "\n");'
+      - name: Install locked web dependencies
+        run: npm ci --prefix apps/web --no-audit --no-fund
+      - name: Test v1 web client with coverage
+        run: npm --prefix apps/web run coverage
+      - name: Build and lint v1 web client
+        run: |
+          npm --prefix apps/web run build
+          npm --prefix apps/web run lint
       - name: Validate release composition
         env:
           RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -40,6 +48,8 @@ jobs:
         run: node scripts/azure/build-foundation-probe-image.mjs
       - name: Render Foundation Probe acceptance Job and egress policy
         run: kubectl kustomize deploy/k8s/acceptance/foundation-probe
+      - name: Install Chromium for broker browser integration tests
+        run: pwsh tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/playwright.ps1 install chromium
       - name: Test .NET foundations, Identity broker, Projects & Config, and Foundation Probe with coverage
         run: npm run coverage:dotnet
       - name: Build unpublished Identity broker image
@@ -113,6 +123,9 @@ jobs:
             ' > artifacts/images/agenthost-profile-access.json
           node --input-type=module -e 'import fs from "node:fs"; const result = JSON.parse(fs.readFileSync("artifacts/images/agenthost-profile-access.json")); if (result.uid !== 1000 || result.gid !== 1000 || result.native.sdkVersion !== "1.0.11" || result.native.runtimeVersion !== "1.0.79" || result.native.ProtocolVersion !== 3 || result.native.nativeDistribution !== "/app/native" || result.native.privatePackageCacheAbsent !== true) throw Error("The exact AgentHost image cannot execute under its selected workspace owner.");'
           rm artifacts/images/agenthost.oci.tar
+      - name: Preload pinned ASP.NET runtime image for release validator
+        if: ${{ !cancelled() }}
+        run: docker pull --platform linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4
       - name: Test release validator with coverage
         if: ${{ !cancelled() }}
         run: npm run coverage:node
@@ -140,6 +153,14 @@ jobs:
               echo '```'
             else
               echo "Node coverage report was not produced; inspect the preceding steps."
+            fi
+            echo "### v1 web client"
+            if [ -f artifacts/coverage/web/coverage-summary.json ]; then
+              echo '```json'
+              cat artifacts/coverage/web/coverage-summary.json
+              echo '```'
+            else
+              echo "Web coverage report was not produced; inspect the preceding steps."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4

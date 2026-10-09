@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="bd052ca8-8d29-4fab-86fc-c787eaeeeeda" x1="9.04" y1="7.64" x2="9.04" y2="17.96" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b3b2b3" />
+      <stop offset="0.38" stop-color="#b6b5b5" />
+      <stop offset="0.61" stop-color="#bebdbe" />
+      <stop offset="0.8" stop-color="#cccbcb" />
+      <stop offset="0.96" stop-color="#e0e0df" />
+      <stop offset="1" stop-color="#e5e5e4" />
+    </linearGradient>
+  </defs>
+  <g id="ea67d497-7e3e-4ff0-9467-0432450726e6">
+    <g>
+      <path d="M13.84,10.28l-.79.79-.05,0a.11.11,0,0,1-.15,0L9.4,7.67a.1.1,0,0,0-.14,0L9,7.89l-.21-.22a.11.11,0,0,0-.15,0L5.24,11.12a.11.11,0,0,1-.15,0l0,0-.79-.79a.11.11,0,0,0-.18.07v2.86a.11.11,0,0,0,.11.11H7a.11.11,0,0,0,.07-.18l-.79-.79-.05,0a.1.1,0,0,1,0-.14l2-2v5.51a.1.1,0,0,1-.11.1H7a.11.11,0,0,0-.07.18l2,2a.11.11,0,0,0,.15,0l2-2a.1.1,0,0,0-.07-.18H9.87a.09.09,0,0,1-.1-.1V10.11l2.05,2.05a.1.1,0,0,1,0,.14l-.05,0-.79.79a.1.1,0,0,0,.07.18h2.86a.1.1,0,0,0,.1-.11V10.35A.1.1,0,0,0,13.84,10.28Z" fill="url(#bd052ca8-8d29-4fab-86fc-c787eaeeeeda)" />
+      <g>
+        <path d="M17.14.6A.64.64,0,0,0,16.5,0H1.5A.64.64,0,0,0,.86.6V8.31a.64.64,0,0,0,.64.63h15a.64.64,0,0,0,.64-.63V.6Z" fill="#821010" />
+        <rect x="1.76" y="0.85" width="4.41" height="1.95" fill="#e62323" />
+        <rect x="6.84" y="0.85" width="4.41" height="1.95" fill="#ff7381" />
+        <rect x="11.93" y="0.85" width="4.41" height="1.95" fill="#e62323" />
+        <rect x="1.76" y="3.47" width="1.83" height="1.95" fill="#e62323" />
+        <rect x="14.5" y="3.47" width="1.83" height="1.95" fill="#ff7381" />
+        <rect x="4.27" y="3.47" width="4.41" height="1.95" fill="#ff7381" />
+        <rect x="9.35" y="3.47" width="4.41" height="1.95" fill="#e62323" />
+        <rect x="1.76" y="6.08" width="4.41" height="1.95" fill="#e62323" />
+        <rect x="6.84" y="6.08" width="4.41" height="1.95" fill="#ff7381" />
+        <rect x="11.93" y="6.08" width="4.41" height="1.95" fill="#e62323" />
+      </g>
+    </g>
+  </g>
+</svg>

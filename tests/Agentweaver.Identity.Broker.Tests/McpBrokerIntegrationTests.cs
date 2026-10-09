@@ -37,6 +37,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var token = await IssueTokenForAudienceBrokerAsync(audience, "mcp-broker-integration");
         var observedBearers = new ConcurrentQueue<string?>();
         var observedIdempotencyKeys = new ConcurrentQueue<string?>();
+        var observedSourceControlRequests =
+            new ConcurrentQueue<(string Method, string Path, string? Bearer, string? Tenant, string? Body)>();
 
         using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
             _signingCertificate.PfxPath,
@@ -59,6 +61,33 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         Encoding.UTF8,
                         "application/json"),
                 });
+            },
+            orchestratorOwner: async (request, cancellationToken) =>
+            {
+                var body = request.Content is null
+                    ? null
+                    : await request.Content.ReadAsStringAsync(cancellationToken);
+                var path = request.RequestUri?.AbsolutePath
+                    ?? throw new InvalidOperationException("Gateway omitted the source-control owner URI.");
+                observedSourceControlRequests.Enqueue((
+                    request.Method.Method,
+                    path,
+                    request.Headers.Authorization?.ToString(),
+                    request.Headers.TryGetValues("X-Agentweaver-Tenant", out var tenant)
+                        ? tenant.Single()
+                        : null,
+                    body));
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        path.EndsWith("/issues", StringComparison.Ordinal)
+                            ? """{"number":41,"title":"Integration issue","htmlUrl":"https://github.com/octo/agentweaver/issues/41","state":"open"}"""
+                            : path.EndsWith("/pin", StringComparison.Ordinal)
+                                ? """{"pinId":"pin-a","repository":"octo/agentweaver","providerId":"github","resourceId":"resource-a","resourceGeneration":1,"providerRepositoryId":12345,"defaultBranch":"main","isPrivate":true,"pinnedAt":"2026-10-08T00:00:00+00:00"}"""
+                            : "[]",
+                        Encoding.UTF8,
+                        "application/json"),
+                };
             });
 
         await using var mcpFactory = new BrokerValidatedMcpFactory(gateway, certificate);
@@ -70,9 +99,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             client,
             new { jsonrpc = "2.0", id = 2, method = "tools/list", @params = new { } },
             protocolVersion);
+        var tools = listedTools.GetProperty("result").GetProperty("tools");
         Assert.Contains(
-            listedTools.GetProperty("result").GetProperty("tools").EnumerateArray(),
+            tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_createKnowledgeRecord");
+        Assert.Contains(
+            tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() == "agentweaver_createSourceControlIssue");
+        Assert.Contains(
+            tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() == "agentweaver_readSourceControlReviews");
+        Assert.Contains(
+            tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() == "agentweaver_pinSourceControlRepository");
+        Assert.DoesNotContain(
+            tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() == "agentweaver_beginCopilotConnection");
+        Assert.DoesNotContain(
+            tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() == "agentweaver_listGitHubRepositorySelections");
 
         var result = await PostRpcAsync(
             client,
@@ -110,6 +155,132 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             toolResult.GetProperty("content")[0].GetProperty("text").GetString());
         Assert.Equal($"Bearer {token}", Assert.Single(observedBearers));
         Assert.Equal(idempotencyKey, Assert.Single(observedIdempotencyKeys));
+
+        var issueResult = await PostRpcAsync(
+            client,
+            new
+            {
+                jsonrpc = "2.0",
+                id = 4,
+                method = "tools/call",
+                @params = new
+                {
+                    name = "agentweaver_createSourceControlIssue",
+                    arguments = new
+                    {
+                        projectId = "project-a",
+                        runId = "run-a",
+                        sessionId = "root-a",
+                        tenantSelector = "tenant-a",
+                        body = new { title = "Integration issue", body = "Created from MCP." },
+                    },
+                },
+            },
+            protocolVersion);
+        Assert.False(issueResult.GetProperty("result").GetProperty("isError").GetBoolean());
+        Assert.Contains(
+            "Integration issue",
+            issueResult.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString());
+
+        var reviewResult = await PostRpcAsync(
+            client,
+            new
+            {
+                jsonrpc = "2.0",
+                id = 5,
+                method = "tools/call",
+                @params = new
+                {
+                    name = "agentweaver_readSourceControlReviews",
+                    arguments = new
+                    {
+                        projectId = "project-a",
+                        runId = "run-a",
+                        sessionId = "root-a",
+                        tenantSelector = "tenant-a",
+                        pullRequestNumber = 17,
+                    },
+                },
+            },
+            protocolVersion);
+        Assert.False(reviewResult.GetProperty("result").GetProperty("isError").GetBoolean());
+        Assert.Equal(
+            new[]
+            {
+                ("POST", "/api/projects/project-a/runs/run-a/source-control/sessions/root-a/issues"),
+                ("GET", "/api/projects/project-a/runs/run-a/source-control/sessions/root-a/pull-requests/17/reviews"),
+            },
+            observedSourceControlRequests.Select(request => (request.Method, request.Path)));
+        Assert.All(observedSourceControlRequests, request =>
+        {
+            Assert.Equal($"Bearer {token}", request.Bearer);
+            Assert.Equal("tenant-a", request.Tenant);
+        });
+        Assert.Equal(
+            """{"title":"Integration issue","body":"Created from MCP."}""",
+            observedSourceControlRequests.First().Body);
+
+        var pinTool = tools.EnumerateArray().Single(
+            tool => tool.GetProperty("name").GetString() == "agentweaver_pinSourceControlRepository");
+        Assert.DoesNotContain(
+            pinTool.GetProperty("inputSchema").GetProperty("required").EnumerateArray(),
+            required => required.GetString() == "body");
+
+        var pinResult = await PostRpcAsync(
+            client,
+            new
+            {
+                jsonrpc = "2.0",
+                id = 6,
+                method = "tools/call",
+                @params = new
+                {
+                    name = "agentweaver_pinSourceControlRepository",
+                    arguments = new
+                    {
+                        projectId = "project-a",
+                        runId = "run-a",
+                        sessionId = "root-a",
+                        tenantSelector = "tenant-a",
+                        body = new { selectionCode = "opaque-selection-code" },
+                    },
+                },
+            },
+            protocolVersion);
+        Assert.False(pinResult.GetProperty("result").GetProperty("isError").GetBoolean());
+        Assert.Contains(
+            "pin-a",
+            pinResult.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString());
+        var pinRequest = observedSourceControlRequests.Last();
+        Assert.Equal(
+            ("POST", "/api/projects/project-a/runs/run-a/source-control/sessions/root-a/pin"),
+            (pinRequest.Method, pinRequest.Path));
+        Assert.Equal("""{"selectionCode":"opaque-selection-code"}""", pinRequest.Body);
+        Assert.Equal($"Bearer {token}", pinRequest.Bearer);
+        Assert.Equal("tenant-a", pinRequest.Tenant);
+
+        var legacyPinResult = await PostRpcAsync(
+            client,
+            new
+            {
+                jsonrpc = "2.0",
+                id = 7,
+                method = "tools/call",
+                @params = new
+                {
+                    name = "agentweaver_pinSourceControlRepository",
+                    arguments = new
+                    {
+                        projectId = "project-a",
+                        runId = "run-a",
+                        sessionId = "root-a",
+                        tenantSelector = "tenant-a",
+                    },
+                },
+            },
+            protocolVersion);
+        Assert.False(legacyPinResult.GetProperty("result").GetProperty("isError").GetBoolean());
+        Assert.Null(observedSourceControlRequests.Last().Body);
     }
 
     [Fact]
@@ -268,7 +439,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal((int)HttpStatusCode.Forbidden,
             denied.GetProperty("structuredContent").GetProperty("status").GetInt32());
         Assert.Equal(
-            "missing_effective_writeprojects",
+            "missing_effective_accessprivateknowledge",
             denied.GetProperty("structuredContent").GetProperty("ownerResponse")
                 .GetProperty("code").GetString());
         Assert.Equal(1L, await CountKnowledgeRecordsAsync());

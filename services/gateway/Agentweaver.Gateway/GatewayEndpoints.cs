@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Collections.Immutable;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using Microsoft.AspNetCore.Mvc;
@@ -17,7 +18,158 @@ public static class GatewayEndpoints
                 "/openapi/v1.json",
                 () => Results.Json(GatewayOpenApi.CreateDocument(), GatewayOpenApi.JsonOptions))
             .AllowAnonymous()
+            .RequireCors(GatewayWebCors.OpenApiPolicyName)
             .WithName("getGatewayOpenApiV1");
+
+        var repoApp = endpoints.MapGroup("/api/auth/github/repo-app").RequireAuthorization();
+        repoApp.MapPost(
+            "/authorizations",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "POST", "/api/auth/github/repo-app/authorizations",
+                    hasJsonBody: true,
+                    forwardTenantSelector: false,
+                    forwardCookieName: null,
+                    cookieErrorCode: "callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        repoApp.MapGet(
+            "/authorization/status",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "GET", "/api/auth/github/repo-app/authorization/status",
+                    hasJsonBody: false,
+                    forwardTenantSelector: false,
+                    forwardCookieName: null,
+                    cookieErrorCode: "callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        repoApp.MapGet(
+            "/authorizations/{transactionId}",
+            (string transactionId, HttpContext context, GatewayOwnerClient owner,
+                CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "GET",
+                    "/api/auth/github/repo-app/authorizations/" + Uri.EscapeDataString(transactionId),
+                    hasJsonBody: false,
+                    forwardTenantSelector: false,
+                    forwardCookieName: null,
+                    cookieErrorCode: "callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        repoApp.MapPost(
+            "/authorization/refresh",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "POST", "/api/auth/github/repo-app/authorization/refresh",
+                    hasJsonBody: false,
+                    forwardTenantSelector: false,
+                    forwardCookieName: null,
+                    cookieErrorCode: "callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        repoApp.MapDelete(
+            "/authorization",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "DELETE", "/api/auth/github/repo-app/authorization",
+                    hasJsonBody: false,
+                    forwardTenantSelector: false,
+                    forwardCookieName: null,
+                    cookieErrorCode: "callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+
+        var repositorySelections = endpoints.MapGroup("/api/github/repository-selections")
+            .RequireAuthorization();
+        repositorySelections.MapGet(
+            "",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "GET", "/api/github/repository-selections",
+                    hasJsonBody: false,
+                    forwardTenantSelector: false,
+                    forwardCookieName: null,
+                    cookieErrorCode: "callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        repositorySelections.MapPost(
+            "",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "POST", "/api/github/repository-selections",
+                    hasJsonBody: true,
+                    forwardTenantSelector: false,
+                    forwardCookieName: null,
+                    cookieErrorCode: "callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+
+        endpoints.MapGet(
+                "/auth/github/repo-app/callback",
+                (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                    owner.ProxyGitHubRepoAppCallbackAsync(
+                        context,
+                        "/auth/github/repo-app/callback",
+                        "__Host-agentweaver-repo-app-auth",
+                        "repo_app_callback_cookie_invalid",
+                        ["code", "state", "error"],
+                        cancellationToken))
+            .AllowAnonymous();
+        endpoints.MapGet(
+                "/auth/github/repo-app/installation/callback",
+                (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                    owner.ProxyGitHubRepoAppCallbackAsync(
+                        context,
+                        "/auth/github/repo-app/installation/callback",
+                        "__Host-agentweaver-repo-app-install-auth",
+                        "repo_app_installation_cookie_invalid",
+                        ["installation_id", "setup_action", "state"],
+                        cancellationToken))
+            .AllowAnonymous();
+
+        var copilotConnections = endpoints.MapGroup("/api/connections/copilot-user/v1")
+            .RequireAuthorization()
+            .RequireCors(GatewayWebCors.CopilotConnectionsPolicyName);
+        copilotConnections.MapPost(
+            "/begin",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyCopilotConnectionAsync(
+                    context,
+                    "POST",
+                    "/internal/connections/copilot-user/begin",
+                    forwardLinkCookie: false,
+                    cancellationToken: cancellationToken));
+        copilotConnections.MapPost(
+            "/complete",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyCopilotConnectionAsync(
+                    context,
+                    "POST",
+                    "/internal/connections/copilot-user/complete",
+                    forwardLinkCookie: true,
+                    cancellationToken: cancellationToken));
+        copilotConnections.MapPost(
+            "/refresh",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyCopilotConnectionAsync(
+                    context,
+                    "POST",
+                    "/internal/connections/copilot-user/refresh",
+                    forwardLinkCookie: false,
+                    cancellationToken: cancellationToken));
+        copilotConnections.MapPost(
+            "/revoke",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyCopilotConnectionAsync(
+                    context,
+                    "POST",
+                    "/internal/connections/copilot-user/revoke",
+                    forwardLinkCookie: false,
+                    cancellationToken: cancellationToken));
+        copilotConnections.MapGet(
+            "/{connectionId:guid}",
+            (Guid connectionId, HttpContext context, GatewayOwnerClient owner,
+                CancellationToken cancellationToken) =>
+                owner.ProxyCopilotConnectionAsync(
+                    context,
+                    "GET",
+                    $"/internal/connections/copilot-user/{connectionId:D}",
+                    forwardLinkCookie: false,
+                    cancellationToken: cancellationToken));
 
         foreach (var route in GatewayRouteCatalog.Routes)
         {
@@ -33,14 +185,23 @@ public static class GatewayEndpoints
             }
             else
             {
-                endpoint = endpoints.MapMethods(
-                    route.PublicPath,
-                    [route.Method],
-                    (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
-                        owner.ProxyAsync(context, route, cancellationToken));
+                endpoint = route.OperationId == "getAuthorizationContext"
+                    ? endpoints.MapGet(
+                        route.PublicPath,
+                        (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                            owner.ProxyAuthorizationContextAsync(context, route, cancellationToken))
+                    : endpoints.MapMethods(
+                        route.PublicPath,
+                        [route.Method],
+                        (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                            owner.ProxyAsync(context, route, cancellationToken));
             }
 
+            if (route.OperationId == "importKnowledgeRecords")
+                endpoint.WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
+
             endpoint.RequireAuthorization()
+                .RequireCors(GatewayWebCors.PolicyName(route))
                 .WithName(route.OperationId)
                 .WithSummary(route.Summary)
                 .WithDescription(

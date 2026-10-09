@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="b678a999-859e-481f-9d74-f50715e6d72c" x1="7.945" y1="4.549" x2="7.945" y2="15.996" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="0.018" stop-color="#569ded" />
+      <stop offset="0.088" stop-color="#3b91e5" />
+      <stop offset="0.169" stop-color="#2588df" />
+      <stop offset="0.264" stop-color="#1481da" />
+      <stop offset="0.381" stop-color="#097cd6" />
+      <stop offset="0.545" stop-color="#0279d5" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="bfaf18f4-68d3-4696-88f2-cac321651cf8" x1="-77.595" y1="733.368" x2="-77.289" y2="729.859" gradientTransform="matrix(1, 0, 0, -1, 81.6, 743.32)" gradientUnits="userSpaceOnUse">
+      <stop offset="0.001" stop-color="#ffb34d" />
+      <stop offset="1" stop-color="#faa21d" />
+    </linearGradient>
+    <linearGradient id="f713238f-802d-4fa8-9175-1d68021733ec" x1="-77.467" y1="736.093" x2="-77.198" y2="733.015" gradientUnits="userSpaceOnUse">
+      <stop offset="0.001" stop-color="#ffb34d" />
+      <stop offset="1" stop-color="#faa21d" />
+    </linearGradient>
+  </defs>
+  <g id="bc0ca454-24f7-43b4-836a-f120d5a7f39a">
+    <g>
+      <path d="M18,2.724V12.785a.531.531,0,0,1-.531.531H16.453a.141.141,0,0,1-.14-.141V5.214a.953.953,0,0,0-.953-.953H2.25a.141.141,0,0,1-.14-.141v-1.4a.529.529,0,0,1,.529-.529h14.83A.53.53,0,0,1,18,2.724Z" fill="#005ba1" />
+      <rect y="4.684" width="15.891" height="11.122" rx="0.53" fill="url(#b678a999-859e-481f-9d74-f50715e6d72c)" />
+      <g>
+        <rect x="8.035" y="11.013" width="6.316" height="0.934" rx="0.467" fill="#fff" />
+        <rect x="8.035" y="8.543" width="6.316" height="0.934" rx="0.467" fill="#fff" />
+      </g>
+      <path d="M6.512,13.263A.473.473,0,0,0,7,12.808v-.014a.281.281,0,0,0,0-.058A2.793,2.793,0,0,0,4.259,9.944c-1.672,0-2.587,1.063-2.768,2.78a.5.5,0,0,0,.439.545H6.508Z" fill="url(#bfaf18f4-68d3-4696-88f2-cac321651cf8)" />
+      <path d="M4.279,10.311a1.532,1.532,0,0,1-.823-.247l.823,2.162L5.1,10.08A1.566,1.566,0,0,1,4.279,10.311Z" fill="#fff" />
+      <circle cx="4.267" cy="8.766" r="1.545" fill="url(#f713238f-802d-4fa8-9175-1d68021733ec)" />
+    </g>
+  </g>
+</svg>

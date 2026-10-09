@@ -85,6 +85,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             project.ProjectId,
             runId,
             ["orchestrator"]);
+        var contextToken = tenantAdminToken;
 
         var ownerRequests = new ConcurrentQueue<(GatewayOwner Owner, Uri Uri, string? Authorization, string? Tenant)>();
         var projectOwnerRequests = new ConcurrentQueue<(Uri Uri, string? Authorization, string? Tenant)>();
@@ -245,6 +246,57 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 liveEventResponses.GetProperty("200").GetProperty("content")
                     .TryGetProperty("text/event-stream", out _));
             Assert.True(liveEventResponses.TryGetProperty("400", out _));
+            var authorizationContext = paths.GetProperty("/api/v1/authorization/context").GetProperty("get");
+            Assert.Equal(
+                "getAuthorizationContext",
+                authorizationContext.GetProperty("operationId").GetString());
+            Assert.Equal(
+                "Projects",
+                authorizationContext.GetProperty("x-agentweaver-owner").GetString());
+            Assert.False(authorizationContext.GetProperty("parameters").EnumerateArray()
+                .Single(parameter => parameter.GetProperty("name").GetString() == "X-Agentweaver-Tenant")
+                .GetProperty("required").GetBoolean());
+            Assert.False(paths.TryGetProperty("/api/connections/copilot-user/v1/begin", out _));
+            Assert.False(paths.TryGetProperty("/api/auth/github/repo-app/authorizations", out _));
+            Assert.False(paths.TryGetProperty("/api/github/repository-selections", out _));
+            Assert.False(paths.TryGetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/github-app-installations/authorizations",
+                out _));
+            Assert.DoesNotContain(
+                paths.EnumerateObject(),
+                path => path.Name.Contains("webhook-relay", StringComparison.Ordinal));
+            var sourceControlIssue = paths.GetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/issues")
+                .GetProperty("post");
+            Assert.Equal("createSourceControlIssue", sourceControlIssue.GetProperty("operationId").GetString());
+            Assert.Equal("Orchestrator", sourceControlIssue.GetProperty("x-agentweaver-owner").GetString());
+            Assert.Equal(
+                "#/components/schemas/SourceControlIssueRequest",
+                sourceControlIssue.GetProperty("requestBody").GetProperty("content")
+                    .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+            var sourceControlPin = paths.GetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/pin")
+                .GetProperty("post");
+            Assert.False(sourceControlPin.GetProperty("requestBody").GetProperty("required").GetBoolean());
+            Assert.Equal(
+                "#/components/schemas/SourceControlRepositoryPinRequest",
+                sourceControlPin.GetProperty("requestBody").GetProperty("content")
+                    .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+            Assert.True(sourceControlPin.GetProperty("parameters").EnumerateArray()
+                .Single(parameter => parameter.GetProperty("name").GetString() == "X-Agentweaver-Tenant")
+                .GetProperty("required").GetBoolean());
+            var sourceControlReviews = paths.GetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}" +
+                "/pull-requests/{pullRequestNumber}/reviews").GetProperty("get");
+            var pullRequestNumber = sourceControlReviews.GetProperty("parameters").EnumerateArray()
+                .Single(parameter => parameter.GetProperty("name").GetString() == "pullRequestNumber");
+            Assert.Equal("integer", pullRequestNumber.GetProperty("schema").GetProperty("type").GetString());
+            Assert.Equal("int64", pullRequestNumber.GetProperty("schema").GetProperty("format").GetString());
+            var mergeIntent = paths.GetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/merge-intents")
+                .GetProperty("post");
+            Assert.True(mergeIntent.GetProperty("x-agentweaver-accepted-only").GetBoolean());
+            Assert.True(mergeIntent.GetProperty("responses").TryGetProperty("202", out _));
             var readRecord = paths.GetProperty(
                 "/api/v1/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}")
                 .GetProperty("get");
@@ -336,6 +388,60 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     schemas);
             }
 
+            using (var authorizationContextRequest = new HttpRequestMessage(
+                HttpMethod.Get,
+                "/api/v1/authorization/context"))
+            {
+                AddBearerAndTenant(authorizationContextRequest, contextToken, TenantId);
+                using var authorizationContextResponse = await gateway.Client.SendAsync(
+                    authorizationContextRequest);
+                Assert.Equal(HttpStatusCode.OK, authorizationContextResponse.StatusCode);
+                AssertNoStore(authorizationContextResponse);
+                using var authorizationContextPayload = JsonDocument.Parse(
+                    await authorizationContextResponse.Content.ReadAsStringAsync());
+                AssertPayloadMatchesSchema(
+                    authorizationContextPayload.RootElement,
+                    schemas.GetProperty("ProjectAuthorizationContext"),
+                    schemas);
+                Assert.Equal(
+                    tenantAdminSubject,
+                    authorizationContextPayload.RootElement.GetProperty("actorId").GetString());
+                Assert.Equal(
+                    TenantId,
+                    authorizationContextPayload.RootElement.GetProperty("tenantId").GetString());
+                Assert.Equal(
+                    JsonValueKind.Null,
+                    authorizationContextPayload.RootElement.GetProperty("boundProjectId").ValueKind);
+                Assert.Equal(
+                    JsonValueKind.Null,
+                    authorizationContextPayload.RootElement.GetProperty("boundRunId").ValueKind);
+            }
+            var forwardedAuthorizationContext = Assert.Single(
+                projectOwnerRequests,
+                request => request.Uri.AbsolutePath == "/api/authorization/context");
+            Assert.Equal("Bearer " + contextToken, forwardedAuthorizationContext.Authorization);
+            Assert.Equal(TenantId, forwardedAuthorizationContext.Tenant);
+
+            var projectRequestCountBeforeInvalidSelector = projectOwnerRequests.Count;
+            using (var invalidContextRequest = new HttpRequestMessage(
+                HttpMethod.Get,
+                "/api/v1/authorization/context"))
+            {
+                invalidContextRequest.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", contextToken);
+                invalidContextRequest.Headers.TryAddWithoutValidation(
+                    "X-Agentweaver-Tenant",
+                    [TenantId, TenantId]);
+                using var invalidContextResponse = await gateway.Client.SendAsync(invalidContextRequest);
+                Assert.Equal(HttpStatusCode.BadRequest, invalidContextResponse.StatusCode);
+                using var invalidContextProblem = JsonDocument.Parse(
+                    await invalidContextResponse.Content.ReadAsStringAsync());
+                Assert.Equal(
+                    "tenant_selector_invalid",
+                    invalidContextProblem.RootElement.GetProperty("code").GetString());
+            }
+            Assert.Equal(projectRequestCountBeforeInvalidSelector, projectOwnerRequests.Count);
+
             using (var configurationRequest = new HttpRequestMessage(
                 HttpMethod.Get,
                 $"/api/v1/projects/{project.ProjectId}/configuration"))
@@ -369,6 +475,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
         }
 
+        var ownerRequestCountBeforeLiveSse = ownerRequests.Count;
+        var projectRequestCountBeforeLiveSse = projectOwnerRequests.Count;
         using (var ioFailureRequest = new HttpRequestMessage(
             HttpMethod.Get,
             $"/api/v1/projects/{project.ProjectId}/runs/{runId}/events/live?cursor=gateway-cursor-io-before-start"))
@@ -593,15 +701,185 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.DoesNotContain("id: ", remainingStream.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("ordinal\":2", remainingStream.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("application/problem+json", remainingStream.ToString(), StringComparison.Ordinal);
-        Assert.Contains(projectOwnerRequests, request =>
-            request.Uri.AbsolutePath == $"/api/projects/{project.ProjectId}" &&
-            QueryHelpers.ParseQuery(request.Uri.Query)["runId"].SingleOrDefault() == runId &&
-            request.Authorization == "Bearer " + runToken &&
-            request.Tenant == TenantId);
+        var liveSseProjectReads = projectOwnerRequests.ToArray()
+            .Skip(projectRequestCountBeforeLiveSse)
+            .Where(request =>
+                request.Uri.AbsolutePath == $"/api/projects/{project.ProjectId}" &&
+                QueryHelpers.ParseQuery(request.Uri.Query).TryGetValue("runId", out var runIds) &&
+                runIds.SingleOrDefault() == runId)
+            .ToArray();
+        Assert.NotEmpty(liveSseProjectReads);
+        Assert.All(liveSseProjectReads, request =>
+        {
+            Assert.Equal("Bearer " + runToken, request.Authorization);
+            Assert.Equal(TenantId, request.Tenant);
+        });
+
+        var liveSseEventPages = ownerRequests.ToArray()
+            .Skip(ownerRequestCountBeforeLiveSse)
+            .Where(request =>
+                request.Owner == GatewayOwner.Events &&
+                QueryHelpers.ParseQuery(request.Uri.Query).TryGetValue("limit", out var limits) &&
+                limits.SingleOrDefault() == "1")
+            .ToArray();
+        Assert.NotEmpty(liveSseEventPages);
+        Assert.All(liveSseEventPages, request =>
+        {
+            Assert.Equal("Bearer " + runToken, request.Authorization);
+            Assert.Equal(TenantId, request.Tenant);
+        });
         Assert.Contains(ownerRequests, request =>
             request.Owner == GatewayOwner.Events &&
             QueryHelpers.ParseQuery(request.Uri.Query).TryGetValue("cursor", out var cursorValues) &&
             cursorValues.SingleOrDefault() == events.FirstCursor);
+    }
+
+    [Fact]
+    public async Task GatewayAuthorizationContextRejectsRedirectsCacheableAndDuplicateOwnerContracts()
+    {
+        using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        const string validContext =
+            """{"contractVersion":1,"issuer":"https://broker.test/","actorId":"gateway-negative-test","tenantId":"tenant-1","membershipRevision":1,"boundProjectId":null,"boundRunId":null,"effectiveAuthority":[]}""";
+        var ownerResponses = new Queue<Func<HttpResponseMessage>>();
+        ownerResponses.Enqueue(() => new HttpResponseMessage(HttpStatusCode.Found)
+        {
+            Headers = { Location = new Uri("https://owner-redirect.test/authorization/context") },
+        });
+        ownerResponses.Enqueue(() => JsonResponse(HttpStatusCode.OK, validContext));
+        ownerResponses.Enqueue(() =>
+        {
+            var response = JsonResponse(
+                HttpStatusCode.OK,
+                """{"contractVersion":1,"issuer":"https://broker.test/","actorId":"gateway-negative-test","tenantId":"tenant-1","membershipRevision":1,"boundProjectId":null,"boundProjectId":null,"boundRunId":null,"effectiveAuthority":[]}""");
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+            return response;
+        });
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new X509SecurityKey(certificate),
+            () => new AuthorizationContextOwnerResponseHandler(_ => ownerResponses.Dequeue()()),
+            (_, _, _) => Task.FromResult(JsonResponse(
+                HttpStatusCode.NotImplemented,
+                """{"code":"unexpected_owner_request"}""")));
+        var token = CreateGatewayTestToken(
+            certificate, "https://api.test", DateTime.UtcNow.AddMinutes(5));
+
+        foreach (var expectedCode in new[]
+        {
+            "owner_redirect_rejected",
+            "owner_contract_invalid",
+            "owner_contract_invalid",
+        })
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                "/api/v1/authorization/context");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var response = await gateway.Client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(expectedCode, problem.RootElement.GetProperty("code").GetString());
+        }
+    }
+
+    [Fact]
+    public async Task GatewayAuthorizationContextMatchesCallerSubjectBoundsAndExplicitTenantSelector()
+    {
+        using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        var unboundToken = CreateGatewayTestToken(
+            certificate, "https://api.test", DateTime.UtcNow.AddMinutes(5));
+        var boundToken = CreateGatewayTestToken(
+            certificate,
+            "https://api.test",
+            DateTime.UtcNow.AddMinutes(5),
+            new Claim("project_id", "project-1"),
+            new Claim("run_id", "run-1"));
+        var ownerResponses = new Queue<HttpResponseMessage>(
+        [
+            AuthorizationContextResponse("gateway-negative-test", "tenant-1", null, null),
+            AuthorizationContextResponse("different-subject", "tenant-1", null, null),
+            AuthorizationContextResponse("gateway-negative-test", "tenant-1", "project-1", null),
+            AuthorizationContextResponse("gateway-negative-test", "tenant-1", "project-1", "run-1"),
+            AuthorizationContextResponse("gateway-negative-test", "tenant-1", "project-2", "run-1"),
+            AuthorizationContextResponse("gateway-negative-test", "tenant-1", "project-1", "run-2"),
+            AuthorizationContextResponse("gateway-negative-test", "tenant-2", "project-1", "run-1"),
+        ]);
+        var forwardedTenants = new ConcurrentQueue<string?>();
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new X509SecurityKey(certificate),
+            () => new AuthorizationContextOwnerResponseHandler(request =>
+            {
+                forwardedTenants.Enqueue(
+                    request.Headers.TryGetValues("X-Agentweaver-Tenant", out var values)
+                        ? values.Single()
+                        : null);
+                return ownerResponses.Dequeue();
+            }),
+            (_, _, _) => Task.FromResult(JsonResponse(
+                HttpStatusCode.NotImplemented,
+                """{"code":"unexpected_owner_request"}""")));
+
+        async Task AssertContextAsync(
+            string token,
+            string? tenantSelector,
+            HttpStatusCode expectedStatus)
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                "/api/v1/authorization/context");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            if (tenantSelector is not null)
+                request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", tenantSelector);
+            using var response = await gateway.Client.SendAsync(request);
+            Assert.Equal(expectedStatus, response.StatusCode);
+            if (expectedStatus == HttpStatusCode.OK)
+            {
+                AssertNoStore(response);
+                return;
+            }
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("owner_contract_invalid", problem.RootElement.GetProperty("code").GetString());
+        }
+
+        await AssertContextAsync(unboundToken, null, HttpStatusCode.OK);
+        await AssertContextAsync(unboundToken, null, HttpStatusCode.BadGateway);
+        await AssertContextAsync(unboundToken, null, HttpStatusCode.BadGateway);
+        await AssertContextAsync(boundToken, "tenant-1", HttpStatusCode.OK);
+        await AssertContextAsync(boundToken, "tenant-1", HttpStatusCode.BadGateway);
+        await AssertContextAsync(boundToken, "tenant-1", HttpStatusCode.BadGateway);
+        await AssertContextAsync(boundToken, "tenant-1", HttpStatusCode.BadGateway);
+
+        Assert.Equal(
+            new string?[] { null, null, null, "tenant-1", "tenant-1", "tenant-1", "tenant-1" },
+            forwardedTenants.ToArray());
+        Assert.Empty(ownerResponses);
+
+        static HttpResponseMessage AuthorizationContextResponse(
+            string actorId,
+            string tenantId,
+            string? projectId,
+            string? runId)
+        {
+            var body = JsonSerializer.Serialize(new
+            {
+                contractVersion = 1,
+                issuer = "https://broker.test/",
+                actorId,
+                tenantId,
+                membershipRevision = 1,
+                boundProjectId = projectId,
+                boundRunId = runId,
+                effectiveAuthority = Array.Empty<object>(),
+            });
+            var response = JsonResponse(HttpStatusCode.OK, body);
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+            return response;
+        }
     }
 
     [Fact]
@@ -896,16 +1174,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ValueTask.FromException<int>(new IOException("Controlled owner body failure."));
     }
 
+    private sealed class AuthorizationContextOwnerResponseHandler(
+        Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(responseFactory(request));
+    }
+
     private static string CreateGatewayTestToken(
         X509Certificate2 certificate,
         string audience,
-        DateTime expiresAt)
+        DateTime expiresAt,
+        params Claim[] additionalClaims)
     {
         var now = DateTime.UtcNow;
         var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(
             new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
             audience,
-            [new System.Security.Claims.Claim("sub", "gateway-negative-test")],
+            [new Claim("sub", "gateway-negative-test"), .. additionalClaims],
             now.AddMinutes(-1),
             expiresAt,
             new SigningCredentials(new X509SecurityKey(certificate), SecurityAlgorithms.RsaSha256));

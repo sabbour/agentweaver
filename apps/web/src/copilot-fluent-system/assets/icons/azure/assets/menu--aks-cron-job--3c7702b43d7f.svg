@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="af428bd8-3649-4d25-b8d4-9954c3591caf" x1="9" y1="18" x2="9" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#773adc" />
+      <stop offset="1" stop-color="#a67af4" />
+    </linearGradient>
+    <clipPath id="bc3eb0e6-948e-4b87-9a67-fbec71946f43">
+      <path d="M13.918,8.481a4.9,4.9,0,0,0-3.163,1.152,4.471,4.471,0,0,0-2.288,3.9c0,.149.007.295.021.44-1.211.487-4.9.187-5.927-1.412-1.6-2.5.581-7.253.581-7.253l7.794-.277S16.637,8.481,13.918,8.481Z" />
+    </clipPath>
+    <linearGradient id="af6fbad0-f680-4756-8c49-680d712cfe7d" x1="10.764" y1="9.65" x2="14.589" y2="16.486" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" />
+      <stop offset="1" stop-color="#e6e6e6" />
+    </linearGradient>
+  </defs>
+  <g id="b32d463f-99e3-48e9-8ed8-7241f6c34f51">
+    <g>
+      <g>
+        <path d="M17.4,13.531a4.465,4.465,0,0,1-7.185,3.545l-1.468.848a.57.57,0,0,1-.568,0L.88,13.708A.57.57,0,0,1,.6,13.216V4.784A.57.57,0,0,1,.88,4.292L8.183.076a.57.57,0,0,1,.568,0l7.3,4.216a.568.568,0,0,1,.284.492v5.853A4.446,4.446,0,0,1,17.4,13.531Z" fill="url(#af428bd8-3649-4d25-b8d4-9954c3591caf)" />
+        <g clip-path="url(#bc3eb0e6-948e-4b87-9a67-fbec71946f43)">
+          <rect x="7.014" y="9.671" width="2.865" height="2.865" rx="0.284" fill="#fff" opacity="0.6" />
+          <rect x="2.941" y="9.671" width="2.865" height="2.865" rx="0.284" fill="#fff" opacity="0.6" />
+          <rect x="11.087" y="9.671" width="2.865" height="2.865" rx="0.241" fill="#fff" opacity="0.6" />
+          <rect x="7.014" y="5.567" width="2.865" height="2.865" rx="0.284" fill="#fff" opacity="0.8" />
+          <rect x="2.941" y="5.567" width="2.865" height="2.865" rx="0.284" fill="#fff" opacity="0.8" />
+        </g>
+      </g>
+      <circle cx="12.936" cy="13.531" r="4.083" fill="url(#af6fbad0-f680-4756-8c49-680d712cfe7d)" />
+      <path d="M15,13.917h-2.2a.257.257,0,0,1-.257-.257V10.787a.257.257,0,0,1,.257-.257H13a.257.257,0,0,1,.257.257v2.166a.257.257,0,0,0,.257.257H15a.258.258,0,0,1,.257.257v.193A.258.258,0,0,1,15,13.917Z" />
+    </g>
+  </g>
+</svg>
