@@ -74,6 +74,25 @@ also requires the confirmed applied egress-intent generation.
 The P1 Orchestrator Core library adds pure, deterministic workflow-catalog and
 step-bound WorkPlan validation. It validates pinned run selections, output bounds,
 joins, snapshots, and scope diffs; it does not dispatch children or persist run state.
+It now also includes a migration-free, project-scoped backlog dependency graph and
+readiness evaluator. These pure contracts reject stale graph/task revisions, invalid
+or cyclic edges, and owner-projected prerequisite snapshots that are missing,
+incomplete, stale, or lack required verified output evidence. `Merged` is reserved
+for a validated Merge gate; a fully evidenced non-merge workflow uses a distinct
+`Completed` state, with captured outputs still verified and no-output completion
+backed by an explicit owner seal. They do not persist tasks,
+authorize callers, or produce/verify Source Control evidence. An Orchestrator owner
+candidate adds persisted task/dependency operations, a run-scoped atomic claim, and
+wired MAF owner-evidence reader/routes. At claim time it locks the current owner
+binding, enumerates and rereads all admitted captures for that root and selection,
+and rebuilds the witness from that inventory. Non-empty output requires exactly one
+capture matching the witness ID; no-output evidence includes actual captures so a
+late non-empty manifest blocks readiness. Migration 016 remains unregistered. The
+bounded C3/MAF source composition is admitted, but whole-producer runtime acceptance
+remains pending. The MAF 015 schema is packaged as an embedded resource and registered
+with the explicit migrator. This source change does not apply it to a shared or live
+database. This candidate is not deployable and does not authorize dispatch or verified
+outputs.
 
 The unpublished Source Control candidate adds an exclusive GitHub provider adapter,
 typed project repository and SecretRef settings, immutable accepted-run provider pins,

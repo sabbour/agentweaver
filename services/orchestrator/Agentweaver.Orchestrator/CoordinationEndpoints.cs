@@ -33,6 +33,9 @@ public static partial class CoordinationEndpoints
             "/sessions/{sessionId}/actions/revise_work_plan",
             ReviseCoordinatorWorkPlanAsync);
         coordination.MapPost(
+            "/sessions/{sessionId}/actions/dispatch",
+            DispatchCoordinatorWorkPlanAsync);
+        coordination.MapPost(
             "/sessions/{sessionId}/actions/request_assembly",
             RequestCoordinatorAssemblyAsync);
         coordination.MapGet(

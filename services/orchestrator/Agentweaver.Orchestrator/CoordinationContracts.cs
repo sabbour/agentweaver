@@ -74,6 +74,22 @@ public sealed record ReviseCoordinatorWorkPlanRequest(
     string RequestId,
     WorkPlan RevisedPlan);
 
+public sealed record MafExecutionDispatchRequest(long ExpectedStateVersion, string WorkPlanId);
+
+public sealed record MafExecutionDispatchResponse(
+    string WorkPlanId,
+    long DecisionStateVersion,
+    long CheckpointRevision,
+    ImmutableArray<string> DispatchedAssociationIds,
+    ImmutableArray<string> UnavailableExecutorStepIds,
+    ImmutableArray<string> FailedDependencyIds,
+    bool IsComplete)
+{
+    public ImmutableDictionary<string, string> CompletedResults { get; init; } =
+        ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal);
+    public bool WallTimeLimitReached { get; init; }
+}
+
 public sealed record RequestCoordinatorAssemblyRequest(
     long ExpectedStateVersion,
     string IdempotencyKey,
@@ -135,6 +151,7 @@ internal static class CoordinatorTypedActionIds
     public const string ProposeWorkPlan = "propose_work_plan";
     public const string ReviseWorkPlan = "revise_work_plan";
     public const string RequestAssembly = "request_assembly";
+    public const string Dispatch = "dispatch";
 
     public static ImmutableHashSet<string> All { get; } =
         ImmutableHashSet.Create(
@@ -143,7 +160,8 @@ internal static class CoordinatorTypedActionIds
             SelectWorkflow,
             ProposeWorkPlan,
             ReviseWorkPlan,
-            RequestAssembly);
+            RequestAssembly,
+            Dispatch);
 }
 
 public sealed record AcceptedRoot(
@@ -433,7 +451,7 @@ public sealed record TurnBoundaryResult(
 
 internal sealed record SessionRuntimeOwnerState(
     string RootSessionId,
-    string WorkPlanItemId,
+    string? WorkPlanItemId,
     string TenantId,
     string AcceptedSelectionHash,
     long ExecutionFence,

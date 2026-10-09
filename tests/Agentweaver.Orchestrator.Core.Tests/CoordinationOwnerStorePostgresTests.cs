@@ -94,6 +94,47 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CoordinatorExecutionCheckpointsAppendLinkedValuesAndReadBackFromTheirStore()
+    {
+        var runId = Guid.NewGuid().ToString("D");
+        var selection = new AuthorizedRunSelection(
+            _selection.Selection with
+            {
+                RunId = runId,
+                Snapshot = Payload("""{"modelSelection":{"reference":"model-1"}}""")
+            },
+            _selection.Authorization with { BoundRunId = runId });
+        var root = await _store.AcceptRootAsync(
+            _actor, selection, "checkpoint-root", CancellationToken.None);
+        var identity = new SessionIdentity(selection.Selection.ProjectId, runId, "checkpoint-root");
+        var binding = new MafCheckpointBinding(
+            identity,
+            _actor,
+            root.ExecutionFence,
+            MafExecutionCheckpointStore.CurrentSdkVersion,
+            "model-1",
+            CacheReference: null,
+            StoreName: MafExecutionCheckpointContract.StoreName);
+        var checkpointStore = new PostgresMafCheckpointStore(
+            _fixture.DataSource, _schema, objectStore: null).ForRun(binding);
+
+        var first = await checkpointStore.CreateCheckpointAsync(
+            identity.SessionId, Payload("""{"revision":1}"""));
+        var second = await checkpointStore.CreateCheckpointAsync(
+            identity.SessionId, Payload("""{"revision":2}"""), first);
+
+        var index = await checkpointStore.RetrieveIndexAsync(identity.SessionId);
+        Assert.Equal(2, index.Count());
+        Assert.Contains(index, checkpoint => checkpoint.CheckpointId == first.CheckpointId);
+        Assert.Contains(index, checkpoint => checkpoint.CheckpointId == second.CheckpointId);
+
+        var latest = await checkpointStore.ReadLatestCheckpointAsync(binding, CancellationToken.None);
+        Assert.NotNull(latest);
+        Assert.Equal(second.CheckpointId, latest.Value.Info.CheckpointId);
+        Assert.Equal(2, latest.Value.Value.GetProperty("revision").GetInt32());
+    }
+
+    [Fact]
     public async Task SpawnCannotPersistAnUnvalidatedWorkPlanItemId()
     {
         var request = new SpawnSessionRequest(
