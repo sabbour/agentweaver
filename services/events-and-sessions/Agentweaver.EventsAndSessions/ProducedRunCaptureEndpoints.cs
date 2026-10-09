@@ -121,7 +121,11 @@ internal sealed class ProducedRunCaptureApplicationService(
         var current = await ReadAuthorityAsync(context, identity, cancellationToken).ConfigureAwait(false);
         RequireProofAuthority(proof, identity, entry.Capture.CaptureId, current, requireActorMatch: false);
         var currentProof = await owner.ReadProducedRunCaptureProofAsync(
-            context, identity, entry.Capture.CaptureId, cancellationToken).ConfigureAwait(false);
+            context,
+            identity,
+            entry.Capture.CaptureId,
+            cancellationToken,
+            notFoundIsMissing: true).ConfigureAwait(false);
         if (currentProof != proof)
             throw new RuntimeAuthorizationException("source_control_output_capture_authority_changed");
         return new(entry, bytes);

@@ -5,7 +5,7 @@ namespace Agentweaver.Abstractions;
 
 public static class ProducedRunCaptureLimits
 {
-    public const int ContractVersion = 1;
+    public const int ContractVersion = 2;
     public const int MaximumFiles = 10_000;
     public const int MaximumFileBytes = 16 * 1024 * 1024;
     public const int MaximumTotalFileBytes = 64 * 1024 * 1024;
@@ -31,6 +31,7 @@ public sealed record ProducedRunCaptureProof(
     string AcceptedSelectionHash,
     string WorkspaceId,
     Guid WorkspaceIncarnationId,
+    string BranchName,
     string RepositoryId,
     long ResourceGeneration,
     string BaseSha,
@@ -81,6 +82,7 @@ public static class ProducedRunCaptureContractValidation
             !IsHash(capture.AcceptedSelectionHash, allowUppercase: true) ||
             !IsWorkspaceId(capture.WorkspaceId) ||
             capture.WorkspaceIncarnationId == Guid.Empty ||
+            !IsBoundedText(capture.BranchName, 255) ||
             !IsIdentifier(capture.RepositoryId, 256) ||
             capture.ResourceGeneration < 1 ||
             !IsGitObjectId(capture.BaseSha) ||
@@ -125,7 +127,7 @@ public static class ProducedRunCaptureContractValidation
             $"{capture.TenantId}\0{capture.Identity.ProjectId}\0{capture.Identity.RunId}\0{capture.Identity.SessionId}")));
         return new SessionObjectReference(
             new ObjectKey(
-                $"source-control-produced-output/v1/{scopeHash}/{capture.CaptureId}/{capture.PackageSha256}"),
+                $"source-control-produced-output/v2/{scopeHash}/{capture.CaptureId}/{capture.PackageSha256}"),
             ObjectPurpose,
             capture.PackageByteLength);
     }
@@ -136,6 +138,7 @@ public static class ProducedRunCaptureContractValidation
         string acceptedSelectionHash,
         string workspaceId,
         Guid workspaceIncarnationId,
+        string branchName,
         string repositoryId,
         long resourceGeneration,
         string baseSha,
@@ -150,6 +153,7 @@ public static class ProducedRunCaptureContractValidation
             acceptedSelectionHash,
             workspaceId,
             workspaceIncarnationId.ToString("N"),
+            branchName,
             repositoryId,
             resourceGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
             baseSha.ToLowerInvariant(),
