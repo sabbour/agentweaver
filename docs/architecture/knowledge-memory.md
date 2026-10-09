@@ -9,7 +9,7 @@ project-fact stream. Project facts are separate from the Sessions run journal.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'" alt="Knowledge rechecks current project authority and run selection, commits an accepted proposal receipt and delivery intent through the selected Memory provider, then relays only the receipt ID and versions to Events. Events fetches the receipt from the fixed Knowledge owner, rechecks current authority, and commits a separate project fact with its sequence and inbox receipt. Native PostgreSQL remains the default; the optional Cosmos container is project-partitioned." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'" alt="Knowledge rechecks current project authority and run selection, commits an accepted proposal receipt and delivery intent through the selected Memory provider, then relays only the receipt ID and versions to Events. Events fetches the receipt from the fixed Knowledge owner, rechecks current authority, and commits a separate project fact with its sequence and inbox receipt. Native PostgreSQL remains the default; Cosmos and Redis are optional source candidates." />
   </a>
   <figcaption>Accepted project facts are durably admitted by Events before Knowledge marks provider-owned delivery state complete. The Knowledge run pin and Sessions journal remain in PostgreSQL; project facts do not append to or change the run-bound journal.</figcaption>
 </figure>
@@ -96,8 +96,38 @@ closed; a run never falls back to PostgreSQL.
 The Cosmos tests use a fake document-store transport and exercise selection metadata,
 partition isolation, immutable revisions, conflicts, idempotency, promotion, delivery
 leases, and restart behavior. They do not prove live Cosmos permissions, throughput,
-availability, or cloud deployment. Redis remains planned P2 work, not part of this
-source candidate. Neither Memory adapter replaces the PostgreSQL Sessions journal or
+availability, or cloud deployment.
+
+### Redis Memory source candidate
+
+When the catalog and `Knowledge:RedisProvider` options register Redis, an accepted
+run selection can choose the `redis.memory` adapter through the same exclusive
+`IMemoryProvider` boundary. Native PostgreSQL remains the default. The endpoint must
+be a `rediss://` URI with an explicit port; optional ACL username and password are
+configured together. Resource identity, generation, options revision, and schema
+version are pinned with the run. The service does not provision Redis resources.
+
+Negotiation requires Redis 6 or later as a standalone primary, with no replicas or
+cluster mode, verified append-only persistence (`appendonly yes`, `appendfsync
+always`, `no-appendfsync-on-rewrite no`), `noeviction`, and a healthy AOF. Existing
+namespace keys must not expire; Redis versions that support hash-field expiration are
+also checked for expiring fields. Project IDs are SHA-256 hashed into project-specific
+Redis hash keys. Stored Knowledge documents remain opaque JSON. A bounded Lua batch
+validates all document, ETag, and lease changes before one final hash write; delivery
+leases use Redis server time. Any incompatible configuration, unavailable backend,
+or invalid stored data fails closed without provider fallback.
+
+Redis tests use a controlled command-client fake to cover selection and negotiation,
+durability/eviction/topology rejection, expiry checks, prevalidated single-write
+batches, CAS conflicts, idempotent replay after a lost response, server-time lease
+fencing, and backend-loss behavior. A separate opt-in native suite uses the production
+Redis command client and document store to exercise Lua batch atomicity, concurrent
+CAS, and promotion/receipt/idempotency plus server-time lease fencing across a restart
+of one explicitly test-owned, digest-pinned, loopback-TLS Redis instance with AOF on a
+dedicated labeled volume. It never creates or pulls an instance or flushes keys; the
+restart case restarts only the validated test-owned instance. These tests do not prove
+production Redis permissions, availability, or deployment.
+Neither optional Memory source candidate replaces the PostgreSQL Sessions journal or
 the PostgreSQL state owned by other services.
 
 ## Records and revisions

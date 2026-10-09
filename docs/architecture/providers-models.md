@@ -89,8 +89,10 @@ limits.
 Native PostgreSQL remains the default. Cosmos negotiation validates the existing
 container identity, `/projectId` partition key, required search composite index, and
 non-expiring default TTL; it does not provision resources.
-Redis remains planned P2 work. These are Memory backends, not replacements for the
-PostgreSQL Sessions journal.
+The `redis.memory` source candidate requires TLS and negotiates standalone-primary,
+AOF-always, noeviction, no-replica/no-cluster, and non-expiring-data constraints.
+Neither candidate provisions resources. These are Memory backends, not replacements
+for the PostgreSQL Sessions journal.
 
 Application Hosting currently plans only the built-in AKS web runtime.
 Canvas owns A2UI and GitHub Canvas compatibility work. Elastic SAN is outside P2;
