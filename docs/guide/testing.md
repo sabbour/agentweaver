@@ -133,8 +133,9 @@ Migration tests cover fresh Events version 7, admitted version-3 and version-4 u
 the legacy version-2 project-fact layout, and rejected version gaps.
 The Orchestrator migration fixture now enumerates schema versions 8 through 15 and
 includes the packaged 015 MAF evidence resource. It asserts the final migration
-history contains exactly 15 versions. The fixture was not run for this source
-publication change, and no migration was invoked against a shared or live database.
+history contains exactly 15 versions. The fixture was not run locally during source
+preparation; configured GitHub Actions CI covers it in a disposable PostgreSQL schema.
+Source publication does not invoke a migration against a shared or live database.
 Repeated migration checks preserve the original migration history.
 
 The combined Broker test connects actual OAuth and bearer validation, current Core
