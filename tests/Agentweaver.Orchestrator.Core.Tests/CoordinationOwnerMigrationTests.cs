@@ -73,8 +73,11 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             }
         }
         var historyBefore = await ReadMigrationHistoryAsync(version);
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        if (version < migrations.Length)
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        else
+            await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
