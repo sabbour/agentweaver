@@ -21,6 +21,7 @@ public sealed record GitWorkspaceCapturedOutputManifest(
     string RepositoryId,
     long ResourceGeneration,
     Guid WorkspaceIncarnationId,
+    string BranchName,
     string BaseSha,
     string OutputTreeSha,
     ImmutableArray<GitWorkspaceCapturedOutputFile> Files);
@@ -80,6 +81,7 @@ public static class GitWorkspaceCapturePackage
             capture.RepositoryId,
             capture.ResourceGeneration,
             capture.WorkspaceIncarnationId,
+            capture.BranchName,
             capture.BaseSha.ToLowerInvariant(),
             capture.OutputTreeSha.ToLowerInvariant(),
             fileMetadata.MoveToImmutable());
@@ -214,6 +216,7 @@ public static class GitWorkspaceCapturePackage
             string.IsNullOrWhiteSpace(manifest.RepositoryId) ||
             manifest.ResourceGeneration < 1 ||
             manifest.WorkspaceIncarnationId == Guid.Empty ||
+            !GitWorkspaceManager.IsValidBranchName(manifest.BranchName) ||
             !IsSha(manifest.BaseSha) ||
             !IsSha(manifest.OutputTreeSha) ||
             manifest.Files.IsDefault ||

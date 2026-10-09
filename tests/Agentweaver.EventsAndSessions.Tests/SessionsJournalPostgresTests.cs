@@ -164,6 +164,51 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ProducedRunCaptureReadReturnsNotFoundWhenProofIsWithheldDuringDownload()
+    {
+        var principal = CaptureOwnerPrincipal();
+        var context = new DefaultHttpContext { User = principal };
+        var payload = CapturePayload();
+        var packageBytes = CapturePackageBytes();
+        var projects = new CaptureProjectsAuthorizationContextClient(
+            CaptureReadAuthority("33333333-3333-3333-3333-333333333333"));
+        var owner = new CaptureCoordinationOwnerClient(payload.Capture);
+        var downloadStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishDownload = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var objects = new CaptureObjectStore(async cancellationToken =>
+        {
+            downloadStarted.TrySetResult(true);
+            await finishDownload.Task.WaitAsync(cancellationToken);
+        });
+        var package = ProducedRunCaptureContractValidation.CreatePackageReference(payload.Capture);
+        await objects.WriteAsync(
+            package.Key,
+            new MemoryStream(packageBytes, writable: false),
+            CancellationToken.None);
+        await _journal.AppendProducedRunCaptureAsync(
+            principal,
+            "session-1",
+            payload,
+            static _ => Task.CompletedTask,
+            static _ => Task.CompletedTask,
+            CancellationToken.None);
+        var service = new ProducedRunCaptureApplicationService(projects, owner, _journal, objects);
+
+        var readTask = service.ReadAsync(
+            context, "session-1", payload.Capture.EventId, CancellationToken.None);
+        await downloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        owner.Withhold();
+        finishDownload.TrySetResult(true);
+        var unavailable = await Assert.ThrowsAsync<CoordinationOwnerClientException>(() => readTask);
+
+        Assert.Equal(StatusCodes.Status404NotFound, unavailable.StatusCode);
+        Assert.True(owner.LastNotFoundIsMissing);
+        Assert.Equal(2, owner.ProofReadCount);
+    }
+
+    [Fact]
     public async Task AddressedMessageIsIdempotentAndCommitsWithJournalAndOutbox()
     {
         await _journal.CreateSessionAsync(_owner, "session-2", _binding);
@@ -1679,7 +1724,7 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         var manifestSha = Convert.ToHexStringLower(SHA256.HashData(manifestBytes));
         var captureIdentity = ProducedRunCaptureContractValidation.CreateIdentity(
             identity, "source-pin-test", acceptedSelectionHash, "workspace-test",
-            workspaceIncarnationId, "repo-test", 1, baseSha, treeSha, manifestSha);
+            workspaceIncarnationId, "main", "repo-test", 1, baseSha, treeSha, manifestSha);
         var proof = new ProducedRunCaptureProof(
             ProducedRunCaptureLimits.ContractVersion,
             identity,
@@ -1692,6 +1737,7 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             acceptedSelectionHash,
             "workspace-test",
             workspaceIncarnationId,
+            "main",
             "repo-test",
             1,
             baseSha,
@@ -1760,18 +1806,39 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
         }
     }
 
-    private sealed class CaptureCoordinationOwnerClient(ProducedRunCaptureProof proof) : ICoordinationOwnerClient
+    private sealed class CaptureCoordinationOwnerClient : ICoordinationOwnerClient
     {
+        private readonly ProducedRunCaptureProof _proof;
+        private int _proofReadCount;
+        private int _lastNotFoundIsMissing;
+        private int _withheld;
+
+        public CaptureCoordinationOwnerClient(ProducedRunCaptureProof proof) => _proof = proof;
+
+        public int ProofReadCount => Volatile.Read(ref _proofReadCount);
+        public bool LastNotFoundIsMissing => Volatile.Read(ref _lastNotFoundIsMissing) != 0;
+        public void Withhold() => Volatile.Write(ref _withheld, 1);
+
         public Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
             HttpContext context,
             SessionIdentity identity,
             string captureId,
             CancellationToken cancellationToken = default,
-            bool notFoundIsMissing = false) =>
-            proof.Identity == identity && proof.CaptureId == captureId
-                ? Task.FromResult(proof)
-                : Task.FromException<ProducedRunCaptureProof>(
-                    new CoordinationOwnerClientException("capture_not_found", 404));
+            bool notFoundIsMissing = false)
+        {
+            _ = Interlocked.Increment(ref _proofReadCount);
+            Volatile.Write(ref _lastNotFoundIsMissing, notFoundIsMissing ? 1 : 0);
+            if (Volatile.Read(ref _withheld) != 0 ||
+                _proof.Identity != identity ||
+                _proof.CaptureId != captureId)
+                return Task.FromException<ProducedRunCaptureProof>(
+                    new CoordinationOwnerClientException(
+                        notFoundIsMissing ? "source_control_output_capture_not_found" :
+                            "coordination_owner_unavailable",
+                        notFoundIsMissing ? StatusCodes.Status404NotFound :
+                            StatusCodes.Status502BadGateway));
+            return Task.FromResult(_proof);
+        }
 
         public Task<MessageRouteBinding> ValidateMessageRouteAsync(
             HttpContext context,
@@ -1811,7 +1878,7 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             throw new NotSupportedException();
     }
 
-    private sealed class CaptureObjectStore : IObjectStore
+    private sealed class CaptureObjectStore(Func<CancellationToken, Task>? beforeRead = null) : IObjectStore
     {
         private readonly Dictionary<string, byte[]> _objects = new(StringComparer.Ordinal);
 
@@ -1827,14 +1894,16 @@ public sealed class SessionsJournalPostgresTests : IAsyncLifetime
             return WriteCoreAsync(key, content, cancellationToken);
         }
 
-        public Task<ObjectRead?> ReadAsync(
+        public async Task<ObjectRead?> ReadAsync(
             ObjectKey key,
             CancellationToken cancellationToken = default)
         {
+            if (beforeRead is not null)
+                await beforeRead(cancellationToken);
             if (!_objects.TryGetValue(key.Value, out var bytes))
-                return Task.FromResult<ObjectRead?>(null);
+                return null;
             var stream = new MemoryStream(bytes.ToArray(), writable: false);
-            return Task.FromResult<ObjectRead?>(new ObjectRead(stream, bytes.Length, stream.Dispose));
+            return new ObjectRead(stream, bytes.Length, stream.Dispose);
         }
 
         public Task<bool> DeleteAsync(ObjectKey key, CancellationToken cancellationToken = default) =>

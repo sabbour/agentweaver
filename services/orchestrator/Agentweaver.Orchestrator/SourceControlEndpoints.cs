@@ -615,7 +615,9 @@ internal static class SourceControlEndpoints
             if (existingPending is not null)
             {
                 if (!string.Equals(
-                        existingPending.Proof.BaseSha, request.BaseSha, StringComparison.OrdinalIgnoreCase))
+                        existingPending.Proof.BaseSha, request.BaseSha, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(
+                        existingPending.Proof.BranchName, request.BranchName, StringComparison.Ordinal))
                     throw new CoordinationException(
                         "source_control_output_capture_pending_conflict", StatusCodes.Status409Conflict);
                 return await WriteAndAdmitOutputCaptureAsync(existingPending).ConfigureAwait(false);
@@ -939,6 +941,7 @@ internal static class SourceControlEndpoints
                 manifest.RepositoryId != proof.RepositoryId ||
                 manifest.ResourceGeneration != proof.ResourceGeneration ||
                 manifest.WorkspaceIncarnationId != proof.WorkspaceIncarnationId ||
+                manifest.BranchName != proof.BranchName ||
                 !string.Equals(manifest.BaseSha, proof.BaseSha, StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(manifest.OutputTreeSha, proof.OutputTreeSha, StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("The persisted output capture manifest binding is inconsistent.");
@@ -970,22 +973,32 @@ internal static class SourceControlEndpoints
 
     private static SourceControlOutputCaptureSummaryView ToOutputCaptureSummary(
         SourceControlOutputCaptureRecord record)
+        => ToOutputCaptureSummary(record.Proof, record.EventPosition);
+
+    private static SourceControlOutputCaptureSummaryView ToOutputCaptureSummary(
+        SourceControlOutputCaptureSummary record)
+        => ToOutputCaptureSummary(record.Proof, record.EventPosition);
+
+    private static SourceControlOutputCaptureSummaryView ToOutputCaptureSummary(
+        ProducedRunCaptureProof proof,
+        long? eventPosition)
     {
-        if (record.EventPosition is not long position)
+        if (eventPosition is not long position)
             throw OutputCaptureIntegrityFailure();
         return new(
-            record.Proof.CaptureId,
-            record.Proof.EventId,
+            proof.CaptureId,
+            proof.EventId,
             position,
-            record.Proof.CapturedAt,
-            record.Proof.WorkspaceId,
-            record.Proof.BaseSha,
-            record.Proof.OutputTreeSha,
-            record.Proof.ManifestSha256,
-            record.Proof.ManifestByteLength,
-            record.Proof.PatchSha256,
-            record.Proof.PatchByteLength,
-            record.Proof.PackageByteLength);
+            proof.CapturedAt,
+            proof.WorkspaceId,
+            proof.BranchName,
+            proof.BaseSha,
+            proof.OutputTreeSha,
+            proof.ManifestSha256,
+            proof.ManifestByteLength,
+            proof.PatchSha256,
+            proof.PatchByteLength,
+            proof.PackageByteLength);
     }
 
     private static Task<IResult> PrepareMergeIntentAsync(
@@ -2449,6 +2462,7 @@ internal sealed record SourceControlOutputCaptureSummaryView(
     long EventPosition,
     DateTimeOffset CapturedAt,
     string WorkspaceId,
+    string BranchName,
     string BaseSha,
     string OutputTreeSha,
     string ManifestSha256,

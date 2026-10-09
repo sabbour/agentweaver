@@ -11,6 +11,7 @@ CREATE TABLE {schema}.source_control_output_captures (
     accepted_selection_hash char(64) NOT NULL,
     workspace_id varchar(128) NOT NULL,
     workspace_incarnation_id uuid NOT NULL,
+    branch_name varchar(255) NOT NULL,
     repository_id varchar(256) NOT NULL,
     resource_generation bigint NOT NULL CHECK (resource_generation > 0),
     base_sha char(40) NOT NULL,
@@ -69,6 +70,7 @@ BEGIN
        OLD.accepted_selection_hash IS NOT DISTINCT FROM NEW.accepted_selection_hash AND
        OLD.workspace_id IS NOT DISTINCT FROM NEW.workspace_id AND
        OLD.workspace_incarnation_id IS NOT DISTINCT FROM NEW.workspace_incarnation_id AND
+       OLD.branch_name IS NOT DISTINCT FROM NEW.branch_name AND
        OLD.repository_id IS NOT DISTINCT FROM NEW.repository_id AND
        OLD.resource_generation IS NOT DISTINCT FROM NEW.resource_generation AND
        OLD.base_sha IS NOT DISTINCT FROM NEW.base_sha AND

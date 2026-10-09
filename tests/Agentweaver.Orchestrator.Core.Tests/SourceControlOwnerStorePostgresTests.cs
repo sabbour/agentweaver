@@ -53,6 +53,30 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             Assert.Equal("pending", pending.State);
             Assert.Null(pending.ObjectKey);
             Assert.Null(pending.EventPosition);
+            var restartedSourceControl = new SourceControlOwnerStore(
+                fixture.DataSource, schema, catalog, resolver);
+            var replayedPending = await restartedSourceControl.RegisterOutputCaptureAsync(
+                actor,
+                identity,
+                selection,
+                pin,
+                current.StateVersion,
+                CreateCaptureDocument(identity, pin),
+                CancellationToken.None);
+            Assert.Equal(pending.Proof.CaptureId, replayedPending.Proof.CaptureId);
+            Assert.Equal(pending.Proof.EventId, replayedPending.Proof.EventId);
+            Assert.Equal(pending.PackageBytes, replayedPending.PackageBytes);
+            Assert.Equal("main", pending.Proof.BranchName);
+            var changedBranch = await Assert.ThrowsAsync<CoordinationException>(() =>
+                restartedSourceControl.RegisterOutputCaptureAsync(
+                    actor,
+                    identity,
+                    selection,
+                    pin,
+                    current.StateVersion,
+                    CreateCaptureDocument(identity, pin, branchName: "agent/other"),
+                    CancellationToken.None));
+            Assert.Equal(StatusCodes.Status409Conflict, changedBranch.StatusCode);
             Assert.Equal(
                 document.PackageBytes,
                 (await sourceControl.ReadPendingOutputCaptureAsync(
@@ -96,7 +120,8 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             Assert.Equal(admitted.Proof, loaded!.Proof);
             Assert.Equal(admitted.State, loaded.State);
             Assert.Equal(document.PackageBytes, loaded.PackageBytes);
-            var secondDocument = CreateCaptureDocument(identity, pin, "second output", new string('c', 40));
+            var secondDocument = CreateCaptureDocument(
+                identity, pin, new string('x', 4 * 1024 * 1024), new string('c', 40));
             var secondPending = await sourceControl.RegisterOutputCaptureAsync(
                 actor,
                 identity,
@@ -117,6 +142,10 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
             var page = await sourceControl.ReadOutputCapturePageAsync(
                 identity, selectionHash, null, null, 1, CancellationToken.None);
             Assert.Single(page);
+            Assert.DoesNotContain(
+                typeof(byte[]),
+                typeof(SourceControlOutputCaptureSummary).GetProperties()
+                    .Select(property => property.PropertyType));
             var nextPage = await sourceControl.ReadOutputCapturePageAsync(
                 identity,
                 selectionHash,
@@ -126,6 +155,13 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
                 CancellationToken.None);
             Assert.Single(nextPage);
             Assert.NotEqual(page[0].Proof.CaptureId, nextPage[0].Proof.CaptureId);
+            Assert.Contains(
+                new[] { page[0], nextPage[0] },
+                item => item.Proof.PackageByteLength == secondDocument.PackageBytes.LongLength);
+            var loadedLargeCapture = await sourceControl.ReadOutputCaptureAsync(
+                identity, secondPending.Proof.CaptureId, selectionHash, CancellationToken.None);
+            Assert.Equal(secondDocument.PackageBytes, loadedLargeCapture!.PackageBytes);
+            Assert.Equal(secondPending.Proof, loadedLargeCapture.Proof);
             Assert.Null(await sourceControl.ReadOutputCaptureAsync(
                 identity, pending.Proof.CaptureId, new string('f', 64), CancellationToken.None));
 
@@ -140,6 +176,81 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
                     journalEntry with { Position = 20 },
                     CancellationToken.None));
             Assert.Equal(StatusCodes.Status409Conflict, wrongPosition.StatusCode);
+
+            var racePending = await sourceControl.RegisterOutputCaptureAsync(
+                actor,
+                identity,
+                selection,
+                pin,
+                current.StateVersion,
+                CreateCaptureDocument(identity, pin, "capture waiting on a decision"),
+                CancellationToken.None);
+            await using var blocker = await fixture.DataSource.OpenConnectionAsync();
+            await using var blockerTransaction = await blocker.BeginTransactionAsync();
+            await using var blockerPidCommand = new NpgsqlCommand(
+                "SELECT pg_backend_pid()", blocker, blockerTransaction);
+            var blockerPid = (int)(await blockerPidCommand.ExecuteScalarAsync())!;
+            await using (var lockOwner = new NpgsqlCommand($"""
+                SELECT r.run_id
+                FROM "{schema}".accepted_runs AS r
+                INNER JOIN "{schema}".coordination_sessions AS s
+                  ON s.project_id = r.project_id AND s.run_id = r.run_id
+                WHERE r.project_id = @project AND r.run_id = @run
+                  AND s.session_id = @session
+                FOR UPDATE OF r, s
+                """, blocker, blockerTransaction))
+            {
+                lockOwner.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
+                lockOwner.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
+                lockOwner.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+                Assert.Equal(identity.RunId, await lockOwner.ExecuteScalarAsync());
+            }
+
+            var staleAdmission = sourceControl.AdmitOutputCaptureAsync(
+                actor,
+                identity,
+                selection,
+                pin,
+                current.StateVersion,
+                racePending.Proof.CaptureId,
+                new ProducedRunCaptureJournalEntry(racePending.Proof, 21),
+                CancellationToken.None);
+            try
+            {
+                await WaitUntilBlockedAsync(fixture.DataSource, blockerPid, "accepted_runs");
+                await using var reject = new NpgsqlCommand($"""
+                    INSERT INTO "{schema}".coordinator_decisions
+                        (project_id, run_id, session_id, request_id, decision_id,
+                         actor_issuer, actor_subject, execution_fence, state_version,
+                         action_kind, idempotency_key, command_hash, decision_state, decision)
+                    SELECT project_id, run_id, session_id, @request, @decision,
+                           actor_issuer, actor_subject, execution_fence, state_version + 1,
+                           'source-capture-test-reject', @idempotency, @hash, 'rejected', decision
+                    FROM "{schema}".coordinator_decisions
+                    WHERE project_id = @project AND run_id = @run AND session_id = @session
+                    ORDER BY state_version DESC
+                    LIMIT 1
+                    """, blocker, blockerTransaction);
+                reject.Parameters.AddWithValue("request", NpgsqlDbType.Varchar, "capture-reject-" + Guid.NewGuid().ToString("N"));
+                reject.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, Guid.NewGuid());
+                reject.Parameters.AddWithValue("idempotency", NpgsqlDbType.Varchar, "capture-reject-" + Guid.NewGuid().ToString("N"));
+                reject.Parameters.AddWithValue("hash", NpgsqlDbType.Char, new string('d', 64));
+                reject.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
+                reject.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
+                reject.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+                Assert.Equal(1, await reject.ExecuteNonQueryAsync());
+                await blockerTransaction.CommitAsync();
+            }
+            catch
+            {
+                await blockerTransaction.RollbackAsync();
+                throw;
+            }
+
+            var staleVersion = await Assert.ThrowsAsync<CoordinationException>(() => staleAdmission);
+            Assert.Equal(StatusCodes.Status409Conflict, staleVersion.StatusCode);
+            Assert.Equal("pending", (await sourceControl.ReadOutputCaptureAsync(
+                identity, racePending.Proof.CaptureId, selectionHash, CancellationToken.None))!.State);
         }
         finally
         {
@@ -496,7 +607,8 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
         SessionIdentity identity,
         SourceControlRepositoryPin pin,
         string output = "captured output",
-        string outputTreeSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        string outputTreeSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        string branchName = "main")
     {
         var content = Encoding.UTF8.GetBytes(output);
         var capture = new GitWorkspaceCapture(
@@ -513,8 +625,32 @@ public sealed class SourceControlOwnerStorePostgresTests(CoordinationPostgresFix
                 "100644",
                 GitWorkspaceCapturePackage.Hash(content),
                 content.LongLength,
-                ImmutableArray.CreateRange(content))));
+                ImmutableArray.CreateRange(content))),
+            branchName);
         return GitWorkspaceCapturePackage.Create(capture);
+    }
+
+    private static async Task WaitUntilBlockedAsync(
+        NpgsqlDataSource dataSource,
+        int blockerProcessId,
+        string queryPattern)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        while (true)
+        {
+            await using var connection = await dataSource.OpenConnectionAsync(timeout.Token);
+            await using var wait = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_stat_activity
+                    WHERE @locker = ANY(pg_blocking_pids(pid))
+                      AND query ILIKE '%' || @pattern || '%')
+                """, connection);
+            wait.Parameters.AddWithValue("locker", NpgsqlDbType.Integer, blockerProcessId);
+            wait.Parameters.AddWithValue("pattern", NpgsqlDbType.Text, queryPattern);
+            if ((bool)(await wait.ExecuteScalarAsync(timeout.Token) ?? false))
+                return;
+            await Task.Delay(20, timeout.Token);
+        }
     }
 
     private static ProviderCatalog CreateSourceControlCatalog()

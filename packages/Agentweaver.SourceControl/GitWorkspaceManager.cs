@@ -378,7 +378,8 @@ public sealed class GitWorkspaceManager
                 request.BaseSha,
                 treeSha,
                 DecodeGitOutput(patchBytes),
-                files);
+                files,
+                workspace.BranchName);
         }
         finally
         {
@@ -896,7 +897,7 @@ public sealed class GitWorkspaceManager
                 "The source-control workspace request is not bound to a valid run, repository, revision, and branch.");
     }
 
-    private static bool IsValidBranchName(string branch) =>
+    internal static bool IsValidBranchName(string branch) =>
         !string.IsNullOrWhiteSpace(branch) &&
         branch.Length <= 255 &&
         branch[0] != '-' &&

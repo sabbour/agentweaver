@@ -358,6 +358,7 @@ internal sealed class SourceControlOwnerStore(
             selectionHash,
             document.Manifest.WorkspaceId,
             document.Manifest.WorkspaceIncarnationId,
+            document.Manifest.BranchName,
             document.Manifest.RepositoryId,
             document.Manifest.ResourceGeneration,
             document.Manifest.BaseSha,
@@ -409,13 +410,13 @@ internal sealed class SourceControlOwnerStore(
             INSERT INTO {OutputCaptures}
                 (project_id, run_id, session_id, capture_id, event_id, pin_id, issuer, actor_id,
                  tenant_id, accepted_selection_hash, workspace_id, workspace_incarnation_id,
-                 repository_id, resource_generation, base_sha, output_tree_sha, manifest_sha256,
+                 branch_name, repository_id, resource_generation, base_sha, output_tree_sha, manifest_sha256,
                  manifest_byte_length, manifest_bytes, patch_sha256, patch_byte_length, patch_bytes,
                  package_sha256, package_byte_length, package_bytes)
             VALUES
                 (@project, @run, @session, @capture, @event, @pin, @issuer, @actor,
                  @tenant, @selectionHash, @workspace, @incarnation,
-                 @repository, @generation, @baseSha, @treeSha, @manifestSha,
+                 @branch, @repository, @generation, @baseSha, @treeSha, @manifestSha,
                  @manifestLength, @manifest, @patchSha, @patchLength, @patch,
                  @packageSha, @packageLength, @package)
             ON CONFLICT (project_id, run_id, session_id, capture_id) DO NOTHING
@@ -433,6 +434,7 @@ internal sealed class SourceControlOwnerStore(
             insert.Parameters.AddWithValue("workspace", NpgsqlDbType.Varchar, manifest.WorkspaceId);
             insert.Parameters.AddWithValue(
                 "incarnation", NpgsqlDbType.Uuid, manifest.WorkspaceIncarnationId);
+            insert.Parameters.AddWithValue("branch", NpgsqlDbType.Varchar, manifest.BranchName);
             insert.Parameters.AddWithValue("repository", NpgsqlDbType.Varchar, manifest.RepositoryId);
             insert.Parameters.AddWithValue("generation", NpgsqlDbType.Bigint, manifest.ResourceGeneration);
             insert.Parameters.AddWithValue("baseSha", NpgsqlDbType.Char, manifest.BaseSha);
@@ -549,7 +551,7 @@ internal sealed class SourceControlOwnerStore(
         return record;
     }
 
-    internal async Task<ImmutableArray<SourceControlOutputCaptureRecord>> ReadOutputCapturePageAsync(
+    internal async Task<ImmutableArray<SourceControlOutputCaptureSummary>> ReadOutputCapturePageAsync(
         SessionIdentity identity,
         string acceptedSelectionHash,
         DateTimeOffset? beforeCapturedAt,
@@ -563,11 +565,11 @@ internal sealed class SourceControlOwnerStore(
             throw new CoordinationException(
                 "source_control_output_capture_page_invalid", StatusCodes.Status400BadRequest);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        var rows = ImmutableArray.CreateBuilder<SourceControlOutputCaptureRecord>();
+        var rows = ImmutableArray.CreateBuilder<SourceControlOutputCaptureSummary>();
         await using var command = new NpgsqlCommand($"""
             SELECT project_id, run_id, session_id, capture_id, event_id, pin_id, issuer, actor_id,
                 tenant_id, accepted_selection_hash, workspace_id, workspace_incarnation_id,
-                repository_id, resource_generation, base_sha, output_tree_sha, manifest_sha256,
+                branch_name, repository_id, resource_generation, base_sha, output_tree_sha, manifest_sha256,
                 manifest_byte_length, manifest_bytes, patch_sha256, patch_byte_length, patch_bytes,
                 package_sha256, package_byte_length, capture_state, object_key, event_position,
                 captured_at, admitted_at, package_bytes
@@ -592,7 +594,10 @@ internal sealed class SourceControlOwnerStore(
         {
             var record = ReadOutputCaptureRow(reader);
             ValidateOutputCaptureRecord(record);
-            rows.Add(record);
+            rows.Add(new(
+                record.Proof,
+                record.EventPosition ?? throw new CoordinationException(
+                    "source_control_output_capture_corrupt", StatusCodes.Status503ServiceUnavailable)));
         }
         return rows.ToImmutable();
     }
@@ -1188,7 +1193,7 @@ internal sealed class SourceControlOwnerStore(
         await using var command = new NpgsqlCommand($"""
             SELECT project_id, run_id, session_id, capture_id, event_id, pin_id, issuer, actor_id,
                 tenant_id, accepted_selection_hash, workspace_id, workspace_incarnation_id,
-                repository_id, resource_generation, base_sha, output_tree_sha, manifest_sha256,
+                branch_name, repository_id, resource_generation, base_sha, output_tree_sha, manifest_sha256,
                 manifest_byte_length, manifest_bytes, patch_sha256, patch_byte_length, patch_bytes,
                 package_sha256, package_byte_length, capture_state, object_key, event_position, captured_at,
                 admitted_at, package_bytes
@@ -1226,25 +1231,26 @@ internal sealed class SourceControlOwnerStore(
             reader.GetString(10),
             reader.GetGuid(11),
             reader.GetString(12),
-            reader.GetInt64(13),
-            reader.GetString(14),
+            reader.GetString(13),
+            reader.GetInt64(14),
             reader.GetString(15),
             reader.GetString(16),
-            reader.GetInt64(17),
-            reader.GetString(19),
-            reader.GetInt64(20),
-            reader.GetString(22),
-            reader.GetInt64(23),
-            reader.GetFieldValue<DateTimeOffset>(27));
+            reader.GetString(17),
+            reader.GetInt64(18),
+            reader.GetString(20),
+            reader.GetInt64(21),
+            reader.GetString(23),
+            reader.GetInt64(24),
+            reader.GetFieldValue<DateTimeOffset>(28));
         return new SourceControlOutputCaptureRecord(
             proof,
-            reader.GetString(24),
-            reader.IsDBNull(25) ? null : reader.GetString(25),
-            reader.IsDBNull(26) ? null : reader.GetInt64(26),
-            reader.IsDBNull(28) ? null : reader.GetFieldValue<DateTimeOffset>(28),
-            reader.GetFieldValue<byte[]>(18),
-            reader.GetFieldValue<byte[]>(21),
-            reader.GetFieldValue<byte[]>(29));
+            reader.GetString(25),
+            reader.IsDBNull(26) ? null : reader.GetString(26),
+            reader.IsDBNull(27) ? null : reader.GetInt64(27),
+            reader.IsDBNull(29) ? null : reader.GetFieldValue<DateTimeOffset>(29),
+            reader.GetFieldValue<byte[]>(19),
+            reader.GetFieldValue<byte[]>(22),
+            reader.GetFieldValue<byte[]>(30));
     }
 
     private static void ValidateOutputCaptureRecord(SourceControlOutputCaptureRecord record)
@@ -1279,6 +1285,7 @@ internal sealed class SourceControlOwnerStore(
             if (manifest.RunId != proof.Identity.RunId ||
                 manifest.WorkspaceId != proof.WorkspaceId ||
                 manifest.WorkspaceIncarnationId != proof.WorkspaceIncarnationId ||
+                manifest.BranchName != proof.BranchName ||
                 manifest.RepositoryId != proof.RepositoryId ||
                 manifest.ResourceGeneration != proof.ResourceGeneration ||
                 manifest.BaseSha != proof.BaseSha ||
@@ -1316,6 +1323,7 @@ internal sealed class SourceControlOwnerStore(
             proof.AcceptedSelectionHash == HashSelection(selection.Selection) &&
             proof.WorkspaceId == manifest.WorkspaceId &&
             proof.WorkspaceIncarnationId == manifest.WorkspaceIncarnationId &&
+            proof.BranchName == manifest.BranchName &&
             proof.RepositoryId == manifest.RepositoryId &&
             proof.ResourceGeneration == manifest.ResourceGeneration &&
             proof.BaseSha == manifest.BaseSha &&
@@ -1522,47 +1530,76 @@ internal sealed class SourceControlOwnerStore(
         bool forUpdate,
         CancellationToken cancellationToken)
     {
-        var lockSuffix = forUpdate ? " FOR UPDATE OF r, s" : string.Empty;
-        await using var command = new NpgsqlCommand($"""
-            SELECT r.accepted_selection_hash, r.accepted_by_issuer, r.accepted_by_subject,
-                   COALESCE(r.tenant_id, ''), r.execution_fence, r.execution_state,
-                   s.session_id, s.execution_fence, s.writer_issuer, s.writer_subject,
-                   s.lifecycle_state, d.decision_id, d.state_version, d.decision_state
-            FROM {_schema}.accepted_runs AS r
-            INNER JOIN {_schema}.coordination_sessions AS s
-              ON s.project_id = r.project_id AND s.run_id = r.run_id
-             AND s.session_id = @session AND s.parent_session_id IS NULL
-            INNER JOIN LATERAL (
-                SELECT decision_id, state_version, decision_state
-                FROM {_schema}.coordinator_decisions
-                WHERE project_id = r.project_id AND run_id = r.run_id AND session_id = s.session_id
-                ORDER BY state_version DESC
-                LIMIT 1
-            ) AS d ON true
-            WHERE r.project_id = @project AND r.run_id = @run
-            {lockSuffix}
-            """, connection, transaction);
-        AddScope(command, identity);
-        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            throw new CoordinationException(
-                "source_control_run_unavailable", StatusCodes.Status404NotFound);
-        var binding = new OwnerBindingSnapshot(
-            reader.GetString(0).TrimEnd(),
-            reader.GetString(1),
-            reader.GetString(2),
-            reader.GetString(3),
-            reader.GetInt64(4),
-            reader.GetString(5),
-            reader.GetString(6),
-            reader.GetInt64(7),
-            reader.GetString(8),
-            reader.GetString(9),
-            reader.GetString(10),
-            reader.GetGuid(11),
-            reader.GetInt64(12),
-            reader.GetString(13));
+        OwnerBindingSnapshot binding;
+        if (forUpdate)
+        {
+            if (transaction is null)
+                throw new ArgumentException("A transaction is required for an update lock.", nameof(transaction));
+            var owner = await LockOwnerRowsAsync(
+                connection, transaction, identity, cancellationToken).ConfigureAwait(false);
+            var decision = await ReadLatestOwnerDecisionAsync(
+                connection, transaction, identity, cancellationToken).ConfigureAwait(false)
+                ?? throw new CoordinationException(
+                    "source_control_run_unavailable", StatusCodes.Status404NotFound);
+            binding = new OwnerBindingSnapshot(
+                owner.AcceptedSelectionHash,
+                owner.AcceptedIssuer,
+                owner.AcceptedSubject,
+                owner.TenantId,
+                owner.RunFence,
+                owner.ExecutionState,
+                owner.RootSessionId,
+                owner.SessionFence,
+                owner.WriterIssuer,
+                owner.WriterSubject,
+                owner.SessionLifecycle,
+                decision.DecisionId,
+                decision.StateVersion,
+                decision.DecisionState);
+        }
+        else
+        {
+            await using var command = new NpgsqlCommand($"""
+                SELECT r.accepted_selection_hash, r.accepted_by_issuer, r.accepted_by_subject,
+                       COALESCE(r.tenant_id, ''), r.execution_fence, r.execution_state,
+                       s.session_id, s.execution_fence, s.writer_issuer, s.writer_subject,
+                       s.lifecycle_state, d.decision_id, d.state_version, d.decision_state
+                FROM {_schema}.accepted_runs AS r
+                INNER JOIN {_schema}.coordination_sessions AS s
+                  ON s.project_id = r.project_id AND s.run_id = r.run_id
+                 AND s.session_id = @session AND s.parent_session_id IS NULL
+                INNER JOIN LATERAL (
+                    SELECT decision_id, state_version, decision_state
+                    FROM {_schema}.coordinator_decisions
+                    WHERE project_id = r.project_id AND run_id = r.run_id AND session_id = s.session_id
+                    ORDER BY state_version DESC
+                    LIMIT 1
+                ) AS d ON true
+                WHERE r.project_id = @project AND r.run_id = @run
+                """, connection, transaction);
+            AddScope(command, identity);
+            command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new CoordinationException(
+                    "source_control_run_unavailable", StatusCodes.Status404NotFound);
+            binding = new OwnerBindingSnapshot(
+                reader.GetString(0).TrimEnd(),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt64(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.GetInt64(7),
+                reader.GetString(8),
+                reader.GetString(9),
+                reader.GetString(10),
+                reader.GetGuid(11),
+                reader.GetInt64(12),
+                reader.GetString(13));
+        }
+
         if (binding.AcceptedIssuer != actor.Issuer ||
             binding.AcceptedSubject != actor.Subject ||
             binding.TenantId != tenantId ||
@@ -1574,6 +1611,65 @@ internal sealed class SourceControlOwnerStore(
             throw new CoordinationException(
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
         return binding;
+    }
+
+    private async Task<OwnerBindingScope> LockOwnerRowsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT r.accepted_selection_hash, r.accepted_by_issuer, r.accepted_by_subject,
+                   COALESCE(r.tenant_id, ''), r.execution_fence, r.execution_state,
+                   s.session_id, s.execution_fence, s.writer_issuer, s.writer_subject,
+                   s.lifecycle_state
+            FROM {_schema}.accepted_runs AS r
+            INNER JOIN {_schema}.coordination_sessions AS s
+              ON s.project_id = r.project_id AND s.run_id = r.run_id
+             AND s.session_id = @session AND s.parent_session_id IS NULL
+            WHERE r.project_id = @project AND r.run_id = @run
+            FOR UPDATE OF r, s
+            """, connection, transaction);
+        AddScope(command, identity);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "source_control_run_unavailable", StatusCodes.Status404NotFound);
+        return new OwnerBindingScope(
+            reader.GetString(0).TrimEnd(),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetInt64(4),
+            reader.GetString(5),
+            reader.GetString(6),
+            reader.GetInt64(7),
+            reader.GetString(8),
+            reader.GetString(9),
+            reader.GetString(10));
+    }
+
+    private async Task<(Guid DecisionId, long StateVersion, string DecisionState)?> ReadLatestOwnerDecisionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT decision_id, state_version, decision_state
+            FROM {_schema}.coordinator_decisions
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            ORDER BY state_version DESC
+            LIMIT 1
+            """, connection, transaction);
+        AddScope(command, identity);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? (reader.GetGuid(0), reader.GetInt64(1), reader.GetString(2))
+            : null;
     }
 
     private static void EnsureCurrentBinding(
@@ -1978,6 +2074,19 @@ internal sealed class SourceControlOwnerStore(
         return $"\"{value}\"";
     }
 
+    private sealed record OwnerBindingScope(
+        string AcceptedSelectionHash,
+        string AcceptedIssuer,
+        string AcceptedSubject,
+        string TenantId,
+        long RunFence,
+        string ExecutionState,
+        string RootSessionId,
+        long SessionFence,
+        string WriterIssuer,
+        string WriterSubject,
+        string SessionLifecycle);
+
     private sealed record OwnerBindingSnapshot(
         string AcceptedSelectionHash,
         string AcceptedIssuer,
@@ -2039,6 +2148,10 @@ internal sealed record SourceControlOutputCaptureRecord(
     byte[] ManifestBytes,
     byte[] PatchBytes,
     byte[] PackageBytes);
+
+internal sealed record SourceControlOutputCaptureSummary(
+    ProducedRunCaptureProof Proof,
+    long EventPosition);
 
 internal sealed record SourceControlMergeIntentSnapshot(
     string IntentId,

@@ -927,10 +927,13 @@ run-scoped caller and are not persisted in owner records.
 
 Produced-run output capture is also owned by Source Control. The authenticated caller captures an
 existing bound workspace as one sealed Git tree: the requested base is `HEAD`, and tracked edits and
-untracked files in the resulting tree are included. The canonical manifest binds each safe relative
-path, Git mode, SHA-256 digest, and byte length; the bounded diff and packed file bytes are hashed as
-well. Limits are 10,000 files, 16 MiB per file, 64 MiB total file content, a 32 MiB manifest, and an
-8 MiB diff. This is a sealed tree capture, not an atomic filesystem snapshot.
+untracked files in the resulting tree are included. The canonical manifest and proof bind the actual
+workspace branch; it contributes to the deterministic capture identity. A retry for an unresolved
+capture must use the original base and branch. A mismatch conflicts without reopening or rereading the
+workspace. The manifest also binds each safe relative path, Git mode, SHA-256 digest, and byte length;
+the bounded diff and packed file bytes are hashed as well. Limits are 10,000 files, 16 MiB per file,
+64 MiB total file content, a 32 MiB manifest, and an 8 MiB diff. This is a sealed tree capture, not
+an atomic filesystem snapshot.
 
 Source Control persists the capture proof and exact sealed package bytes as pending before sending
 the package to Events & Sessions. This durable copy lets a retry after a lost response or process
@@ -939,19 +942,21 @@ while that workspace has an unresolved capture. Events verifies the proof and pa
 immutable package in Object Store, and appends the typed capture event to the session journal. The
 journal event ID and position are the provenance for authorized historical reads; Source Control
 makes its owner record readable only after the exact acknowledgement is admitted. Admission rechecks
-current Projects authority and run state, then locks and checks the current owner/session fence,
-accepted pin, and decision in the owner transaction. Reads recheck current authority and run state
-after the journal/object fetch. Replays must match the original proof and journal entry. A pending or
-unadmitted capture is not visible, and there is no fallback to the live workspace or a caller-supplied
-event ID.
+current Projects authority and run state, then locks the owner/session rows before reading the latest
+decision in a new statement in the same transaction. This prevents a decision committed during a lock
+wait from being missed. Reads recheck current authority and run state after the journal/object fetch.
+Replays must match the original proof and journal entry. A pending or unadmitted capture is not visible,
+and there is no fallback to the live workspace or a caller-supplied event ID.
 
 Capture is allowed only while the run is active, idle, or blocked. Authorized history reads recheck
 current Projects authority, accepted selection, and run state before and after fetching file bytes by
 the journal event ID, verifying journal position, package digest, manifest, and file digest before
 returning them. Completed runs remain readable; failed or indeterminate runs and pending captures are
 withheld as not found.
-The paged history and detail/diff/file routes support later retained-UI browsing; they do not add a
-browser UI or change the current UI surface.
+Paged history validates captures one row at a time and returns summary metadata and cursor fields,
+not package, manifest, or patch bytes. Single-capture detail/diff/file reads continue to validate the
+full record. These routes support later retained-UI browsing; they do not add a browser UI or change
+the current UI surface.
 
 The authenticated run-bound webhook relay accepts raw payloads up to 1 MiB plus GitHub delivery, event,
 and signature headers. It verifies HMAC over those exact bytes, matches the repository name and provider ID

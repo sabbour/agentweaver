@@ -73,7 +73,8 @@ public sealed record GitWorkspaceCapture(
     string BaseSha,
     string OutputTreeSha,
     string Patch,
-    ImmutableArray<GitWorkspaceCapturedFile> Files);
+    ImmutableArray<GitWorkspaceCapturedFile> Files,
+    string BranchName);
 
 internal interface IGitRepositoryRemote
 {

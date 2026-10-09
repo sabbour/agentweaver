@@ -107,6 +107,7 @@ public sealed class GitWorkspaceManagerTests
             Assert.Equal(indexBeforeCapture, indexAfterCapture);
             Assert.Equal(request.BaseSha, capture.BaseSha);
             Assert.Equal(40, capture.OutputTreeSha.Length);
+            Assert.Equal(request.BranchName, manifest.BranchName);
             Assert.Equal(
                 new[] { "README.md", "new-output.txt" },
                 files.Keys.Order(StringComparer.Ordinal).ToArray());
