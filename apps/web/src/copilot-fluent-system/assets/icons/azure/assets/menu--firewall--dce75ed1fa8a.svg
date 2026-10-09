@@ -1,0 +1,24 @@
+<svg id="eedd0b6b-34f2-4543-8afa-50340a9921da" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="ad4a8deb-731f-468f-a98e-bebe08238486" x1="9" y1="15.265" x2="9" y2="2.735" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset="0.156" stop-color="#1380da" />
+      <stop offset="0.528" stop-color="#3c91e5" />
+      <stop offset="0.822" stop-color="#559cec" />
+      <stop offset="1" stop-color="#5ea0ef" />
+    </linearGradient>
+  </defs>
+  <g>
+    <path d="M18,3.623a.812.812,0,0,0-.7-.888H.7a.812.812,0,0,0-.7.888V14.377a.812.812,0,0,0,.7.888H17.3a.812.812,0,0,0,.7-.888V3.623Z" fill="url(#ad4a8deb-731f-468f-a98e-bebe08238486)" />
+    <rect x="0.995" y="3.979" width="4.878" height="2.715" fill="#50e6ff" />
+    <rect x="6.616" y="3.979" width="4.878" height="2.715" fill="#c3f1ff" />
+    <rect x="12.236" y="3.979" width="4.878" height="2.715" fill="#50e6ff" />
+    <rect x="0.995" y="7.626" width="2.027" height="2.715" fill="#50e6ff" />
+    <rect x="15.087" y="7.626" width="2.027" height="2.715" fill="#c3f1ff" />
+    <rect x="3.765" y="7.626" width="4.878" height="2.715" fill="#c3f1ff" />
+    <rect x="9.386" y="7.626" width="4.878" height="2.715" fill="#50e6ff" />
+    <rect x="0.995" y="11.274" width="4.878" height="2.715" fill="#50e6ff" />
+    <rect x="6.616" y="11.274" width="4.878" height="2.715" fill="#c3f1ff" />
+    <rect x="12.236" y="11.274" width="4.878" height="2.715" fill="#50e6ff" />
+  </g>
+</svg>

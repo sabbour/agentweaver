@@ -1,0 +1,12 @@
+- generic [ref=f2e1]:
+  - button "Open invalid callback" [ref=f2e16]
+  - button "Open valid callback" [active] [ref=f2e17]
+  - main [ref=f2e4]:
+    - generic [ref=f2e5]:
+      - generic [ref=f2e6]: Agentweaver
+      - heading "Sign in" [level=1] [ref=f2e7]
+      - paragraph [ref=f2e8]: Sign in through the Identity Broker to use the Gateway-backed project and run views.
+      - alert [ref=f2e9]:
+        - generic [ref=f2e13]: Configure Identity Broker URL, registered OAuth client ID, registered OAuth scopes before signing in.
+      - button "Continue with Identity Broker" [disabled] [ref=f2e14]
+      - paragraph [ref=f2e15]: Access tokens stay in memory only. After a reload, continue sign-in again; the Broker recovers its local session and rechecks current grants and project roles.
