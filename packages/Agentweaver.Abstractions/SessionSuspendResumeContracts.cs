@@ -114,7 +114,7 @@ public sealed record SessionSuspendResumeManifest(
             workspaceResource.Generation != workspaceVolume.ResourceGeneration)
             throw new ArgumentException("The workspace references do not identify the same resource generation.");
 
-        if (WorkspaceDataGeneration is <= 0)
+        if (WorkspaceDataGeneration is < 0)
             throw new ArgumentOutOfRangeException(nameof(WorkspaceDataGeneration));
         if (WorkspaceDataGeneration is not null &&
             (WorkspaceVolume is null || WorkspaceResource is null))

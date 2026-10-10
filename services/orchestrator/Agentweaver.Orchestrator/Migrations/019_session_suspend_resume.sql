@@ -10,6 +10,15 @@ ALTER TABLE {schema}.coordination_execution_operations
             (owner_execution_fence IS NULL OR owner_execution_fence > 0) AND
             (operation_kind NOT IN ('suspend', 'resume') OR owner_execution_fence IS NOT NULL)
         ),
+    ADD COLUMN reserved_manifest_id uuid,
+    ADD CONSTRAINT coordination_execution_operations_manifest_check
+        CHECK (
+            operation_kind NOT IN ('suspend', 'resume') OR
+            (reserved_manifest_id IS NOT NULL AND
+             reserved_manifest_id <> '00000000-0000-0000-0000-000000000000'::uuid)
+        ),
+    ADD CONSTRAINT uq_coordination_execution_operations_project_manifest
+        UNIQUE (project_id, reserved_manifest_id),
     ADD COLUMN operation_phase varchar(32) NOT NULL DEFAULT 'not_applicable',
     ADD CONSTRAINT coordination_execution_operations_phase_check
         CHECK (operation_phase IN (
@@ -53,6 +62,8 @@ CREATE TABLE {schema}.session_consistency_manifests (
     FOREIGN KEY (project_id, run_id, session_id, operation_id)
         REFERENCES {schema}.coordination_execution_operations(
             project_id, run_id, session_id, operation_id),
+    FOREIGN KEY (project_id, manifest_id)
+        REFERENCES {schema}.coordination_execution_operations(project_id, reserved_manifest_id),
     CHECK ((manifest->>'contractVersion')::integer = contract_version),
     CHECK (manifest->>'manifestId' = manifest_id::text),
     CHECK (manifest->'identity'->>'projectId' = project_id),
@@ -98,6 +109,7 @@ BEGIN
         NEW.run_id IS DISTINCT FROM OLD.run_id OR
         NEW.session_id IS DISTINCT FROM OLD.session_id OR
         NEW.operation_id IS DISTINCT FROM OLD.operation_id OR
+        NEW.reserved_manifest_id IS DISTINCT FROM OLD.reserved_manifest_id OR
         NEW.actor_issuer IS DISTINCT FROM OLD.actor_issuer OR
         NEW.actor_subject IS DISTINCT FROM OLD.actor_subject OR
         NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key OR

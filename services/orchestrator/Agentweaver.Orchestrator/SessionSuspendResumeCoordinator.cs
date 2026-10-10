@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
 
@@ -176,6 +177,43 @@ internal sealed class SessionSuspendResumeCoordinator
         Results.Json(
             new { error = "suspend_resume_owner_unavailable" },
             statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    internal async Task<RuntimeHostSuspendRequest> RequireCurrentSuspendAsync(
+        CoordinationActor actor,
+        AuthorizedRunSelection selection,
+        RuntimeHostSuspendRequest request,
+        CancellationToken cancellationToken)
+    {
+        var ownerStore = _ownerStore
+            ?? throw new InvalidOperationException("The coordination owner store is not configured.");
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Proof);
+        ArgumentNullException.ThrowIfNull(request.Proof.Registration);
+        ArgumentNullException.ThrowIfNull(request.Proof.Registration.Binding);
+        var binding = request.Proof.Registration.Binding;
+        try
+        {
+            await ownerStore.RequireCurrentSessionSuspendAsync(
+                actor,
+                selection,
+                new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId),
+                request.OperationId,
+                request.ManifestId,
+                binding.ExecutionFence,
+                binding.AcceptedSelectionHash,
+                request.PhaseVersion,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (PostgresException exception) when (
+            exception.SqlState is PostgresErrorCodes.UndefinedTable or
+                PostgresErrorCodes.UndefinedColumn or PostgresErrorCodes.UndefinedObject)
+        {
+            throw new CoordinationException(
+                "suspend_resume_owner_schema_unavailable", StatusCodes.Status503ServiceUnavailable, exception);
+        }
+
+        return request;
+    }
 
     internal async Task<IResult> RecordUnavailableAsync(
         CoordinationActor actor,

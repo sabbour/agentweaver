@@ -24,6 +24,96 @@ internal sealed record SessionSuspendResumeOperationSnapshot(
 
 internal sealed partial class CoordinationOwnerStore
 {
+    internal async Task RequireCurrentSessionSuspendAsync(
+        CoordinationActor actor,
+        AuthorizedRunSelection selection,
+        SessionIdentity identity,
+        Guid operationId,
+        Guid manifestId,
+        long executionFence,
+        string acceptedSelectionHash,
+        long phaseVersion,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(selection);
+        if (operationId == Guid.Empty || manifestId == Guid.Empty ||
+            executionFence < 1 || phaseVersion < 1 ||
+            string.IsNullOrWhiteSpace(acceptedSelectionHash))
+            throw new CoordinationException(
+                "suspend_resume_proof_invalid", StatusCodes.Status400BadRequest);
+        CoordinationIdentity.ValidateIdentity(identity.ProjectId, nameof(identity.ProjectId));
+        CoordinationIdentity.ValidateIdentity(identity.RunId, nameof(identity.RunId));
+        CoordinationIdentity.ValidateIdentity(identity.SessionId, nameof(identity.SessionId));
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var run = await ReadAcceptedRunAsync(
+            connection, transaction, identity.ProjectId, identity.RunId,
+            forUpdate: true, cancellationToken).ConfigureAwait(false);
+        var session = await ReadSessionAsync(
+            connection, transaction, identity, forUpdate: true, cancellationToken).ConfigureAwait(false);
+        RequireWriter(session, actor);
+        RequireRunOwner(run, actor);
+        RequireCurrentAuthorizedSelection(actor, selection, identity, run);
+        RequireCurrentActiveSession(session, run);
+        if (run.Fence != executionFence || session.ExecutionFence != executionFence ||
+            run.SelectionHash != acceptedSelectionHash)
+            throw new CoordinationException(
+                "suspend_resume_operation_stale", StatusCodes.Status409Conflict);
+
+        await using var command = new NpgsqlCommand($"""
+            SELECT actor_issuer, actor_subject, operation_kind, idempotency_key, request_hash,
+                operation_phase, phase_version, owner_execution_fence, reserved_manifest_id
+            FROM {_executionOperations}
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND operation_id = @operation
+            FOR UPDATE
+            """, connection, transaction);
+        AddRunScope(command, identity.ProjectId, identity.RunId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException(
+                "suspend_resume_operation_stale", StatusCodes.Status409Conflict);
+
+        var issuer = reader.GetString(0);
+        var subject = reader.GetString(1);
+        var kind = reader.GetString(2);
+        var idempotencyKey = reader.GetString(3);
+        var requestHash = reader.GetString(4).TrimEnd();
+        var phase = SessionSuspendResumePhaseMachine.ParsePhase(reader.GetString(5));
+        var storedPhaseVersion = reader.GetInt64(6);
+        var storedFence = reader.GetInt64(7);
+        var storedManifestId = reader.IsDBNull(8) ? Guid.Empty : reader.GetGuid(8);
+        await reader.DisposeAsync().ConfigureAwait(false);
+
+        if (issuer != actor.Issuer || subject != actor.Subject)
+            throw new CoordinationException(
+                "coordination_owner_forbidden", StatusCodes.Status403Forbidden);
+
+        var expectedRequestHash = SessionSuspendResumePhaseMachine.HashRequest(
+            SessionSuspendResumeOperationKind.Suspend,
+            identity,
+            new
+            {
+                idempotencyKey,
+                sourceManifestId = (Guid?)null,
+                acceptedSelectionHash
+            });
+        if (kind != "suspend" || storedManifestId != manifestId ||
+            storedFence != executionFence || phase != SessionSuspendResumeOperationPhase.Fenced ||
+            storedPhaseVersion != phaseVersion ||
+            !string.Equals(requestHash, expectedRequestHash, StringComparison.Ordinal))
+            throw new CoordinationException(
+                "suspend_resume_operation_stale", StatusCodes.Status409Conflict);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     internal async Task<SessionSuspendResumeOperationSnapshot> RecordUnavailableSessionSuspendResumeAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -108,11 +198,11 @@ internal sealed partial class CoordinationOwnerStore
 
         await using (var insertOperation = new NpgsqlCommand($"""
             INSERT INTO {_executionOperations}
-                (project_id, run_id, operation_id, session_id, actor_issuer, actor_subject,
+                (project_id, run_id, operation_id, session_id, reserved_manifest_id, actor_issuer, actor_subject,
                  operation_kind, idempotency_key, request_hash, result,
                  owner_execution_fence, operation_phase, phase_version, progress)
             VALUES
-                (@project, @run, @operation, @session, @issuer, @subject,
+                (@project, @run, @operation, @session, @manifestId, @issuer, @subject,
                  @kind, @key, @hash, @empty,
                  @fence, 'reserved', 0, @empty)
             """, connection, transaction))
@@ -120,6 +210,7 @@ internal sealed partial class CoordinationOwnerStore
             AddRunScope(insertOperation, identity.ProjectId, identity.RunId);
             insertOperation.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
             insertOperation.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+            insertOperation.Parameters.AddWithValue("manifestId", NpgsqlDbType.Uuid, manifestId);
             insertOperation.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, actor.Issuer);
             insertOperation.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, actor.Subject);
             insertOperation.Parameters.AddWithValue(
@@ -162,7 +253,7 @@ internal sealed partial class CoordinationOwnerStore
             WHERE project_id = @project AND run_id = @run AND session_id = @session
                 AND operation_id = @operation AND actor_issuer = @issuer AND actor_subject = @subject
                 AND operation_kind = @kind AND idempotency_key = @key AND request_hash = @hash
-                AND owner_execution_fence = @fence
+                AND owner_execution_fence = @fence AND reserved_manifest_id = @manifestId
                 AND operation_phase = 'reserved' AND phase_version = 0
             """, connection, transaction))
         {
@@ -176,6 +267,7 @@ internal sealed partial class CoordinationOwnerStore
             interruptOperation.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, idempotencyKey);
             interruptOperation.Parameters.AddWithValue("hash", NpgsqlDbType.Char, requestHash);
             interruptOperation.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, run.Fence);
+            interruptOperation.Parameters.AddWithValue("manifestId", NpgsqlDbType.Uuid, manifestId);
             interruptOperation.Parameters.AddWithValue(
                 "progress", NpgsqlDbType.Jsonb, progress.GetRawText());
             interruptOperation.Parameters.AddWithValue(
@@ -214,7 +306,8 @@ internal sealed partial class CoordinationOwnerStore
         await using var command = new NpgsqlCommand($"""
             SELECT o.operation_id, o.session_id, o.operation_kind, o.request_hash,
                 o.operation_phase, o.phase_version, o.owner_execution_fence, o.progress,
-                m.manifest_id, m.manifest_hash, m.manifest, m.owner_execution_fence
+                m.manifest_id, m.manifest_hash, m.manifest, m.owner_execution_fence,
+                o.reserved_manifest_id
             FROM {_executionOperations} o
             LEFT JOIN {_schema}.session_consistency_manifests m
               ON m.project_id = o.project_id AND m.run_id = o.run_id
@@ -249,13 +342,14 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException(
                 "suspend_resume_operation_fence_stale", StatusCodes.Status409Conflict);
         var progress = ReadJsonObject(reader.GetString(7), "suspend_resume_progress_invalid");
-        if (reader.IsDBNull(8) || reader.IsDBNull(9) || reader.IsDBNull(10) || reader.IsDBNull(11))
+        if (reader.IsDBNull(8) || reader.IsDBNull(9) || reader.IsDBNull(10) ||
+            reader.IsDBNull(11) || reader.IsDBNull(12))
             throw new CoordinationException(
                 "suspend_resume_manifest_unavailable", StatusCodes.Status503ServiceUnavailable);
 
         var manifestId = reader.GetGuid(8);
         var manifestHash = reader.GetString(9).TrimEnd();
-        if (reader.GetInt64(11) != ownerFence)
+        if (reader.GetInt64(11) != ownerFence || reader.GetGuid(12) != manifestId)
             throw new CoordinationException(
                 "suspend_resume_manifest_fence_invalid", StatusCodes.Status503ServiceUnavailable);
         var manifest = DeserializeAndValidateManifest(

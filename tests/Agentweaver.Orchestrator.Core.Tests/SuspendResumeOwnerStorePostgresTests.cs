@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
@@ -41,7 +42,6 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
 
         await CoordinationOwnerMigrator.MigrateAsync(_fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(_fixture.DataSource, _schema);
-        await ApplySuspendResumeMigrationAsync();
 
         _store = new CoordinationOwnerStore(_fixture.DataSource, _schema);
         _ = await _store.AcceptRootAsync(
@@ -93,12 +93,15 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(first.ManifestHash, replay.ManifestHash);
         Assert.Equal(first.OwnerExecutionFence, replay.OwnerExecutionFence);
         Assert.Equal(first.Manifest.ManifestId, replay.Manifest.ManifestId);
-        Assert.Equal(first.Manifest.MissingEvidence, replay.Manifest.MissingEvidence);
+        Assert.True(
+            first.Manifest.MissingEvidence.SequenceEqual(replay.Manifest.MissingEvidence),
+            $"Expected [{string.Join(", ", first.Manifest.MissingEvidence)}], " +
+            $"actual [{string.Join(", ", replay.Manifest.MissingEvidence)}].");
 
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
-            SELECT operation_kind, operation_phase, phase_version, owner_execution_fence,
-                manifest_hash, manifest::text, claimed_execution_fence
+            SELECT o.operation_kind, o.operation_phase, o.phase_version, o.owner_execution_fence,
+                o.reserved_manifest_id, m.manifest_hash, m.manifest::text, m.claimed_execution_fence
             FROM "{_schema}".coordination_execution_operations o
             JOIN "{_schema}".session_consistency_manifests m
               ON m.project_id = o.project_id AND m.run_id = o.run_id
@@ -114,10 +117,11 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal("interrupted", reader.GetString(1));
         Assert.Equal(1L, reader.GetInt64(2));
         Assert.Equal(first.OwnerExecutionFence, reader.GetInt64(3));
-        Assert.Equal(first.ManifestHash, reader.GetString(4).TrimEnd());
-        Assert.True(reader.IsDBNull(6));
+        Assert.Equal(first.ManifestId, reader.GetGuid(4));
+        Assert.Equal(first.ManifestHash, reader.GetString(5).TrimEnd());
+        Assert.True(reader.IsDBNull(7));
         var canonicalManifest = JsonSerializer.Deserialize<SessionSuspendResumeManifest>(
-            reader.GetString(5), JsonOptions);
+            reader.GetString(6), JsonOptions);
         Assert.NotNull(canonicalManifest);
         var canonicalHash = Convert.ToHexStringLower(SHA256.HashData(
             JsonSerializer.SerializeToUtf8Bytes(canonicalManifest, JsonOptions)));
@@ -192,6 +196,17 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
         await Assert.ThrowsAsync<PostgresException>(
             () => operationMutation.ExecuteNonQueryAsync());
 
+        await using var reservationMutation = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordination_execution_operations
+            SET reserved_manifest_id = @manifest
+            WHERE project_id = @project AND operation_id = @operation
+            """, connection);
+        reservationMutation.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _identity.ProjectId);
+        reservationMutation.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, result.OperationId);
+        reservationMutation.Parameters.AddWithValue("manifest", NpgsqlDbType.Uuid, Guid.NewGuid());
+        await Assert.ThrowsAsync<PostgresException>(
+            () => reservationMutation.ExecuteNonQueryAsync());
+
         await using var manifestMutation = new NpgsqlCommand($"""
             UPDATE "{_schema}".session_consistency_manifests
             SET manifest_state = 'suspended'
@@ -201,6 +216,183 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
         manifestMutation.Parameters.AddWithValue("manifest", NpgsqlDbType.Uuid, result.ManifestId);
         await Assert.ThrowsAsync<PostgresException>(
             () => manifestMutation.ExecuteNonQueryAsync());
+    }
+
+    [Fact]
+    public async Task CurrentSuspendGuardRequiresExactFencedOperationBinding()
+    {
+        var seeded = await InsertFencedSuspendOperationAsync("guarded-suspend");
+        var request = CreateSuspendRequest(seeded);
+        var echo = await new SessionSuspendResumeCoordinator(_store).RequireCurrentSuspendAsync(
+            _actor,
+            _selection,
+            request,
+            CancellationToken.None);
+        Assert.Same(request, echo);
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{_schema}".session_consistency_manifests
+            WHERE project_id = @project AND run_id = @run AND operation_id = @operation
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _identity.ProjectId);
+            command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _identity.RunId);
+            command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, seeded.OperationId);
+            Assert.Equal(0L, await command.ExecuteScalarAsync());
+        }
+
+        var wrongOperation = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RequireCurrentSessionSuspendAsync(
+                _actor, _selection, _identity, Guid.NewGuid(), seeded.ManifestId,
+                seeded.ExecutionFence, seeded.AcceptedSelectionHash, seeded.PhaseVersion,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, wrongOperation.StatusCode);
+
+        var wrongManifest = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RequireCurrentSessionSuspendAsync(
+                _actor, _selection, _identity, seeded.OperationId, Guid.NewGuid(),
+                seeded.ExecutionFence, seeded.AcceptedSelectionHash, seeded.PhaseVersion,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, wrongManifest.StatusCode);
+
+        var wrongVersion = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RequireCurrentSessionSuspendAsync(
+                _actor, _selection, _identity, seeded.OperationId, seeded.ManifestId,
+                seeded.ExecutionFence, seeded.AcceptedSelectionHash, seeded.PhaseVersion + 1,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, wrongVersion.StatusCode);
+
+        var wrongFence = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RequireCurrentSessionSuspendAsync(
+                _actor, _selection, _identity, seeded.OperationId, seeded.ManifestId,
+                seeded.ExecutionFence + 1, seeded.AcceptedSelectionHash, seeded.PhaseVersion,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, wrongFence.StatusCode);
+
+        var wrongSelection = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RequireCurrentSessionSuspendAsync(
+                _actor, _selection, _identity, seeded.OperationId, seeded.ManifestId,
+                seeded.ExecutionFence, new string('0', 64), seeded.PhaseVersion,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, wrongSelection.StatusCode);
+
+        var wrongScope = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RequireCurrentSessionSuspendAsync(
+                _actor,
+                _selection,
+                new SessionIdentity("another-project", _identity.RunId, _identity.SessionId),
+                seeded.OperationId,
+                seeded.ManifestId,
+                seeded.ExecutionFence,
+                seeded.AcceptedSelectionHash,
+                seeded.PhaseVersion,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status404NotFound, wrongScope.StatusCode);
+
+        var wrongActor = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RequireCurrentSessionSuspendAsync(
+                _actor with { Subject = Guid.NewGuid().ToString("D") },
+                _selection, _identity, seeded.OperationId, seeded.ManifestId,
+                seeded.ExecutionFence, seeded.AcceptedSelectionHash, seeded.PhaseVersion,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, wrongActor.StatusCode);
+        var missingVersion = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RequireCurrentSessionSuspendAsync(
+                _actor, _selection, _identity, seeded.OperationId, seeded.ManifestId,
+                seeded.ExecutionFence, seeded.AcceptedSelectionHash, 0,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, missingVersion.StatusCode);
+    }
+
+    [Fact]
+    public async Task CurrentSuspendGuardRejectsAnOperationThatIsNotFenced()
+    {
+        var reserved = await InsertFencedSuspendOperationAsync(
+            "reserved-suspend", advanceToFenced: false);
+        var exception = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RequireCurrentSessionSuspendAsync(
+                _actor, _selection, _identity, reserved.OperationId, reserved.ManifestId,
+                reserved.ExecutionFence, reserved.AcceptedSelectionHash, reserved.PhaseVersion,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task TerminalManifestMustUseTheReservedOperationManifestId()
+    {
+        var seeded = await InsertFencedSuspendOperationAsync("manifest-id-mismatch");
+        var wrongManifestId = Guid.NewGuid();
+        var manifest = new SessionSuspendResumeManifest(
+            SessionSuspendResumeContractVersions.CurrentManifestVersion,
+            wrongManifestId,
+            _identity,
+            SessionSuspendResumeManifestState.Interrupted,
+            EnvironmentFence: null,
+            CoreExecutionFence: null,
+            CacheAcknowledgment: null,
+            Checkpoint: null,
+            FlushedJournalPosition: null,
+            WorkspaceVolume: null,
+            WorkspaceResource: null,
+            WorkspaceDataGeneration: null,
+            WorkspaceTreeSha256: null,
+            WorkspaceProviderCheckpointId: null,
+            GuestSnapshotResource: null,
+            GuestSnapshotLifecycleGeneration: null,
+            NetworkIntentGeneration: null,
+            ImmutableArray.Create("workspace_flush_unavailable"));
+        var manifestJson = JsonSerializer.Serialize(manifest, JsonOptions);
+        var manifestHash = Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes(manifestJson)));
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var insertManifest = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".session_consistency_manifests
+                (project_id, run_id, session_id, operation_id, manifest_id, contract_version,
+                 owner_execution_fence, claimed_execution_fence, manifest_state, manifest_hash, manifest)
+            VALUES
+                (@project, @run, @session, @operation, @manifestId, @contractVersion,
+                 @ownerFence, NULL, 'interrupted', @hash, @manifest)
+            """, connection);
+        insertManifest.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _identity.ProjectId);
+        insertManifest.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _identity.RunId);
+        insertManifest.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _identity.SessionId);
+        insertManifest.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, seeded.OperationId);
+        insertManifest.Parameters.AddWithValue("manifestId", NpgsqlDbType.Uuid, wrongManifestId);
+        insertManifest.Parameters.AddWithValue(
+            "contractVersion", NpgsqlDbType.Integer, SessionSuspendResumeContractVersions.CurrentManifestVersion);
+        insertManifest.Parameters.AddWithValue("ownerFence", NpgsqlDbType.Bigint, seeded.ExecutionFence);
+        insertManifest.Parameters.AddWithValue("hash", NpgsqlDbType.Char, manifestHash);
+        insertManifest.Parameters.AddWithValue("manifest", NpgsqlDbType.Jsonb, manifestJson);
+        var exception = await Assert.ThrowsAsync<PostgresException>(
+            () => insertManifest.ExecuteNonQueryAsync());
+        Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
+    }
+
+    [Fact]
+    public async Task SuspendOperationRequiresANonemptyReservedManifestId()
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_execution_operations
+                (project_id, run_id, operation_id, session_id, actor_issuer, actor_subject,
+                 operation_kind, idempotency_key, request_hash, result, owner_execution_fence,
+                 operation_phase, phase_version)
+            VALUES
+                (@project, @run, @operation, @session, @issuer, @subject,
+                 'suspend', @key, @hash, jsonb_build_object(), 1, 'reserved', 0)
+            """, connection);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _identity.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _identity.RunId);
+        command.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, Guid.NewGuid());
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _identity.SessionId);
+        command.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, _actor.Issuer);
+        command.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, _actor.Subject);
+        command.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, "missing-manifest-reservation");
+        command.Parameters.AddWithValue("hash", NpgsqlDbType.Char, new string('a', 64));
+        var exception = await Assert.ThrowsAsync<PostgresException>(
+            () => command.ExecuteNonQueryAsync());
+        Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
     }
 
     [Fact]
@@ -236,19 +428,6 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
         Assert.Equal(StatusCodes.Status409Conflict, stale.StatusCode);
     }
 
-    private async Task ApplySuspendResumeMigrationAsync()
-    {
-        await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
-            "Agentweaver.Orchestrator.Migrations.017_session_suspend_resume.sql")
-            ?? throw new InvalidOperationException("The suspend/resume migration resource is missing.");
-        using var text = new StreamReader(resource);
-        var sql = (await text.ReadToEndAsync()).Replace(
-            "{schema}", $"\"{_schema}\"", StringComparison.Ordinal);
-        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using var command = new NpgsqlCommand(sql, connection);
-        await command.ExecuteNonQueryAsync();
-    }
-
     private static AuthorizedRunSelection CreateSelection(CoordinationActor actor)
     {
         using var snapshot = JsonDocument.Parse("""{"source":"projects-config"}""");
@@ -274,5 +453,105 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
                     "project",
                     selection.ProjectId,
                     ImmutableArray.Create(new ProjectsPermissionGrant("acceptRunSelection", 1))))));
+    }
+
+    private async Task<(Guid OperationId, Guid ManifestId, long ExecutionFence,
+        string AcceptedSelectionHash, long PhaseVersion)> InsertFencedSuspendOperationAsync(
+        string idempotencyKey,
+        bool advanceToFenced = true)
+    {
+        var operationId = Guid.NewGuid();
+        var manifestId = Guid.NewGuid();
+        var acceptedSelectionHash = CoordinationOwnerStore.HashSelection(_selection.Selection);
+        const long executionFence = 1;
+        const long phaseVersion = 1;
+        var requestHash = SessionSuspendResumePhaseMachine.HashRequest(
+            SessionSuspendResumeOperationKind.Suspend,
+            _identity,
+            new
+            {
+                idempotencyKey,
+                sourceManifestId = (Guid?)null,
+                acceptedSelectionHash
+            });
+
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using (var insertOperation = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_execution_operations
+                (project_id, run_id, operation_id, session_id, actor_issuer, actor_subject,
+                 operation_kind, idempotency_key, request_hash, result,
+                 owner_execution_fence, reserved_manifest_id, operation_phase, phase_version, progress)
+            VALUES
+                (@project, @run, @operation, @session, @issuer, @subject,
+                 'suspend', @key, @hash, jsonb_build_object(),
+                 @fence, @manifestId, 'reserved', 0, jsonb_build_object())
+            """, connection))
+        {
+            insertOperation.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _identity.ProjectId);
+            insertOperation.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _identity.RunId);
+            insertOperation.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+            insertOperation.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _identity.SessionId);
+            insertOperation.Parameters.AddWithValue("issuer", NpgsqlDbType.Varchar, _actor.Issuer);
+            insertOperation.Parameters.AddWithValue("subject", NpgsqlDbType.Varchar, _actor.Subject);
+            insertOperation.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, idempotencyKey);
+            insertOperation.Parameters.AddWithValue("hash", NpgsqlDbType.Char, requestHash);
+            insertOperation.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, executionFence);
+            insertOperation.Parameters.AddWithValue("manifestId", NpgsqlDbType.Uuid, manifestId);
+            await insertOperation.ExecuteNonQueryAsync();
+        }
+
+        if (advanceToFenced)
+        {
+            await using var fenceOperation = new NpgsqlCommand($"""
+                UPDATE "{_schema}".coordination_execution_operations
+                SET operation_phase = 'fenced', phase_version = 1
+                WHERE project_id = @project AND run_id = @run AND operation_id = @operation
+                """, connection);
+            fenceOperation.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _identity.ProjectId);
+            fenceOperation.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _identity.RunId);
+            fenceOperation.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+            Assert.Equal(1, await fenceOperation.ExecuteNonQueryAsync());
+        }
+
+        return (operationId, manifestId, executionFence, acceptedSelectionHash, phaseVersion);
+    }
+
+    private RuntimeHostSuspendRequest CreateSuspendRequest(
+        (Guid OperationId, Guid ManifestId, long ExecutionFence, string AcceptedSelectionHash, long PhaseVersion)
+            operation)
+    {
+        var selection = _selection.Selection;
+        var registration = new RuntimeRegistration(
+            Guid.NewGuid(),
+            1,
+            new RuntimeBinding(
+                _actor.Issuer,
+                _actor.Subject,
+                _selection.Authorization.TenantId,
+                _identity.ProjectId,
+                _identity.RunId,
+                _identity.SessionId,
+                "agent-1",
+                "turn-1",
+                selection.ProjectRevision,
+                selection.ProjectConfigurationRevision,
+                selection.PlatformRuntimeRevision,
+                selection.ContextRevision,
+                operation.AcceptedSelectionHash,
+                operation.ExecutionFence,
+                "environment-1",
+                "placement-1",
+                1,
+                "profile-1",
+                new Uri("https://agent.example/configure"),
+                new Uri("https://agent.example/observe")),
+            RuntimeRegistrationState.Active,
+            DateTimeOffset.UtcNow.AddMinutes(5));
+        return new RuntimeHostSuspendRequest(
+            new RuntimeHostSessionProof(
+                1, registration, Guid.NewGuid(), 1, RuntimeCredentialPurpose.Observe),
+            operation.OperationId,
+            operation.ManifestId,
+            operation.PhaseVersion);
     }
 }

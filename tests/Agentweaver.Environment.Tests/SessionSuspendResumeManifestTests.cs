@@ -125,6 +125,21 @@ public sealed class SessionSuspendResumeManifestTests
     }
 
     [Fact]
+    public void WorkspaceDataGenerationAllowsZeroButSuspendedStateStillRequiresContentProof()
+    {
+        var manifest = SuspendedManifest() with { WorkspaceDataGeneration = 0 };
+        Assert.Same(manifest, manifest.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            (manifest with { WorkspaceDataGeneration = -1 }).Validate());
+        Assert.Throws<ArgumentException>(() =>
+            (manifest with
+            {
+                WorkspaceTreeSha256 = null,
+                WorkspaceProviderCheckpointId = null,
+            }).Validate());
+    }
+
+    [Fact]
     public void GuestSnapshotEvidenceIsOptionalButMustBePairedAndPositive()
     {
         var manifest = SuspendedManifest();
