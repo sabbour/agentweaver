@@ -3,6 +3,7 @@ extern alias AzureIdentity;
 using System.Collections.Immutable;
 using Agentweaver.Orchestrator;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
 using Agentweaver.SourceControl;
@@ -97,11 +98,19 @@ builder.Services.AddSingleton(services => new CoordinatorDecisionOwnerStore(
     options.Schema,
     services.GetRequiredService<CoordinatorRunSelectionContextStore>(),
     services.GetRequiredService<TimeProvider>()));
+builder.Services.AddSingleton(services => new BacklogOwnerStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
 builder.Services.AddSingleton(services => new SourceControlOwnerStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
     services.GetRequiredService<ProviderCatalog>(),
     services.GetRequiredService<ProviderResolver>()));
+builder.Services.AddSingleton(services => new ReviewedRemoteToolSnapshotStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
+builder.Services.AddSingleton<IReviewedRemoteToolSnapshotResolver>(services =>
+    services.GetRequiredService<ReviewedRemoteToolSnapshotStore>());
 builder.Services.AddSingleton<ExecutableActionGrantOwnerStore>();
 builder.Services.AddSingleton<IExecutableActionGrantOwnerLookup>(services =>
     services.GetRequiredService<ExecutableActionGrantOwnerStore>());
@@ -113,10 +122,23 @@ builder.Services.AddSingleton(services => new PostgresMafCheckpointStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
     services.GetService<IObjectStore>()));
+builder.Services.AddSingleton(services => new MafExecutionOutputWitnessStore(options.Schema));
+builder.Services.AddSingleton<IBacklogPrerequisiteEvidenceReader>(services =>
+    new MafBacklogPrerequisiteEvidenceReader(
+        services.GetRequiredService<NpgsqlDataSource>(),
+        services.GetRequiredService<BacklogOwnerStore>(),
+        services.GetRequiredService<CoordinationOwnerStore>(),
+        services.GetRequiredService<CoordinatorDecisionOwnerStore>(),
+        services.GetRequiredService<CoordinatorRunSelectionContextStore>(),
+        services.GetRequiredService<SourceControlOwnerStore>(),
+        services.GetRequiredService<PostgresMafCheckpointStore>(),
+        services.GetRequiredService<MafExecutionOutputWitnessStore>()));
 builder.Services.AddHttpClient<ProjectsRunSelectionClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient<EventsAddressedMessageClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient<RuntimeRunAdmissionClient>(client => client.Timeout = TimeSpan.FromSeconds(20))
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
 builder.Services.AddSingleton(secretRedemptionOptions);
 builder.Services.AddHttpClient<SourceControlSecretRedemptionClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
@@ -140,6 +162,9 @@ builder.Services.AddScoped(services => new ExecutableActionGuard(
     services.GetService<IExecutableActionSourceReceiptWriter>(),
     services.GetService<IExecutableActionPolicyEvaluationReceiptWriter>()));
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
+if (runtimeRegistrationEnabled)
+    builder.Services.AddHttpClient<MafBuildTestEnvironmentClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
 var runtimeUsageEnabled = builder.Services.AddRuntimeUsageSource(builder.Configuration);
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
@@ -182,6 +207,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
 });
 app.MapCoordinationEndpoints();
+app.MapBacklogEndpoints();
 app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)
     app.MapRuntimeRegistrationEndpoints();

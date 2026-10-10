@@ -11,6 +11,45 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RuntimeSessionRecoveryTests
 {
+    [Theory]
+    [InlineData(20000, false)]
+    [InlineData(8000, true)]
+    public async Task ReplacementPreservesTheRecordedPromptLimitAndRejectsASmallerModelCapacity(
+        long supportedAfterRestart, bool reject)
+    {
+        var registration = RuntimeCopilotSessionTests.Registration();
+        registration = registration with { Binding = registration.Binding with { MaxPromptTokens = 20000 } };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        SdkSessionFacts facts;
+        await using (var external = new ControlledCopilotRuntime { MaxPromptTokens = 16000 })
+        await using (var session = await RuntimeCopilotSessionTests.Factory(external).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token))
+            facts = session.Facts;
+        Assert.Equal(16000, facts.MaxPromptTokens);
+        var recovery = Recovery(registration, facts, NativeArchive("state/events.jsonl", "opaque events"));
+        await using var replacement = new ControlledCopilotRuntime { MaxPromptTokens = supportedAfterRestart };
+        var create = RuntimeCopilotSessionTests.Factory(replacement).CreateAsync(
+            registration with { RuntimeInstanceId = Guid.NewGuid() },
+            registration.Binding.ModelSelectionReference!, RuntimeCopilotSessionTests.SdkCredential(),
+            _ => Task.CompletedTask, timeout.Token, recovery);
+        if (reject)
+        {
+            Assert.Equal("runtime_prompt_capacity_changed",
+                (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => create)).Code);
+            Assert.DoesNotContain(replacement.Requests, request => request.Method is "session.resume" or "session.create");
+        }
+        else
+        {
+            await using var resumed = await create;
+            Assert.Equal(RuntimeSessionRecoveryMode.NativeCache, resumed.RecoveryMode);
+            Assert.Equal(16000, resumed.Facts.MaxPromptTokens);
+            var resume = Assert.Single(replacement.Requests, request => request.Method == "session.resume");
+            Assert.Equal(16000, resume.Parameters.GetProperty("modelCapabilities")
+                .GetProperty("limits").GetProperty("max_prompt_tokens").GetInt32());
+        }
+    }
+
     [Fact]
     public void JournalPageDeserializesTheReadOnlyEnvelopeAndTypedTurnPayload()
     {
@@ -189,6 +228,9 @@ public sealed class RuntimeSessionRecoveryTests
                     registration.Revision, registration.Binding.ExecutionFence,
                     registration.Binding.AcceptedSelectionHash, facts.SdkVersion, facts.RuntimeVersion,
                     facts.ModelSelectionReference, facts.ModelId)
+                {
+                    MaxPromptTokens = facts.MaxPromptTokens
+                }
             }), bytes);
 
     private static byte[] NativeArchive(string path, string content)

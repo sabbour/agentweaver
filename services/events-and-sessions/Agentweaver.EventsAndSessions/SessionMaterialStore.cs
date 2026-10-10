@@ -29,7 +29,8 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
             scope.Value.ProjectId != binding.ProjectId || scope.Value.RunId != binding.RunId ||
             sessionId != binding.SessionId || input.RuntimeInstanceId != registration.RuntimeInstanceId ||
             input.RegistrationRevision != registration.Revision || input.ExecutionFence != binding.ExecutionFence ||
-            input.SdkVersion != source.SdkVersion || input.ModelId != source.ModelId)
+            input.SdkVersion != source.SdkVersion || input.ModelId != source.ModelId ||
+            input.MaxPromptTokens != source.MaxPromptTokens)
             throw new RuntimeAuthorizationException("runtime_material_binding_invalid");
         var identity = scope.Value.ForSession(sessionId);
         var bytes = input.Bytes.ToArray();
@@ -43,6 +44,9 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
             Material = new(1, input.Kind, binding.TenantId, digest, registration.RuntimeInstanceId,
                 registration.Revision, binding.ExecutionFence, binding.AcceptedSelectionHash,
                 source.SdkVersion, source.RuntimeVersion, source.ModelSelectionReference, source.ModelId)
+            {
+                MaxPromptTokens = source.MaxPromptTokens
+            }
         };
         SessionMaterialValidation.Validate(reference);
         SessionEventPayload payload = input.Kind == SessionMaterialKind.TurnContent

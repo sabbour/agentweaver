@@ -27,6 +27,10 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     private readonly SemaphoreSlim _executionGate = new(1, 1);
     private readonly SemaphoreSlim _authorityGate = new(1, 1);
     private RuntimeSessionRefreshReceipt? _refreshReplay;
+    private RuntimeNativeTurnRecordedReceipt? _lastNativeTurn;
+    private RuntimeHostSuspendReceipt? _suspendReceipt;
+    private RuntimeHostSuspendRequest? _suspendRequest;
+    private int _suspended;
     private int _disposed;
 
     internal AuthorizedRuntimeSession(
@@ -59,6 +63,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         string prompt, RuntimeSessionMaterialHttpClient material, CancellationToken cancellationToken,
         Guid? userEventId = null)
     {
+        if (Registration.Binding.WorkflowStepId is not null)
+            throw new RuntimeAuthorizationException("runtime_native_turn_admission_required");
         if (_actions is null)
             throw new RuntimeAuthorizationException("runtime_action_authority_unavailable");
         if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > AddressedMessageValidation.MaximumTextLength ||
@@ -67,6 +73,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         await _executionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            RequireTurnAdmission();
+            _lastNativeTurn = null;
             if (userEventId is { } recordedId)
             {
                 if (recordedId == Guid.Empty)
@@ -82,10 +90,60 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                 .ConfigureAwait(false);
             await _actions.RequireAsync(Registration, "model.turn", System.Text.Encoding.UTF8.GetBytes(prompt),
                 RequireCurrentAsync, cancellationToken).ConfigureAwait(false);
-            var answer = await _session.SendTurnAsync(prompt, cancellationToken).ConfigureAwait(false);
+            var answer = await _session.SendTurnAsync(prompt, cancellationToken, userEventId).ConfigureAwait(false);
             await CommitTurnContentAsync(material, Guid.NewGuid(), "assistant", answer, cancellationToken).ConfigureAwait(false);
             await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
             return answer;
+        }
+        finally
+        {
+            _executionGate.Release();
+        }
+    }
+
+    internal async Task<(string Response, RuntimeNativeTurnRecordedReceipt Receipt)> SendNativeTurnAsync(
+        RuntimeA2ASendRequest request, RuntimeSessionMaterialHttpClient material,
+        RuntimeUsageSourceHttpClient source, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(material);
+        ArgumentNullException.ThrowIfNull(source);
+        if (_actions is null)
+            throw new RuntimeAuthorizationException("runtime_action_authority_unavailable");
+        var message = request.Message;
+        if (message is null || message.MessageId == Guid.Empty ||
+            message.Parts is not [{ Kind: "text", Text: { Length: > 0 } prompt }] ||
+            string.IsNullOrWhiteSpace(prompt) || prompt.Length > AddressedMessageValidation.MaximumTextLength ||
+            RuntimeCopilotSession.HasUnsupportedPromptControls(prompt))
+            throw new RuntimeAuthorizationException("runtime_a2a_message_invalid");
+        await _executionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RequireTurnAdmission();
+            _lastNativeTurn = null;
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var binding = Registration.Binding;
+            if (await material.ReadOptionalTurnAsync(
+                new(binding.ProjectId, binding.RunId, binding.SessionId), message.MessageId, cancellationToken)
+                .ConfigureAwait(false) is not null)
+                throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
+            await _actions.RequireAsync(Registration, "model.turn", System.Text.Encoding.UTF8.GetBytes(prompt),
+                RequireCurrentAsync, cancellationToken, dispatchId: message.MessageId).ConfigureAwait(false);
+            var admission = await source.BeginNativeTurnAsync(this, request, cancellationToken).ConfigureAwait(false);
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            await CommitTurnContentAsync(material, message.MessageId, "user", prompt, cancellationToken)
+                .ConfigureAwait(false);
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var turn = await _session.SendTurnWithNativeReceiptAsync(
+                prompt, cancellationToken, message.MessageId).ConfigureAwait(false);
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var recorded = await source.RecordNativeTurnAsync(this, admission, turn.Receipt, cancellationToken)
+                .ConfigureAwait(false);
+            await CommitTurnContentAsync(material, Guid.NewGuid(), "assistant", turn.Response, cancellationToken)
+                .ConfigureAwait(false);
+            await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+            _lastNativeTurn = recorded;
+            return (turn.Response, recorded);
         }
         finally
         {
@@ -132,6 +190,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         await _authorityGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            RequireTurnAdmission();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             if (_refreshReplay is { } replay && replay.OperationId == operationId)
             {
@@ -199,6 +258,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         await _authorityGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            RequireTurnAdmission();
             await RequireCurrentCoreAsync(cancellationToken).ConfigureAwait(false);
             var receipt = await material.WriteTurnContentAsync(
                 this, eventId, role, content, cancellationToken).ConfigureAwait(false);
@@ -219,24 +279,102 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             source.Credential ?? throw new RuntimeAuthorizationException("runtime_source_credential_unavailable"));
     }
 
-    public async Task<SessionMaterialAcknowledgment> CommitNativeCacheAsync(
-        RuntimeSessionMaterialHttpClient material, Guid eventId, CancellationToken cancellationToken)
+    public Task<SessionMaterialAcknowledgment> CommitNativeCacheAsync(
+        RuntimeSessionMaterialHttpClient material, Guid eventId, CancellationToken cancellationToken) =>
+        CommitNativeCacheCoreAsync(material, eventId, cancellationToken, requireCurrentSuspend: null);
+
+    private async Task<SessionMaterialAcknowledgment> CommitNativeCacheCoreAsync(
+        RuntimeSessionMaterialHttpClient material, Guid eventId, CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? requireCurrentSuspend)
     {
         ArgumentNullException.ThrowIfNull(material);
         await _authorityGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (requireCurrentSuspend is null)
+                RequireTurnAdmission();
             await RequireCurrentCoreAsync(cancellationToken).ConfigureAwait(false);
+            if (requireCurrentSuspend is not null)
+                await requireCurrentSuspend(cancellationToken).ConfigureAwait(false);
             var bytes = await _session.CaptureNativeCacheAsync(cancellationToken).ConfigureAwait(false);
             await RequireCurrentCoreAsync(cancellationToken).ConfigureAwait(false);
+            if (requireCurrentSuspend is not null)
+                await requireCurrentSuspend(cancellationToken).ConfigureAwait(false);
             var receipt = await material.WriteCacheAsync(this, eventId, bytes, cancellationToken).ConfigureAwait(false);
             await RequireCurrentCoreAsync(cancellationToken).ConfigureAwait(false);
+            if (requireCurrentSuspend is not null)
+                await requireCurrentSuspend(cancellationToken).ConfigureAwait(false);
             return receipt;
         }
         finally
         {
             _authorityGate.Release();
         }
+    }
+
+    internal async Task<RuntimeHostSuspendReceipt> SuspendAsync(
+        RuntimeSessionMaterialHttpClient material, RuntimeHostSuspendRequest request,
+        Func<CancellationToken, Task> requireCurrentSuspend,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(material);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(requireCurrentSuspend);
+        if (request.OperationId == Guid.Empty || request.ManifestId == Guid.Empty || request.PhaseVersion <= 0 ||
+            request.OperationId == request.ManifestId)
+            throw new RuntimeAuthorizationException("runtime_suspend_request_invalid");
+        await _executionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _authorityGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await RequireCurrentCoreAsync(cancellationToken).ConfigureAwait(false);
+                await requireCurrentSuspend(cancellationToken).ConfigureAwait(false);
+                if (Volatile.Read(ref _suspended) != 0 && _suspendRequest != request)
+                    throw new RuntimeAuthorizationException("runtime_suspend_operation_conflict");
+                _suspendRequest = request;
+                Volatile.Write(ref _suspended, 1);
+            }
+            finally
+            {
+                _authorityGate.Release();
+            }
+            if (_suspendReceipt is { } replay)
+            {
+                if (replay.SourceGrant != SourceGrant)
+                    throw new RuntimeAuthorizationException("runtime_suspend_receipt_stale");
+                var stored = await material.ReadRecordedAsync(
+                    replay.CacheAcknowledgment.Identity, replay.CacheAcknowledgment.EventId,
+                    SessionMaterialKind.SdkCache, cancellationToken).ConfigureAwait(false);
+                if (stored.Material != replay.CacheAcknowledgment)
+                    throw new RuntimeAuthorizationException("runtime_suspend_receipt_stale");
+                await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+                await requireCurrentSuspend(cancellationToken).ConfigureAwait(false);
+                return replay;
+            }
+            var native = _lastNativeTurn
+                ?? throw new RuntimeAuthorizationException("runtime_native_suspend_receipt_unavailable");
+            RuntimeNativeTurnContract.ValidateRecorded(native);
+            if (native.Admission.Registration != Registration || native.Admission.Source != Facts)
+                throw new RuntimeAuthorizationException("runtime_native_suspend_receipt_invalid");
+            var cache = await CommitNativeCacheCoreAsync(
+                material, request.ManifestId, cancellationToken, requireCurrentSuspend).ConfigureAwait(false);
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            await requireCurrentSuspend(cancellationToken).ConfigureAwait(false);
+            _suspendReceipt = new(1, request.OperationId, request.ManifestId, Registration, SourceGrant, native, cache);
+            return _suspendReceipt;
+        }
+        finally
+        {
+            _executionGate.Release();
+        }
+    }
+
+    private void RequireTurnAdmission()
+    {
+        if (Volatile.Read(ref _suspended) != 0)
+            throw new RuntimeAuthorizationException("runtime_session_suspended");
     }
 
     public async IAsyncEnumerable<RuntimeUsageSourceReceipt> CommitUsageAsync(

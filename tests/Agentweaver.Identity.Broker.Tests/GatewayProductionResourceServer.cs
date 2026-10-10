@@ -36,10 +36,13 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? eventsOwner = null,
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? knowledgeOwner = null,
         int ownerRequestTimeoutSeconds = 10,
-        Action<string>? observeSseData = null)
+        Action<string>? observeSseData = null,
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? orchestratorOwner = null,
+        string identityAudience = "https://api.test/")
     {
         var factory = new ProductionGatewayFactory(
-            signingKey, projectsOwner, eventsOwner, knowledgeOwner, ownerRequestTimeoutSeconds, observeSseData);
+            signingKey, projectsOwner, eventsOwner, knowledgeOwner, ownerRequestTimeoutSeconds, observeSseData,
+            orchestratorOwner, identityAudience);
         try
         {
             var client = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -69,6 +72,7 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
         private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _projectsOwner;
         private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? _eventsOwner;
         private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? _knowledgeOwner;
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? _orchestratorOwner;
         private readonly Action<string>? _observeSseData;
         private bool _restored;
 
@@ -78,19 +82,24 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
             Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? eventsOwner,
             Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? knowledgeOwner,
             int ownerRequestTimeoutSeconds,
-            Action<string>? observeSseData)
+            Action<string>? observeSseData,
+            Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>>? orchestratorOwner,
+            string identityAudience)
         {
             _signingKey = signingKey;
             _projectsOwner = projectsOwner;
             _eventsOwner = eventsOwner;
             _knowledgeOwner = knowledgeOwner;
+            _orchestratorOwner = orchestratorOwner;
             _observeSseData = observeSseData;
             SetEnvironment("Identity__Issuer", IdentityBrokerWebApplicationFactory.Issuer);
-            SetEnvironment("Identity__Audience", "https://api.test/");
+            SetEnvironment("Identity__Audience", identityAudience);
             SetEnvironment("Gateway__Owners__Projects", "https://projects.test");
             SetEnvironment("Gateway__Owners__Orchestrator", "https://orchestrator.test");
             SetEnvironment("Gateway__Owners__Knowledge", "https://knowledge.test");
             SetEnvironment("Gateway__Owners__Events", "https://events.test");
+            SetEnvironment("Gateway__Owners__IdentityBrokerAddress", "https://identity-broker.test");
+            SetEnvironment("Gateway__WebOrigin", "https://web.test/");
             SetEnvironment("Gateway__OwnerRequestTimeoutSeconds", ownerRequestTimeoutSeconds.ToString());
         }
 
@@ -122,6 +131,12 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
                         options => options.HttpMessageHandlerBuilderActions.Add(
                         handlerBuilder => handlerBuilder.PrimaryHandler =
                             new OwnerHandler(_knowledgeOwner)));
+                if (_orchestratorOwner is not null)
+                    services.Configure<HttpClientFactoryOptions>(
+                        nameof(GatewayOwner.Orchestrator),
+                        options => options.HttpMessageHandlerBuilderActions.Add(
+                            handlerBuilder => handlerBuilder.PrimaryHandler =
+                                new OwnerHandler(_orchestratorOwner)));
                 if (_observeSseData is not null)
                     services.AddSingleton<IStartupFilter>(
                         new SseObservationStartupFilter(_observeSseData));

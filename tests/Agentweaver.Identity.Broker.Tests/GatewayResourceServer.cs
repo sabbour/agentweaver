@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,6 +36,11 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
             .Single(endpoint => endpoint.RoutePattern.RawText == routePattern)
             .Metadata.GetMetadata<IRequestSizeLimitMetadata>();
 
+    public IReadOnlyList<Endpoint> Endpoints =>
+        ((IEndpointRouteBuilder)_app).DataSources
+            .SelectMany(dataSource => dataSource.Endpoints)
+            .ToArray();
+
     public static async Task<GatewayResourceServer> StartAsync(
         SecurityKey signingKey,
         Func<HttpMessageHandler> projectsHandlerFactory,
@@ -51,12 +57,15 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
             new Uri("https://orchestrator.test/"),
             new Uri("https://knowledge.test/"),
             new Uri("https://events.test/"),
+            new Uri("https://identity-broker.test/"),
+            new Uri("https://web.test/"),
             ownerRequestTimeout ?? TimeSpan.FromSeconds(10));
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Logging.ClearProviders();
         builder.Services.AddSingleton(options);
+        GatewayHost::Agentweaver.Gateway.GatewayWebCors.AddGatewayWebCors(builder.Services, options);
         builder.Services.AddHttpClient(nameof(GatewayOwner.Projects), client =>
                 client.Timeout = Timeout.InfiniteTimeSpan)
             .ConfigurePrimaryHttpMessageHandler(() =>
@@ -95,6 +104,8 @@ internal sealed class GatewayResourceServer : IAsyncDisposable
         builder.Services.AddAuthorization();
 
         var app = builder.Build();
+        app.UseRouting();
+        app.UseCors();
         app.UseAuthentication();
         app.UseAuthorization();
         GatewayHost::Agentweaver.Gateway.GatewayEndpoints.MapGatewayEndpoints(app);

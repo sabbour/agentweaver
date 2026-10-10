@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="fc94e424-e94b-4b84-ae0b-4d0d70089e74" x1="9" y1="18" x2="9" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset="1" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="af2e3ffc-8cfe-47e5-810d-61b436d4cdcb" x1="9" y1="12.108" x2="9" y2="1.921" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#50e6ff" />
+      <stop offset="1" stop-color="#9cebff" />
+    </linearGradient>
+  </defs>
+  <g id="beee0df3-672a-4368-8af8-7bcf7baf22da">
+    <rect x="1.648" width="14.705" height="18" rx="0.6" fill="url(#fc94e424-e94b-4b84-ae0b-4d0d70089e74)" />
+    <path d="M9,1.921a5.094,5.094,0,1,0,5.094,5.093A5.094,5.094,0,0,0,9,1.921ZM9,8.613a1.6,1.6,0,1,1,1.6-1.6A1.6,1.6,0,0,1,9,8.613Z" fill="url(#af2e3ffc-8cfe-47e5-810d-61b436d4cdcb)" />
+    <g>
+      <path d="M2.935,14.2v2.2a.32.32,0,0,0,.32.32h2.3a.32.32,0,0,0,.284-.172l3.392-6.5a.32.32,0,0,0-.477-.4l-5.7,4.3A.319.319,0,0,0,2.935,14.2Z" fill="#c3f1ff" />
+      <path d="M5.559,16.866h-2.3a.474.474,0,0,1-.474-.473V14.2a.476.476,0,0,1,.189-.378l5.695-4.3a.473.473,0,0,1,.705.6l-3.391,6.5A.471.471,0,0,1,5.559,16.866ZM8.95,9.727a.162.162,0,0,0-.1.036l-5.7,4.3a.165.165,0,0,0-.066.133v2.2a.167.167,0,0,0,.167.167h2.3a.169.169,0,0,0,.149-.091L9.1,9.974a.162.162,0,0,0-.04-.205A.173.173,0,0,0,8.95,9.727Z" fill="#fff" />
+    </g>
+    <path d="M4.087,1.863a.576.576,0,1,1-.576-.576A.576.576,0,0,1,4.087,1.863Zm10.4-.576a.576.576,0,1,0,.576.576A.576.576,0,0,0,14.489,1.287Zm0,14.274a.576.576,0,1,0,.576.576A.576.576,0,0,0,14.489,15.561Z" fill="#83b9f9" />
+  </g>
+  <metadata>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:li>public:true</rdf:li>
+      <rdf:li>sdk:false</rdf:li>
+      <rdf:li>category:Other</rdf:li>
+    </rdf:RDF>
+  </metadata>
+</svg>

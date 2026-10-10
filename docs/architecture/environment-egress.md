@@ -115,6 +115,9 @@ mediation for `PublicHttps` or `RemoteMcp`, so those requirements fail rather
 than becoming a blanket HTTPS rule. This slice contains no L7 adapter; if the
 immutable selection contains an L7 candidate, the operation also fails
 explicitly rather than silently ignoring or pinning an unapplied layer.
+The Environment connection and parser source boundary is described in
+[Remote MCP connections](remote-mcp-connections.md). It does not add L7
+mediation or prove a remote MCP request.
 
 The Cilium adapter assigns a hashed environment/owner selector and derives its
 resource name from the full owner tuple. It applies a positive policy generation
@@ -132,6 +135,21 @@ It does not tag the owner tuple, bearer token, destination rules, or raw provide
 it is not permission to start a model run. Any automated/model-run execution
 must separately validate its existing Orchestrator action grant. `DatapathEnforcementVerified`
 remains false because an API readback is not datapath evidence.
+
+BuildTest uses separate Cilium policies for command and output-collector Pods.
+Each policy binds the stable operation ID, role, owner, and current Sandbox/Workspace fences; neither policy permits egress.
+Environment persists the policy binding and checks its UID and specification before it releases the corresponding Pod scheduling gate.
+This is policy-object evidence, not proof that a deployed Cilium datapath enforced the policy.
+
+The [credential-less sandbox proposal](identity-secrets.md#network-tls-and-hostile-input)
+extends this layered design with a required trusted L7 gateway for that mode,
+not a new credential-sourcing provider. L3/L4 enforcement must force protected
+traffic through it and deny guest credential acquisition and direct bypass.
+The gateway independently validates current action/resource authority before
+trusted-side credential injection. Proxy environment variables and static
+allowlists are insufficient. The current Cilium-only candidate has no L7
+adapter and cannot report credential-less readiness; existing generation,
+owner fences, and explicit unsupported behavior remain unchanged.
 
 ```mermaid
 sequenceDiagram

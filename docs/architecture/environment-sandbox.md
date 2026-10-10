@@ -13,6 +13,14 @@ tested.
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.drawio'">Open editable draw.io source</a></p>
 
+<figure class="aw-diagram" tabindex="0">
+  <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'">
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'" alt="Environment resolves Core's immutable accepted BuildTest command and persists its stable operation before provider effects. It rechecks current authorization and exact Sandbox, Workspace, and Cilium bindings. A gated command Pod uses an offline policy; a separate read-only collector Pod starts only after verified command success and returns a bounded no-follow file receipt tied to its UID and the request fingerprint. Uncertain effects reconcile the same operation, while Core retains MAF state." />
+  </a>
+  <figcaption>BuildTest command and output evidence sequence. Required outputs come from a separate pinned collector on the exact Workspace PVC. Command logs are not file evidence; Core retains MAF checkpoint and run-state ownership.</figcaption>
+</figure>
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.drawio'">Open editable draw.io source</a></p>
+
 ## Ownership and admission
 
 `EnvironmentSandboxManager` owns the Sandbox lease for the complete tenant,
@@ -47,7 +55,7 @@ Environment separately verifies the selected Cilium policy generation.
 
 ## Authorization and API
 
-All six Sandbox routes require an authenticated caller and fresh Projects
+All Sandbox routes require an authenticated caller and fresh Projects
 authority. Provision, inspect, abandon, and reconcile require target-project
 `WriteProjects` plus the separate `ReadRunSelection` permission before they
 read the immutable run selection or contact Kubernetes. They compare the fresh
@@ -66,6 +74,10 @@ continues to enforce the configured Environment audience for both routes.
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Return the same projection to a run-bound caller with exact project/run bindings and `ReadRunSelection`; no run selection is fetched and no provider effect occurs. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/abandon` | Explicitly abandon one current resource generation and provider fence. The request is not itself proof of ownership; fresh Projects authorization and the durable owner CAS are required. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource. A network-policy generation may be supplied to verify readiness. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/binding-preparation?sessionId={sessionId}&executionProfileReference={profile}` | Validate the current Sandbox profile binding for a session without starting a command. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands` | Resolve the accepted Core checkpoint, reserve its immutable command intent, and execute the stable BuildTest operation. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}` | Read the exact persisted operation under the current owner and Sandbox binding. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}/reconcile` | Reconcile the same operation and immutable intent; do not create a replacement operation. |
 
 Both v1 placement routes use the owner-scoped `ISandboxLeaseStore.GetCurrentAsync`
 callback overload under the exact active Environment owner fence. The public
@@ -141,7 +153,30 @@ from Kubernetes observations. It does not emit `configured` or dispatch
 The separate [AgentHost handshake](agenthost.md) adds authenticated configuration and current readiness evidence.
 Its internal readiness owner read retains the exact lease across fresh egress and Sandbox observations.
 It uses the retained selection snapshot, not a recursive accepted-selection lookup.
+It validates the stored recovery record and reads its nested provision request.
+That request supplies the exact network generation and Workspace mount path.
 Object readback does not prove Cilium datapath enforcement.
+
+The internal bootstrap profile route also exposes a read-only `/workspace` suffix.
+It returns `EnvironmentRuntimeWorkspaceContext` under current run-read authority and the exact registered runtime profile.
+One owner transaction retains both the current Sandbox lease and the Workspace record during the Core context read.
+The record must remain Attached at the exact saved transition revision, volume generation, data generation, Storage resource, and provider attachment.
+The response includes the validated mount negotiation and transition revision, not provider options, credentials, or the PVC release descriptor.
+Data generation zero is valid metadata.
+
+This read does not flush Storage or produce a content checkpoint.
+It supplies no tree hash and does not prove that a session suspended.
+Core still requires genuine native completion, cache, checkpoint, and Workspace content evidence before a successful suspend manifest.
+
+For the [proposed credential-less mode](identity-secrets.md#minimal-contract-changes-and-admission),
+admission must also prove that credential-consuming services are outside the
+untrusted guest, with no guest-accessible private memory, volumes, sockets or
+cloud assertions. The existing `ISandboxProvider` negotiated capability and
+lease/profile surfaces carry placement evidence; the selected L3/L4 and L7
+providers must supply current forced-mediation evidence. Two containers in one
+Kata guest, a VM-isolation descriptor, or policy readback alone do not prove this
+boundary. These are proposed readiness additions, not current Sandbox capability
+or deployment evidence; legacy placement must not be relabeled credential-less.
 
 ## Agent Sandbox resources and recovery
 
@@ -186,6 +221,49 @@ reconciler stops; receipt persistence verifies the current lifecycle fence,
 claim token, and unexpired persisted claim atomically. A matching duplicate
 receipt remains idempotent after completion. Provider failures remain visible
 and leave the cleanup available for retry.
+
+## BuildTest command and output collection
+
+BuildTest is a separate command operation on the current Sandbox lease.
+The caller supplies a checkpoint reference and expected binding, not a command, image, argument list, or authority grant.
+Environment resolves the complete checkpoint with Core under current authorization.
+Core returns the immutable accepted command, execution options, selection hash, and stable operation ID.
+The manager records the intent and request fingerprint in the existing `owner_effects` row before provider effects.
+Attempts, Pod references, and results use the same operation.
+The store writes UTC timestamps at PostgreSQL microsecond precision so JSON and row timestamps agree after restart.
+A terminal snapshot is immutable except for its update timestamp.
+Identical saves and additional durable attempt markers cannot replace its status, Pod references, or evidence.
+An uncertain create remains `ReconciliationRequired`; it does not authorize another Pod.
+Command create, read, and reconcile responses use `SandboxBuildTestOperationResult`, which contains the operation and replay flag.
+Reconcile requests retain the same complete checkpoint and expected binding as the original command request.
+Core validates a read result before it reconciles; invalid owner response shapes cannot start another command.
+
+Configure `Environment:Sandbox:AgentSandbox:AcceptedBuildTestProfile` to enable the BuildTest capability.
+The profile pins the executable allowlist, image digests, resource limits, offline egress, and trusted collector command.
+An absent profile does not advertise the capability.
+An invalid profile fails configuration validation; the provider does not use a default profile.
+The active lease retains its accepted profile even if current server defaults change.
+BuildTest reads the same string-enum JSON format that Sandbox provisioning persists.
+It obtains the original mount request through the validated Sandbox recovery record, not a separate caller-supplied request.
+
+Before each effect, Environment rechecks the owner, accepted command, Sandbox lease, Workspace generation, and Cilium binding.
+The command Pod uses the exact writable Workspace PVC and an operation/role-scoped offline deny-all policy.
+Only verified terminal success with exit code zero can start the separate required-output collector.
+The collector uses the pinned image and executable with a read-only Workspace mount.
+AgentHost routes `--build-test-output-collector-v1` before web configuration or native SDK startup.
+This Linux-only mode accepts one bounded encoded request.
+It opens accepted paths without following symlinks, checks regular files and mount identity, and returns a bounded receipt.
+Native directory and no-follow flags match the executing Linux architecture; unsupported architectures fail before collection.
+The stream matches the synchronous native file descriptor and keeps bounded cancellable reads.
+The receipt binds the collector Pod UID, container, operation, checkpoint, and request fingerprint.
+Missing required files or an invalid collector receipt are `Failed`.
+Bound collector timeout, cancellation, or output-limit termination is `Interrupted`, even after the command exits successfully.
+Logs are bounded command output, not file evidence.
+
+BuildTest does not advance MAF checkpoints, turns, or run status.
+Core retains that state and its interruption acknowledgement.
+Disposable PostgreSQL tests verify owner-store reservation, restart replay, and terminal-evidence preservation.
+They do not prove command-Pod execution, Kubernetes isolation, Cilium datapath enforcement, or complete native accounting.
 
 ## Retirement and storage retention
 

@@ -84,6 +84,8 @@ builder.Services.AddDbContext<EnvironmentDbContext>((services, options) =>
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
 builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
+builder.Services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
+builder.Services.AddScoped<RemoteMcpConnectionStore>();
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
 builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
@@ -109,6 +111,11 @@ if (runtimeBootstrapEnabled)
 builder.Services.AddSingleton(ciliumOptions);
 builder.Services.AddHttpClient<EnvironmentRuntimeOwnerContextClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddHttpClient<
+        ISandboxBuildTestAcceptedCommandVerifier,
+        EnvironmentSandboxBuildTestAcceptedCommandVerifier>(client => client.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
 builder.Services.AddHttpClient<IProjectsConfigClient, ProjectsConfigHttpClient>(client =>
 {
     client.BaseAddress = projectsBaseAddress;
@@ -132,7 +139,10 @@ builder.Services.AddHttpClient<KubernetesAgentSandboxClient>(client =>
 }).ConfigurePrimaryHttpMessageHandler(() =>
     KubernetesServiceAccountHandler.Create(serviceAccountToken, serviceAccountCa));
 builder.Services.AddScoped<ISandboxProvider, AgentSandboxProvider>();
+builder.Services.AddScoped<ISandboxBuildTestCommandProvider>(services =>
+    (ISandboxBuildTestCommandProvider)services.GetRequiredService<ISandboxProvider>());
 builder.Services.AddScoped<EnvironmentSandboxManager>();
+builder.Services.AddScoped<EnvironmentSandboxBuildTestCommandManager>();
 builder.Services.AddAgentweaverWorkspaceVolumeService(
     azureFilesOptions,
     kubernetesBaseAddress,
@@ -188,6 +198,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
 });
 app.MapEnvironmentEndpoints();
+app.MapRemoteMcpConnectionEndpoints();
 app.Run();
 
 static CiliumEgressProviderOptions ReadCiliumOptions(IConfiguration configuration)
@@ -320,8 +331,27 @@ public partial class Program
                 section.GetValue("StartupBudgets:TotalSeconds", 0)))
         {
             AgentHost = section.GetSection("AgentHost")
-                .Get<AgentSandboxOptions.AgentSandboxAgentHostProfile>()
+                .Get<AgentSandboxOptions.AgentSandboxAgentHostProfile>(),
+            AcceptedBuildTestProfile = ReadBuildTestProfile(section.GetSection("AcceptedBuildTestProfile"))
         }.Validate();
+    }
+
+    private static SandboxBuildTestAcceptedExecutionOptions? ReadBuildTestProfile(IConfigurationSection section)
+    {
+        if (!section.Exists())
+            return null;
+        var profile = section.Get<SandboxBuildTestAcceptedExecutionOptions>()
+            ?? throw new InvalidOperationException("An accepted BuildTest profile is required.");
+        // ConfigurationBinder does not populate ImmutableArray record parameters.
+        return profile with
+        {
+            AllowedExecutables = (section.GetSection("AllowedExecutables").Get<string[]>()
+                ?? throw new InvalidOperationException("The accepted BuildTest executable allowlist is required."))
+                .ToImmutableArray(),
+            CollectorAssemblyArguments = (section.GetSection("CollectorAssemblyArguments").Get<string[]>()
+                ?? throw new InvalidOperationException("The accepted BuildTest collector assembly arguments are required."))
+                .ToImmutableArray()
+        };
     }
 
     internal static string Required(string? value, string name) =>

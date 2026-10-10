@@ -167,6 +167,104 @@ namespace Agentweaver.Projects.Config.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectCastingProposalRecord", b =>
+                {
+                    b.Property<Guid>("ProposalId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("proposal_id");
+
+                    b.Property<long>("BaseConfigurationRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("base_configuration_revision");
+
+                    b.Property<long?>("ConfirmedConfigurationRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("confirmed_configuration_revision");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("created_by_actor_id");
+
+                    b.Property<string>("DraftJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("draft");
+
+                    b.Property<long>("DraftRevision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint")
+                        .HasColumnName("draft_revision");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ResultJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("result");
+
+                    b.Property<string>("State")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("state");
+
+                    b.Property<string>("TransferContentDigest")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("transfer_content_digest");
+
+                    b.Property<int?>("TransferFormatVersion")
+                        .HasColumnType("integer")
+                        .HasColumnName("transfer_format_version");
+
+                    b.Property<long?>("TransferSourceConfigurationRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("transfer_source_configuration_revision");
+
+                    b.Property<string>("TransferSourceProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("transfer_source_project_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("UpdatedByActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("updated_by_actor_id");
+
+                    b.HasKey("ProposalId");
+
+                    b.HasIndex("ProjectId", "CreatedAt");
+
+                    b.ToTable("project_casting_proposals", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_project_casting_proposals_base_revision", "base_configuration_revision > 0");
+
+                            t.HasCheckConstraint("ck_project_casting_proposals_confirmed_result", "(state = 'Confirmed' AND confirmed_configuration_revision IS NOT NULL AND result IS NOT NULL) OR (state <> 'Confirmed' AND confirmed_configuration_revision IS NULL AND result IS NULL)");
+
+                            t.HasCheckConstraint("ck_project_casting_proposals_draft_revision", "draft_revision > 0");
+
+                            t.HasCheckConstraint("ck_project_casting_proposals_state", "state IN ('Pending', 'Confirmed', 'Rejected')");
+
+                            t.HasCheckConstraint("ck_project_casting_proposals_transfer_provenance", "(transfer_format_version IS NULL AND transfer_source_project_id IS NULL AND transfer_source_configuration_revision IS NULL AND transfer_content_digest IS NULL) OR (transfer_format_version = 1 AND transfer_source_project_id IS NOT NULL AND transfer_source_configuration_revision > 0 AND transfer_content_digest ~ '^[0-9a-f]{64}$')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectConfigurationRevisionRecord", b =>
                 {
                     b.Property<string>("ProjectId")
@@ -560,6 +658,15 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasOne("Agentweaver.Projects.Config.PlatformRuntimeHeadRecord", null)
                         .WithMany()
                         .HasForeignKey("HeadId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectCastingProposalRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

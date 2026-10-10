@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 
 namespace Agentweaver.Orchestrator;
@@ -25,6 +26,7 @@ public static partial class CoordinationEndpoints
         var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
         var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
             context, projectId, runId, cancellationToken).ConfigureAwait(false);
+        var budgetLimits = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(selection.Selection.Snapshot);
         var identity = new SessionIdentity(projectId, runId, sessionId);
         var owner = await store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)
             .ConfigureAwait(false);
@@ -49,6 +51,8 @@ public static partial class CoordinationEndpoints
             throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
         var modelSelection = ReadModelSelection(
             selection.Selection.Snapshot, workPlanItem.ModelSelectionReference);
+        var runAdmission = await store.ReadRunAdmissionAsync(actor, selection, cancellationToken)
+            .ConfigureAwait(false);
         await RequireUnchangedAuthorizedSelectionAsync(
             context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
         var currentOwner = await store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)
@@ -80,13 +84,19 @@ public static partial class CoordinationEndpoints
             WorkflowStepId = workPlanItem.WorkflowStepId,
             ModelCredentialReference = modelSelection.CredentialReference,
             ModelSourceMode = modelSelection.SourceMode,
+            ModelBindingPin = runAdmission?.ModelBindingPin ?? modelSelection.ModelBindingPin,
             ModelConnectionId = modelSelection.ConnectionId,
-            ModelConnectionScope = modelSelection.ConnectionScope
+            ModelConnectionScope = modelSelection.ConnectionScope,
+            MaxModelTurns = budgetLimits.MaxModelTurns,
+            MaxToolCalls = budgetLimits.MaxToolCalls,
+            MaxPromptTokens = budgetLimits.MaxPromptTokens,
+            MaxRevisionAttempts = budgetLimits.MaxRevisionAttempts,
+            CopilotSoftCreditLimit = budgetLimits.CopilotSoftCreditLimit,
+            CopilotHardCreditLimit = budgetLimits.CopilotHardCreditLimit
         };
     }
 
-    private static (SecretRef? CredentialReference, ModelSourceMode? SourceMode,
-        Guid? ConnectionId, ProjectAuthorityResourceType? ConnectionScope) ReadModelSelection(
+    private static RuntimeAcceptedModelSelection ReadModelSelection(
         JsonElement snapshot, string expectedModelReference)
     {
         if (snapshot.ValueKind != JsonValueKind.Object ||
@@ -98,62 +108,15 @@ public static partial class CoordinationEndpoints
             throw new CoordinationException(
                 "runtime_owner_model_selection_unavailable", StatusCodes.Status409Conflict);
 
-        ModelSourceMode? sourceMode = null;
-        if (modelSelection.TryGetProperty("sourceMode", out var suppliedMode) &&
-            suppliedMode.ValueKind != JsonValueKind.Null)
-        {
-            if (suppliedMode.ValueKind != JsonValueKind.String ||
-                suppliedMode.GetString() is not ("hostedCopilot" or "byok"))
-                throw new CoordinationException(
-                    "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
-            sourceMode = suppliedMode.GetString() == "hostedCopilot"
-                ? ModelSourceMode.HostedCopilot : ModelSourceMode.Byok;
-        }
-        Guid? connectionId = null;
-        ProjectAuthorityResourceType? connectionScope = null;
-        if (modelSelection.TryGetProperty("connectionId", out var suppliedConnection) &&
-            suppliedConnection.ValueKind != JsonValueKind.Null)
-        {
-            if (sourceMode != ModelSourceMode.HostedCopilot ||
-                suppliedConnection.ValueKind != JsonValueKind.String ||
-                !Guid.TryParseExact(suppliedConnection.GetString(), "D", out var parsedConnection) ||
-                parsedConnection == Guid.Empty)
-                throw new CoordinationException(
-                    "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
-            connectionId = parsedConnection;
-            if (!snapshot.TryGetProperty("projectConfiguration", out var projectConfiguration) ||
-                projectConfiguration.ValueKind != JsonValueKind.Object)
-                throw new CoordinationException(
-                    "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
-            connectionScope = projectConfiguration.TryGetProperty("modelSelection", out var projectModel) &&
-                projectModel.ValueKind != JsonValueKind.Null
-                ? ProjectAuthorityResourceType.Project : ProjectAuthorityResourceType.Platform;
-            if (connectionScope == ProjectAuthorityResourceType.Project &&
-                projectModel.GetRawText() != modelSelection.GetRawText())
-                throw new CoordinationException(
-                    "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
-        }
-        if (!modelSelection.TryGetProperty("credentialReference", out var credentialReference) ||
-            credentialReference.ValueKind == JsonValueKind.Null)
-            return (null, sourceMode, connectionId, connectionScope);
-        if (connectionId is not null)
-            throw new CoordinationException(
-                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
-        if (credentialReference.ValueKind != JsonValueKind.Object ||
-            !credentialReference.TryGetProperty("id", out var id) ||
-            id.ValueKind != JsonValueKind.String ||
-            !credentialReference.TryGetProperty("version", out var version) ||
-            version.ValueKind != JsonValueKind.String)
-            throw new CoordinationException(
-                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
         try
         {
-            return (new SecretRef(id.GetString()!, version.GetString()!), sourceMode, null, null);
+            var accepted = RuntimeAcceptedModelSelection.Read(snapshot);
+            return accepted;
         }
-        catch (ArgumentException)
+        catch (RuntimeAuthorizationException exception)
         {
             throw new CoordinationException(
-                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway, exception);
         }
     }
 }

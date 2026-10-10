@@ -1,0 +1,259 @@
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { KanbanBoard } from '../components/board/KanbanBoard';
+import { makeBoard, makeBoardWithArchivedItems, makeBoardWorkflowUnavailable } from './fixtures/board';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { ReactNode } from 'react';
+vi.mock('../api/apiClient', () => ({
+  apiClient: {
+    getBoard: vi.fn(),
+    getBacklogSettings: vi.fn(),
+    setBacklogSettings: vi.fn(),
+    captureBacklogTask: vi.fn(),
+    editBacklogTask: vi.fn(),
+    deleteBacklogTask: vi.fn(),
+    archiveBacklogTask: vi.fn(),
+    deleteRun: vi.fn(),
+    archiveRun: vi.fn(),
+    moveTaskToReady: vi.fn(),
+    moveTaskToBacklog: vi.fn(),
+    reorderBacklogTask: vi.fn(),
+  },
+}));
+
+const mockNavigate = vi.fn();
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return { ...actual, useNavigate: () => mockNavigate };
+});
+
+const getBoardMock = () => vi.mocked(apiClient.getBoard);
+
+function Wrapper({ children }: { children: ReactNode }) {
+  return (
+    <AzureFluentProvider density="compact">
+      <MemoryRouter>{children}</MemoryRouter>
+    </AzureFluentProvider>
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockNavigate.mockReset();
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+describe('KanbanBoard — fixed columns (FR-013/015/016/019)', () => {
+  it('renders only the fixed six board columns', async () => {
+    getBoardMock().mockResolvedValue(makeBoard());
+
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
+
+    // Columns appear in the fixed product order, not the dynamic API stage order.
+    // Main workflow row: Backlog → Ready → Active → Done.
+    // Human Review and Problems render in the Needs attention / review section below.
+    const columns = screen.getAllByTestId(/^column-/);
+    expect(columns.map((c) => c.getAttribute('data-testid'))).toEqual([
+      'column-backlog',
+      'column-ready',
+      'column-active',
+      'column-done',
+      'column-human-review',
+      'column-problems',
+    ]);
+    expect(screen.queryByTestId('column-coordinator')).toBeNull();
+    expect(screen.queryByTestId('column-planned:assembly-custom')).toBeNull();
+    expect(screen.queryByTestId('column-terminal')).toBeNull();
+
+    // Backlog tasks render in priority (order_key) order as returned.
+    const backlog = screen.getByTestId('column-backlog');
+    expect(within(backlog).getByText('First backlog task')).toBeTruthy();
+    expect(within(backlog).getByText('Second backlog task')).toBeTruthy();
+
+    // Ready card present.
+    expect(within(screen.getByTestId('column-ready')).getByText('Ready task')).toBeTruthy();
+  });
+
+  it('exposes a board zoom control (Ctrl+Scroll hint, +/- buttons, % readout)', async () => {
+    getBoardMock().mockResolvedValue(makeBoard());
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
+
+    expect(screen.getByTitle('Ctrl + Scroll to zoom')).toBeTruthy();
+    expect(screen.getByText('100%')).toBeTruthy();
+    const zoomOut = screen.getByLabelText('Zoom out');
+    const zoomIn = screen.getByLabelText('Zoom in') as HTMLButtonElement;
+
+    // At 100% (max) zoom-in is disabled; zooming out lowers the readout.
+    expect(zoomIn.disabled).toBe(true);
+    fireEvent.click(zoomOut);
+    expect(screen.getByText('90%')).toBeTruthy();
+  });
+
+  it('renders board summary badges as navigable controls', async () => {
+    getBoardMock().mockResolvedValue(makeBoard());
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
+
+    expect(screen.getByRole('button', { name: /Jump to Backlog: 3 queued tasks/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Jump to Active: 1 active runs/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Jump to Human Review: 0 approvals/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Jump to Needs attention \/ review: 0 items need attention/i })).toBeTruthy();
+  });
+
+  it('distinguishes pickup-ready and dependency-blocked tasks in the Ready column summary', async () => {
+    const board = makeBoard({
+      columns: [
+        { id: 'backlog', kind: 'intake', label: 'Backlog', cards: [] },
+        {
+          id: 'ready',
+          kind: 'intake',
+          label: 'Ready',
+          cards: [
+            { kind: 'task', task_id: 'ready-1', title: 'Pickup-ready task', description: null, state: 'ready', order_key: 'a', captured_by: 'bob', created_at: '2026-01-01T00:02:00Z', is_ready_to_start: true },
+            { kind: 'task', task_id: 'ready-2', title: 'Blocked task', description: null, state: 'ready', order_key: 'b', captured_by: 'bob', created_at: '2026-01-01T00:03:00Z', is_blocked: true, is_ready_to_start: false, blocked_reason: 'Waiting for 1 prerequisite task to merge.' },
+          ],
+        },
+        { id: 'problems', kind: 'workflow', label: 'Problems', cards: [] },
+        { id: 'human-review', kind: 'workflow', label: 'Human Review', cards: [] },
+        { id: 'active', kind: 'workflow', label: 'Active', cards: [] },
+        { id: 'done', kind: 'workflow', label: 'Done', cards: [] },
+      ],
+    });
+    getBoardMock().mockResolvedValue(board);
+
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    const ready = await screen.findByTestId('column-ready');
+    expect(within(ready).getByText('1 task queued · 1 blocked')).toBeTruthy();
+    expect(within(ready).getByText('Waiting on prerequisites')).toBeTruthy();
+  });
+
+  it('places an active run-backed card in the Active fixed column (FR-016)', async () => {
+    getBoardMock().mockResolvedValue(makeBoard());
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('column-active')).toBeTruthy());
+    const active = screen.getByTestId('column-active');
+    const runCard = within(active).getByTestId('run-card-r1');
+    expect(runCard).toBeTruthy();
+    expect(within(active).getByText('Run-backed work')).toBeTruthy();
+
+    // Coordinator-run detail pages are run_id-keyed for EVERY coordinator run, so the card must
+    // navigate by run_id ('r1') — never by workflow_run_id ('wr1', distinct in this fixture).
+    // Regression guard for the Feature 009 backlog-pickup 404 cascade.
+    fireEvent.click(runCard);
+    expect(mockNavigate).toHaveBeenCalledWith('/projects/proj-1/orchestrations/r1');
+  });
+
+  it('renders the workflow-unavailable warning without reintroducing dynamic columns (FR-019)', async () => {
+    getBoardMock().mockResolvedValue(makeBoardWorkflowUnavailable());
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
+    expect(screen.getByText(/Workflow state is temporarily unavailable/i)).toBeTruthy();
+    expect(screen.queryByTestId('column-coordinator')).toBeNull();
+    expect(screen.getAllByTestId(/^column-/).map((c) => c.getAttribute('data-testid'))).toEqual([
+      'column-backlog',
+      'column-ready',
+      'column-active',
+      'column-done',
+      'column-human-review',
+      'column-problems',
+    ]);
+  });
+
+  it('routes review and failed terminal cards into Human Review and Problems', async () => {
+    const board = makeBoard({
+      columns: [
+        { id: 'backlog', kind: 'intake', label: 'Backlog', cards: [] },
+        { id: 'ready', kind: 'intake', label: 'Ready', cards: [] },
+        {
+          id: 'planned:assembly-review',
+          kind: 'workflow',
+          label: 'Human Review',
+          cards: [
+            { kind: 'run', run_id: 'r-review', task: 'Needs review', status: 'awaiting_review', stage_id: 'planned:assembly-review', started_at: '2026-01-01T00:00:00Z' },
+          ],
+        },
+        {
+          id: 'terminal',
+          kind: 'workflow',
+          label: 'Done',
+          cards: [
+            { kind: 'run', run_id: 'r-failed', task: 'Failed work', status: 'failed', stage_id: 'terminal', started_at: '2026-01-01T00:01:00Z' },
+          ],
+        },
+      ],
+    });
+    getBoardMock().mockResolvedValue(board);
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('column-human-review')).toBeTruthy());
+    expect(within(screen.getByTestId('column-human-review')).getByText('Needs review')).toBeTruthy();
+    expect(within(screen.getByTestId('column-problems')).getByText('Failed work')).toBeTruthy();
+  });
+
+  it('does not render archived cards or archive-only columns returned by the API', async () => {
+    getBoardMock().mockResolvedValue(makeBoardWithArchivedItems());
+
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
+    expect(screen.queryByText('Archived task')).toBeNull();
+    expect(screen.queryByText('Archived run')).toBeNull();
+    expect(screen.queryByTestId('task-card-archived-task')).toBeNull();
+    expect(screen.queryByTestId('run-card-archived-run')).toBeNull();
+  });
+
+  it('terminal "Show older (N)" toggle refetches with include_terminal_history=true (FR-016a)', async () => {
+    getBoardMock().mockResolvedValue(makeBoard());
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByText('Show older (5)')).toBeTruthy());
+    fireEvent.click(screen.getByText('Show older (5)'));
+
+    await waitFor(() => expect(getBoardMock()).toHaveBeenCalledWith('proj-1', true));
+  });
+
+  it('archives a task card using the existing off-board removal action and refetches', async () => {
+    getBoardMock().mockResolvedValue(makeBoard());
+    vi.mocked(apiClient.archiveBacklogTask).mockResolvedValue(undefined);
+
+    render(<Wrapper><KanbanBoard projectId="proj-1" pollIntervalMs={100000} /></Wrapper>);
+
+    await waitFor(() => expect(screen.getByTestId('column-backlog')).toBeTruthy());
+    const callsBefore = getBoardMock().mock.calls.length;
+    fireEvent.click(within(screen.getByTestId('task-card-t1')).getByLabelText('Archive task'));
+
+    await waitFor(() =>
+      expect(vi.mocked(apiClient.archiveBacklogTask)).toHaveBeenCalledWith('proj-1', 't1'),
+    );
+    await waitFor(() =>
+      expect(getBoardMock().mock.calls.length).toBeGreaterThan(callsBefore),
+    );
+  });
+});

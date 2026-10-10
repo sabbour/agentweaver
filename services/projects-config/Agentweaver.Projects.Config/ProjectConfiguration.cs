@@ -10,7 +10,11 @@ namespace Agentweaver.Projects.Config;
 public sealed record ModelSelectionSettings(
     string Reference, SecretRef? CredentialReference = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ModelSourceMode? SourceMode = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ConnectionId = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ConnectionId = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeModelBindingPin? ModelBindingPin { get; init; }
+}
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProjectProviderOverride(ProviderSeam Seam, string ProviderId);
@@ -41,6 +45,12 @@ public sealed record CopilotRunLimitOverrides
     public int? MaxConcurrentChildren { get; init; }
     public int? MaxWallTimeSeconds { get; init; }
     public int? MaxPromptTokens { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxRevisionAttempts { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? CopilotSoftCreditLimit { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? CopilotHardCreditLimit { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -52,6 +62,12 @@ public sealed record CopilotRunLimits
     public int MaxConcurrentChildren { get; init; }
     public int MaxWallTimeSeconds { get; init; }
     public int MaxPromptTokens { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxRevisionAttempts { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? CopilotSoftCreditLimit { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? CopilotHardCreditLimit { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -70,6 +86,9 @@ public sealed record ProjectConfiguration
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SourceControlProjectSettings? SourceControl { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<ReviewedRemoteToolSnapshotReference>? ReviewedRemoteToolSnapshots { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -128,6 +147,17 @@ public static class ProjectConfigurationValidator
             configuration.RunLimits is null)
             throw Invalid("Configuration collections and run-limit settings must be present.");
 
+        if (configuration.ReviewedRemoteToolSnapshots is { } reviewedSnapshots)
+        {
+            if (reviewedSnapshots.IsDefault || reviewedSnapshots.Any(snapshot => snapshot is null))
+            throw Invalid("Reviewed remote tool snapshot references must be present and non-null.");
+            if (reviewedSnapshots
+            .Select(snapshot => (snapshot.ProjectId, snapshot.SnapshotId))
+            .Distinct()
+            .Count() != reviewedSnapshots.Length)
+            throw Invalid("Reviewed remote tool snapshot references must not contain duplicate project and snapshot IDs.");
+        }
+
         if (configuration.ModelSelection is { } model)
         {
             ValidateIdentifier(model.Reference, "modelSelection.reference");
@@ -184,10 +214,12 @@ public static class ProjectConfigurationValidator
         foreach (var item in configuration.Casting)
         {
             ValidateIdentifier(item.AgentId, "casting.agentId");
-            ValidateText(item.Role, 120, "casting.role");
+            ValidateIdentifier(item.Role, "casting.role");
             if (item.Order < 0)
                 throw Invalid("Casting order cannot be negative.");
         }
+
+        ValidateCastingProjection(configuration.AgentCharters, configuration.Casting);
 
         if (configuration.BlueprintWorkflowReferences.Any(item => item is null))
             throw Invalid("Configuration contains a null blueprint reference.");
@@ -217,6 +249,32 @@ public static class ProjectConfigurationValidator
         ValidateSourceControl(configuration.SourceControl);
         return configuration with { EgressNarrowing = normalizedEgress };
     }
+
+    private static void ValidateCastingProjection(
+        ImmutableArray<ProjectAgentCharter> charters,
+        ImmutableArray<ProjectAgentCast> casting)
+    {
+        var chartersByAgent = charters.ToDictionary(item => item.AgentId, StringComparer.Ordinal);
+        var castingByAgent = casting.ToDictionary(item => item.AgentId, StringComparer.Ordinal);
+        if (chartersByAgent.Count != castingByAgent.Count)
+            throw Invalid("Every cast agent must have exactly one matching agent charter, and every charter must be cast.");
+
+        foreach (var cast in casting)
+        {
+            if (IsReservedOrchestrationRole(cast.AgentId) || IsReservedOrchestrationRole(cast.Role))
+                throw Invalid($"Casting agent '{cast.AgentId}' uses reserved orchestration role '{cast.Role}'.");
+            if (!chartersByAgent.TryGetValue(cast.AgentId, out var charter) ||
+                !string.Equals(charter.Role, cast.Role, StringComparison.Ordinal))
+                throw Invalid(
+                    $"Casting agent '{cast.AgentId}' role '{cast.Role}' must exactly match its agent charter role.");
+        }
+    }
+
+    private static bool IsReservedOrchestrationRole(string value) =>
+        value.Equals("scribe", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("work-monitor", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("coordinator", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("rai", StringComparison.OrdinalIgnoreCase);
 
     private static void ValidateSourceControl(SourceControlProjectSettings? sourceControl)
     {
@@ -248,6 +306,19 @@ public static class ProjectConfigurationValidator
 
     private static void ValidateModelSourceMode(ModelSelectionSettings model)
     {
+        if (model.ModelBindingPin is { } pin &&
+            (model.SourceMode != ModelSourceMode.Byok || pin.ContractVersion != 1 ||
+             pin.SourceMode != model.SourceMode || pin.ModelSelectionReference != model.Reference ||
+             pin.ProviderType is not ("azure" or "openai" or "anthropic") ||
+             string.IsNullOrWhiteSpace(pin.ModelId) || string.IsNullOrWhiteSpace(pin.ConfigurationRevision) ||
+             pin.ConfigurationHash is not { Length: 64 } ||
+             pin.ConfigurationHash.Any(character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f'))))
+            throw Invalid("The BYOK model binding pin must match the selected source and reference.");
+        if (model.ModelBindingPin is { } validatedPin)
+        {
+            ValidateIdentifier(validatedPin.ModelId, "modelSelection.modelBindingPin.modelId");
+            ValidateIdentifier(validatedPin.ConfigurationRevision, "modelSelection.modelBindingPin.configurationRevision");
+        }
         if (model.SourceMode is { } mode && !Enum.IsDefined(mode))
             throw Invalid("Model source mode must be hostedCopilot or byok.");
         if (model.ConnectionId == Guid.Empty ||
@@ -298,6 +369,14 @@ public static class ProjectConfigurationValidator
             MaxConcurrentChildren = ResolveLimit(project.MaxConcurrentChildren, platform.RunLimits.MaxConcurrentChildren, nameof(project.MaxConcurrentChildren)),
             MaxWallTimeSeconds = ResolveLimit(project.MaxWallTimeSeconds, platform.RunLimits.MaxWallTimeSeconds, nameof(project.MaxWallTimeSeconds)),
             MaxPromptTokens = ResolveLimit(project.MaxPromptTokens, platform.RunLimits.MaxPromptTokens, nameof(project.MaxPromptTokens)),
+            MaxRevisionAttempts = ResolveOptionalLimit(
+                project.MaxRevisionAttempts, platform.RunLimits.MaxRevisionAttempts, nameof(project.MaxRevisionAttempts)),
+            CopilotSoftCreditLimit = ResolveOptionalCreditLimit(
+                project.CopilotSoftCreditLimit, platform.RunLimits.CopilotSoftCreditLimit,
+                nameof(project.CopilotSoftCreditLimit)),
+            CopilotHardCreditLimit = ResolveOptionalCreditLimit(
+                project.CopilotHardCreditLimit, platform.RunLimits.CopilotHardCreditLimit,
+                nameof(project.CopilotHardCreditLimit)),
         };
         ValidateLimits(resolved);
         return resolved;
@@ -356,6 +435,10 @@ public static class ProjectConfigurationValidator
         ValidateRange(limits.MaxConcurrentChildren, 1, 32, "runLimits.maxConcurrentChildren");
         ValidateRange(limits.MaxWallTimeSeconds, 60, 86400, "runLimits.maxWallTimeSeconds");
         ValidateRange(limits.MaxPromptTokens, 1024, 200000, "runLimits.maxPromptTokens");
+        ValidateOptionalRange(limits.MaxRevisionAttempts, 0, int.MaxValue, "runLimits.maxRevisionAttempts");
+        ValidateCreditLimit(limits.CopilotSoftCreditLimit, "runLimits.copilotSoftCreditLimit");
+        ValidateCreditLimit(limits.CopilotHardCreditLimit, "runLimits.copilotHardCreditLimit");
+        ValidateCreditLimitOrder(limits.CopilotSoftCreditLimit, limits.CopilotHardCreditLimit);
     }
 
     private static void ValidateLimitOverrides(CopilotRunLimitOverrides limits)
@@ -366,6 +449,42 @@ public static class ProjectConfigurationValidator
         ValidateOptionalRange(limits.MaxConcurrentChildren, 1, 32, "runLimits.maxConcurrentChildren");
         ValidateOptionalRange(limits.MaxWallTimeSeconds, 60, 86400, "runLimits.maxWallTimeSeconds");
         ValidateOptionalRange(limits.MaxPromptTokens, 1024, 200000, "runLimits.maxPromptTokens");
+        ValidateOptionalRange(limits.MaxRevisionAttempts, 0, int.MaxValue, "runLimits.maxRevisionAttempts");
+        ValidateCreditLimit(limits.CopilotSoftCreditLimit, "runLimits.copilotSoftCreditLimit");
+        ValidateCreditLimit(limits.CopilotHardCreditLimit, "runLimits.copilotHardCreditLimit");
+        ValidateCreditLimitOrder(limits.CopilotSoftCreditLimit, limits.CopilotHardCreditLimit);
+    }
+
+    private static int? ResolveOptionalLimit(int? value, int? platformValue, string name)
+    {
+        if (value is null)
+            return platformValue;
+        ValidateOptionalRange(value, 0, int.MaxValue, name);
+        if (platformValue is { } platformLimit && value > platformLimit)
+            throw Invalid($"Project run limit '{name}' cannot exceed the platform limit.");
+        return value;
+    }
+
+    private static decimal? ResolveOptionalCreditLimit(decimal? value, decimal? platformValue, string name)
+    {
+        if (value is null)
+            return platformValue;
+        ValidateCreditLimit(value, name);
+        if (platformValue is { } platformLimit && value > platformLimit)
+            throw Invalid($"Project run limit '{name}' cannot exceed the platform limit.");
+        return value;
+    }
+
+    private static void ValidateCreditLimit(decimal? value, string name)
+    {
+        if (value is < 0)
+            throw Invalid($"Run limit '{name}' must be greater than or equal to zero.");
+    }
+
+    private static void ValidateCreditLimitOrder(decimal? soft, decimal? hard)
+    {
+        if (soft is { } softLimit && hard is { } hardLimit && softLimit > hardLimit)
+            throw Invalid("The Copilot soft credit limit cannot exceed the hard credit limit.");
     }
 
     private static void ValidateOptionalRange(int? value, int minimum, int maximum, string name)

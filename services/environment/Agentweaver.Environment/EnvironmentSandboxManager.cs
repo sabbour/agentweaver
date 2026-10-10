@@ -93,6 +93,8 @@ public sealed record EnvironmentSandboxPlacementProjectionV1(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public EnvironmentRuntimeReadinessEvidence? RuntimeReadiness { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public EnvironmentRuntimeWorkspaceEvidence? RuntimeWorkspace { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public EnvironmentSandboxConsumerPinV1? ProviderPin { get; init; }
 }
 
@@ -110,6 +112,10 @@ public sealed record EnvironmentRuntimeReadinessEvidence(
     SandboxObservation Observation,
     SandboxStartupTimeBudgets StartupBudgets,
     string WorkspaceMountPath);
+
+public sealed record EnvironmentRuntimeWorkspaceEvidence(
+    WorkspaceVolumeAttachmentNegotiation Workspace,
+    long TransitionRevision);
 
 public sealed class EnvironmentSandboxManager(
     IProjectsConfigClient projects,
@@ -392,10 +398,11 @@ public sealed class EnvironmentSandboxManager(
         bool runBoundRead,
         Func<EnvironmentSandboxPlacementProjectionV1?, CancellationToken, Task<TResult>> project,
         CancellationToken cancellationToken,
-        bool includeRuntimeReadiness = false)
+        bool includeRuntimeReadiness = false,
+        bool includeRuntimeWorkspace = false)
     {
-        if (includeRuntimeReadiness && !runBoundRead)
-            throw new ArgumentException("Runtime readiness requires run-bound placement-read authority.");
+        if ((includeRuntimeReadiness || includeRuntimeWorkspace) && !runBoundRead)
+            throw new ArgumentException("Runtime evidence requires run-bound placement-read authority.");
         var authorization = runBoundRead
             ? await egressManager.GetAuthorizedRunEnvironmentPlacementReadAsync(
                 caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false)
@@ -414,75 +421,84 @@ public sealed class EnvironmentSandboxManager(
         else
             await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
                 caller, authorization.Owner, authorization.Authorization, cancellationToken).ConfigureAwait(false);
+        if (includeRuntimeWorkspace && lease is not null)
+            return await leaseStore.GetCurrentWithWorkspaceAsync(
+                lifecycle.Fence, ReadProvisionRequest(lease).VolumeId,
+                ProjectAsync, cancellationToken).ConfigureAwait(false);
         return await leaseStore.GetCurrentAsync(
-            lifecycle.Fence,
-            async (currentLease, callbackCancellationToken) =>
-            {
-                if (!SameCurrentPlacementLease(lease, currentLease))
-                    throw new EnvironmentLifecycleException(
-                        "sandbox_lease_stale",
-                        "The current Sandbox lease changed while its placement was being authorized.");
-                if (runBoundRead)
-                    await egressManager.EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
-                        caller,
-                        authorization.Owner,
-                        authorization.Authorization,
-                        callbackCancellationToken).ConfigureAwait(false);
-                else
-                    await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
-                        caller,
-                        authorization.Owner,
-                        authorization.Authorization,
-                        callbackCancellationToken).ConfigureAwait(false);
-                var projection = currentLease is null
-                    ? null
-                    : ProjectCurrentPlacement(
-                        authorization.Owner,
-                        lifecycle.Fence,
-                        currentLease,
-                        DateTimeOffset.UtcNow);
-                if (projection is not null && includeRuntimeReadiness)
-                {
-                    var pinnedLease = currentLease!;
-                    var selection = pinnedLease.ProvisionIntent.SelectionSnapshot
-                        .Deserialize<EffectiveNetworkPolicySelection>(JsonOptions)
-                        ?? throw new EnvironmentLifecycleException(
-                            "sandbox_selection_unavailable", "The Sandbox lease has no retained run selection.");
-                    var provision = pinnedLease.ProvisionIntent.ProviderRequest
-                        .Deserialize<SandboxProvisionApiRequest>(JsonOptions)
-                        ?? throw new EnvironmentLifecycleException(
-                            "sandbox_provision_intent_unavailable", "The Sandbox lease has no recorded provision request.");
-                    provision.Validate();
-                    if (selection.ProjectId != projectId || selection.RunId != runId)
-                        throw new EnvironmentLifecycleException(
-                            "sandbox_selection_stale", "The retained Sandbox selection has a different owner.");
-                    var selected = new EnvironmentEgressManager.AuthorizedSelection(
-                        authorization.Authorization, selection);
-                    await egressManager.VerifyNetworkForSandboxAsync(
-                        caller, lifecycle.Fence, selected, provision.NetworkPolicyGeneration,
-                        callbackCancellationToken, runBoundRead).ConfigureAwait(false);
-                    var describe = CreateDescribeRequest(pinnedLease);
-                    var observation = (await sandboxProvider.DescribeAsync(describe, callbackCancellationToken)
-                        .ConfigureAwait(false)).ValidateFor(describe);
-                    await egressManager.VerifyNetworkForSandboxAsync(
-                        caller, lifecycle.Fence, selected, provision.NetworkPolicyGeneration,
-                        callbackCancellationToken, runBoundRead).ConfigureAwait(false);
-                    if (observation.State is not (SandboxObservedState.Finished or SandboxObservedState.Absent))
-                        observation = observation with { VerifiedNetworkGeneration = provision.NetworkPolicyGeneration };
-                    var pinnedOptions = pinnedLease.ProvisionIntent.OptionsSnapshot
-                        .Deserialize<AgentSandboxOptions>(JsonOptions)
-                        ?? throw new EnvironmentLifecycleException(
-                            "sandbox_provider_binding_invalid", "The retained Sandbox options are missing.");
-                    pinnedOptions.Validate();
-                    projection = projection with
-                    {
-                        RuntimeReadiness = new(describe.LeaseCreatedAt, observation.ValidateFor(describe),
-                            pinnedOptions.StartupBudgets.ToContract(), provision.MountPath)
-                    };
-                }
-                return await project(projection, callbackCancellationToken).ConfigureAwait(false);
-            },
+            lifecycle.Fence, (currentLease, token) => ProjectAsync(currentLease, null, token),
             cancellationToken).ConfigureAwait(false);
+
+        async Task<TResult> ProjectAsync(
+            SandboxLeaseSnapshot? currentLease,
+            EnvironmentWorkspaceVolumeSnapshot? workspace,
+            CancellationToken callbackCancellationToken)
+        {
+            if (!SameCurrentPlacementLease(lease, currentLease))
+                throw new EnvironmentLifecycleException(
+                    "sandbox_lease_stale",
+                    "The current Sandbox lease changed while its placement was being authorized.");
+            if (runBoundRead)
+                await egressManager.EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
+                    caller,
+                    authorization.Owner,
+                    authorization.Authorization,
+                    callbackCancellationToken).ConfigureAwait(false);
+            else
+                await egressManager.EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
+                    caller,
+                    authorization.Owner,
+                    authorization.Authorization,
+                    callbackCancellationToken).ConfigureAwait(false);
+            var projection = currentLease is null
+                ? null
+                : ProjectCurrentPlacement(
+                    authorization.Owner,
+                    lifecycle.Fence,
+                    currentLease,
+                    DateTimeOffset.UtcNow);
+            if (projection is not null && includeRuntimeWorkspace)
+                projection = projection with
+                {
+                    RuntimeWorkspace = ProjectRuntimeWorkspace(lifecycle.Fence, currentLease!, workspace)
+                };
+            if (projection is not null && includeRuntimeReadiness)
+            {
+                var pinnedLease = currentLease!;
+                var selection = pinnedLease.ProvisionIntent.SelectionSnapshot
+                    .Deserialize<EffectiveNetworkPolicySelection>(JsonOptions)
+                    ?? throw new EnvironmentLifecycleException(
+                        "sandbox_selection_unavailable", "The Sandbox lease has no retained run selection.");
+                var provision = ReadProvisionRequest(pinnedLease);
+                if (selection.ProjectId != projectId || selection.RunId != runId)
+                    throw new EnvironmentLifecycleException(
+                        "sandbox_selection_stale", "The retained Sandbox selection has a different owner.");
+                var selected = new EnvironmentEgressManager.AuthorizedSelection(
+                    authorization.Authorization, selection);
+                await egressManager.VerifyNetworkForSandboxAsync(
+                    caller, lifecycle.Fence, selected, provision.NetworkPolicyGeneration,
+                    callbackCancellationToken, runBoundRead).ConfigureAwait(false);
+                var describe = CreateDescribeRequest(pinnedLease);
+                var observation = (await sandboxProvider.DescribeAsync(describe, callbackCancellationToken)
+                    .ConfigureAwait(false)).ValidateFor(describe);
+                await egressManager.VerifyNetworkForSandboxAsync(
+                    caller, lifecycle.Fence, selected, provision.NetworkPolicyGeneration,
+                    callbackCancellationToken, runBoundRead).ConfigureAwait(false);
+                if (observation.State is not (SandboxObservedState.Finished or SandboxObservedState.Absent))
+                    observation = observation with { VerifiedNetworkGeneration = provision.NetworkPolicyGeneration };
+                var pinnedOptions = pinnedLease.ProvisionIntent.OptionsSnapshot
+                    .Deserialize<AgentSandboxOptions>(JsonOptions)
+                    ?? throw new EnvironmentLifecycleException(
+                        "sandbox_provider_binding_invalid", "The retained Sandbox options are missing.");
+                pinnedOptions.Validate();
+                projection = projection with
+                {
+                    RuntimeReadiness = new(describe.LeaseCreatedAt, observation.ValidateFor(describe),
+                        pinnedOptions.StartupBudgets.ToContract(), provision.MountPath)
+                };
+            }
+            return await project(projection, callbackCancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task<EnvironmentSandboxResult> AbandonAsync(
@@ -1285,6 +1301,53 @@ public sealed class EnvironmentSandboxManager(
             throw new EnvironmentLifecycleException(
                 "workspace_detachment_completion_invalid",
                 "The Workspace owner did not commit the exact Sandbox detachment.");
+    }
+
+    internal static SandboxProvisionApiRequest ReadProvisionRequest(SandboxLeaseSnapshot lease) =>
+        ReadProviderRecoveryIntent(lease).Request;
+
+    internal static EnvironmentRuntimeWorkspaceEvidence ProjectRuntimeWorkspace(
+        EnvironmentGenerationFence fence, SandboxLeaseSnapshot lease,
+        EnvironmentWorkspaceVolumeSnapshot? snapshot)
+    {
+        var recovery = ReadProviderRecoveryIntent(lease);
+        var attachment = recovery.Workspace.Negotiation;
+        var request = recovery.Request;
+        if (snapshot is null)
+            throw new EnvironmentLifecycleException(
+                "workspace_volume_unknown", "The exact Sandbox Workspace volume does not exist.");
+        if (lease.Fence != fence || attachment.EnvironmentFence != fence ||
+            attachment.SandboxResource != lease.ProvisionedResource?.Resource ||
+            snapshot.EnvironmentFence != fence || snapshot.VolumeId != request.VolumeId ||
+            attachment.Volume != new WorkspaceVolumeReference(
+                fence.Owner.ProjectId, request.VolumeId, request.VolumeResourceGeneration) ||
+            attachment.DataGeneration != request.DataGeneration ||
+            attachment.MountPath != request.MountPath || attachment.ReadOnly != request.ReadOnly ||
+            snapshot.Phase != EnvironmentWorkspaceVolumeState.Attached ||
+            snapshot.TransitionRevision != recovery.WorkspaceAttachmentTransitionRevision ||
+            snapshot.ResourceGeneration != request.VolumeResourceGeneration ||
+            snapshot.DataGeneration != request.DataGeneration ||
+            snapshot.Resource != attachment.StorageResource || snapshot.ProviderBinding is null)
+            throw new EnvironmentLifecycleException(
+                "workspace_attachment_stale", "The Workspace no longer matches the exact Sandbox attachment.");
+        var spec = snapshot.Specification.Deserialize<WorkspaceVolumeSpec>(JsonOptions)
+            ?? throw new EnvironmentLifecycleException(
+                "workspace_specification_invalid", "The stored Workspace volume specification is invalid.");
+        if (spec.ProjectId != fence.Owner.ProjectId || spec.VolumeId != request.VolumeId ||
+            !spec.AllowsEnvironment(fence.Owner.ProjectId, fence.Owner.EnvironmentId) ||
+            spec.Consistency != WorkspaceVolumeConsistency.Strict)
+            throw new EnvironmentLifecycleException(
+                "workspace_attachment_stale", "The Workspace specification does not match the Sandbox owner.");
+        var binding = snapshot.ProviderBinding.ValidateFor(attachment.StorageResource);
+        var descriptor = binding.ReleaseDescriptor;
+        var currentAttachment = new SandboxWorkspaceAttachment(
+            attachment, JsonSerializer.SerializeToElement(new AgentSandboxPersistentVolumeClaimAttachment(
+                1, binding.ProviderId, RequiredJsonString(descriptor, "namespace"),
+                RequiredJsonString(descriptor, "claimName"), RequiredJsonString(descriptor, "claimUid")), JsonOptions));
+        if (!SameSandboxWorkspaceAttachment(currentAttachment, recovery.Workspace))
+            throw new EnvironmentLifecycleException(
+                "workspace_attachment_stale", "The pinned Workspace provider attachment has changed.");
+        return new(attachment, snapshot.TransitionRevision);
     }
 
     private static SandboxProviderRecoveryIntent ReadProviderRecoveryIntent(SandboxLeaseSnapshot lease)

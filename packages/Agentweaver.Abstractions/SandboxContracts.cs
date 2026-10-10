@@ -12,6 +12,7 @@ public static class SandboxCapabilities
     public const string VmIsolation = "sandbox.isolation.vm";
     public const string WorkspacePersistentVolumeClaim = "sandbox.workspace.pvc";
     public const string VerifiedNetworkPolicy = "sandbox.network-policy.verified";
+    public const string BuildTestCommandPod = "sandbox.command.build-test-pod";
 }
 
 public static class SandboxResourceIdentity
@@ -838,6 +839,13 @@ public interface ISandboxLeaseStore
     Task<TResult> GetCurrentAsync<TResult>(
         EnvironmentGenerationFence fence,
         Func<SandboxLeaseSnapshot?, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken);
+
+    /// <summary>Reads the lease and workspace under the same retained Environment owner lock.</summary>
+    Task<TResult> GetCurrentWithWorkspaceAsync<TResult>(
+        EnvironmentGenerationFence fence,
+        string volumeId,
+        Func<SandboxLeaseSnapshot?, EnvironmentWorkspaceVolumeSnapshot?, CancellationToken, Task<TResult>> callback,
         CancellationToken cancellationToken);
 
     Task<SandboxLeaseSnapshot?> GetAsync(

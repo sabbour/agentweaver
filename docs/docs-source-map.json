@@ -23,6 +23,20 @@
   ],
   "rules": [
     {
+      "name": "Retained P1 surface harness adapters",
+      "sourcePrefixes": [
+        "scripts/api-harness/",
+        "scripts/ui-harness/",
+        "scripts/mcp-harness/",
+        "scripts/harness-shared/",
+        "scripts/harness-judge/"
+      ],
+      "required": [
+        "docs/guide/testing.md",
+        "docs/diagrams/src/flagship/v1-sessions-journal.json"
+      ]
+    },
+    {
       "name": "Orchestrator workflow catalogs",
       "sourcePrefixes": [
         "services/orchestrator/Agentweaver.Orchestrator.Core/"
@@ -231,7 +245,8 @@
         "docs/architecture/environment-sandbox.md",
         "docs/architecture/design/provider-seams.md",
         "docs/guide/environment-sandbox-testing.md",
-        "docs/diagrams/src/flagship/v1-environment-sandbox-lifecycle.json"
+        "docs/diagrams/src/flagship/v1-environment-sandbox-lifecycle.json",
+        "docs/diagrams/src/flagship/v1-environment-buildtest-command.json"
       ]
     },
     {

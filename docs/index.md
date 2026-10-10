@@ -13,6 +13,7 @@ This site documents code and procedures that exist in the `v1` source. Proposed 
 | [Build and use](./guide/build-and-use) | Restore, build, test, and compose foundation libraries. |
 | [Testing](./guide/testing) | Run current tests and read their limits. |
 | [Gateway/BFF](./guide/gateway) | Use the versioned REST/SSE entry and discover its live OpenAPI contract. |
+| [Web client](./guide/web-client) | Configure and use the Broker/Gateway-backed v1 application and its explicit contract limits. |
 | [Azure acceptance](./guide/azure-acceptance) | Compile infrastructure and prepare an approved acceptance run. |
 
 ## Architecture

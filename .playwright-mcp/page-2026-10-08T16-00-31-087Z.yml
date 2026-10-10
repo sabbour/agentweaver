@@ -1,0 +1,12 @@
+- generic [ref=f1e1]:
+  - link "Open local Copilot callback" [active] [ref=f1e16] [cursor=pointer]:
+    - /url: /auth/github/copilot-app/callback?state=browser-state&code=browser-code
+  - main [ref=f1e4]:
+    - generic [ref=f1e5]:
+      - generic [ref=f1e6]: Agentweaver
+      - heading "Sign in" [level=1] [ref=f1e7]
+      - paragraph [ref=f1e8]: Sign in through the Identity Broker to use the Gateway-backed project and run views.
+      - alert [ref=f1e9]:
+        - generic [ref=f1e13]: Configure Identity Broker URL, registered OAuth client ID, registered OAuth scopes before signing in.
+      - button "Continue with Identity Broker" [disabled] [ref=f1e14]
+      - paragraph [ref=f1e15]: Access tokens stay in memory only. After a reload, continue sign-in again; the Broker recovers its local session and rechecks current grants and project roles.

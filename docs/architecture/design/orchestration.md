@@ -108,6 +108,84 @@ owner persists accepted definitions and decisions, exact-request gate state, wor
 position, and MAF checkpoints in its own PostgreSQL schema. The full dispatch engine
 remains a separate slice.
 
+The Core models a project-scoped, revisioned backlog dependency graph. It rejects
+cross-project, self, missing, duplicate, and cyclic edges; only unclaimed, unarchived,
+non-provisional tasks can have their dependencies edited. Effective edge changes
+advance the graph revision, while idempotent no-ops preserve it. Readiness evaluation
+binds graph and task revisions to owner-projected prerequisite task/execution
+revisions. A successful Merge gate uses the `Merged` state; a fully evidenced workflow
+without a Merge gate uses `Completed` instead. Both states require current task and
+execution evidence. Captured outputs require verified proof; explicit no-output
+completion requires a current owner seal and no Merge gate. Incomplete,
+archived, cancelled, delegated, failed, indeterminate, or stale prerequisites block
+readiness. The evaluator does not make snapshots current; its owner must re-read and
+recheck them after waits. Required output proof is accepted only as an owner-supplied
+verified reference; Core neither creates nor verifies it.
+
+The Orchestrator owner candidate persists these tasks and dependencies and exposes
+run-scoped routes under `/api/projects/{projectId}/runs/{runId}/backlog` for graph
+reads, task creation/state/archive, dependency edits, and claims. Mutations carry the
+expected graph revision; task state and archive operations also carry the task
+revision, while claims include an idempotency key. A claim locks graph and task rows
+before accepted-run and decision state, then commits the task's exact revision with
+its accepted root/run, selection hash, fence, decision version, and token-free intent.
+The route revalidates current authority immediately before commit; if that check fails,
+the claim, accepted root, decision, and outbox intent roll back together.
+Prerequisite evidence must join the task to that exact accepted root and the whole
+confirmed WorkPlan, including every required output; one merged item cannot satisfy
+the task. Missing,
+legacy, or unknown plan, capture, merge, or acknowledgment evidence is indeterminate.
+Closed-root evidence uses a dedicated read-only checkpoint path; ordinary checkpoint
+reads remain active-only. The claim transaction rechecks the closed-root checkpoint,
+complete output set, and witness integrity. Migration 015 defines
+`owner_evidence_json` as a bounded JSON array. Its SQL is packaged as an embedded
+resource and registered with the explicit migrator; this source change does not apply
+it to a shared or live database. The MAF dispatch candidate now
+appends a completed-plan witness before returning: an explicit empty witness when
+there are no output obligations, or typed capture rows and, when selected, a typed
+Merge intent for non-empty output sets. The bounded C3/MAF source composition is
+admitted. Whole-producer runtime acceptance remains pending. Positive evidence is
+accepted only after current owner rereads and exact serializer reconstruction.
+Workflow-bound native sends now prepare through the current source owner.
+Configured hosted credit limits also require real Events pricing before root acceptance or backlog claim.
+Events resolves the concrete model through the same versioned server-owned map as AgentHost.
+The acceptance transaction retains the model, connection, selection hash, and Cost receipt in the existing outbox.
+It rechecks current Projects authority after remote waits and before root or claim commit.
+The Host registration carries that immutable model pin and rejects a different local binding before SDK startup.
+Configured hosted credit limits require actual Events pricing before dispatch start and again at native begin.
+The Host completes an observed source-to-ledger receipt join before returning output.
+MAF rereads that completed dispatch and verifies the output hash before retaining the result.
+Explicit unpriced accounting permits uncapped output, not free capped admission.
+The partial native report does not assert accounting-source finality.
+For each claim, the current owner lock covers enumeration of all admitted captures
+for the accepted root and selection, then each typed proof and pin is reread in the
+same transaction. A non-empty witness must name the sole admitted capture; a second
+or differently named capture blocks it. A no-output witness is rebuilt from the
+actual capture inventory, so a late capture with a non-empty manifest invalidates it.
+An inventory above the 100-capture bound rejects evaluation with an explicit limit
+error; it is not truncated.
+The admitted contract requires complete root-scoped 014 capture manifests to match
+the whole WorkPlan output obligations exactly by unique path and path/hash/length;
+ambiguous paths, extra or missing files, and partial evidence remain indeterminate.
+When the accepted workflow selects one Merge platform operation, each output row
+binds to that operation's current 012 intent for the same accepted workflow,
+WorkPlan, and root. The consumer must recheck the current owner binding, repository
+pin, persisted merged state, MergeSha, and current typed approval receipt; approval
+alone is not proof. `mergeIntentId` must be present on every output row. Explicit
+`null` is valid only with source-owned proof that no Merge operation was selected;
+omitted fields, ambiguous or optional/conditional activation without an absence
+proof, and missing or stale owner rows remain indeterminate. Empty outputs or an
+empty evidence array cannot bypass required platform owner operations. Capture
+admission and Merge completion remain separate facts: neither proves that the
+captured OutputTreeSha is included in the intent HeadSha or MergeSha.
+`NotRequired` requires explicit owner-derived absence evidence, not merely an empty
+output contract.
+Migration 016 remains unregistered, and whole-producer runtime acceptance remains
+pending. The bounded C3/MAF source composition is admitted, but these routes are not
+yet deployable. The 015 schema source is packaged and registered. This source change
+does not apply it to a shared or live database. No child dispatch or successful
+output verification is implied.
+
 Non-empty or fixed-work plans also require a trusted Sandbox binding. The owner
 validates the accepted candidate against the server catalog, asks its registered
 resource adapter to resolve an existing resource and return the original
@@ -246,6 +324,61 @@ flowchart TD
 ```
 
 The accepted definition is snapshotted for the run, then bound to real MAF executors.
+An executable BuildTest platform step can include a typed `buildTestCommand`.
+It specifies the immutable execution-profile reference, absolute executable,
+ordered arguments, workspace-root working directory (`.`), and bounded output obligations.
+The coordinator cannot submit image options, credentials, shell text, or a success verdict.
+The trusted executor must resolve the profile and current Sandbox binding separately.
+Command, argument-order, profile, path, or output-bound changes require scope confirmation.
+The validated WorkPlan requires a pinned Sandbox with the BuildTest command capability,
+even when it contains no model work.
+A legacy BuildTest step without a typed command remains valid but cannot execute.
+
+Before dispatch, the checkpoint stores the operation ID, exact command, accepted
+execution and collector options, and expected Environment binding.
+Later checkpoints retain that intent without changes.
+Recovery reuses the same operation and original checkpoint reference.
+The owner-authorized Core getter returns only the persisted command after it
+rechecks the current decision, selection hash, execution fence, and provider pin.
+Its route is
+`/api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}`.
+The query also carries the exact WorkPlan, checkpoint revision, decision version,
+execution fence, and accepted selection hash.
+The getter does not reserve or execute a command.
+
+The optional dispatch field `buildTestEnvironmentId` selects the Environment
+owner scope, not a different provider or execution profile.
+Preparation must match the WorkPlan's existing Sandbox pin.
+The Environment owner address uses the existing
+`Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress` configuration.
+Without that configuration or an Environment scope, the executor remains unavailable.
+The preparation GET ends in `/sandbox/build-test/binding-preparation`.
+It binds `sessionId` and `executionProfileReference` to current owner state.
+The command POST sends only the checkpoint reference and unchanged expected binding.
+Environment resolves the command through Core and rejects changed bindings or options.
+
+Normal dispatch and recovery use the same executor check.
+Recovery reads the original operation before it starts or reconciles that operation.
+Only a validated terminal result and required collector outputs can advance the step.
+Checkpoints retain compact terminal receipts and output digests, not raw command logs.
+Dependent model work receives a bounded typed result summary.
+Final output witnesses must match the collector's file digests and byte counts.
+Required command outputs cannot use a no-output seal.
+
+```mermaid
+flowchart LR
+    P["Confirmed typed command and provider pin"] --> E["Owner-authorized Environment preparation"]
+    E --> C["Immutable MAF checkpoint intent"]
+    C --> G["Owner-authorized Core getter"]
+    G --> V["Recheck current decision, selection, fence, and pin"]
+    V --> A["Return exact accepted command"]
+    A --> O["Environment rechecks binding and executes the same operation"]
+    O --> T["Terminal and required output join"]
+    T --> D["Checkpoint receipt and dependent model frontier"]
+    C --> R["Recover original operation and checkpoint reference"]
+    R --> G
+```
+
 Child work within an open step fans out only within validated limits and joins at
 that step's boundary. Checkpoints preserve the current step, pending children, and
 gates. The journal preserves what was proposed, accepted, dispatched, and observed.
@@ -328,6 +461,79 @@ GitHub raw bytes with the pinned webhook SecretRef and durably deduplicates deli
 after fresh Projects/Core checks. It does not approve a merge or trigger an
 unauthorized effect. Direct unauthenticated GitHub delivery is denied until a
 trusted relay identity is separately deployed.
+
+## Reviewed remote tool data
+
+The Core contracts bind a reviewed remote tool to one project, agent, and node.
+The immutable snapshot retains connection, configuration, catalog, tool, schema,
+and permission values with their revisions and digests. It contains no credentials.
+Its snapshot digest covers these values, including the endpoint, resource URI,
+authentication mode, Identity reference, and transport profile.
+
+`ReviewedRemoteToolCall.Create` requires the exact reviewed agent, node, and tool.
+It combines the snapshot with the supplied runtime registration, actor, tenant,
+run, session, step, accepted-selection hash, and execution fence.
+It sorts JSON object properties and rejects duplicate property names.
+The event ID is stable for one project, run, session, step, and native call ID.
+The input hash also covers the full snapshot, execution binding, and arguments.
+Changing the input preserves the event ID but changes its input hash.
+
+The internal snapshot store persists and resolves exact snapshot references.
+It rejects conflicting reuse of a snapshot ID and checks the stored digest and
+identity fields on every read. The embedded 018 SQL resource rejects row updates
+and deletes. The normal owner migration path does not yet apply that resource.
+PostgreSQL tests apply it directly and check persistence, conflicts, corruption,
+and rejected row changes.
+
+The result envelope retains opaque content and matching execution metadata.
+Its constructor does not verify a current grant or a durable Events acknowledgment.
+This source does not add Projects configuration references, selection resolution,
+a current connection read, credential use, or native remote dispatch.
+Those checks must be integrated before any protected remote request can be sent.
+A matching data object is not permission to send a request.
+
+```mermaid
+classDiagram
+    class ReviewedRemoteToolSnapshot {
+        +ConnectionConfigurationAndReview
+        +SnapshotDigest
+    }
+    class ReviewedRemoteToolSnapshotReference {
+        +ProjectId
+        +SnapshotId
+        +SnapshotDigest
+        +AgentId
+        +NodeId
+    }
+    class ReviewedRemoteToolSnapshotStore {
+        +PersistImmutableSnapshot
+        +ResolveExactReference
+    }
+    class RemoteToolCallExecutionBinding {
+        +RuntimeActorAndRun
+        +AcceptedSelectionHash
+        +ExecutionFence
+    }
+    class ReviewedRemoteToolCall {
+        +EventId
+        +InputHash
+        +CanonicalArguments
+    }
+    class RemoteToolCallAuthorityBinding {
+        +ExecutionMetadata
+        +GrantIdAndRevision
+    }
+    class RemoteToolResultEnvelope {
+        +OperationId
+        +OpaqueContent
+    }
+    ReviewedRemoteToolSnapshot --> ReviewedRemoteToolSnapshotReference : exact identity
+    ReviewedRemoteToolSnapshotReference ..> ReviewedRemoteToolSnapshotStore : exact row lookup
+    ReviewedRemoteToolSnapshot --> ReviewedRemoteToolCall : reviewed input
+    RemoteToolCallExecutionBinding --> ReviewedRemoteToolCall : execution input
+    ReviewedRemoteToolCall --> RemoteToolResultEnvelope : result context
+    RemoteToolCallAuthorityBinding --> RemoteToolResultEnvelope : metadata match only
+```
 
 ## Rules in code
 

@@ -5,17 +5,25 @@
 // artifacts for a human to inspect and manually publish. See releases/README.md.
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateFile } from './validate.mjs';
+import {
+  validateFile,
+  WEB_HOST_LOCK_PATH,
+  WEB_HOST_PROJECT_PATH,
+  WEB_LOCK_PATH,
+  WEB_PROJECT_PATH,
+} from './validate.mjs';
 import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sha = /^[a-f0-9]{40}$/;
 
 export function componentImageRepository(componentId) {
-  return componentId === 'Agentweaver.FoundationProbe' ? 'agentweaver-foundation-probe' : componentId.toLowerCase();
+  if (componentId === 'Agentweaver.FoundationProbe') return 'agentweaver-foundation-probe';
+  if (componentId === 'Agentweaver.Web') return 'agentweaver-web';
+  return componentId.toLowerCase();
 }
 
 function fail(location, message) {
@@ -39,6 +47,28 @@ function defaultDotnet(root) {
   };
 }
 
+function defaultNpm(env) {
+  return (args, cwd) => {
+    const bin = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const result = spawnSync(bin, args, {
+      cwd, stdio: 'inherit', env, shell: process.platform === 'win32',
+    });
+    if (result.error) fail('npm', `failed to launch "${bin} ${args.join(' ')}": ${result.error.message}`);
+    if (result.status !== 0) fail('npm', `"${bin} ${args.join(' ')}" exited with code ${result.status}`);
+  };
+}
+
+function defaultDocker(root) {
+  return (args, cwd = root) => {
+    const result = spawnSync(process.env.DOCKER_HOST_PATH || 'docker', args, {
+      cwd, stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    if (result.error) fail('docker', `failed to launch "docker ${args.join(' ')}": ${result.error.message}`);
+    if (result.status !== 0) fail('docker', `"docker ${args.join(' ')}" exited with code ${result.status}`);
+    return result.stdout.toString('utf8').trim();
+  };
+}
+
 function listFilesRecursive(dir, readdir, stat) {
   const out = [];
   for (const entry of readdir(dir, { withFileTypes: true })) {
@@ -49,23 +79,175 @@ function listFilesRecursive(dir, readdir, stat) {
   return out;
 }
 
+function listRegularWebFiles(dir, readdir, location = 'apps/web/dist') {
+  const out = [];
+  for (const entry of readdir(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listRegularWebFiles(full, readdir, location));
+    else if (entry.isFile()) out.push(full);
+    else fail(location, `unsupported build output entry ${path.relative(dir, full)}`);
+  }
+  return out;
+}
+
+function parseWebDockerfile(text) {
+  const logical = text.replaceAll('\r\n', '\n').split('\n')
+    .reduce((lines, line) => {
+      if (lines.length && lines.at(-1).endsWith('\\')) {
+        lines[lines.length - 1] = `${lines.at(-1).slice(0, -1)} ${line.trim()}`;
+      } else {
+        lines.push(line.trim());
+      }
+      return lines;
+    }, []);
+  const images = [];
+  const stages = new Set();
+  for (const line of logical) {
+    if (!line || line.startsWith('#')) continue;
+    const match = /^FROM\s+(\S+)(?:\s+AS\s+(\S+))?$/i.exec(line);
+    if (!match) {
+      if (/^FROM\b/i.test(line)) fail('apps/web/Dockerfile', `unsupported or mutable FROM instruction "${line}"`);
+      const copy = /^COPY\s+(.+)$/i.exec(line);
+      if (copy) {
+        const from = /(?:^|\s)--from=([^\s]+)/i.exec(copy[1])?.[1];
+        if (from && !stages.has(from.toLowerCase()) && !/^\d+$/.test(from)) {
+          fail('apps/web/Dockerfile', `COPY --from=${from} must refer to a declared pinned FROM stage`);
+        }
+      }
+      if (/^RUN\b/i.test(line)) {
+        for (const [, from] of line.matchAll(/(?:^|[, ])from=([^\s,]+)/gi)) {
+          if (!stages.has(from.toLowerCase()) && !/^\d+$/.test(from)) {
+            fail('apps/web/Dockerfile', `RUN mount from=${from} must refer to a declared pinned FROM stage`);
+          }
+        }
+      }
+      if (/^ADD\b/i.test(line) && /\b(?:https?:\/\/|git@|git:\/\/)/i.test(line)) {
+        fail('apps/web/Dockerfile', 'remote ADD sources are not permitted in a source-bound web image');
+      }
+      continue;
+    }
+    const reference = match[1];
+    const at = reference.lastIndexOf('@sha256:');
+    if (at < 1 || !/^sha256:[a-f0-9]{64}$/.test(reference.slice(at + 1)) ||
+        reference.slice(0, at).includes('$')) {
+      fail('apps/web/Dockerfile', `every FROM image must be pinned by an explicit immutable digest: ${reference}`);
+    }
+    const repository = reference.slice(0, at);
+    if (repository.split('/').at(-1).includes(':')) {
+      fail('apps/web/Dockerfile', `FROM image must not include a mutable tag: ${reference}`);
+    }
+    images.push({ reference, repositoryDigest: reference });
+    if (match[2]) stages.add(match[2].toLowerCase());
+  }
+  if (images.length === 0) fail('apps/web/Dockerfile', 'expected at least one pinned FROM image');
+  return images;
+}
+
+function createWebDockerContext(root, sourceFiles, distDir, publishDir, contextDir, {
+  readFile, readdir, stat, writeFile, mkdir,
+}) {
+  for (const source of sourceFiles) {
+    const sourcePath = path.resolve(root, source.path);
+    const relative = path.relative(path.resolve(root, 'apps', 'web'), sourcePath);
+    const destination = path.join(contextDir, relative);
+    mkdir(path.dirname(destination), { recursive: true });
+    writeFile(destination, readFile(sourcePath));
+  }
+  for (const file of listFilesRecursive(distDir, readdir, stat)) {
+    const relative = path.relative(distDir, file);
+    const destination = path.join(contextDir, 'wwwroot', relative);
+    mkdir(path.dirname(destination), { recursive: true });
+    writeFile(destination, readFile(file));
+  }
+  for (const file of listFilesRecursive(publishDir, readdir, stat)) {
+    const relative = path.relative(publishDir, file);
+    const destination = path.join(contextDir, 'publish', relative);
+    mkdir(path.dirname(destination), { recursive: true });
+    writeFile(destination, readFile(file));
+  }
+}
+
+function sourceTreeMetadata(root, sourceSha, git, readFile, stat) {
+  const output = git('ls-tree', '-r', '--name-only', sourceSha, '--', 'apps/web');
+  const paths = output.split(/\r?\n/).filter(Boolean).sort();
+  if (![WEB_PROJECT_PATH, WEB_LOCK_PATH, WEB_HOST_PROJECT_PATH, WEB_HOST_LOCK_PATH, 'apps/web/Dockerfile']
+    .every((file) => paths.includes(file))) {
+    fail('apps/web', 'package.json, both committed lockfiles, the ASP.NET host project, and Dockerfile must all exist in source HEAD');
+  }
+  if (paths.some((file) => file.split('/').includes('dist') || file.split('/').includes('node_modules'))) {
+    fail('apps/web', 'dist and node_modules must not be checked into the release source tree');
+  }
+  const files = paths.map((file) => {
+    const full = path.resolve(root, file);
+    if (!existsSync(full) || !lstatSync(full).isFile() || !stat(full).isFile()) {
+      fail(file, 'committed web source file must be a regular file in the working tree');
+    }
+    return { path: file, sha256: hashFile(full, readFile), size: stat(full).size };
+  });
+  const treeSha256 = createHash('sha256').update(JSON.stringify(files.map(({ path: file, sha256 }) => [file, sha256]))).digest('hex');
+  return { treeSha256, files };
+}
+
+function verifyPinnedBaseImages(images, docker, webDir) {
+  const resolved = [];
+  for (const image of images) {
+    const { reference } = image;
+    let output;
+    try {
+      output = docker(['image', 'inspect', '--format={{json .}}', reference], webDir);
+    } catch (error) {
+      fail('docker', `pinned FROM image ${reference} is not available locally; refusing registry access: ${error.message}`);
+    }
+    let info;
+    try {
+      info = JSON.parse(output);
+    } catch {
+      fail('docker', `cannot inspect local pinned FROM image ${reference}`);
+    }
+    const digest = reference.slice(reference.lastIndexOf('@'));
+    const expected = `${reference.slice(0, reference.lastIndexOf('@')).replace(/:[^/:]+$/, '')}${digest}`;
+    if (!/^sha256:[a-f0-9]{64}$/.test(info?.Id ?? '') ||
+        !Array.isArray(info.RepoDigests) || !info.RepoDigests.includes(expected)) {
+      fail('docker', `locally available FROM image does not have the required immutable RepoDigest ${expected}`);
+    }
+    resolved.push({ ...image, imageId: info.Id });
+  }
+  return resolved;
+}
+
+export function cleanBuildEnvironment(environment) {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^VITE_/i.test(name)));
+}
+
+function rejectLocalBuildInputs(webDir, readdir) {
+  const files = readdir(webDir, { withFileTypes: true });
+  const localEnv = files.filter(({ name }) =>
+    name === '.env.local' || /^\.env\..*\.local$/i.test(name)).map(({ name }) => name);
+  if (localEnv.length) fail('apps/web', `local Vite environment files are not source-bound build inputs: ${localEnv.join(', ')}`);
+  if (existsSync(path.join(webDir, 'dist'))) {
+    fail('apps/web/dist', 'stale or prebuilt dist output must be removed before source packing');
+  }
+}
+
 function hashFile(file, readFile) {
   return createHash('sha256').update(readFile(file)).digest('hex');
 }
 
 /**
  * Restores, builds, and packs every packable manifest component into `outDir`, then writes an
- * atomic `provenance.json` receipt once every package has been produced successfully. Fails closed
- * (no provenance written) on: a dirty working tree before or after the build (rejects drift from a
- * build step that unexpectedly touched checked-in files), a non-empty `outDir` (a fresh directory is
- * required per run so artifacts from different runs are never mixed), or any failing `dotnet`
- * invocation. Never pushes or publishes any artifact anywhere.
+ * atomic `provenance.json` receipt once every package or local image has been produced successfully.
+ * Fails closed (no provenance written) on a dirty working tree, stale output, or any failing build.
+ * Web images are built only from a locked npm install, a clean staged context, and locally present
+ * immutable base images. Never pushes or publishes any artifact anywhere.
  */
 export function packComponents(manifest, {
   root = repositoryRoot,
   git = defaultGit(root),
   status = () => defaultStatus(root),
   dotnet = defaultDotnet(root),
+  npm,
+  docker,
+  environment = process.env,
   readdirSync: readdir = readdirSync,
   readFileSync: readFile = readFileSync,
   writeFileSync: writeFileImpl = writeFileSync,
@@ -96,9 +278,77 @@ export function packComponents(manifest, {
   const probeSource = components.some(component => component.id === 'Agentweaver.FoundationProbe')
     ? resolveProbeImageSource({ repoRoot: root, readFile }) : undefined;
   if (probeSource && probeSource.sourceSha !== sourceSha) fail('git', 'Probe image source changed before preparation');
+  const buildEnvironment = cleanBuildEnvironment(environment);
+  const runNpm = npm ?? defaultNpm(buildEnvironment);
+  const runDotnet = dotnet ?? defaultDotnet(root);
+  const runDocker = docker ?? defaultDocker(root);
   const expectedArtifacts = new Map();
   const locks = new Map();
+  const webSources = new Map();
+  const webBuilds = new Map();
   for (const component of components) {
+    if (component.project === WEB_PROJECT_PATH) {
+      if (component.id !== 'Agentweaver.Web' || component.kind !== 'service') {
+        fail(component.project, 'only Agentweaver.Web may be packed from an npm project');
+      }
+      const lock = path.resolve(root, WEB_LOCK_PATH);
+      if (!existsImpl(lock)) fail(component.project, 'committed npm package-lock.json is required before preparation');
+      const hostLock = path.resolve(root, WEB_HOST_LOCK_PATH);
+      if (!existsImpl(hostLock)) fail(component.project, 'committed ASP.NET host packages.lock.json is required before preparation');
+      for (const file of [
+        WEB_PROJECT_PATH, WEB_LOCK_PATH, WEB_HOST_PROJECT_PATH, WEB_HOST_LOCK_PATH, 'apps/web/Dockerfile',
+      ]) {
+        try {
+          git('cat-file', '-e', `${sourceSha}:${file}`);
+        } catch (error) {
+          fail(file, `must be committed in source HEAD before web preparation: ${error.message}`);
+        }
+      }
+      let webPackage;
+      let webLock;
+      try {
+        webPackage = JSON.parse(readFile(path.resolve(root, WEB_PROJECT_PATH), 'utf8'));
+        webLock = JSON.parse(readFile(lock, 'utf8'));
+      } catch (error) {
+        fail(WEB_PROJECT_PATH, `cannot read npm project mirrors: ${error.message}`);
+      }
+      if (webPackage?.version !== component.version ||
+          webLock?.version !== component.version ||
+          webLock?.packages?.['']?.version !== component.version) {
+        fail(WEB_PROJECT_PATH, `package.json, package-lock.json, and package-lock.json packages[""] must all mirror ${component.version}`);
+      }
+      locks.set(component.id, {
+        path: WEB_LOCK_PATH,
+        sha256: hashFile(lock, readFile),
+      });
+      const source = sourceTreeMetadata(root, sourceSha, git, readFile, stat);
+      const dockerfilePath = path.join(root, 'apps', 'web', 'Dockerfile');
+      const dockerfile = readFile(dockerfilePath, 'utf8');
+      const baseImages = parseWebDockerfile(dockerfile);
+      const artifactName = `${component.id}.${component.version}.tar`;
+      const tag = `${component.version.replaceAll('+', '_')}-${sourceSha}`;
+      if (tag.length > 128) fail(component.id, 'version-derived Docker tag exceeds the 128-character limit');
+      const imageReference = `${componentImageRepository(component.id)}:${tag}`;
+      webSources.set(component.id, {
+        treeSha256: source.treeSha256,
+        files: source.files,
+        packageJsonSha256: source.files.find(({ path: file }) => file === WEB_PROJECT_PATH).sha256,
+        packageLockSha256: source.files.find(({ path: file }) => file === WEB_LOCK_PATH).sha256,
+        hostProjectSha256: source.files.find(({ path: file }) => file === WEB_HOST_PROJECT_PATH).sha256,
+        hostLockSha256: source.files.find(({ path: file }) => file === WEB_HOST_LOCK_PATH).sha256,
+        dockerfileSha256: source.files.find(({ path: file }) => file === 'apps/web/Dockerfile').sha256,
+      });
+      expectedArtifacts.set(artifactName, {
+        componentId: component.id,
+        kind: 'image',
+        repository: componentImageRepository(component.id),
+        tag,
+        imageReference,
+        platform: 'linux/amd64',
+        baseImages,
+      });
+      continue;
+    }
     const project = path.resolve(root, component.project);
     const lock = path.join(path.dirname(project), 'packages.lock.json');
     if (!existsImpl(lock)) fail(component.project, 'checked-in packages.lock.json is required before preparation');
@@ -128,6 +378,120 @@ export function packComponents(manifest, {
   mkdirImpl(resolvedOutDir, { recursive: true });
 
   for (const component of components) {
+    if (component.project === WEB_PROJECT_PATH) {
+      const webDir = path.resolve(root, 'apps', 'web');
+      const distDir = path.join(webDir, 'dist');
+      const hostPublishDir = path.join(resolvedOutDir, '.web-host-publish');
+      const contextDir = path.join(resolvedOutDir, '.web-context');
+      rejectLocalBuildInputs(webDir, readdir);
+      let buildOutput;
+      try {
+        runNpm(['ci', '--offline', '--no-audit', '--no-fund', '--no-progress'], webDir, buildEnvironment);
+        runNpm(['run', 'build'], webDir, buildEnvironment);
+        if (!existsImpl(distDir) || !lstatSync(distDir).isDirectory()) fail('apps/web/dist', 'npm run build did not produce a fresh dist directory');
+        runDotnet(['restore', path.resolve(root, WEB_HOST_PROJECT_PATH), '--locked-mode']);
+        runDotnet([
+          'publish', path.resolve(root, WEB_HOST_PROJECT_PATH),
+          '--configuration', 'Release', '--no-restore', '--output', hostPublishDir,
+          '-p:UseAppHost=false', '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`,
+        ]);
+        if (!existsImpl(hostPublishDir) || !lstatSync(hostPublishDir).isDirectory()) {
+          fail(WEB_HOST_PROJECT_PATH, 'dotnet publish did not produce the ASP.NET host output directory');
+        }
+        if (status().trim() !== '') fail('git', 'web build left tracked or untracked output outside ignored build artifacts');
+        const webFiles = listRegularWebFiles(distDir, readdir).sort()
+          .map((file) => ({
+            path: path.relative(distDir, file).replaceAll('\\', '/'),
+            sha256: hashFile(file, readFile),
+            size: stat(file).size,
+          }));
+        if (webFiles.length === 0) fail('apps/web/dist', 'npm run build produced no files');
+        const hostFiles = listRegularWebFiles(hostPublishDir, readdir, WEB_HOST_PROJECT_PATH).sort()
+          .map((file) => ({
+            path: path.relative(hostPublishDir, file).replaceAll('\\', '/'),
+            sha256: hashFile(file, readFile),
+            size: stat(file).size,
+          }));
+        if (hostFiles.length === 0) fail(WEB_HOST_PROJECT_PATH, 'dotnet publish produced no files');
+        const hostBuildOutput = {
+          files: hostFiles,
+          sha256: createHash('sha256').update(JSON.stringify(hostFiles)).digest('hex'),
+        };
+        const files = [
+          ...webFiles.map((file) => ({ ...file, path: `wwwroot/${file.path}` })),
+          ...hostFiles.map((file) => ({ ...file, path: `publish/${file.path}` })),
+        ].sort((left, right) => left.path.localeCompare(right.path));
+        buildOutput = {
+          files,
+          sha256: createHash('sha256').update(JSON.stringify(files)).digest('hex'),
+        };
+
+        const artifact = [...expectedArtifacts.values()].find(({ componentId }) => componentId === component.id);
+        const webDockerfile = readFile(path.join(webDir, 'Dockerfile'), 'utf8');
+        const baseImages = verifyPinnedBaseImages(parseWebDockerfile(webDockerfile), runDocker, webDir);
+        createWebDockerContext(root, webSources.get(component.id).files, distDir, hostPublishDir, contextDir, {
+          readFile, readdir, stat, writeFile: writeFileImpl, mkdir: mkdirImpl,
+        });
+        runDocker([
+          'build', '--pull=false', '--network=none', '--no-cache', '--platform=linux/amd64',
+          '--tag', artifact.imageReference,
+          '--build-arg', `IMAGE_TAG=${component.version}`,
+          '--build-arg', `GIT_SHA=${sourceSha}`,
+          '--file', 'Dockerfile', '.',
+        ], contextDir);
+        let imageInfo;
+        try {
+          imageInfo = JSON.parse(runDocker(['image', 'inspect', '--format={{json .}}', artifact.imageReference], contextDir));
+        } catch (error) {
+          fail('docker', `cannot inspect locally built web image: ${error.message}`);
+        }
+        if (!imageInfo || !/^sha256:[a-f0-9]{64}$/.test(imageInfo.Id ?? '') ||
+            imageInfo.Os !== 'linux' || imageInfo.Architecture !== 'amd64' ||
+            imageInfo.Config?.Labels?.['org.opencontainers.image.revision'] !== sourceSha ||
+            imageInfo.Config?.Labels?.['org.opencontainers.image.version'] !== component.version) {
+          fail('docker', 'built web image is missing its source-SHA or component-version labels');
+        }
+        const artifactName = `${component.id}.${component.version}.tar`;
+        const artifactPath = path.join(resolvedOutDir, artifactName);
+        runDocker(['save', '--output', artifactPath, artifact.imageReference], contextDir);
+        artifact.imageId = imageInfo.Id;
+        artifact.labels = {
+          'org.opencontainers.image.revision': imageInfo.Config.Labels['org.opencontainers.image.revision'],
+          'org.opencontainers.image.version': imageInfo.Config.Labels['org.opencontainers.image.version'],
+        };
+        artifact.buildOutput = buildOutput;
+        artifact.baseImages = baseImages;
+        webBuilds.set(component.id, {
+          tool: 'npm+dotnet',
+          install: ['npm', 'ci', '--offline', '--no-audit', '--no-fund', '--no-progress'],
+          build: ['npm', 'run', 'build'],
+          dotnet: {
+            project: WEB_HOST_PROJECT_PATH,
+            lock: { path: WEB_HOST_LOCK_PATH, sha256: webSources.get(component.id).hostLockSha256 },
+            restoreMode: 'locked',
+            publishConfiguration: 'Release',
+            useAppHost: false,
+            output: hostBuildOutput,
+          },
+          environment: 'ambient VITE_* removed; local .env files rejected',
+          output: buildOutput,
+          dockerfile: 'apps/web/Dockerfile',
+          dockerBuildArguments: { IMAGE_TAG: component.version, GIT_SHA: sourceSha },
+          imageId: imageInfo.Id,
+          imageReference: artifact.imageReference,
+          platform: artifact.platform,
+          baseImages,
+        });
+      } finally {
+        rmSync(distDir, { recursive: true, force: true });
+        rmSync(hostPublishDir, { recursive: true, force: true });
+        rmSync(contextDir, { recursive: true, force: true });
+      }
+      if (!existsImpl(path.join(resolvedOutDir, `${component.id}.${component.version}.tar`))) {
+        fail('pack', `expected web image archive for ${component.id} was not produced`);
+      }
+      continue;
+    }
     const project = path.resolve(root, component.project);
     const image = [...expectedArtifacts.values()].find((artifact) => artifact.componentId === component.id && artifact.kind === 'image');
     const baseImageArgs = image ? [`-p:ContainerBaseImage=${image.baseImage}`] : [];
@@ -183,7 +547,10 @@ export function packComponents(manifest, {
     manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
     stage: manifest.stage,
     createdAt: now().toISOString(),
-    components: components.map(({ id, kind, version, project }) => ({ id, kind, version, project, lock: locks.get(id) })),
+    components: components.map(({ id, kind, version, project }) => ({
+      id, kind, version, project, lock: locks.get(id),
+      ...(webSources.has(id) ? { source: webSources.get(id), build: webBuilds.get(id) } : {}),
+    })),
     artifacts,
   };
 

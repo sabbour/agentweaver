@@ -5,7 +5,7 @@ using Microsoft.Azure.Cosmos;
 
 namespace Agentweaver.Knowledge;
 
-public sealed record CosmosMemoryDocument(
+public sealed record KnowledgeMemoryDocument(
     string Id,
     string ProjectId,
     string DocumentType,
@@ -27,23 +27,42 @@ public sealed record CosmosMemoryDocument(
     string? WorkerId = null,
     DateTimeOffset? LeasedUntil = null);
 
-public sealed record CosmosMemoryStoredDocument(CosmosMemoryDocument Document, string ETag);
+public sealed record MemoryStoredDocument(KnowledgeMemoryDocument Document, string ETag);
 
-public enum CosmosMemoryBatchOperationKind
+public enum MemoryBatchOperationKind
 {
     Create,
     Replace
 }
 
-public sealed record CosmosMemoryBatchOperation(
-    CosmosMemoryBatchOperationKind Kind,
-    CosmosMemoryDocument Document,
-    string? ETag = null);
-
-public sealed record CosmosMemoryBatchResult(
-    HttpStatusCode StatusCode)
+public enum MemoryLeaseMutationKind
 {
-    public bool Succeeded => (int)StatusCode is >= 200 and < 300;
+    Claim,
+    Release,
+    Acknowledge
+}
+
+public sealed record MemoryLeaseMutation(
+    MemoryLeaseMutationKind Kind,
+    Guid LeaseToken,
+    long DurationMilliseconds = 0);
+
+public sealed record MemoryBatchOperation(
+    MemoryBatchOperationKind Kind,
+    KnowledgeMemoryDocument Document,
+    string? ETag = null,
+    MemoryLeaseMutation? LeaseMutation = null);
+
+public enum MemoryBatchStatus
+{
+    Succeeded,
+    Conflict,
+    Failed
+}
+
+public sealed record MemoryBatchResult(MemoryBatchStatus Status)
+{
+    public bool Succeeded => Status == MemoryBatchStatus.Succeeded;
 }
 
 public sealed record CosmosMemoryContainerIdentity(
@@ -53,17 +72,14 @@ public sealed record CosmosMemoryContainerIdentity(
     int? DefaultTimeToLiveSeconds,
     bool HasRequiredSearchCompositeIndex);
 
-public interface ICosmosMemoryDocumentStore
+public interface IKnowledgeMemoryDocumentStore
 {
-    Task<CosmosMemoryContainerIdentity> ReadContainerIdentityAsync(
-        CancellationToken cancellationToken);
-
-    Task<CosmosMemoryStoredDocument?> ReadAsync(
+    Task<MemoryStoredDocument?> ReadAsync(
         string projectId,
         string documentId,
         CancellationToken cancellationToken);
 
-    Task<IReadOnlyList<CosmosMemoryDocument>> FindAcceptedEffectAsync(
+    Task<IReadOnlyList<KnowledgeMemoryDocument>> FindAcceptedEffectAsync(
         Guid receiptId,
         CancellationToken cancellationToken);
 
@@ -102,9 +118,15 @@ public interface ICosmosMemoryDocumentStore
         long sequence,
         CancellationToken cancellationToken);
 
-    Task<CosmosMemoryBatchResult> ExecuteBatchAsync(
+    Task<MemoryBatchResult> ExecuteBatchAsync(
         string projectId,
-        IReadOnlyList<CosmosMemoryBatchOperation> operations,
+        IReadOnlyList<MemoryBatchOperation> operations,
+        CancellationToken cancellationToken);
+}
+
+public interface ICosmosMemoryDocumentStore : IKnowledgeMemoryDocumentStore
+{
+    Task<CosmosMemoryContainerIdentity> ReadContainerIdentityAsync(
         CancellationToken cancellationToken);
 }
 
@@ -152,18 +174,18 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
             hasRequiredSearchCompositeIndex);
     }
 
-    public async Task<CosmosMemoryStoredDocument?> ReadAsync(
+    public async Task<MemoryStoredDocument?> ReadAsync(
         string projectId,
         string documentId,
         CancellationToken cancellationToken)
     {
         try
         {
-            var response = await _container.ReadItemAsync<CosmosMemoryDocument>(
+            var response = await _container.ReadItemAsync<KnowledgeMemoryDocument>(
                 documentId,
                 new PartitionKey(projectId),
                 cancellationToken: cancellationToken).ConfigureAwait(false);
-            return new CosmosMemoryStoredDocument(response.Resource, response.ETag);
+            return new MemoryStoredDocument(response.Resource, response.ETag);
         }
         catch (CosmosException exception) when (exception.StatusCode == HttpStatusCode.NotFound)
         {
@@ -171,7 +193,7 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
         }
     }
 
-    public async Task<IReadOnlyList<CosmosMemoryDocument>> FindAcceptedEffectAsync(
+    public async Task<IReadOnlyList<KnowledgeMemoryDocument>> FindAcceptedEffectAsync(
         Guid receiptId,
         CancellationToken cancellationToken)
     {
@@ -179,10 +201,10 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
             SELECT TOP 2 * FROM c
             WHERE c.id = @id AND c.documentType = @acceptedEffectType
             """)
-            .WithParameter("@id", CosmosMemoryDocumentIds.AcceptedEffect(receiptId))
+            .WithParameter("@id", KnowledgeMemoryDocumentIds.AcceptedEffect(receiptId))
             .WithParameter("@acceptedEffectType", AcceptedEffectDocumentType);
-        using var iterator = _container.GetItemQueryIterator<CosmosMemoryDocument>(query);
-        var documents = new List<CosmosMemoryDocument>();
+        using var iterator = _container.GetItemQueryIterator<KnowledgeMemoryDocument>(query);
+        var documents = new List<KnowledgeMemoryDocument>();
         while (iterator.HasMoreResults && documents.Count < 2)
         {
             var response = await iterator.ReadNextAsync(cancellationToken).ConfigureAwait(false);
@@ -404,9 +426,9 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
         return await ReadScalarAsync<long>(query, projectId, cancellationToken).ConfigureAwait(false) > 0;
     }
 
-    public async Task<CosmosMemoryBatchResult> ExecuteBatchAsync(
+    public async Task<MemoryBatchResult> ExecuteBatchAsync(
         string projectId,
-        IReadOnlyList<CosmosMemoryBatchOperation> operations,
+        IReadOnlyList<MemoryBatchOperation> operations,
         CancellationToken cancellationToken)
     {
         if (operations.Count is < 1 or > 100)
@@ -420,10 +442,10 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
         {
             switch (operation.Kind)
             {
-                case CosmosMemoryBatchOperationKind.Create:
+                case MemoryBatchOperationKind.Create:
                     batch.CreateItem(operation.Document);
                     break;
-                case CosmosMemoryBatchOperationKind.Replace when !string.IsNullOrWhiteSpace(operation.ETag):
+                case MemoryBatchOperationKind.Replace when !string.IsNullOrWhiteSpace(operation.ETag):
                     batch.ReplaceItem(
                         operation.Document.Id,
                         operation.Document,
@@ -435,7 +457,13 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
         }
 
         using var response = await batch.ExecuteAsync(cancellationToken).ConfigureAwait(false);
-        return new CosmosMemoryBatchResult(response.StatusCode);
+        var status = response.StatusCode is HttpStatusCode.Conflict or
+            HttpStatusCode.PreconditionFailed or HttpStatusCode.NotFound
+                ? MemoryBatchStatus.Conflict
+                : (int)response.StatusCode is >= 200 and < 300
+                    ? MemoryBatchStatus.Succeeded
+                    : MemoryBatchStatus.Failed;
+        return new MemoryBatchResult(status);
     }
 
     private QueryDefinition CreateSearchQuery(
@@ -468,16 +496,16 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
         return 0;
     }
 
-    private async Task<IReadOnlyList<CosmosMemoryDocument>> ReadManyAsync(
+    private async Task<IReadOnlyList<KnowledgeMemoryDocument>> ReadManyAsync(
         QueryDefinition query,
         string projectId,
         CancellationToken cancellationToken,
         int? maximumResults = null)
     {
-        using var iterator = _container.GetItemQueryIterator<CosmosMemoryDocument>(
+        using var iterator = _container.GetItemQueryIterator<KnowledgeMemoryDocument>(
             query,
             requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(projectId) });
-        var documents = new List<CosmosMemoryDocument>();
+        var documents = new List<KnowledgeMemoryDocument>();
         while (iterator.HasMoreResults)
         {
             var response = await iterator.ReadNextAsync(cancellationToken).ConfigureAwait(false);

@@ -6,17 +6,17 @@
   },
   "drawio": {
     "file": "v1-outbox-relay.drawio",
-    "sha256": "44fdc1d093a7f7be34d7c8a6d80e4d0e16f6fa02c316d2670036203b2c095c28"
+    "sha256": "c0efbcf0795ce08b3f83c14ec1c0752d75603e514cc81bafba0c77eae6f3a89d"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
-    "rendererVersion": "31.4.5",
     "format": "png",
     "border": 16,
-    "scale": 2
+    "scale": 2,
+    "rendererVersion": "31.5.3"
   },
   "png": {
     "file": "v1-outbox-relay.png",
-    "sha256": "c235e52f11e8bd502b42d0675e61505076d1f1ff785e48cbf031dcff2a63052f"
+    "sha256": "e4bdb209e14932caaed9b62e39e808bb6711d9bf3049e9a64f1104ee805c3120"
   }
 }

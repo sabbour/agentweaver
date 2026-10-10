@@ -41,7 +41,7 @@ builder.Services.AddSingleton<TokenCredential>(_ => new WorkloadIdentityCredenti
 builder.Services.AddSingleton<NpgsqlDataSource>(provider =>
     ProjectsConfigPostgresDataSource.Create(
         runtimeConnectionString, provider.GetRequiredService<TokenCredential>()));
-builder.Services.AddDbContext<ProjectsConfigDbContext>((provider, options) =>
+builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options) =>
 {
     options.UseNpgsql(
         provider.GetRequiredService<NpgsqlDataSource>(),

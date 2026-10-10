@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.DataProtection;
@@ -23,6 +24,7 @@ internal sealed record GitHubRepoAppRepositoryOption(
 internal sealed record GitHubRepoAppRepositoryBrowser(
     string ConnectionId,
     long ConnectionRevision,
+    [property: JsonPropertyName("githubLogin")]
     string GitHubLogin,
     IReadOnlyList<GitHubRepoAppRepositoryOption> Repositories);
 
@@ -31,6 +33,7 @@ internal sealed record GitHubRepoAppConnectionStatus(
     string LocalReadiness,
     string? ConnectionId,
     long? ConnectionRevision,
+    [property: JsonPropertyName("githubLogin")]
     string? GitHubLogin,
     DateTimeOffset? AccessTokenExpiresAt,
     DateTimeOffset? UpdatedAt);

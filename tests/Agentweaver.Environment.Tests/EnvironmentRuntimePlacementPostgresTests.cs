@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Agentweaver.Identity;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -223,6 +225,178 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
             route => route.RoutePattern.RawText!.EndsWith("/sandbox/v1/placement", StringComparison.Ordinal));
         Assert.NotEmpty(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>());
         Assert.Equal(["GET"], endpoint.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods);
+        var workspace = Assert.Single(((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>(),
+            route => route.RoutePattern.RawText!.EndsWith("/runtime-bootstrap/profiles/{profileId}/workspace",
+                StringComparison.Ordinal));
+        Assert.NotEmpty(workspace.Metadata.GetOrderedMetadata<IAuthorizeData>());
+        Assert.Equal(["GET"], workspace.Metadata.GetMetadata<HttpMethodMetadata>()!.HttpMethods);
+    }
+
+    [Fact]
+    public async Task RuntimeWorkspaceReadRetainsTheActualLeaseAndAttachedVolumeWithoutProviderEffects()
+    {
+        var (owner, lifecycle, store) = await CreateOwnerAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var volumes = fixture.CreateStore();
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        json.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        var spec = new WorkspaceVolumeSpec("workspace", owner.ProjectId,
+            new(WorkspaceVolumeOwnerKind.Run, owner.RunId), owner.EnvironmentId,
+            WorkspaceVolumeBindingMode.Environment, WorkspaceVolumeAccessMode.ReadWriteMany, 8,
+            "azure-files", WorkspaceVolumeConsistency.Strict, WorkspaceVolumeReclaimPolicy.Delete,
+            WorkspaceVolumeOwnerDeletionPolicy.Retain, []);
+        await volumes.CreateWorkspaceVolumeAsync(
+            lifecycle.Fence, spec.VolumeId, JsonSerializer.SerializeToElement(spec, json), "create", timeout.Token);
+        var storage = new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "workspace-claim", 1);
+        var binding = new WorkspaceVolumeProviderBindingSnapshot(
+            storage.ProviderId, "1.0.0", 1, "storage-options",
+            JsonSerializer.SerializeToElement(new { endpoint = "controlled" }),
+            JsonSerializer.SerializeToElement(new
+            {
+                @namespace = "agentweaver",
+                claimName = storage.ResourceId, claimUid = "workspace-claim-uid"
+            }));
+        var provision = await volumes.ReserveWorkspaceVolumeProvisionAsync(
+            lifecycle.Fence, spec.VolumeId, 1, 0, 0, "provision", timeout.Token);
+        await volumes.CompleteWorkspaceVolumeProvisionAsync(
+            provision.OperationId, lifecycle.Fence, true, storage, binding, true, timeout.Token);
+        var bind = await volumes.ReserveWorkspaceVolumeBindAsync(
+            lifecycle.Fence, spec.VolumeId, 2, 1, 0, "bind", timeout.Token);
+        await volumes.CompleteWorkspaceVolumeBindAsync(
+            bind.OperationId, lifecycle.Fence, true, storage, true, timeout.Token);
+        var attach = await volumes.ReserveWorkspaceVolumeAttachAsync(
+            lifecycle.Fence, spec.VolumeId, 3, 1, 0, "attach", timeout.Token);
+        await volumes.CompleteWorkspaceVolumeAttachAsync(
+            attach.OperationId, lifecycle.Fence, true, storage, true, timeout.Token);
+        var request = new SandboxProvisionApiRequest(spec.VolumeId, 1, 0,
+            "/workspace/agentweaver/project", false, 7, "sandbox");
+        var reserved = await store.ReserveProvisionAsync(lifecycle.Fence, "sandbox",
+            Intent() with { ProviderRequest = JsonSerializer.SerializeToElement(request, json) }, timeout.Token);
+        var sandbox = Resource(reserved.Lease);
+        var negotiation = new WorkspaceVolumeAttachmentNegotiation(owner.ProjectId, owner.EnvironmentId, owner.RunId,
+            new(owner.ProjectId, spec.VolumeId, 1), sandbox.Resource, storage, lifecycle.Fence, 0,
+            request.MountPath, false, WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim);
+        var attachment = new SandboxWorkspaceAttachment(negotiation, JsonSerializer.SerializeToElement(
+            new AgentSandboxPersistentVolumeClaimAttachment(1, storage.ProviderId, "agentweaver",
+                storage.ResourceId, "workspace-claim-uid"), json));
+        await store.SaveProviderRequestAsync(reserved.Lease.OperationId, lifecycle.Fence,
+            JsonSerializer.SerializeToElement(new
+            {
+                contractVersion = 1, request, workspace = attachment,
+                egressSelectorLabels = ImmutableDictionary<string, string>.Empty,
+                workspaceAttachmentTransitionRevision = 4
+            }, json), timeout.Token);
+        var lease = await store.CompleteProvisionAsync(
+            reserved.Lease.OperationId, lifecycle.Fence, sandbox, true, timeout.Token);
+        var projects = new ControlledAuthority(owner) { CanReadSelection = true };
+        var manager = Reader(projects, new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System));
+        var snapshot = (await volumes.GetWorkspaceVolumeAsync(lifecycle.Fence, spec.VolumeId, timeout.Token))!;
+        EnvironmentWorkspaceVolumeSnapshot ChangedWorkspace(long revision, long dataGeneration,
+            EnvironmentWorkspaceVolumeState phase, ProviderResourceRef resource) =>
+            new(snapshot.EnvironmentFence, snapshot.VolumeId, revision, resource.Generation, dataGeneration,
+                phase, snapshot.LastOperation, snapshot.Specification, resource, snapshot.ProviderBinding);
+        foreach (var changed in new[]
+        {
+            ChangedWorkspace(5, 0, snapshot.Phase, storage),
+            ChangedWorkspace(4, 1, snapshot.Phase, storage),
+            ChangedWorkspace(4, 0, EnvironmentWorkspaceVolumeState.Bound, storage),
+            ChangedWorkspace(4, 0, snapshot.Phase, storage with { ResourceId = "different-claim" }),
+            ChangedWorkspace(4, 0, snapshot.Phase, storage with { Generation = 2 })
+        })
+            Assert.Equal("workspace_attachment_stale",
+                Assert.Throws<EnvironmentLifecycleException>(() =>
+                    EnvironmentSandboxManager.ProjectRuntimeWorkspace(lifecycle.Fence, lease, changed)).Code);
+        var credential = new SecretCredential(
+            "isolated.module.token", DateTimeOffset.UtcNow.AddMinutes(1), TimeProvider.System);
+        var core = new RuntimeOwnerContext(1, "https://module-identity.test", "module-actor",
+            owner.TenantId, owner.ProjectId, owner.RunId, "session", "agent", "model", "turn",
+            1, 1, 1, "context", new string('a', 64), 1, 1, 1, 1);
+        using var coreTransport = new WorkspaceOwnerTransport(core);
+        using var coreClient = new HttpClient(coreTransport);
+        var reader = new EnvironmentRuntimePlacementReader(manager,
+            new EnvironmentRuntimeOwnerContextClient(coreClient,
+                new(new Uri("https://orchestrator.test/"), new Uri("https://broker.test/"))), TimeProvider.System);
+        var profile = new EnvironmentRuntimeBootstrapProfile(
+            "runtime", new Uri("https://runtime.test/runtime/v1/configure"), new Uri("https://orchestrator.test/observe"));
+        var profiles = new EnvironmentRuntimeBootstrapProfileRegistry([new(owner, profile, sandbox.Resource)]);
+        EnvironmentRuntimeWorkspaceContext? context;
+        try
+        {
+            context = await reader.GetWorkspaceContextAsync(new(credential, owner.TenantId),
+                owner.ProjectId, owner.RunId, core.SessionId, owner.EnvironmentId, profile.ProfileId, profiles, timeout.Token);
+        }
+        finally
+        {
+            credential.Invalidate();
+        }
+        Assert.NotNull(context);
+        Assert.Equal(negotiation, context.Workspace);
+        Assert.Equal(4, context.TransitionRevision);
+        Assert.Equal(core, context.Placement.RuntimeOwnerContext);
+        Assert.Equal(sandbox.Resource, context.Placement.Resource);
+        Assert.Equal(1, coreTransport.Reads);
+        var responseJson = JsonSerializer.Serialize(context, json);
+        Assert.DoesNotContain("providerAttachmentDescriptor", responseJson);
+        Assert.DoesNotContain("workspaceTreeSha256", responseJson);
+        Assert.DoesNotContain("workspaceProviderCheckpointId", responseJson);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var read = manager.GetCurrentPlacementCoreAsync(
+            Caller(owner), owner.ProjectId, owner.RunId, owner.EnvironmentId, true, async (projection, token) =>
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(token);
+                return projection;
+            }, timeout.Token, includeRuntimeWorkspace: true);
+        await Task.WhenAny(entered.Task, read).WaitAsync(timeout.Token);
+        if (!entered.Task.IsCompleted)
+        {
+            await read;
+            throw new InvalidOperationException("The Workspace read did not reach its retained callback.");
+        }
+        var application = "runtime-workspace-detach-" + Guid.NewGuid().ToString("N");
+        await using var writerSource = fixture.CreateDataSource(application);
+        var detach = new EnvironmentLifecycleStore(writerSource, TimeProvider.System).ReserveWorkspaceVolumeDetachAsync(
+            lifecycle.Fence, spec.VolumeId, 4, 1, 0, "detach", timeout.Token);
+        var exerciseError = await Record.ExceptionAsync(async () =>
+        {
+            await using var observer = await fixture.DataSource.OpenConnectionAsync(timeout.Token);
+            await using var blocked = new NpgsqlCommand(
+                "SELECT count(*) FROM pg_locks locks JOIN pg_stat_activity activity ON activity.pid = locks.pid " +
+                "WHERE activity.application_name = @application AND locks.locktype = 'advisory' AND NOT locks.granted",
+                observer);
+            blocked.Parameters.AddWithValue("application", application);
+            while (Convert.ToInt64(await blocked.ExecuteScalarAsync(timeout.Token)) == 0)
+            {
+                if (detach.IsCompleted)
+                    throw new InvalidOperationException("Workspace detachment bypassed the retained read.",
+                        await Record.ExceptionAsync(() => detach));
+                await using var clear = new NpgsqlCommand("SELECT pg_stat_clear_snapshot()", observer);
+                await clear.ExecuteNonQueryAsync(timeout.Token);
+                await Task.Delay(10, timeout.Token);
+            }
+            release.TrySetResult();
+            var projection = await read;
+            Assert.NotNull(projection?.RuntimeWorkspace);
+            Assert.Equal(lease.LeaseRevision, projection.LeaseRevision);
+            Assert.Equal(negotiation, projection.RuntimeWorkspace.Workspace);
+            Assert.Equal(4, projection.RuntimeWorkspace.TransitionRevision);
+            Assert.Equal(0, projects.SelectionReads);
+            var detached = await detach;
+            await volumes.CompleteWorkspaceVolumeDetachAsync(
+                detached.OperationId, lifecycle.Fence, true, storage, true, timeout.Token);
+            var stale = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+                manager.GetCurrentPlacementCoreAsync(Caller(owner), owner.ProjectId, owner.RunId, owner.EnvironmentId,
+                    true, (current, _) => Task.FromResult(current), timeout.Token, includeRuntimeWorkspace: true));
+            Assert.Equal("workspace_attachment_stale", stale.Code);
+        });
+        release.TrySetResult();
+        var cleanupError = await Record.ExceptionAsync(() => Task.WhenAll(read, detach));
+        if (exerciseError is not null && cleanupError is not null)
+            throw new AggregateException("Workspace read and cleanup failed.", exerciseError, cleanupError);
+        if (exerciseError is not null || cleanupError is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exerciseError ?? cleanupError!).Throw();
     }
 
     [Fact]
@@ -248,27 +422,54 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         var adapter = new CiliumEgressPolicyAdapter(network, networkOptions);
         var selector = EnvironmentEgressSelector.Create(owner.EnvironmentId, owner.TenantId, owner.ProjectId,
             owner.RunId, networkOptions.Namespace);
+        const long policyGeneration = 7;
         var effect = await fixture.CreateStore().ReserveNetworkEffectAsync(lifecycle.Fence,
-            $"{selector.Namespace}/{selector.PolicyName}", 1, 0, EnvironmentNetworkEffectKind.Apply,
+            $"{selector.Namespace}/{selector.PolicyName}", policyGeneration, 0, EnvironmentNetworkEffectKind.Apply,
             "network-ready", timeout.Token);
         var compilation = EgressIntentCompiler.Compile(selection);
         Assert.True(compilation.IsSuccess, compilation.Failure?.Message);
-        await adapter.ApplyAsync(selector, compilation.Intent!, 1, 0, timeout.Token);
+        await adapter.ApplyAsync(selector, compilation.Intent!, policyGeneration, 0, timeout.Token);
         await fixture.CreateStore().CompleteNetworkEffectAsync(effect.OperationId, lifecycle.Fence, true, true, timeout.Token);
         var sandboxOptions = new AgentSandboxOptions(AgentSandboxOptions.CurrentOptionsSchemaVersion,
             "sandbox-options", "agentweaver", "azure-files-csi", "runtime-test@sha256:" + new string('a', 64),
             "linux/amd64", 123456, "kata-test", "kata-test", "100m", "128Mi", 20, 100,
             new(30, 30, 30, 30, 30, 120));
         var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        json.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
         var provision = new SandboxProvisionApiRequest("workspace", 1, 0,
-            "/workspace/project", false, 1, "runtime-ready");
+            "/workspace/agentweaver/project", false, policyGeneration, "runtime-ready");
         var intent = new SandboxLeaseProvisionIntent("agent-sandbox", "1.0.0",
             sandboxOptions.OptionsSchemaVersion, sandboxOptions.OptionsRevision,
             JsonSerializer.SerializeToElement(sandboxOptions, json), JsonSerializer.SerializeToElement(selection, json),
             JsonSerializer.SerializeToElement(provision, json));
         var reserved = await store.ReserveProvisionAsync(lifecycle.Fence, "runtime-ready", intent, timeout.Token);
+        var resource = Resource(reserved.Lease);
+        var workspace = new SandboxWorkspaceAttachment(
+            new(owner.ProjectId, owner.EnvironmentId, owner.RunId,
+                new(owner.ProjectId, provision.VolumeId, provision.VolumeResourceGeneration),
+                resource.Resource,
+                new(ProviderSeam.Storage, sandboxOptions.WorkspaceStorageProviderId, "workspace-claim",
+                    provision.VolumeResourceGeneration),
+                lifecycle.Fence, provision.DataGeneration, provision.MountPath, provision.ReadOnly,
+                WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim),
+            JsonSerializer.SerializeToElement(new AgentSandboxPersistentVolumeClaimAttachment(
+                1, sandboxOptions.WorkspaceStorageProviderId, sandboxOptions.Namespace, "workspace-claim",
+                "workspace-claim-uid"), json)).Validate();
+        var recoveryIntent = JsonSerializer.SerializeToElement(new
+        {
+            contractVersion = 1,
+            request = provision,
+            workspace,
+            egressSelectorLabels = selector.MatchLabels,
+            workspaceAttachmentTransitionRevision = 2
+        }, json);
+        await store.SaveProviderRequestAsync(
+            reserved.Lease.OperationId, lifecycle.Fence, recoveryIntent, timeout.Token);
         var lease = await store.CompleteProvisionAsync(reserved.Lease.OperationId, lifecycle.Fence,
-            Resource(reserved.Lease), true, timeout.Token);
+            resource, true, timeout.Token);
+        var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
+        var retained = await restarted.GetCurrentAsync(lifecycle.Fence, timeout.Token);
+        Assert.True(JsonElement.DeepEquals(recoveryIntent, retained!.ProvisionIntent.ProviderRequest));
         var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var provider = new ReadinessSandboxProvider(async (request, token) =>
@@ -282,11 +483,16 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
                  new(SandboxStartupPhase.Started, 1, request.LeaseCreatedAt)]);
         });
         var egress = new EnvironmentEgressManager(projects, adapter, networkOptions, fixture.CreateStore());
-        var manager = new EnvironmentSandboxManager(projects, fixture.CreateStore(), store, provider,
+        var manager = new EnvironmentSandboxManager(projects, fixture.CreateStore(), restarted, provider,
             sandboxOptions, new KubernetesAgentSandboxClient(_kubernetes), networkOptions, egress);
         var read = manager.GetCurrentPlacementCoreAsync(caller, owner.ProjectId, owner.RunId, owner.EnvironmentId,
             runBoundRead: true, (projection, _) => Task.FromResult(projection), timeout.Token, includeRuntimeReadiness: true);
-        await observed.Task.WaitAsync(timeout.Token);
+        await Task.WhenAny(observed.Task, read).WaitAsync(timeout.Token);
+        if (!observed.Task.IsCompleted)
+        {
+            await read;
+            throw new InvalidOperationException("Readiness completed without observing its exact Sandbox resource.");
+        }
         var application = "readiness-retirement-" + Guid.NewGuid().ToString("N");
         await using var retirementDataSource = fixture.CreateDataSource(application);
         var retirement = new EnvironmentSandboxLeaseStore(retirementDataSource, TimeProvider.System).BeginRetirementAsync(
@@ -315,9 +521,11 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
             var projection = await read;
             Assert.NotNull(projection?.RuntimeReadiness);
             Assert.Equal(lease.LeaseRevision, projection.LeaseRevision);
+            Assert.Equal(resource.Resource, projection.Resource);
+            Assert.Equal(resource.Resource, projection.RuntimeReadiness.Observation.Resource);
             Assert.Equal(lease.CreatedAt, projection.RuntimeReadiness.LeaseCreatedAt);
-            Assert.Equal(1, projection.RuntimeReadiness.Observation.VerifiedNetworkGeneration);
-            Assert.Equal("/workspace/project", projection.RuntimeReadiness.WorkspaceMountPath);
+            Assert.Equal(policyGeneration, projection.RuntimeReadiness.Observation.VerifiedNetworkGeneration);
+            Assert.Equal(provision.MountPath, projection.RuntimeReadiness.WorkspaceMountPath);
             Assert.Equal(sandboxOptions.StartupBudgets.ToContract(), projection.RuntimeReadiness.StartupBudgets);
             Assert.Equal(0, projects.SelectionReads);
             Assert.Equal(1, network.Creates);
@@ -398,6 +606,28 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("A placement read must not dispatch a provider effect.");
+    }
+
+    private sealed class WorkspaceOwnerTransport(RuntimeOwnerContext owner) : HttpMessageHandler
+    {
+        public int Reads { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal(new Uri($"https://orchestrator.test/internal/projects/{owner.ProjectId}/runs/{owner.RunId}" +
+                $"/coordination/sessions/{owner.SessionId}/runtime-owner-context"), request.RequestUri);
+            Assert.Equal("isolated.module.token", request.Headers.Authorization?.Parameter);
+            Reads++;
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = System.Net.Http.Json.JsonContent.Create(owner)
+            };
+            response.Headers.CacheControl = new() { NoStore = true };
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class ControlledAuthority(EnvironmentOwnerIdentity owner) : IProjectsConfigClient

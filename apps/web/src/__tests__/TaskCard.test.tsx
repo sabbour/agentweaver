@@ -1,0 +1,243 @@
+import { apiClient } from '../api/apiClient';
+import { AzureFluentProvider } from '../copilot-fluent-system';
+import { TaskCard } from '../components/board/TaskCard';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import type { TaskCardDto, WorkflowListResponse } from '../api/types';
+import type { ReactNode } from 'react';
+vi.mock('../api/apiClient', () => ({
+  apiClient: {
+    listWorkflows: vi.fn(),
+    setTaskWorkflowOverride: vi.fn(),
+    editBacklogTask: vi.fn(),
+    editBacklogDependencies: vi.fn(),
+    deleteBacklogTask: vi.fn(),
+    archiveBacklogTask: vi.fn(),
+  },
+}));
+
+function Wrapper({ children }: { children: ReactNode }) {
+  return <AzureFluentProvider density="compact">{children}</AzureFluentProvider>;
+}
+
+const card: TaskCardDto = {
+  kind: 'task',
+  task_id: 'task-1',
+  title: 'Wire the thing',
+  description: 'Do it well',
+  state: 'ready',
+  order_key: 'a0',
+  captured_by: 'user@example.com',
+  created_at: '2026-06-22T10:00:00Z',
+};
+
+const list: WorkflowListResponse = {
+  default_workflow_id: 'default',
+  workflows: [
+    {
+      id: 'default',
+      name: 'Generic Workflow',
+      description: null,
+      source: 'built-in',
+      valid: true,
+      error: null,
+      is_built_in: true,
+      is_default: true,
+    },
+    {
+      id: 'nightly',
+      name: 'Nightly Sweep',
+      description: null,
+      source: '.agentweaver/workflows/nightly.yaml',
+      valid: true,
+      error: null,
+      is_built_in: false,
+      is_default: false,
+    },
+  ],
+};
+
+function renderCard(onMutated = vi.fn()) {
+  return render(
+    <Wrapper>
+      <TaskCard
+        card={card}
+        columnId="intake"
+        projectId="proj-1"
+        onMutated={onMutated}
+        onDragStartTask={vi.fn()}
+        onDragEndTask={vi.fn()}
+        isDragging={false}
+      />
+    </Wrapper>,
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  cleanup();
+});
+
+describe('TaskCard workflow override', () => {
+  it('explains a missing integrated-output identity without claiming the task is ready', () => {
+    render(
+      <Wrapper>
+        <TaskCard {...{
+          card: { ...card, is_blocked: true, prerequisites: [
+            { task_id: 'upstream-1', title: 'First story',
+              reason: 'upstream_output_identity_unavailable', is_satisfied: false },
+          ] },
+          columnId: 'ready', projectId: 'proj-1', onMutated: vi.fn(),
+          onDragStartTask: vi.fn(), onDragEndTask: vi.fn(), isDragging: false,
+        }} />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Needs First story: integrated output identity unavailable')).toBeTruthy();
+    expect(screen.getByText('Blocked')).toBeTruthy();
+  });
+
+  it('distinguishes a missing collective revision from a missing commit identity', () => {
+    render(
+      <Wrapper>
+        <TaskCard {...{
+          card: { ...card, is_blocked: true, prerequisites: [
+            { task_id: 'upstream-1', title: 'First story',
+              reason: 'upstream_output_revision_unavailable', is_satisfied: false },
+          ] },
+          columnId: 'ready', projectId: 'proj-1', onMutated: vi.fn(),
+          onDragStartTask: vi.fn(), onDragEndTask: vi.fn(), isDragging: false,
+        }} />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Needs First story: immutable integrated output revision unavailable')).toBeTruthy();
+  });
+
+  it('previews affected dependents before saving prerequisite links', async () => {
+    const onMutated = vi.fn();
+    vi.mocked(apiClient.editBacklogDependencies).mockResolvedValue({
+      revision: 4,
+      prerequisites: ['upstream-1'],
+      affected_task_ids: ['task-1', 'downstream-1'],
+      changed: true,
+    });
+    render(
+      <Wrapper>
+        <TaskCard {...{
+          card: { ...card, graph_revision: 3, prerequisites: [
+            { task_id: 'upstream-1', title: 'First story', reason: 'failed', is_satisfied: false },
+          ], dependents_task_ids: ['downstream-1'] },
+          columnId: 'ready', projectId: 'proj-1', onMutated,
+          onDragStartTask: vi.fn(), onDragEndTask: vi.fn(), isDragging: false,
+        }} />
+      </Wrapper>,
+    );
+    expect(screen.getByText('Needs First story: failed')).toBeTruthy();
+    expect(screen.getByText('Dependents: downstream-1')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit prerequisites' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prerequisite task IDs' }), {
+      target: { value: 'upstream-1' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await waitFor(() => expect(apiClient.editBacklogDependencies).toHaveBeenCalledWith(
+      'proj-1', 'task-1', { expected_revision: 3, replace: ['upstream-1'] }, true,
+    ));
+    expect(screen.getByText(/downstream-1/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save links' }));
+    await waitFor(() => expect(apiClient.editBacklogDependencies).toHaveBeenCalledWith(
+      'proj-1', 'task-1', { expected_revision: 3, replace: ['upstream-1'] }, false,
+    ));
+    expect(onMutated).toHaveBeenCalled();
+  });
+
+  it('requires a new preview when a dependency edit conflicts', async () => {
+    const { ApiError } = await import('../api/client');
+    vi.mocked(apiClient.editBacklogDependencies)
+      .mockResolvedValueOnce({ revision: 4, prerequisites: [], affected_task_ids: ['task-1'], changed: true })
+      .mockRejectedValueOnce(new ApiError(409, '{"error":"stale_graph_revision"}'));
+    render(
+      <Wrapper>
+        <TaskCard {...{
+          card: { ...card, graph_revision: 3 }, columnId: 'ready', projectId: 'proj-1',
+          onMutated: vi.fn(), onDragStartTask: vi.fn(), onDragEndTask: vi.fn(), isDragging: false,
+        }} />
+      </Wrapper>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Edit prerequisites' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save links' }).hasAttribute('disabled')).toBe(false));
+    fireEvent.click(screen.getByRole('button', { name: 'Save links' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save links' }).hasAttribute('disabled')).toBe(true));
+  });
+
+  it('sets a per-task workflow override', async () => {
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue(list);
+    vi.mocked(apiClient.setTaskWorkflowOverride).mockResolvedValue({ task_id: 'task-1', workflow_override_id: 'nightly' });
+    const onMutated = vi.fn();
+
+    renderCard(onMutated);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set workflow' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Nightly Sweep/i }));
+
+    await waitFor(() => expect(apiClient.setTaskWorkflowOverride).toHaveBeenCalledWith('proj-1', 'task-1', 'nightly'));
+    await waitFor(() => expect(screen.getByText('Workflow override set.')).toBeDefined());
+    expect(onMutated).toHaveBeenCalled();
+  });
+
+  it('surfaces a 409 when the task was just claimed', async () => {
+    const { ApiError } = await import('../api/client');
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue(list);
+    vi.mocked(apiClient.setTaskWorkflowOverride).mockRejectedValue(new ApiError(409, '{"error":"task_claimed"}'));
+    const onMutated = vi.fn();
+
+    renderCard(onMutated);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set workflow' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Nightly Sweep/i }));
+
+    await waitFor(() => expect(screen.getByText(/can no longer be changed/)).toBeDefined());
+    expect(onMutated).toHaveBeenCalled();
+  });
+
+  it('shows the active badge for the default workflow option', async () => {
+    vi.mocked(apiClient.listWorkflows).mockResolvedValue(list);
+
+    renderCard();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set workflow' }));
+
+    const activeWorkflow = await screen.findByRole('menuitem', { name: /Generic Workflow/i });
+    expect(activeWorkflow.textContent).toContain('Generic Workflow');
+    expect(activeWorkflow.textContent).toContain('Active');
+  });
+
+  it('shows dependency-gated ready tasks as waiting on prerequisites instead of pickup-ready', () => {
+    render(
+      <Wrapper>
+        <TaskCard
+          card={{ ...card, is_blocked: true, is_ready_to_start: false, blocked_reason: 'Waiting for 1 prerequisite task to merge.' }}
+          columnId="ready"
+          projectId="proj-1"
+          onMutated={vi.fn()}
+          onDragStartTask={vi.fn()}
+          onDragEndTask={vi.fn()}
+          isDragging={false}
+        />
+      </Wrapper>,
+    );
+
+    expect(screen.getByText('Blocked')).toBeTruthy();
+    expect(screen.getByText('Waiting on prerequisites')).toBeTruthy();
+    expect(screen.queryByText('Ready for pickup')).toBeNull();
+  });
+});

@@ -1,0 +1,182 @@
+{
+  "$schema": "../sequence-spec.schema.json",
+  "kind": "sequence",
+  "title": "Environment BuildTest accepted command and output collection",
+  "alt": "Environment resolves only Core's immutable accepted command and persists the stable operation with PostgreSQL-precision UTC timestamps before provider effects. It rechecks current authorization, Sandbox lease, writable Workspace PVC, and Cilium binding for each effect. A gated command Pod runs under an operation-scoped offline policy; only verified exit zero starts a separate gated collector Pod with a read-only PVC. The pinned collector returns a bounded no-follow file receipt tied to its Pod UID and the request fingerprint. Restart replay preserves terminal evidence; unknown effects reconcile the same operation, and Core retains MAF checkpoint and run-state ownership.",
+  "autonumber": true,
+  "participants": [
+    {
+      "id": "environment",
+      "label": "Environment owner",
+      "subLabel": "Authorization, durable intent, and reconciliation",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Owner", "tone": "neutral" }
+    },
+    {
+      "id": "admission-core",
+      "label": "Projects / Orchestrator Core",
+      "subLabel": "Fresh authority and immutable MAF acceptance",
+      "icon": "key",
+      "fluentIcon": "identity",
+      "badge": { "text": "Authority / state", "tone": "lavender" }
+    },
+    {
+      "id": "workspace-egress",
+      "label": "Workspace / Cilium",
+      "subLabel": "Exact PVC and role-scoped policy generations",
+      "icon": "route",
+      "fluentIcon": "network",
+      "badge": { "text": "Inputs", "tone": "teal" }
+    },
+    {
+      "id": "execution",
+      "label": "Agent Sandbox / Kubernetes",
+      "subLabel": "Gated Pods and pinned AgentHost collector",
+      "icon": "bot",
+      "fluentIcon": "window",
+      "badge": { "text": "Provider", "tone": "teal" }
+    }
+  ],
+  "steps": [
+    {
+      "type": "note",
+      "over": ["environment", "admission-core"],
+      "label": "The caller provides only a checkpoint reference and expected binding. Projects grants authority; Core alone owns MAF checkpoints and run state."
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "admission-core",
+      "label": "Verify fresh WriteProjects/ReadRunSelection authority and resolve the complete checkpoint",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "admission-core",
+      "to": "environment",
+      "label": "Return current authorization and Core's immutable command/options/hash/stable operation ID",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "Persist accepted intent and fingerprint with PostgreSQL-precision UTC timestamps in owner_effects",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["environment", "workspace-egress"],
+      "label": "Validate the stored Sandbox mount request. Before each effect, recheck authority, accepted intent, current lease, exact PVC, and network binding."
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "workspace-egress",
+      "label": "Create and verify command-role, operation-scoped offline deny-all policy",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "workspace-egress",
+      "to": "environment",
+      "label": "Bind the exact policy UID, spec hash, and generation",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "execution",
+      "label": "Persist attempt, then create the accepted command Pod behind a scheduling gate",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "execution",
+      "to": "environment",
+      "label": "Return exact Pod UID/resourceVersion and validated command container",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "execution",
+      "label": "Recheck bindings, then release the gate on the exact Pod",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "execution",
+      "to": "environment",
+      "label": "Observe exact terminal evidence and bounded command output",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "fragment",
+      "operator": "alt",
+      "label": "Required file outputs after verified command exit zero",
+      "sections": [
+        {
+          "label": "Collect trusted output evidence",
+          "steps": [
+            {
+              "type": "message",
+              "from": "environment",
+              "to": "workspace-egress",
+              "label": "Create a separate collector-role offline deny-all policy",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "environment",
+              "to": "execution",
+              "label": "Create a separate gated collector Pod with the exact Workspace PVC read-only",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "execution",
+              "to": "execution",
+              "label": "Read accepted paths with native no-follow flags and bounded reads on the read-only Workspace",
+              "line": "solid",
+              "arrow": "filled"
+            },
+            {
+              "type": "message",
+              "from": "execution",
+              "to": "environment",
+              "label": "Return bounded regular-file hashes and sizes with Pod UID, container, and request fingerprint",
+              "line": "dashed",
+              "arrow": "open"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "Persist one immutable terminal snapshot; restart replay preserves evidence, and uncertain effects reconcile the same operation",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "note",
+      "over": ["environment", "admission-core"],
+      "label": "Logs are not file evidence. Missing required output is Failed; cancellation, timeout, and limits are Interrupted. Core acknowledges MAF interruption."
+    }
+  ]
+}

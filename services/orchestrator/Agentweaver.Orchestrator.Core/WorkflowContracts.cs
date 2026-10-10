@@ -39,6 +39,19 @@ public sealed record FixedWorkSpecification(
     string IsolationChoice,
     ImmutableArray<string> DeclaredOutputs);
 
+public sealed record WorkflowBuildTestOutput(
+    string Name,
+    string RelativePath,
+    bool Required,
+    long MaximumBytes);
+
+public sealed record WorkflowBuildTestCommand(
+    string ExecutionProfileReference,
+    string ExecutableReference,
+    ImmutableArray<string> Arguments,
+    string WorkingDirectory,
+    ImmutableArray<WorkflowBuildTestOutput> Outputs);
+
 public sealed record WorkflowStepDefinition(
     string Id,
     string Purpose,
@@ -51,7 +64,10 @@ public sealed record WorkflowStepDefinition(
     ImmutableArray<string> AllowedIsolationChoices,
     ImmutableArray<string> RequiredProviderCapabilities,
     FixedWorkSpecification? FixedWork,
-    WorkflowPlatformGate? PlatformGate);
+    WorkflowPlatformGate? PlatformGate)
+{
+    public WorkflowBuildTestCommand? BuildTestCommand { get; init; }
+}
 
 public sealed record WorkflowDefinition(
     string Id,
@@ -168,7 +184,8 @@ public enum WorkflowValidationCode
     WorkflowConfirmationRequired,
     WorkPlanConfirmationRequired,
     InvalidAssemblyRequest,
-    CoordinatorTransitionBlocked
+    CoordinatorTransitionBlocked,
+    InvalidBuildTestCommand
 }
 
 public sealed record WorkflowValidationIssue(

@@ -73,6 +73,37 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void ByokBindingPinMustMatchTheAcceptedModelReferenceAndProvider()
+    {
+        var pin = new RuntimeModelBindingPin(1, "byok-model", "azure-deployment", ModelSourceMode.Byok,
+            "bindings-v1", new string('a', 64)) { ProviderType = "azure" };
+        var project = new ProjectConfiguration
+        {
+            ModelSelection = new("byok-model", new SecretRef("model-key", "version-1"), ModelSourceMode.Byok)
+            {
+                ModelBindingPin = pin
+            }
+        };
+        Assert.Equal(pin, ProjectConfigurationValidator.Validate(project).ModelSelection!.ModelBindingPin);
+        foreach (var changed in new[]
+        {
+            pin with { ModelSelectionReference = "foreign" },
+            pin with { SourceMode = ModelSourceMode.HostedCopilot },
+            pin with { ProviderType = null },
+            pin with { ConfigurationHash = "invalid" },
+            pin with { ConfigurationHash = new string('A', 64) },
+            pin with { ModelId = "invalid model" },
+            pin with { ConfigurationRevision = new string('a', 257) }
+        })
+            Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(project with
+            {
+                ModelSelection = project.ModelSelection! with { ModelBindingPin = changed }
+            }));
+        Assert.DoesNotContain("modelBindingPin", JsonSerializer.Serialize(
+            new ModelSelectionSettings("legacy"), new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    }
+
+    [Fact]
     public void NormalizesEgressAndAllowsOnlySubsetWithRequiredDestinations()
     {
         var baseline = ProjectConfigurationValidator.Validate(PlatformDefaults()).EgressBaseline;
@@ -158,6 +189,63 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void OptionalCreditAndRevisionLimitsInheritAndCanOnlyNarrowIncludingZero()
+    {
+        var platform = PlatformDefaults() with
+        {
+            RunLimits = PlatformDefaults().RunLimits with
+            {
+                MaxRevisionAttempts = 3,
+                CopilotSoftCreditLimit = 4m,
+                CopilotHardCreditLimit = 8m
+            }
+        };
+        var inherited = ProjectConfigurationValidator.ResolveLimits(platform, new());
+        Assert.Equal(3, inherited.MaxRevisionAttempts);
+        Assert.Equal(4m, inherited.CopilotSoftCreditLimit);
+        Assert.Equal(8m, inherited.CopilotHardCreditLimit);
+        var zero = ProjectConfigurationValidator.ResolveLimits(platform, new()
+        {
+            MaxRevisionAttempts = 0,
+            CopilotSoftCreditLimit = 0,
+            CopilotHardCreditLimit = 0
+        });
+        Assert.Equal(0, zero.MaxRevisionAttempts);
+        Assert.Equal(0m, zero.CopilotSoftCreditLimit);
+        Assert.Equal(0m, zero.CopilotHardCreditLimit);
+        foreach (var widening in new[]
+        {
+            new CopilotRunLimitOverrides { MaxRevisionAttempts = 4 },
+            new CopilotRunLimitOverrides { CopilotSoftCreditLimit = 5 },
+            new CopilotRunLimitOverrides { CopilotHardCreditLimit = 9 },
+            new CopilotRunLimitOverrides { CopilotHardCreditLimit = 3 },
+            new CopilotRunLimitOverrides { MaxRevisionAttempts = -1 },
+            new CopilotRunLimitOverrides { CopilotSoftCreditLimit = -1 },
+            new CopilotRunLimitOverrides { CopilotHardCreditLimit = -1 }
+        })
+            Assert.Throws<ProjectConfigException>(() =>
+                ProjectConfigurationValidator.ResolveLimits(platform, widening));
+    }
+
+    [Fact]
+    public void OptionalLimitsDoNotChangeHistoricalNullSerializationOrAcceptedSnapshotShape()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var limits = ProjectConfigurationValidator.ResolveLimits(PlatformDefaults(), new());
+        Assert.Equal(
+            """{"maxModelTurns":12,"maxToolCalls":100,"maxChildren":4,"maxConcurrentChildren":2,"maxWallTimeSeconds":3600,"maxPromptTokens":20000}""",
+            JsonSerializer.Serialize(limits, options));
+        Assert.Equal(
+            """{"maxModelTurns":null,"maxToolCalls":null,"maxChildren":null,"maxConcurrentChildren":null,"maxWallTimeSeconds":null,"maxPromptTokens":null}""",
+            JsonSerializer.Serialize(new CopilotRunLimitOverrides(), options));
+        var configured = ProjectConfigurationValidator.ResolveLimits(
+            PlatformDefaults(), new() { MaxRevisionAttempts = 0, CopilotHardCreditLimit = 0 });
+        Assert.Contains("\"maxRevisionAttempts\":0", JsonSerializer.Serialize(configured, options));
+        Assert.Contains("\"copilotHardCreditLimit\":0", JsonSerializer.Serialize(configured, options));
+        Assert.DoesNotContain("copilotSoftCreditLimit", JsonSerializer.Serialize(configured, options));
+    }
+
+    [Fact]
     public void RejectsProviderOverridesForNonOverridableCardinalities()
     {
         var error = Assert.Throws<ProjectConfigException>(() =>
@@ -212,6 +300,67 @@ public sealed class ProjectConfigurationValidatorTests
         Assert.DoesNotContain("\"authMode\"", json, StringComparison.Ordinal);
         Assert.DoesNotContain("\"identityConnectionId\"", json, StringComparison.Ordinal);
         Assert.DoesNotContain("tokenValue", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReviewedRemoteToolReferencesAreOptionalAndPreserveLegacyConfigurationJson()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var legacy = ProjectConfigurationValidator.Validate(new ProjectConfiguration());
+        var legacyJson = JsonSerializer.Serialize(legacy, options);
+        Assert.Equal(
+            """{"modelSelection":null,"providerOverrides":[],"orderedProviderOverrides":[],"agentCharters":[],"casting":[],"blueprintWorkflowReferences":[],"defaultWorkflowId":null,"skills":[],"egressNarrowing":null,"runLimits":{"maxModelTurns":null,"maxToolCalls":null,"maxChildren":null,"maxConcurrentChildren":null,"maxWallTimeSeconds":null,"maxPromptTokens":null}}""",
+            legacyJson);
+
+        var reference = new ReviewedRemoteToolSnapshotReference(
+            "project-1",
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            new string('a', 64),
+            "agent-1",
+            "node-1");
+        var configuration = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            ReviewedRemoteToolSnapshots = ImmutableArray.Create(reference),
+        });
+        var serialized = JsonSerializer.Serialize(configuration, options);
+        var restored = JsonSerializer.Deserialize<ProjectConfiguration>(serialized, options)!;
+        var restoredReference = Assert.Single(restored.ReviewedRemoteToolSnapshots!.Value);
+
+        Assert.Equal(reference.ProjectId, restoredReference.ProjectId);
+        Assert.Equal(reference.SnapshotId, restoredReference.SnapshotId);
+        Assert.Equal(reference.SnapshotDigest, restoredReference.SnapshotDigest);
+        Assert.Equal(reference.AgentId, restoredReference.AgentId);
+        Assert.Equal(reference.NodeId, restoredReference.NodeId);
+    }
+
+    [Fact]
+    public void ReviewedRemoteToolReferencesRejectDefaultNullAndDuplicateEntries()
+    {
+        var reference = new ReviewedRemoteToolSnapshotReference(
+            "project-1",
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            new string('a', 64),
+            "agent-1",
+            "node-1");
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(
+            new ProjectConfiguration
+            {
+                ReviewedRemoteToolSnapshots =
+                    (ImmutableArray<ReviewedRemoteToolSnapshotReference>?)default(
+                        ImmutableArray<ReviewedRemoteToolSnapshotReference>),
+            }));
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(
+            new ProjectConfiguration
+            {
+                ReviewedRemoteToolSnapshots =
+                    ImmutableArray.Create<ReviewedRemoteToolSnapshotReference>(
+                        new ReviewedRemoteToolSnapshotReference[] { null! }),
+            }));
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(
+            new ProjectConfiguration
+            {
+                ReviewedRemoteToolSnapshots = ImmutableArray.Create(reference, reference),
+            }));
     }
 
     [Fact]
