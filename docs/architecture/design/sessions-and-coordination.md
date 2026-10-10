@@ -288,6 +288,7 @@ stateDiagram-v2
     state "Interrupted" as Interrupted
     [*] --> Running
     Running --> Fenced: suspend requested
+    Running --> Interrupted: required owner transport unavailable (503; no fence claim)
     Running --> Reconciling: provider suspend or relocation event
     Reconciling --> Fenced: reconcile and fence
     Reconciling --> Interrupted: consistency not established
@@ -300,6 +301,7 @@ stateDiagram-v2
     Committed --> Suspended: placement released
     Suspended --> Validating: resume requested
     Interrupted --> Validating: recovery requested
+    Interrupted --> Validating: new operation after required transport becomes available
     Validating --> EnvironmentReady: manifest references agree
     Validating --> Interrupted: generation or reference mismatch
     EnvironmentReady --> NetworkReady: restore or reprovision and verify egress
@@ -357,6 +359,17 @@ pod state or treat a message acknowledgment as a completed command.
 A guest-snapshot adapter is enabled only after a public-preview Azure Blob capture and
 restore, warm-pool claim restore, and startup-budget checks. It is not a 1.0 cutover
 prerequisite ([R3](../decisions/0001-platform-architecture.md#risk-register)).
+
+With the 017 schema extension active, authorized Core routes fail closed while a real
+AgentHost drain/checkpoint/restore transport and current egress proof are unavailable.
+They persist the attempt in the existing execution-operation ledger and an immutable
+`Interrupted` manifest, then return `503`; they do not claim that the session was
+suspended, advance the Core execution fence, or dispatch a resumed turn. The manifest
+records the actual positive owner fence separately from its nullable `coreExecutionFence`,
+and lists missing evidence rather than substituting a zero fence. An exact retry replays
+the same operation and manifest. If the schema extension or an integrity-checked source
+manifest is unavailable, the route returns an explicit `503` without claiming a durable
+operation.
 
 ## Session tree and status
 

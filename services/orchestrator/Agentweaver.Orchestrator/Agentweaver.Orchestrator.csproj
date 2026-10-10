@@ -36,5 +36,7 @@
     <EmbeddedResource Include="Migrations\013_source_control_github_app_pins.sql" />
     <EmbeddedResource Include="Migrations\014_source_control_output_captures.sql" />
     <EmbeddedResource Include="Migrations\015_maf_execution_evidence.sql" />
+    <EmbeddedResource Include="Migrations\016_project_backlog.sql" />
+    <EmbeddedResource Include="Migrations\017_session_suspend_resume.sql" />
   </ItemGroup>
 </Project>
