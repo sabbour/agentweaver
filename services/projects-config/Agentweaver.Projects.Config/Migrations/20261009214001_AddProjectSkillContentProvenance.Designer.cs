@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Projects.Config;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Projects.Config.Migrations
 {
     [DbContext(typeof(ProjectsConfigDbContext))]
-    partial class ProjectsConfigDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261009214001_AddProjectSkillContentProvenance")]
+    partial class AddProjectSkillContentProvenance
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -294,96 +297,6 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.HasKey("ProjectId", "Revision");
 
                     b.ToTable("project_configuration_revisions", "projects_config");
-                });
-
-            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectMarketplaceSourceRecord", b =>
-                {
-                    b.Property<Guid>("SourceId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("source_id");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("CreatedByActorId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("created_by_actor_id");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("name");
-
-                    b.Property<string>("NormalizedName")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("normalized_name");
-
-                    b.Property<string>("ProjectId")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("project_id");
-
-                    b.Property<string>("Repository")
-                        .IsRequired()
-                        .HasMaxLength(201)
-                        .HasColumnType("character varying(201)")
-                        .HasColumnName("repository");
-
-                    b.Property<string>("RequestedRef")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)")
-                        .HasColumnName("requested_ref");
-
-                    b.Property<long>("Revision")
-                        .IsConcurrencyToken()
-                        .HasColumnType("bigint")
-                        .HasColumnName("revision");
-
-                    b.Property<string>("State")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)")
-                        .HasColumnName("state");
-
-                    b.Property<string>("Subpath")
-                        .HasMaxLength(1024)
-                        .HasColumnType("character varying(1024)")
-                        .HasColumnName("subpath");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.Property<string>("UpdatedByActorId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("updated_by_actor_id");
-
-                    b.HasKey("SourceId");
-
-                    b.HasIndex("ProjectId", "NormalizedName")
-                        .IsUnique()
-                        .HasDatabaseName("ux_marketplace_sources_project_name_active")
-                        .HasFilter("\"state\" = 'Active'");
-
-                    b.HasIndex("ProjectId", "State");
-
-                    b.ToTable("marketplace_sources", "projects_config", t =>
-                        {
-                            t.HasCheckConstraint("ck_marketplace_sources_revision", "revision > 0");
-
-                            t.HasCheckConstraint("ck_marketplace_sources_state", "state IN ('Active', 'Removed')");
-                        });
                 });
 
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectRecord", b =>
@@ -859,15 +772,6 @@ namespace Agentweaver.Projects.Config.Migrations
                 });
 
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectConfigurationRevisionRecord", b =>
-                {
-                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectMarketplaceSourceRecord", b =>
                 {
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
                         .WithMany()

@@ -7,6 +7,7 @@ public sealed class RuntimeSessionBootstrap(
     IRuntimeRegistrationOwner owner,
     RuntimeBrokerCredentialClient broker,
     RuntimeCopilotSessionFactory sessions,
+    RuntimeSkillContentHttpClient skillContent,
     RuntimeActorAuthorization actor,
     TimeProvider timeProvider,
     SandboxImageIdentity? expectedImage = null,
@@ -47,6 +48,9 @@ public sealed class RuntimeSessionBootstrap(
             throw new RuntimeAuthorizationException("runtime_model_source_mode_unavailable");
         if (bootstrap.Audience != registration.Binding.ConfigureEndpoint)
             throw new RuntimeAuthorizationException("runtime_configuration_audience_invalid");
+        var acceptedSkills = await skillContent.ReadAsync(registration, cancellationToken)
+            .ConfigureAwait(false);
+        await RequireUnchangedAsync(registration, cancellationToken).ConfigureAwait(false);
 
         var consumed = await broker.ConsumeBootstrapAsync(bootstrap, consumeOperationId, cancellationToken);
         RequireRegistrationReceipt(consumed, registration);
@@ -71,6 +75,12 @@ public sealed class RuntimeSessionBootstrap(
             await RequireUnchangedAsync(registration, cancellationToken);
             var sourceProof = SourceProof(source);
             AuthorizedRuntimeSession? authorized = null;
+            async Task RequireSkillContentCurrentAsync(CancellationToken token)
+            {
+                var current = await skillContent.ReadAsync(registration, token).ConfigureAwait(false);
+                if (!SameAcceptedSkills(acceptedSkills, current))
+                    throw new RuntimeAuthorizationException("runtime_skill_content_stale");
+            }
             async Task RequireSourceAuthorityAsync(CancellationToken token)
             {
                 if (authorized is not null)
@@ -83,6 +93,7 @@ public sealed class RuntimeSessionBootstrap(
                     throw new RuntimeAuthorizationException("runtime_credential_unavailable");
                 if (requireReadiness is not null)
                     await requireReadiness(registration, token).ConfigureAwait(false);
+                await RequireSkillContentCurrentAsync(token).ConfigureAwait(false);
                 var verifiedSource = await broker.VerifySourceAsync(sourceProof, token);
                 RequireRegistrationReceipt(verifiedSource, registration);
                 await broker.VerifyModelCredentialAsync(modelCredential, token);
@@ -98,13 +109,14 @@ public sealed class RuntimeSessionBootstrap(
             await RequireSourceAuthorityAsync(cancellationToken);
             session = await sessions.CreateAsync(
                 registration, modelReference, modelCredential.Credential, RequireSourceAuthorityAsync,
-                cancellationToken, recovery,
+                cancellationToken, acceptedSkills, recovery,
                 actions is null ? null : (action, input, toolInvocation, token) =>
                     actions.RequireAsync(registration, action, input, RequireSourceAuthorityAsync, token,
                         isToolInvocation: toolInvocation));
             await RequireSourceAuthorityAsync(cancellationToken);
             authorized = new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,
-                session, modelCredential, owner, broker, actor, timeProvider, actions, requireReadiness);
+                session, modelCredential, owner, broker, actor, timeProvider, actions, requireReadiness,
+                RequireSkillContentCurrentAsync);
             return authorized;
         }
         catch (Exception failure)
@@ -161,4 +173,13 @@ public sealed class RuntimeSessionBootstrap(
         new(source.Receipt.GrantId, source.Receipt.RuntimeInstanceId, source.Receipt.Revision,
             RuntimeCredentialPurpose.Observe, source.Receipt.Audience, source.Receipt.ConfigurationHash,
             source.Credential ?? throw new RuntimeAuthorizationException("runtime_source_credential_unavailable"));
+
+    private static bool SameAcceptedSkills(
+        SkillRuntimeContentProjectionV1 expected,
+        SkillRuntimeContentProjectionV1 current) =>
+        expected.Skills.Length == current.Skills.Length &&
+        expected.Skills.Zip(current.Skills).All(pair =>
+            pair.First.SkillId == pair.Second.SkillId &&
+            pair.First.Revision == pair.Second.Revision &&
+            pair.First.ContentDigest == pair.Second.ContentDigest);
 }
