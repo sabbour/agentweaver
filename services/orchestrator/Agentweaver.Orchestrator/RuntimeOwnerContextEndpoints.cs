@@ -84,7 +84,7 @@ public static partial class CoordinationEndpoints
             WorkflowStepId = workPlanItem.WorkflowStepId,
             ModelCredentialReference = modelSelection.CredentialReference,
             ModelSourceMode = modelSelection.SourceMode,
-            ModelBindingPin = runAdmission?.ModelBindingPin,
+            ModelBindingPin = runAdmission?.ModelBindingPin ?? modelSelection.ModelBindingPin,
             ModelConnectionId = modelSelection.ConnectionId,
             ModelConnectionScope = modelSelection.ConnectionScope,
             MaxModelTurns = budgetLimits.MaxModelTurns,
@@ -96,8 +96,7 @@ public static partial class CoordinationEndpoints
         };
     }
 
-    private static (SecretRef? CredentialReference, ModelSourceMode? SourceMode,
-        Guid? ConnectionId, ProjectAuthorityResourceType? ConnectionScope) ReadModelSelection(
+    private static RuntimeAcceptedModelSelection ReadModelSelection(
         JsonElement snapshot, string expectedModelReference)
     {
         if (snapshot.ValueKind != JsonValueKind.Object ||
@@ -112,7 +111,7 @@ public static partial class CoordinationEndpoints
         try
         {
             var accepted = RuntimeAcceptedModelSelection.Read(snapshot);
-            return (accepted.CredentialReference, accepted.SourceMode, accepted.ConnectionId, accepted.ConnectionScope);
+            return accepted;
         }
         catch (RuntimeAuthorizationException exception)
         {

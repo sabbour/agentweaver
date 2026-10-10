@@ -129,12 +129,13 @@ public static class EnvironmentEndpoints
             })
             .RequireAuthorization();
 
-        MapRuntimePlacement(readiness: false);
-        MapRuntimePlacement(readiness: true);
+        MapRuntimePlacement("");
+        MapRuntimePlacement("/readiness");
+        MapRuntimePlacement("/workspace");
 
-        void MapRuntimePlacement(bool readiness) => endpoints.MapGet(
+        void MapRuntimePlacement(string suffix) => endpoints.MapGet(
             "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}" +
-                (readiness ? "/readiness" : ""),
+                suffix,
             async (
                 string projectId,
                 string runId,
@@ -158,7 +159,14 @@ public static class EnvironmentEndpoints
                 try
                 {
                     var actor = new RuntimeActorAuthorization(bearer, caller.TenantSelector);
-                    if (readiness)
+                    if (suffix == "/workspace")
+                    {
+                        var workspace = await reader.GetWorkspaceContextAsync(
+                            actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken)
+                            .ConfigureAwait(false);
+                        return workspace is null ? Results.NotFound() : Results.Ok(workspace);
+                    }
+                    if (suffix == "/readiness")
                     {
                         var observed = await reader.GetReadinessContextAsync(
                             actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken)

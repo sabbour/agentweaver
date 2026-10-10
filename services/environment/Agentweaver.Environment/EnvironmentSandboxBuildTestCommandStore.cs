@@ -114,7 +114,7 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
             acceptedCommand.OperationId,
             cancellationToken).ConfigureAwait(false);
 
-        var now = timeProvider.GetUtcNow();
+        var now = CurrentTimestamp();
         var initialState = new EnvironmentSandboxBuildTestCommandState(
             acceptedCommand,
             initialOperation with { CreatedAt = now, UpdatedAt = now },
@@ -270,7 +270,7 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
                 state.AttemptedEffects) ||
             operation.CreatedAt != previous.Operation.CreatedAt ||
             operation.UpdatedAt < previous.Operation.UpdatedAt ||
-            !IsAllowedStatusTransition(previous.Operation.Status, operation.Status) ||
+            !IsAllowedOperationTransition(previous.Operation, operation) ||
             state.AttemptedEffects.IsDefault ||
             state.AttemptedEffects.Any(string.IsNullOrWhiteSpace) ||
             state.AttemptedEffects.Distinct(StringComparer.Ordinal).Count() != state.AttemptedEffects.Length ||
@@ -279,7 +279,7 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
                 "buildtest_operation_conflict",
                 "The BuildTest operation update changed immutable intent or has invalid state.");
 
-        var now = timeProvider.GetUtcNow();
+        var now = CurrentTimestamp();
         var updated = state with { Operation = operation with { UpdatedAt = now } };
         var completedAt = CompletionTime(updated.Operation, existing.CreatedAt);
         await using var update = new NpgsqlCommand($"""
@@ -584,6 +584,12 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
             JsonSerializer.SerializeToNode(left, JsonOptions),
             JsonSerializer.SerializeToNode(right, JsonOptions));
 
+    private DateTimeOffset CurrentTimestamp()
+    {
+        var utc = timeProvider.GetUtcNow().ToUniversalTime();
+        return new DateTimeOffset(utc.Ticks - utc.Ticks % 10, TimeSpan.Zero);
+    }
+
     private static bool CanAdvanceCommandPolicyBinding(
         SandboxBuildTestCommandNetworkPolicyBinding previous,
         SandboxBuildTestCommandNetworkPolicyBinding next,
@@ -631,17 +637,17 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
             attempts.Contains($"{role}:observed", StringComparer.Ordinal);
     }
 
-    private static bool IsAllowedStatusTransition(
-        SandboxBuildTestOperationStatus previous,
-        SandboxBuildTestOperationStatus next)
+    private static bool IsAllowedOperationTransition(
+        SandboxBuildTestOperationSnapshot previous,
+        SandboxBuildTestOperationSnapshot next)
     {
-        if (previous == next)
-            return true;
-        var wasTerminal = previous is SandboxBuildTestOperationStatus.Completed or
+        var wasTerminal = previous.Status is SandboxBuildTestOperationStatus.Completed or
             SandboxBuildTestOperationStatus.Failed or
             SandboxBuildTestOperationStatus.Interrupted or
             SandboxBuildTestOperationStatus.Stale;
-        return !wasTerminal && Enum.IsDefined(next);
+        return wasTerminal
+            ? SameJson(previous with { UpdatedAt = next.UpdatedAt }, next)
+            : Enum.IsDefined(next.Status);
     }
 
     private static bool SameCheckpoint(

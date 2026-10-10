@@ -92,11 +92,20 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var hosted = NativeReceipt();
         var registration = hosted.Registration with
         {
-            Binding = hosted.Registration.Binding with { ModelSourceMode = ModelSourceMode.Byok }
+            Binding = hosted.Registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = new(1, hosted.Usage.SdkSource!.ModelSelectionReference,
+                    hosted.Usage.SdkSource.ModelId, ModelSourceMode.Byok, "byok-bindings-v1", new string('a', 64))
+                {
+                    ProviderType = "azure"
+                }
+            }
         };
         var source = hosted.Usage.SdkSource! with
         {
-            SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null
+            SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null,
+            ByokProvider = new("azure", hosted.Usage.SdkSource.ModelId, new string('a', 64))
         };
         var sdkEvent = Guid.NewGuid().ToString("D");
         var observation = new SdkUsageObservation(

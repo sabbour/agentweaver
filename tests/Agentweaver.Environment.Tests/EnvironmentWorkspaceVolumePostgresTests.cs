@@ -1,6 +1,8 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Npgsql;
 using Xunit;
 
 namespace Agentweaver.Environment.Tests;
@@ -8,6 +10,107 @@ namespace Agentweaver.Environment.Tests;
 public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresFixture fixture)
     : IClassFixture<EnvironmentPostgresFixture>
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CombinedLeaseAndWorkspaceReadRetainsOneOwnerLockAcrossCompetingWrites(bool replaceWorkspace)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var owner = NewOwner();
+        var lifecycle = fixture.CreateStore();
+        var fence = (await RegisterAsync(lifecycle, owner)).Snapshot.Fence;
+        const string volumeId = "workspace-volume";
+        await lifecycle.CreateWorkspaceVolumeAsync(
+            fence, volumeId, CreateSpecification(owner, volumeId), "create", timeout.Token);
+        var storage = new ProviderResourceRef(ProviderSeam.Storage, "azure-files", "resource-1", 1);
+        var provision = await lifecycle.ReserveWorkspaceVolumeProvisionAsync(
+            fence, volumeId, 1, 0, 0, "provision", timeout.Token);
+        await lifecycle.CompleteWorkspaceVolumeProvisionAsync(
+            provision.OperationId, fence, true, storage, Binding(storage), true, timeout.Token);
+        var expectedWorkspace = await lifecycle.GetWorkspaceVolumeAsync(fence, volumeId, timeout.Token);
+        var leases = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
+        var intent = new SandboxLeaseProvisionIntent("agent-sandbox", "1.0.0", 1, "options-1",
+            JsonSerializer.SerializeToElement(new { namespaceName = "agentweaver" }),
+            JsonSerializer.SerializeToElement(new { acceptedSelection = "module-only" }),
+            JsonSerializer.SerializeToElement(new { volumeId }));
+        var reservation = await leases.ReserveProvisionAsync(fence, "sandbox", intent, timeout.Token);
+        var planned = SandboxResourceIdentity.CreatePlannedReference(
+            intent.ProviderId, intent.OptionsRevision, fence, reservation.Lease.ResourceGeneration,
+            reservation.Lease.ProviderFencingGeneration, reservation.Lease.OperationId);
+        var sandbox = new SandboxProvisionedResource(planned, new(Guid.NewGuid()), new("controlled-placement"),
+            ImmutableHashSet.Create(SandboxCapabilities.VmIsolation), [],
+            new(intent.ProviderId, intent.AdapterVersion, intent.OptionsSchemaVersion, intent.OptionsRevision,
+                intent.OptionsSnapshot, JsonSerializer.SerializeToElement(new { claim = planned.ResourceId })));
+        var expectedLease = await leases.CompleteProvisionAsync(
+            reservation.Lease.OperationId, fence, sandbox, true, timeout.Token);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
+        var read = restarted.GetCurrentWithWorkspaceAsync(fence, volumeId, async (lease, workspace, token) =>
+        {
+            Assert.NotNull(lease);
+            Assert.NotNull(workspace);
+            entered.TrySetResult();
+            await release.Task.WaitAsync(token);
+            return (Lease: lease, Workspace: workspace);
+        }, timeout.Token);
+        await Task.WhenAny(entered.Task, read).WaitAsync(timeout.Token);
+        if (!entered.Task.IsCompleted)
+        {
+            await read;
+            throw new InvalidOperationException("The combined owner read did not reach its callback.");
+        }
+        var application = "combined-workspace-writer-" + Guid.NewGuid().ToString("N");
+        await using var writerSource = fixture.CreateDataSource(application);
+        async Task WriteAsync()
+        {
+            if (replaceWorkspace)
+                await new EnvironmentLifecycleStore(writerSource, TimeProvider.System).ReserveWorkspaceVolumeReplaceAsync(
+                    fence, volumeId, 2, 1, 0, "replace", timeout.Token);
+            else
+                await new EnvironmentSandboxLeaseStore(writerSource, TimeProvider.System).BeginRetirementAsync(
+                    fence, expectedLease.ResourceGeneration, expectedLease.ProviderFencingGeneration,
+                    SandboxRetirementReason.AuthorizedAbandon, "retire",
+                    new("https://module-identity.test", "module-actor", 1), null, timeout.Token);
+        }
+        var writer = WriteAsync();
+        var error = await Record.ExceptionAsync(async () =>
+        {
+            await using var observer = await fixture.DataSource.OpenConnectionAsync(timeout.Token);
+            await using var blocked = new NpgsqlCommand(
+                "SELECT count(*) FROM pg_locks locks JOIN pg_stat_activity activity ON activity.pid = locks.pid " +
+                "WHERE activity.application_name = @application AND locks.locktype = 'advisory' AND NOT locks.granted",
+                observer);
+            blocked.Parameters.AddWithValue("application", application);
+            while (Convert.ToInt64(await blocked.ExecuteScalarAsync(timeout.Token)) == 0)
+            {
+                if (writer.IsCompleted)
+                    throw new InvalidOperationException("The writer bypassed the combined owner lock.",
+                        await Record.ExceptionAsync(() => writer));
+                await using var clear = new NpgsqlCommand("SELECT pg_stat_clear_snapshot()", observer);
+                await clear.ExecuteNonQueryAsync(timeout.Token);
+                await Task.Delay(10, timeout.Token);
+            }
+            Assert.False(writer.IsCompleted);
+            release.TrySetResult();
+            var snapshot = await read;
+            Assert.Equal(expectedLease.LeaseRevision, snapshot.Lease.LeaseRevision);
+            Assert.Equal(sandbox.Resource, snapshot.Lease.ProvisionedResource!.Resource);
+            Assert.Equal(expectedWorkspace!.TransitionRevision, snapshot.Workspace.TransitionRevision);
+            Assert.Equal(storage, snapshot.Workspace.Resource);
+            Assert.Equal(0, snapshot.Workspace.DataGeneration);
+            Assert.Equal(owner, snapshot.Workspace.EnvironmentFence.Owner);
+            Assert.Equal(volumeId, snapshot.Workspace.VolumeId);
+            await writer;
+        });
+        release.TrySetResult();
+        var cleanupError = await Record.ExceptionAsync(() => Task.WhenAll(read, writer));
+        if (error is not null && cleanupError is not null)
+            throw new AggregateException("Combined owner read and cleanup failed.", error, cleanupError);
+        if (error is not null || cleanupError is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error ?? cleanupError!).Throw();
+    }
+
     [Fact]
     public async Task ProvisionAndReplaceAdvanceOnlyResourceGeneration()
     {

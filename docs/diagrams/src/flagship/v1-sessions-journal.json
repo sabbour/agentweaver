@@ -183,12 +183,17 @@
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
+      "label": "API/UI/MCP: scoped replay, not transcript text. Gates need fresh owner snapshots; accepted messages and local echoes are not completion."
+    },
+    {
+      "type": "note",
+      "over": ["caller", "api", "postgres"],
       "label": "Knowledge receipts are project facts, not session events. Orchestrator validates its owner outbox before fenced turn-boundary delivery; receipt is not approval."
     },
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
-      "label": "Guarded turns/tools; native idle priority; actual content + compatible cache. Journal rebuild: no effect replay. Accounting ACK before turn ACK."
+      "label": "Turns: accounting before answer.\nSuspend: Core operation/version checks before stopping turns and cache ACK.\nMissing Workspace proof blocks completion."
     },
     {
       "type": "note",

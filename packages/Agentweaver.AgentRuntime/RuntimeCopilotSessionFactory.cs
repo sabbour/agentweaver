@@ -83,6 +83,8 @@ public sealed class RuntimeCopilotSessionFactory
             throw new RuntimeAuthorizationException("runtime_model_reference_unavailable");
         var model = _modelBindings.Resolve(acceptedModelSelectionReference,
             registration.Binding.ModelSourceMode, registration.Binding.ModelBindingPin);
+        if (model.SourceMode == ModelSourceMode.Byok && registration.Binding.ModelBindingPin is null)
+            throw new RuntimeAuthorizationException("runtime_byok_binding_pin_required");
         if (!sdkCredential.IsUsable())
             throw new RuntimeAuthorizationException("runtime_sdk_credential_unavailable");
         var token = sdkCredential.GetValue();
@@ -318,7 +320,10 @@ public sealed class RuntimeCopilotSessionFactory
                 registration.Binding.AcceptedSelectionHash,
                 registration.Revision)
             {
-                MaxPromptTokens = maxPromptTokens
+                MaxPromptTokens = maxPromptTokens,
+                ByokProvider = model.Provider is { } actualProvider
+                    ? new(actualProvider.Type, currentModel.ModelId, _modelBindings.ConfigurationHash)
+                    : null
             };
             return new RuntimeCopilotSession(client, session, facts, usage, turns,
                 nativeFiles, recoveryMode, recoveryReason, _abortDrainTimeout);

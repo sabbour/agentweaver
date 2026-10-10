@@ -4,7 +4,7 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 
 | Test suite | What it exercises | What it does not prove |
 | --- | --- | --- |
-| Orchestrator Core tests | Typed outcome/workflow/plan/revision validation, workflow grammar and step DAG validation, bounded WorkPlan eligibility and joins, project-scoped backlog graph edits and cycle checks, revision-fenced readiness for merge-complete and verified non-merge completion, MAF witness serialization and current-capture inventory regressions for late non-empty captures and multiple captures, pinned model/provider selection checks, structured scope diffs, AGT Policy provider validation and evaluation, negotiation/pinning, deny-by-default and project-policy narrowing, plus action-guard grant scope/fence checks, immutable owner receipt persistence, journal-ACK ordering, current-grant revalidation, and no-effect behavior on evidence failure. Its PostgreSQL integration tests cover persisted backlog edits, concurrent claim arbitration, idempotent replay after store restart, rollback of claim/root/decision intent, and rollback when current authority is lost immediately before commit or replay commit. | Current network authorization in backlog routes, production task-to-whole-plan evidence association/output-proof verification, live model output, full child dispatch, deployed authorization, or protected-effect call-site enforcement. |
+| Orchestrator Core tests | Typed outcome/workflow/plan/revision validation, workflow grammar and step DAG validation, bounded WorkPlan eligibility and joins, deterministic UTC daily/weekly/monthly occurrence evaluation, stable schedule idempotency inputs, bounded structured GitHub event predicates and regex safety, project-scoped backlog graph edits and cycle checks, revision-fenced readiness for merge-complete and verified non-merge completion, MAF witness serialization and current-capture inventory regressions for late non-empty captures and multiple captures, pinned model/provider selection checks, structured scope diffs, AGT Policy provider validation and evaluation, negotiation/pinning, deny-by-default and project-policy narrowing, plus action-guard grant scope/fence checks, immutable owner receipt persistence, journal-ACK ordering, current-grant revalidation, and no-effect behavior on evidence failure. Its PostgreSQL integration tests cover persisted backlog edits, concurrent claim arbitration, idempotent replay after store restart, rollback of claim/root/decision intent, and rollback when current authority is lost immediately before commit or replay commit. | Current network authorization in backlog routes, production task-to-whole-plan evidence association/output-proof verification, automatic workflow initiation, live model output, full child dispatch, deployed authorization, or protected-effect call-site enforcement. |
 | Source Control tests | Real temporary-Git workspace isolation and recovery, controlled GitHub HTTP behavior including exact open-PR reuse and exact-head check evidence, raw-byte HMAC and repository binding, strict Broker redemption, immutable provider-pin restore, typed approval-linked merge-grant state, native PostgreSQL repository locking and webhook-delivery replay/conflict, plus Orchestrator audience rejection of direct GitHub POST before Projects or owner effects. | A deployed Source Control service, trusted unattended webhook relay, live GitHub/Identity calls, or automatic workflow execution from a webhook. |
 | Provider tests | Catalog validation, cardinality, overrides, capability negotiation, and run pinning. | Resource provisioning or network-policy enforcement. |
 | Azure Files provider tests | Environment-scoped generation PVC identities, pinned Kubernetes API target, requested/configured StorageClass matching, effective reclaim-policy enforcement, claim/PV ownership checks, reclaim/delete UID preconditions, exact release receipts and retry outcomes, Azure Files mount options, Kubernetes quantity normalization, and credential-free request bodies through fake Kubernetes transports. | A live Kubernetes API/CSI driver, Azure Files durability or data erasure, Sandbox attachment, or durable flush. |
@@ -18,7 +18,8 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 | PostgreSQL tests | Outbox and inbox transactions, duplicates, concurrency, leases, relay outcomes, and recovery across restart. | A broker, relay daemon, exactly-once delivery, or cross-service transaction. |
 | Events & Sessions tests | Provider-neutral contracts and the P0 Identity Broker principal profile; explicit runtime/migration Entra configuration with no identity fallback; PostgreSQL token refresh and password rejection; project/run-scoped IDs; append, deduplication/conflicts, PolicyEvaluation redaction and provenance checks, receipt-reference admission/no-store acknowledgments/transaction rollback, legacy capability pins, fork prefix lineage and authenticated idempotent retries, owner-admission revocation, migration, and rollback. Addressed-message tests cover idempotency, ordering, leases/fencing, transactional outbox, acknowledgments, expiry, and undeliverable state. PostgreSQL coverage uses disposable containers. | Workload-identity federation, production Entra grants, live cloud migration, AgentHost integration, protected-effect call-site enforcement, or production-scale replica behavior. |
 | Environment egress tests | Purpose-aware FQDN/CIDR intersection, Projects authorization freshness, Cilium options and policy rendering, resource-version/generation fencing, object readback, and provider pinning with fake Kubernetes resources. | Sandbox claim/template labels, Kubernetes RBAC/workload identity, a deployed Cilium datapath, actual network reachability, or public HTTPS/Remote MCP L7 mediation. |
-| Environment Sandbox tests | See the [Sandbox testing guide](./environment-sandbox-testing.md) for owner-fenced lease, selected-provider, readiness, and recovery coverage. BuildTest source tests check complete checkpoint/profile binding, required-output failure, distinct collector terminal provenance, timeout/cancellation classification, server capability configuration, and migration/model metadata consistency without a database connection. | Live AKS or RuntimeClass behavior, Cilium datapath enforcement, deployed AgentHost configuration, durable BuildTest PostgreSQL execution, Core run pins, or deployed service configuration. |
+| Remote MCP parser and contract tests | Exact Registry response/version and static endpoint pins, tool schema and catalog digests, duplicate/invalid JSON rejection, byte limits, and unlinked delegated-OAuth configuration. | PostgreSQL migration/CAS/replay/restart behavior, a live Registry, MCP transport, reviewed tool acceptance, OAuth consent, or L7 mediation. |
+| Environment Sandbox tests | See the [Sandbox testing guide](./environment-sandbox-testing.md) for owner-fenced lease, selected-provider, readiness, and recovery coverage. BuildTest source tests check complete checkpoint/profile binding, required-output failure, distinct collector terminal provenance, timeout/cancellation classification, server capability configuration, and migration/model metadata consistency without a database connection. BuildTest PostgreSQL tests create actual owner, attached Workspace, and active Sandbox records. They cover concurrent reservation, connection-pool restart replay, immutable intent, stale-binding no-effect rejection, policy-attempt persistence, timestamp precision, and terminal-evidence preservation. | Live AKS or RuntimeClass behavior, Cilium datapath enforcement, deployed AgentHost configuration, BuildTest command-Pod execution, Core run pins, or deployed service configuration. |
 | Knowledge tests | Knowledge-owned PostgreSQL migrations and least-privilege runtime grants; project/agent isolation; immutable revision history, CAS conflicts, idempotent retries, explicit proposal decisions and outbox persistence; context filtering/restart; TestServer checks for fresh Projects authority and original-token forwarding; Cosmos adapter option/provider tests with a fake document store, including negotiation rejection for an expiring TTL or missing search index, batch timeout/size/throttle failures, immutable run-pin checks, and no fallback when Cosmos is unavailable; Redis adapter tests with a controlled command-client fake for TLS/options and provider selection, AOF/eviction/topology rejection, persistent-key and hash-field checks, malformed typed-payload rejection during negotiation and scans, single-write batch prevalidation, CAS, lost-response idempotency, server-time lease fencing, and backend-loss behavior; opt-in native Redis tests use the production client/store for real-Lua batch atomicity, concurrent CAS, and promotion/receipt/idempotency plus server-time lease fencing across an AOF-backed restart of one digest-pinned, test-owned instance; deterministic identical-retry races for update, reject, and promote; current scoped receipt reads, legacy three-field N-1 delivery/replay, partial-scope rejection, and a missing-pin lookup that verifies no binding is created. Identity Broker integration tests use broker-issued minimal-profile tokens, live Core membership/role lookup, the Knowledge API, and PostgreSQL to verify the private-content `WriteProjects` boundary. PostgreSQL uses disposable containers. | A deployed Knowledge service, production workload identity, live Cosmos or Redis permissions/durability/availability, or delivery from either Memory adapter to a deployed Events & Sessions journal. |
 | Key Vault tests | Azure SDK authentication and secret requests through in-memory HTTP transports. Workload identity tests use generated token files and fake OAuth and Key Vault endpoints. | Live token exchange, Key Vault RBAC, or an Azure deployment. |
 | Blob tests | Azure SDK requests, streamed data, create-only writes, and missing-object results through a fake HTTP transport. | Live credentials, permissions, durability, or cloud access. |
@@ -127,7 +128,27 @@ dotnet test tests\Agentweaver.Knowledge.Tests\Agentweaver.Knowledge.Tests.csproj
 Do not set the opt-in flag until all instance, image, volume, endpoint, and ownership
 values are confirmed. The native filter is not part of offline test runs.
 
+## Reviewed remote-tool selection
+
+Reviewed remote-tool selection tests use the actual Projects selection reader with
+controlled owner responses and a controlled immutable-store resolver. They cover
+exact references, duplicate and foreign references, missing or changed snapshots,
+and authority loss after resolution. Project validators reject duplicate references
+and retain the omitted legacy field. The numeric-limit PostgreSQL tests use the
+concrete snapshot store and preserve existing grant and limit behavior.
+These checks do not prove production migration activation, current remote-connection
+authority, credential access, applied L7 enforcement, or a protected remote call.
+
 ## Meter-keyed Cost source selection
+
+`AzureByokNativeUsageUsesBrokerCoreAndEventsWithExactDispatchProvenance` uses the real Broker, Projects, Core PostgreSQL, and Events owners.
+Only the external native SDK transport and credential backend are controlled.
+The fixture requires an accepted Azure provider pin and exact-version model-session redemption.
+It records an actual dispatch-correlated SDK usage event, duplicate/conflict outcomes, and reference-only Events acknowledgment.
+BYOK authority-loss cases reject stale grants, retired leases, and expiry without native or ledger effects.
+The Projects fixture reuses its role-bound connection pool and closes it before role cleanup.
+Provider/model mismatch and missing-measurement tests reject invalid source facts.
+These checks do not call a paid model or prove Azure deployment.
 
 Provider tests cover independent enabled selections, duplicate/disabled/wrong-seam
 catalog rejection, absent sources, exact adapter/options schema requirements and
@@ -151,6 +172,11 @@ tests remain unchanged.
 
 The Events & Sessions tests cover weighted nano-AIU pricing, unweighted quotes,
 missing measurements, immutable rate cards, and redacted binding diagnostics.
+`AzureCostProviderTests` cover model-scoped standard token arithmetic, explicit
+rate-card source/currency/version, missing or unsupported token measurements,
+changed pins, overflow, unsupported BYOK quotes, and provisioned-throughput
+`Unpriced` behavior. These are pure local provider tests; they do not prove
+trusted BYOK receipt pricing, PostgreSQL integration, or Azure price retrieval.
 Hosted usage contract tests accept priced nano-AIU without optional SDK accounting metadata.
 They still reject wrong source identities, meter shapes, and unpriced entries.
 Cost snapshot contract tests distinguish valid zero-work quotes from unavailable pricing.
@@ -200,6 +226,9 @@ The native SDK session store and ambient configuration discovery remain disabled
 The custom filesystem captures opaque native cache bytes and restores the same logical session through the actual SDK resume call.
 Missing, incompatible, or corrupt caches rebuild context from journal content without a model-turn replay.
 The guarded positive scenario records the actual user and assistant content, the Policy receipt, and the native cache reference.
+Separate controlled Host tests require Core's exact current-operation echo before stopping turns and around native cache writes.
+They reject changed operation identity, phase version, or authority, and missing replay cache.
+They do not prove a persisted Core suspend operation or PostgreSQL suspend success.
 It rotates the genuine source grant before the protected turn and checks refresh replay.
 Native cancellation tests hold the actual abort idle event before they admit another turn.
 Failed aborts and missing idle events reject later turns and cache capture.
@@ -243,6 +272,56 @@ Live Xunit output identifies current native requests and cleanup if the case rea
 The focused Copilot lifecycle cases cover cookie/subject/state rejection before exchange, callback replay,
 concurrent refresh, transient recovery, permanent rejection, uncertain rotation, account change, and current Core revocation.
 These cases use disposable PostgreSQL and controlled external transports, not live OAuth or paid model calls.
+
+## P1 retained-surface harness candidates
+
+The [API adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/api-harness/README.md), [UI adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/ui-harness/README.md),
+and [MCP adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/mcp-harness/README.md) selectively reuse released 0.x patterns.
+They use current v1 contracts, not retired monolith routes or an inherited P0 acceptance result.
+
+```powershell
+npm run test:harness
+npm run test:harness:api
+npm run test:harness:ui
+npm run test:harness:mcp
+```
+
+The combined command runs controlled adapter checks.
+API tests use actual loopback HTTP with controlled contracts.
+MCP tests use the pinned SDK with an actual loopback JSON-RPC server.
+UI tests use a controlled injected-page contract, not a browser.
+These checks do not prove a real cross-surface journey, native model execution, or deployment.
+
+For an approved journey, discover the live API and MCP menus first.
+Use `requireJourneyCapabilities` from `scripts/harness-shared/journey-capabilities.mjs` before dispatch.
+It checks only the selected gate action, message, or journal requirements.
+Missing required operations block the journey; they do not produce a skipped success.
+Helper and menu presence are not proof of current DOM controls or owner authority.
+Journal replay requires API SSE support, but MCP deliberately does not advertise an SSE tool.
+
+The UI adapter requires an already authorized page and exact Broker identity metadata.
+It neither starts a browser nor changes its profile or stored credentials.
+Gate actions require current owner snapshots and exact request, actor, fence, state version, and answer contracts.
+Decision receipts must match that fence and the next state version, including owner denials.
+After awaited work, the adapter rechecks the exact page scope before final action clicks and replay proof.
+Actual denials remain denials.
+Message acceptance and local browser echoes cannot prove delivery or gate completion.
+
+The retained journal exposes ordered event DTOs and opaque object references.
+The public Gateway has no object-content read route.
+The UI adapter checks replay pages against the current DOM, without inventing transcript text.
+
+![Retained journal and owner evidence boundaries](/diagrams/flagship/v1-sessions-journal.png)
+
+The retained surfaces observe owner evidence; they do not create authority from browser output.
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> | <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
+
+Use the shared redacted JSONL writer and the [P1 judge brief](https://github.com/sabbour/agentweaver/blob/v1/scripts/harness-judge/README.md).
+Record exact source, target, scenario, surface, and owner evidence references.
+Do not persist transient raw bodies or credential values.
+An expected source SHA does not observe a deployment.
+Client disposal does not clean up a project, run, session, or Environment.
+Product cleanup requires current authority, exact test-owned identities, and verified owner receipts.
 
 ## Validate the documentation site
 
@@ -305,3 +384,13 @@ contracts from [#1859](https://github.com/sabbour/agentweaver/issues/1859) and
 It does not require all P1, the whole bundle epic, A2UI, Cosmos, Redis, or P3.
 Passing documentation checks supplies no permission for live deployment, credentials,
 paid execution, publication, or destructive cleanup.
+
+## Environment remote MCP connection records
+
+Disposable PostgreSQL tests cover connection migrations, exact Identity-binding
+revisions and digests, replay after restart, changed authority, and immutable history.
+Runtime-role tests reject updates to configuration history and physical deletion.
+Pure parser tests cover exact Registry versions, static HTTPS endpoints, duplicate
+JSON fields, tool names, schema shapes, and byte limits.
+These tests do not prove live discovery, OAuth credential use, applied L7 policy,
+or a protected remote request.

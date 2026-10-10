@@ -10,7 +10,11 @@ namespace Agentweaver.Projects.Config;
 public sealed record ModelSelectionSettings(
     string Reference, SecretRef? CredentialReference = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ModelSourceMode? SourceMode = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ConnectionId = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ConnectionId = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeModelBindingPin? ModelBindingPin { get; init; }
+}
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProjectProviderOverride(ProviderSeam Seam, string ProviderId);
@@ -82,6 +86,9 @@ public sealed record ProjectConfiguration
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SourceControlProjectSettings? SourceControl { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<ReviewedRemoteToolSnapshotReference>? ReviewedRemoteToolSnapshots { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -139,6 +146,17 @@ public static class ProjectConfigurationValidator
             configuration.EgressNarrowing is { IsDefault: true } ||
             configuration.RunLimits is null)
             throw Invalid("Configuration collections and run-limit settings must be present.");
+
+        if (configuration.ReviewedRemoteToolSnapshots is { } reviewedSnapshots)
+        {
+            if (reviewedSnapshots.IsDefault || reviewedSnapshots.Any(snapshot => snapshot is null))
+            throw Invalid("Reviewed remote tool snapshot references must be present and non-null.");
+            if (reviewedSnapshots
+            .Select(snapshot => (snapshot.ProjectId, snapshot.SnapshotId))
+            .Distinct()
+            .Count() != reviewedSnapshots.Length)
+            throw Invalid("Reviewed remote tool snapshot references must not contain duplicate project and snapshot IDs.");
+        }
 
         if (configuration.ModelSelection is { } model)
         {
@@ -288,6 +306,19 @@ public static class ProjectConfigurationValidator
 
     private static void ValidateModelSourceMode(ModelSelectionSettings model)
     {
+        if (model.ModelBindingPin is { } pin &&
+            (model.SourceMode != ModelSourceMode.Byok || pin.ContractVersion != 1 ||
+             pin.SourceMode != model.SourceMode || pin.ModelSelectionReference != model.Reference ||
+             pin.ProviderType is not ("azure" or "openai" or "anthropic") ||
+             string.IsNullOrWhiteSpace(pin.ModelId) || string.IsNullOrWhiteSpace(pin.ConfigurationRevision) ||
+             pin.ConfigurationHash is not { Length: 64 } ||
+             pin.ConfigurationHash.Any(character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f'))))
+            throw Invalid("The BYOK model binding pin must match the selected source and reference.");
+        if (model.ModelBindingPin is { } validatedPin)
+        {
+            ValidateIdentifier(validatedPin.ModelId, "modelSelection.modelBindingPin.modelId");
+            ValidateIdentifier(validatedPin.ConfigurationRevision, "modelSelection.modelBindingPin.configurationRevision");
+        }
         if (model.SourceMode is { } mode && !Enum.IsDefined(mode))
             throw Invalid("Model source mode must be hostedCopilot or byok.");
         if (model.ConnectionId == Guid.Empty ||

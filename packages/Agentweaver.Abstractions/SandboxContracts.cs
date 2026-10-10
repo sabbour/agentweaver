@@ -841,6 +841,13 @@ public interface ISandboxLeaseStore
         Func<SandboxLeaseSnapshot?, CancellationToken, Task<TResult>> callback,
         CancellationToken cancellationToken);
 
+    /// <summary>Reads the lease and workspace under the same retained Environment owner lock.</summary>
+    Task<TResult> GetCurrentWithWorkspaceAsync<TResult>(
+        EnvironmentGenerationFence fence,
+        string volumeId,
+        Func<SandboxLeaseSnapshot?, EnvironmentWorkspaceVolumeSnapshot?, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken);
+
     Task<SandboxLeaseSnapshot?> GetAsync(
         EnvironmentGenerationFence fence,
         long resourceGeneration,

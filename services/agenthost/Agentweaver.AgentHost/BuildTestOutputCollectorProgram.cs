@@ -18,8 +18,18 @@ internal static class BuildTestOutputCollectorProgram
     private const int OReadOnly = 0;
     private const int ONonBlock = 0x800;
     private const int OCloseOnExec = 0x80000;
-    private const int ODirectory = 0x10000;
-    private const int ONoFollow = 0x20000;
+    private static int ODirectory => RuntimeInformation.ProcessArchitecture switch
+    {
+        Architecture.X64 => 0x10000,
+        Architecture.Arm64 => 0x4000,
+        _ => throw new CollectorCapabilityException()
+    };
+    private static int ONoFollow => RuntimeInformation.ProcessArchitecture switch
+    {
+        Architecture.X64 => 0x20000,
+        Architecture.Arm64 => 0x8000,
+        _ => throw new CollectorCapabilityException()
+    };
     private const int OPath = 0x200000;
     private const uint StatxBasicStats = 0x07ff;
     private const uint StatxMountId = 0x1000;
@@ -210,7 +220,7 @@ internal static class BuildTestOutputCollectorProgram
         var opened = ReadIdentity(readHandle);
         RequireSameFile(before, opened);
 
-        using var input = new FileStream(readHandle, FileAccess.Read, 8192, isAsync: true);
+        using var input = new FileStream(readHandle, FileAccess.Read, 8192, isAsync: false);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var buffer = new byte[8192];
         long readBytes = 0;

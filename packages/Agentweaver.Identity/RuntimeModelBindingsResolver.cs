@@ -72,12 +72,17 @@ public sealed class RuntimeModelBindingsResolver
         CreatePin(reference, Resolve(reference, sourceMode));
 
     private RuntimeModelBindingPin CreatePin(string reference, RuntimeModelBinding model) =>
-        new(1, reference, model.ModelId, model.SourceMode, ConfigurationRevision, ConfigurationHash);
+        new(1, reference, model.ModelId, model.SourceMode, ConfigurationRevision, ConfigurationHash)
+        {
+            ProviderType = model.Provider?.Type
+        };
 
     public static void ValidatePin(RuntimeModelBindingPin pin)
     {
         ArgumentNullException.ThrowIfNull(pin);
-        if (pin.ContractVersion != 1 || !Enum.IsDefined(pin.SourceMode))
+        if (pin.ContractVersion != 1 || !Enum.IsDefined(pin.SourceMode) ||
+            pin.SourceMode == ModelSourceMode.HostedCopilot && pin.ProviderType is not null ||
+            pin.SourceMode == ModelSourceMode.Byok && pin.ProviderType is not ("azure" or "openai" or "anthropic"))
             throw new RuntimeAuthorizationException("runtime_model_binding_pin_invalid");
         RuntimeContractValidation.ValidateIdentifier(pin.ModelSelectionReference);
         RuntimeContractValidation.ValidateIdentifier(pin.ModelId);

@@ -180,6 +180,13 @@ a compatibility default or automatic migration. It returns an explicit migration
 or unavailable result until a new selection is authorized. BYOK retains its exact secret
 reference and SDK Provider configuration, without hosted fallback.
 
+An accepted BYOK selection also stores the common `ModelBindingPin` from the server-owned model map.
+The pin includes the provider type, model ID, configuration revision, and configuration hash.
+The Host compares the pin before SDK use and records the actual effective model in `SdkSessionFacts.ByokProvider`.
+Core binds token measurements to these facts, the producer registration, and the dispatch ID.
+Events reads the immutable Core receipt by reference. It does not accept caller-supplied provider authority.
+Unknown pricing remains `Unpriced`.
+
 The AgentHost mode repair belongs to
 [#1856](https://github.com/sabbour/agentweaver/issues/1856).
 The source Copilot connection and refresh lifecycle belongs to [#1906](https://github.com/sabbour/agentweaver/issues/1906);

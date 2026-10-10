@@ -106,6 +106,11 @@ builder.Services.AddSingleton(services => new SourceControlOwnerStore(
     options.Schema,
     services.GetRequiredService<ProviderCatalog>(),
     services.GetRequiredService<ProviderResolver>()));
+builder.Services.AddSingleton(services => new ReviewedRemoteToolSnapshotStore(
+    services.GetRequiredService<NpgsqlDataSource>(),
+    options.Schema));
+builder.Services.AddSingleton<IReviewedRemoteToolSnapshotResolver>(services =>
+    services.GetRequiredService<ReviewedRemoteToolSnapshotStore>());
 builder.Services.AddSingleton<ExecutableActionGrantOwnerStore>();
 builder.Services.AddSingleton<IExecutableActionGrantOwnerLookup>(services =>
     services.GetRequiredService<ExecutableActionGrantOwnerStore>());

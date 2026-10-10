@@ -33,6 +33,14 @@ generation and rate-card content.
 converts reported nano-AIU to AIC without a second model multiplier. Missing
 measurements or model rates return `Unpriced` with a reason and no amount.
 These methods do not authorize a model session or caller.
+The standalone Azure Cost adapter uses an explicitly configured, versioned card
+for model-scoped standard input/output token rates in the declared currency. It
+does not fetch rates or quote BYOK work. Missing token counts, unsupported cache
+categories, unknown models, and changed bindings remain `Unpriced`. Events must
+verify trusted Azure provider and deployment facts against the accepted runtime
+model pin before using this adapter for receipts. Until that source contract is
+admitted, BYOK receipt accounting remains `Unpriced`; provisioned-throughput
+usage also remains unpriced without trusted usage-share evidence.
 
 ## Gateway REST and SSE entry
 
@@ -166,6 +174,14 @@ The MCP host requires HTTPS `Identity:Issuer`, `Identity:Audience`, and
 `Gateway:BaseAddress` service-root settings. Its tool catalog is fetched from the
 configured Gateway; callers cannot override this address.
 
+## Environment remote MCP connections
+
+The Environment source candidate stores owner-authorized remote MCP connection
+configuration and immutable catalog pins. Its routes use current Projects &
+Config authority and no-store responses. The exact route list, revision fields,
+Identity correlation boundary, parser limits, and missing discovery/transport
+proof are described in [Remote MCP connections](../architecture/remote-mcp-connections.md).
+
 `UsageSubmission` contains an event ID, occurrence time, attribution, model
 metadata, and nullable measurements. `IUsageLedger.AppendAsync` validates and
 commits the immutable entry and rate card before returning. It returns the original
@@ -280,6 +296,17 @@ route's configured audience. Each operation also revalidates current Projects & 
 authority and the accepted run selection; the caller's claims alone do not establish
 current permission. Internal Events calls use the configured Events audience and the
 same caller bearer.
+
+Reviewed remote tool contracts retain immutable snapshot data, exact call identity,
+canonical arguments, and matching result metadata. The internal snapshot store checks
+the full stored snapshot digest and rejects conflicting reuse of an ID. Its embedded
+018 SQL resource is tested directly but is not registered in the normal migration path.
+The accepted Projects configuration may carry exact `reviewedRemoteToolSnapshots`
+references. Orchestrator resolves these references against the immutable store and
+checks the stored digest, project, and exact reference. It refreshes Projects authority
+after resolution and rejects missing, changed, duplicate, or foreign references.
+These checks do not verify a current remote connection or per-call grant.
+They do not authorize credential use or native network requests.
 
 Typed action mutations use strict request contracts, expected state versions, and
 idempotency keys. Proposing or revising non-empty or fixed work requires the server's
@@ -570,6 +597,15 @@ These routes require the existing validated Broker audience and return
 runtime nonce. Current owner authority, exact registration, purpose, audience,
 configuration hash, revision, expiry, and cryptographic verifier must match.
 
+These source contracts can deliver a model credential to the current guest
+AgentHost; they do not implement credential-less execution. The
+[proposed contract changes](../architecture/identity-secrets.md#minimal-contract-changes-and-admission)
+bind an explicit mode and supported gateway/runtime profile to existing
+registration, action, provider and ready-check surfaces. In that proposed mode,
+raw redemption/exchange routes accept trusted external consumers only; a guest
+gateway proof cannot redeem an upstream credential. The proposed L7 operation
+endpoint is not a currently mapped Broker or Gateway/BFF route.
+
 | Method and path | Contract |
 | --- | --- |
 | `POST /internal/runtime/bootstrap/request` | Current-registration delivery receipt; no credential in the receipt. |
@@ -677,6 +713,7 @@ Identity verifies the separate purpose-bound nonce for those operations.
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Public Environment control read. Requires current `WriteProjects`; returns the exact active, unexpired, owner-fenced lease projection. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Internal run-bound placement read. Uses existing current `ReadRunSelection` for the exact signed run. Its additive `providerPin` records the actual successful consumer's provider, adapter/options revisions, resource generation, and negotiated capabilities, without option values or recovery metadata. Does not grant public write permission. |
 | `GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}` | Uses the canonical manager's retained lease callback to read current Orchestrator context and match a registered profile to the exact placement. Requires current run-bound `ReadRunSelection`. |
+| `GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/workspace` | Returns `EnvironmentRuntimeWorkspaceContext` with the current placement, exact validated Workspace mount negotiation, and attached transition revision. One owner lock protects both lease and Workspace during the Core context read. Requires current run-bound `ReadRunSelection`. This is metadata, not flush or content evidence. |
 | `POST /internal/runtime/sources/{runtimeInstanceId}` | Registers actual immutable SDK facts under the validated bearer and separate observe credential. Rechecks current owner and grant authority after waits. |
 | `POST /internal/runtime/observations` | Commits a native SDK observation under the exact current registration/source grant. Identical SDK events return the original source receipt. Changed content conflicts. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/usage-receipts/{receiptId}` | Returns the immutable source receipt only after fresh accepted-selection and run-read checks. Events cannot substitute caller-supplied usage. |
@@ -746,6 +783,13 @@ Every asynchronous redemption and SDK preparation boundary revalidates that proo
 Rotation changes the credential revision, not the immutable accepted selection.
 Controlled native transport evidence does not prove GitHub entitlement or deployed connection services.
 BYOK usage retains token measurements and rejects Copilot nano-AIU attribution.
+BYOK selections also retain the server-owned `ModelBindingPin`, including its provider type and configuration hash.
+The Host compares this pin before SDK use. A missing or changed pin denies the session without a hosted fallback.
+`SdkSessionFacts.ByokProvider` records the actual provider type, effective deployment ID, and accepted configuration hash.
+The deployment ID must equal both source and usage model IDs.
+Core rejects missing input/output measurements, changed provider facts, and Copilot units.
+The controlled Azure fixture proves a dispatched native usage event through Broker, Core PostgreSQL, and reference-only Events accounting.
+This proof does not authorize paid Azure calls.
 Without an admitted Cost provider, its accounting remains `Unpriced`, not zero-cost or hard-bound admission proof.
 
 ## Projects & Config authorization context

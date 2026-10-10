@@ -20,6 +20,36 @@ These tests cover immutable accepted intent, bounded receipts, collector interru
 The migration/model test generates metadata only; it does not connect to PostgreSQL.
 These results do not prove durable provider effects, Kubernetes isolation, Cilium datapath enforcement, or MAF recovery.
 
+Run the BuildTest owner-store tests with the existing disposable PostgreSQL fixture:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --filter "FullyQualifiedName~EnvironmentSandboxBuildTestCommandPostgresTests" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+These tests create the owner, attached Workspace, and active Sandbox through their production stores.
+They cover concurrent reservation, replay from a new store and connection pool, immutable-command conflicts, and stale-binding rejection without an effect row.
+They also cover retirement, durable policy-attempt markers, PostgreSQL timestamp precision, and terminal-result preservation.
+Replay preserves the original result; a later save cannot replace terminal evidence or return a terminal operation to Running.
+These store tests do not execute command Pods, prove HTTP authorization, or verify live Kubernetes isolation and Cilium enforcement.
+
+The release tests also run the managed collector in a cached Linux ASP.NET runtime:
+
+```powershell
+$env:AGENTWEAVER_CONTAINER_ENGINE = "podman"
+node --test scripts\release\tests\buildtest-output-collector.test.mjs
+```
+
+Linux CI uses Docker and its already cached, pinned runtime image.
+The test mounts the managed application and a test-owned Workspace volume read-only.
+The collector runs without network access as user 1654, before web configuration or native SDK startup.
+It checks regular and empty files, exact hashes, absent files, symlinks, non-regular files, byte limits, and malformed requests.
+The collector opens native file descriptors synchronously and retains bounded cancellable reads.
+Its directory and no-follow flags match the executing Linux architecture.
+Local arm64 execution proves managed collector behavior only; the production profile still requires a Linux amd64 image.
+These checks do not prove command-Pod execution, deployed PVC isolation, or Cilium enforcement.
+
 The lease tests use the test project's disposable PostgreSQL 16 container. They
 cover per-Environment capacity, idempotent reservation, owner lifecycle fencing,
 explicit abandonment, supported terminal evidence, exact release receipts,
@@ -79,11 +109,28 @@ policy-resource boundary are controlled. It is not a live Kubernetes or
 datapath test. Sandbox observations remain `Pending` without AgentHost configure
 evidence.
 
+The same integration checks BuildTest binding preparation from the current selected profile.
+The BuildTest route rejects viewers, foreign owners, missing selection authority,
+and a different execution profile. An unknown operation returns 404.
+An unresolved command returns 503 without a BuildTest row or provider creation.
+These checks use the production manager and stores, but do not execute an accepted
+Orchestrator checkpoint, a command Pod, or the output collector.
+
 The separate native SDK harness reuses the canonical placement manager.
 Its profile callback reads actual Orchestrator work-item context under the retained lease.
 The module tests retire a lease before lifecycle advancement, as the admitted lifecycle guard requires.
 The readiness module test retains the actual PostgreSQL advisory lock during Cilium and Sandbox observations.
 It observes a competing retirement through `pg_locks` and releases it only after readiness completes.
+It persists the versioned recovery record through the lease store, then reads it from a new store.
+It checks the nested provision request's exact network generation and valid Workspace mount path.
+
+The Workspace metadata module test creates the actual attached volume and active Sandbox through their production stores.
+It runs the production placement reader against a controlled Core context HTTP response.
+It checks the exact mount, Storage resource, volume generation, data generation zero, transition revision, and registered profile.
+Changed volume, data, Storage resource, and attachment state all fail.
+The test observes a competing detach through `pg_locks` while the combined owner read remains active.
+The response contains no provider descriptor, tree hash, or content checkpoint.
+These checks do not prove Storage flush, a completed suspend, or deployment.
 The retained snapshot supplies selection data without a recursive Projects selection request.
 The combined source scenarios then exercise actual Broker delivery, SDK callbacks,
 immutable Orchestrator receipts, and reference-only Events accounting.

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Data;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -241,6 +242,12 @@ public sealed partial class ProjectsConfigService
         var normalized = ProjectConfigurationValidator.Validate(configuration);
         var project = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
             .ConfigureAwait(false);
+        if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
+            reviewedSnapshots.Any(snapshot => snapshot.ProjectId != project.ProjectId))
+            throw new ProjectConfigException(
+                "invalid_configuration",
+                "Reviewed remote tool snapshot references must belong to this project.",
+                (int)HttpStatusCode.BadRequest);
         if (project.State != ProjectLifecycleState.Active)
             throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
         if (project.ConfigurationRevision != expectedRevision)

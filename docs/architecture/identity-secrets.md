@@ -310,6 +310,332 @@ Authority loss during source transaction waits denies the observation without ac
 This evidence does not prove cloud deployment or paid model execution. See the
 [runtime credential source contract](../reference/contracts#runtime-credential-source-candidate).
 
+## Credential-less sandbox proposal
+
+**Status: proposed design, not implemented or deployed.** Credential-less means
+that untrusted sandbox code cannot obtain real upstream credentials, including
+model keys, Copilot access tokens, Git credentials, Azure bearer tokens, refresh
+tokens, private keys, or equivalent exchangeable cloud assertions. A `SecretRef`
+that the guest can redeem is not credential-less. Neither is federation that
+lets the guest obtain an upstream bearer token without a stored secret.
+
+The current [AgentHost](agenthost.md) consumes a model credential in the native
+SDK inside the Sandbox. That source remains a separate legacy credential-delivery
+path; its guarded tools, private state, and credential-free process environment
+do not establish this stronger boundary. The diagrams above describe existing
+Identity source, not the proposed guest boundary below.
+
+### Trust boundary and placement
+
+The trusted outbound gateway is an implementation of the existing L7 Network
+Policy layer and Tool & MCP mediation role, not a new identity service or the
+browser Gateway/BFF's arbitrary upstream proxy. Identity still owns credential
+sourcing, connection lifecycle, and exact-version redemption through
+`ISecretRedemption` / `AuthorizedSecretRedemption`. Projects & Config owns live
+membership and roles; Orchestrator owns current actions, Policy receipts, runtime
+registration, and execution fences. Environment owns placement, network intent,
+leases, and readiness. Credential sourcing and permission to perform an outbound
+effect are separate checks.
+
+Untrusted code includes guest shell commands, tools, dependencies, repository
+content, and any guest SDK process. The trusted gateway, Identity clients, token
+caches, and any credential-consuming native runtime must be **outside that
+guest's security boundary**. Use the existing remote-service or in-process
+provider hosting patterns in a trusted host. A sidecar is acceptable only where
+the provider proves independent isolation from guest code. Two containers in one
+Kata Pod normally share one guest VM; a second container is not a second VM.
+Container names, different UIDs, private `HOME`, or read-only mounts alone do not
+prove that credentials are inaccessible.
+
+Environment admission must prove that the guest cannot read trusted host/gateway
+process memory, private `HOME`, token caches, credentials, signing or TLS private
+keys, service sockets, host paths, shared private volumes, or snapshots of that
+state. Do not expose workload-identity projected assertions, Kubernetes service
+account tokens/API access, IMDS/metadata endpoints, or cloud token exchange to the
+guest. A workspace shared for authorized file operations carries data only,
+never host state or credential helpers. Treat its contents as hostile on the
+trusted side. Snapshots and SDK-cache export cannot include credential-bearing
+state; disable that export for a mode that cannot prove safe separation.
+
+The guest uses a **low-authority gateway identity**, separate from owner/service
+tokens and upstream credentials. Bind it to one current runtime registration,
+tenant/project/run/session, placement generation, execution fence, gateway
+audience, expiry, and allowed operation profile. Prefer provider-attested
+transport identity or sender-bound proof verified outside the guest; the gateway
+does not trust a source IP or guest-supplied identity header. A guest-held proof
+can be copied by hostile guest code, so sender binding is not a claim that a
+guest private key is unextractable. Enforce the registered placement/channel,
+replay protection, and current authority as well. The proof cannot authenticate
+to upstreams, redeem secrets, exchange for owner tokens, configure another
+runtime, or gain public `WriteProjects`. Replaying it from another placement or
+session must fail. It still permits misuse of operations actually authorized to
+that guest; it is not a secret-free assertion that the guest has no authority.
+
+### Authorized request flow
+
+Prefer a structured gateway operation for a bound model, repository, Azure
+resource, or connection over accepting an arbitrary URL. The gateway resolves
+the upstream route and credential from trusted owner state.
+
+```mermaid
+sequenceDiagram
+    participant Guest as Untrusted guest
+    participant Gateway as Trusted outbound gateway outside guest
+    participant Owners as Projects / Orchestrator / Environment
+    participant Identity as Identity and Secrets provider
+    participant Upstream as Approved upstream
+    Guest->>Gateway: Bound operation, input, operation ID, gateway-only proof
+    Gateway->>Owners: Validate current actor, action, selection and placement fences
+    Owners-->>Gateway: Current authority and committed Policy admission
+    Gateway->>Gateway: Validate destination, request and upstream TLS peer
+    Gateway->>Identity: Acquire credential for exact accepted connection and purpose
+    Identity->>Identity: Check current grant before and after acquisition
+    Identity-->>Gateway: Short-lived credential for trusted use only
+    Gateway->>Owners: Recheck current authority and bindings after waits
+    Owners-->>Gateway: Same authorized action and current fences, or deny
+    Gateway->>Upstream: Insert authentication outside guest; send validated request
+    Upstream-->>Gateway: Response or bounded stream
+    Gateway->>Gateway: Apply response contract and remove credential exposure
+    Gateway-->>Guest: Authorized data and credential-free operation receipt
+    Note over Gateway,Identity: Any failed postcheck invalidates acquired credential and prevents dispatch
+```
+
+Authenticate first, then obtain fresh `GET /api/authorization/context` and the
+current Orchestrator action/registration and Environment lease evidence through
+their existing owner contracts. The gateway uses an admitted trusted runtime/
+actor delegation derived from authenticated enrollment, not its administrator
+identity or a guest-supplied subject. That delegation stays outside the guest;
+missing owner-route support fails explicitly without impersonation or broader
+service grants. Validate input and destination before acquiring
+credentials. Resolve and validate the upstream TLS connection; any connection,
+DNS, credential, policy, or owner wait requires fresh binding/authority checks
+before authentication insertion and dispatch. Identity's post-acquisition grant
+check does not replace the gateway's action and placement postcheck. No saved
+allowlist, admission receipt, or token cache is fresh authorization by itself.
+
+Freeze the validated method, route, resource, body hash, operation ID, and binding
+for dispatch. Do not accept new bytes or follow a new destination after the
+final check. Fail closed on missing, ambiguous, changed, revoked, expired, or
+unavailable authority. This follows existing owner/action fencing, not a new
+cross-service atomic transaction: revocation cannot undo an upstream effect
+already sent. On reconnect, retry, each new WebSocket operation, and each model
+turn, repeat authorization. Long streams have bounded lifetimes and current
+grant/lease checks; revoke, expiry, cancellation, or failed checks stop forwarding
+and close the channel. Do not claim instantaneous rollback of in-flight bytes.
+
+### Connection and action mapping
+
+An accepted reference identifies a connection; it does not authorize one. The
+server-owned mapping must include the following facts, with revisions supplied
+by their current owners rather than trusted from guest JSON:
+
+| Bound facts | Required decision |
+| --- | --- |
+| Actor issuer/subject, tenant, project, run, session, agent and turn | Intersect current Projects authority, registered session/work item, and signed run constraints. A tenant selector or guest action label cannot choose another user. |
+| Accepted selection reference/hash and project/configuration/platform revisions | Use the immutable accepted model/repository/connection selection; do not rewrite hashes or choose a fallback credential. |
+| Runtime instance/registration revision, execution fence, Environment lifecycle and provider/current fences, lease revision/expiry, placement/resource generations, applied network-intent generation | Require the exact current active resources and negotiated protocol profile before and after waits. A previous generation cannot dispatch through a replacement gateway or placement. |
+| Connection ID/revision, credential kind, sourcing provider, exact SecretRef version where applicable | Identity resolves the current authorized connection under its existing sharing rules. The guest cannot choose an arbitrary secret or supply a token. Rotation follows the owner revision without silently changing accepted scope. |
+| Upstream audience, minimum scopes/permissions, destination scheme/host/port, method, route/resource, operation and action purpose | Derive from a platform-enabled, project-narrowed operation profile. Validate request data as well as the URL: an allowed POST endpoint can still carry a forbidden resource or operation. |
+| Delegated user identity versus application/workload identity | Require the configured mode and its separate consent/resource permissions. An app credential is not proof of user delegation; do not substitute a broader app identity when delegated access fails. |
+
+Reuse `RuntimeActionRequest` / `RuntimeActionAdmission` and the current AGT guard
+for `model.turn` and existing tool/execution admissions. The current action ID
+set does **not** describe arbitrary GitHub or Azure effects. Extend the owning
+typed tool/Source Control operation contract only for an admitted operation and
+bind its resource, input hash and permission to the existing action/Policy
+receipt. An `exec.shell` grant alone must not authorize all upstream operations
+of a shell script. Source Control approval and merge guards still apply.
+Provider-returned permissions/audiences must match the request; unexpectedly
+broader tokens must not be used as a convenient fallback.
+
+### Supported protocols and SDK limits
+
+These are proposed profiles, not a claim of current transparent-proxy support.
+One header-injection proxy cannot safely support every authentication protocol.
+
+| Operation | Credential-less path and limits |
+| --- | --- |
+| Model HTTP, streaming and WebSocket | Bind the model, approved endpoint/API, input and `model.turn` admission. Inject headers only on the validated upstream connection; bound streaming frames, backpressure, cancellation, reconnect and lifetime. Each new operation on a socket needs its own action admission; opening a socket is not permission for later turns or tools. |
+| Hosted Copilot SDK | SDK 1.0.18 currently receives the real token through `Models.ListAsync(gitHubToken: ...)` and `SessionConfig.GitHubToken` over native RPC. An authenticated `UriRuntimeConnection.ConnectionToken` secures SDK transport; it does not replace Copilot authentication. Empty mode disables ambient login, not session-token delivery. Do not pass an upstream token, redeemable reference, or pretend Copilot token into a guest runtime and call it injection. |
+| BYOK SDK | `RuntimeByokProvider.ToSdkProvider` currently puts the key in `ProviderConfig.ApiKey` with explicit `BaseUrl`, wire API and optional headers. A gateway base URL alone does not prove that this SDK mode avoids credential consumption or direct egress. Validate the exact SDK/native pair's supported authentication and routing before admission. |
+| Git smart HTTP/HTTPS | Map the exact repository and Git service: authorized `info/refs` service discovery, `git-upload-pack` reads, and separately admitted `git-receive-pack` writes. Check repository/ref/write restrictions through Source Control, not just HTTP method. Use an admitted gateway endpoint or protocol adapter; guest credential helpers must never receive a GitHub token. Handle challenges and redirects inside the trusted adapter, not via a raw redemption route. |
+| GitHub API tools | Use typed, resource-bound tools through Source Control or the existing Tool & MCP role. Identity mints only the accepted installation/repository permissions. An API route that returns credentials or changes connection authority is not an ordinary repository tool. |
+| Azure SDK HTTP | Bind the exact cloud, service audience and resource/action. ARM, Storage, Key Vault and other services have different token audiences; the guest cannot request arbitrary `TokenCredential.GetToken` scopes. SDKs that demand a real bearer token or signed request need trusted-side SDK execution or a specifically validated mediated transport, not a guest `DefaultAzureCredential` fallback. Challenge handling must stay within the admitted audience. |
+| Generic HTTP broker-backed connection | A reviewed connection profile maps protocol, destination, authentication and operation semantics. Inject only its credential, with bounded request/response rules. Unknown endpoints, token-returning APIs, or opaque operations that cannot be checked are unsupported, not a blanket HTTP tunnel. |
+| Git SSH, mTLS, pinned TLS, non-HTTP signing or authentication | Require a trusted protocol adapter holding keys and signing material outside the guest, with equivalent resource/action checks, or return explicit unsupported capability. A generic HTTP proxy cannot promise SSH signing, mTLS client-key isolation, TLS-pin compatibility, or safe credential injection into opaque encrypted traffic. |
+
+For an incompatible SDK mode, admit a **trusted model-runtime adapter outside
+the guest** using the existing AgentHost library and the same Copilot harness,
+registration, action checks and observation contracts. It consumes credentials
+there and returns only authorized native responses, tool requests and result
+data. Guest file/shell operations cross a narrow guarded bridge; the trusted SDK
+must not execute hostile workspace code in its own credential-bearing process.
+This is a proposed placement/profile split, not current remote-runtime support.
+If the exact SDK mode cannot preserve that separation, admission returns
+`CapabilityUnavailable` (or an explicit unsupported runtime capability), with
+no credential-delivery downgrade.
+
+Preserve native session/model identity, SDK/runtime versions, abort/idle
+behavior, typed tool results, usage events, and the existing receipt identities.
+Cancellation uses the native abort/idle contract; failed abort prohibits another
+turn or cache capture. Events remains the sole financial ledger. Forward actual
+Copilot AI credits and SDK 1.0.18 `TotalNanoAiu` through Orchestrator source
+receipts and existing Events acknowledgment; do not multiply weighted nano-AIU
+again, infer cost from gateway bytes, or add a gateway ledger. Keep existing
+deny-new-dispatch behavior at the observed turn boundary and current delivery
+semantics. No all-future-source accounting-completeness gate is added here.
+
+### Network, TLS and hostile input
+
+The selected L3/L4 provider must force credential-bearing traffic through the
+admitted L7 gateway: default deny, exact gateway/control-route access, controlled
+DNS and no direct protected upstream access, even without `HTTP_PROXY`. Enforce
+both IPv4 and IPv6, alternate ports, UDP/QUIC, IP literals, proxy chains and
+CONNECT tunnels. Unmediated credential-free destinations, if separately allowed,
+must not provide a route to a protected upstream or credential-returning broker.
+Direct credential acquisition endpoints stay denied. Guest DNS choices or
+`NO_PROXY` cannot change enforcement. No host networking, privileged guest
+network changes, escape sockets, or permissive fallback when a layer fails.
+
+At the gateway, normalize URLs once; reject user-info, alternate encodings,
+ambiguous paths, duplicate/conflicting authentication headers, and mismatches
+between operation, URL, HTTP authority/Host and TLS SNI. Never trust a guest-supplied
+header as an identity assertion. Build upstream Host/SNI and authentication from
+the validated profile; reject guest `Authorization`, `Proxy-Authorization`,
+API-key, identity-forwarding and connection-specific credential headers instead
+of forwarding or merging them. Strip hop-by-hop headers and reject ambiguous
+HTTP framing/request smuggling. Bound bodies, headers, decompression, frames,
+concurrency and timeouts; parse resource/action selectors before a protected
+effect. Reuse upstream idempotency only where supported. An uncertain external
+write is an explicit unresolved outcome, not permission for a blind retry.
+
+Resolve DNS on the trusted side and validate every resolved address against the
+profile and restricted ranges, including loopback, link-local, private networks,
+metadata and Kubernetes/control endpoints. A private upstream needs an explicit
+resource-specific mapping, not blanket private-CIDR access. Connect to the
+validated address while verifying TLS against the approved hostname; do not
+reresolve after validation without another check. Apply the same rules to
+reconnects. Reject redirects by default. Any profile that admits a redirect
+requires independent destination, audience and action validation, with fresh
+authentication for that target; never forward the old credential automatically.
+
+Validate upstream certificates, hostname and approved trust roots. Never disable
+TLS verification. Prefer structured endpoints to TLS interception. If a reviewed
+SDK/protocol profile requires interception, terminate only that profile's allowed
+hosts/protocols, with a narrowly scoped trusted CA certificate installed in the
+guest; its CA signing key and per-host private keys stay outside the guest. The
+guest authenticates the gateway separately, and the gateway independently
+validates upstream TLS. A broad trust root does not make arbitrary interception
+authorized. A pinned client must use a supported explicit endpoint/adapter or
+fail admission; mTLS client certificates and keys stay on the trusted upstream
+leg. This proposal does not select Nginx or any new proxy product.
+
+Responses expose approved data, not upstream authentication state. Allowlist
+response headers and operation schemas; do not return bearer challenges with
+secrets, auth cookies, signed credential URLs, token exchange results, or
+credential-minting responses. Reject known injected credential reflection in
+decoded bodies/stream frames and headers, including protocol-supported encoded
+forms; sanitize errors before forwarding. Text redaction alone cannot prove an
+arbitrary malicious upstream will never encode a token. Admission therefore
+requires a trusted upstream and a reviewed response contract; unsupported opaque
+or credential-returning operations fail closed. This boundary protects
+broker-managed credentials, not every secret a user puts into allowed data.
+
+No credentials or request authentication bytes enter receipts, logs, traces,
+error strings, crash dumps, exported SDK caches, workspace files or snapshots.
+Record safe operation IDs, binding revisions, admitted resource references,
+Policy/source receipt references, outcomes and sanitized error codes through
+existing owners. Do not log entire URLs, headers or bodies as a shortcut.
+Streaming inspection must not buffer/log secrets or silently corrupt native
+results; reject an unsafe response explicitly.
+
+### Lifetime, revocation and trusted-host limits
+
+Credential expiry is bounded by provider expiry and the current grant, connection
+and lease limits, using the existing lifetime-narrowing behavior. A static API
+key may have a longer upstream lifetime: limiting its wrapper's use window does
+not shorten the real key's validity. Keep that value only in the protected store
+and trusted operation memory; use the narrowest provider credential available.
+Where a provider cannot downscope a key per operation, state that resource/action
+narrowing is gateway-enforced, not an upstream token-scope guarantee. Cache only in
+trusted memory; partition by issuer/subject, identity mode, tenant/project/run/
+session, connection/revision/secret version, provider, audience/scopes, destination
+profile, registration/execution/placement fences and policy generation. Pooling
+connections or cached tokens must not mix users or sessions. Cache hits still
+need fresh owner/action authorization; old revision entries are unusable.
+
+Refresh and rotation remain Identity-owned. Revocation or changed authority denies
+new dispatch, invalidates local cache entries and closes affected active channels
+when observed. Use upstream revocation where the provider supports it; otherwise
+an already-issued token can remain valid until its upstream expiry.
+`SecretCredential.Invalidate` clears one wrapper reference, not immutable string
+copies or provider tokens. Do not promise remote revocation by clearing a wrapper.
+Disable credential-bearing dumps and persistent caches, minimize copies, and
+invalidate on cancellation/error and after operation use.
+
+Gateway administration, provider options, route profiles, trust roots and token
+issuance are trusted control-plane operations with separate owner/operator
+authorization, not guest-accessible routes. Use least-privilege service identities
+and protected host-to-Identity transport; never grant the L7 provider arbitrary
+Secrets access merely because it mediates traffic. The cluster/node runtime,
+network enforcer, trusted host and Identity service are trust assumptions.
+Compromise of those components can expose credentials. Isolation does not prevent
+an authorized guest from misusing allowed data/actions, nor erase effects already
+accepted upstream.
+
+### Minimal contract changes and admission
+
+These are bounded follow-on design changes, **not implemented fields or routes**:
+
+| Existing surface | Proposed change |
+| --- | --- |
+| Projects accepted selection and `RuntimeBinding` | Add an explicit credential handling mode (`legacy-delivery` or `credential-less`) and versioned operation/runtime profile reference, separate from hosted/BYOK `ModelSourceMode`. Pin profile revision and resource generations without credentials or cached authority. Preserve old JSON/hashes; changing mode needs authorized new selection/registration. |
+| `ProviderDescriptor`, `EffectiveProviderCandidate`, `ResourceNegotiation` and `ProviderResolver.PinNetworkPolicy` | Use existing required/advertised/negotiated capability sets for guest credential isolation, forced mediation and exact protocol support. Define shared capability names only for the supported adapters; profile details remain versioned adapter options. Require L7 for this mode even though L7 remains optional for other selections. No new Identity or Model provider enum. |
+| `ISandboxProvider`, `SandboxProvisionedResource`, Environment lease/placement/profile reads | Return verified boundary/endpoint references and profile evidence, not credentials. Environment compares exact negotiated isolation, workspace separation, lease/fences and applied L3/L4 plus L7 generations after provisioning/readback. A descriptor or a second container is not proof. |
+| `EnvironmentEgressManager` and AgentHost `/health/ready` | Include the credential mode, reachable admitted gateway, current protocol/runtime profile and isolation/network enforcement evidence in readiness. Preserve existing configured/ready phases and measured budgets. Policy-object readback alone cannot establish forced mediation; require provider conformance and placement-specific datapath evidence before credential-less dispatch. |
+| `/runtime/v1/configure`, `/runtime/v1/refresh` and registration/profile contracts | In credential-less mode deliver only gateway-specific proof/reference and configuration, never model credentials or owner credentials usable at raw redemption endpoints. A trusted external model adapter keeps configure/observe/model credentials on its side and preserves the existing registration and source contracts. |
+| Identity `/secrets/redeem`, `/internal/runtime/model-session/redeem`, source exchange/rotate and connection/token-mint routes | Restrict raw credentials and credential exchange to authenticated trusted service consumers plus current actor/run purpose checks. A guest gateway proof is rejected even with a valid connection ID or SecretRef. Network denial complements, not replaces, this endpoint authorization. Do not change browser sign-in or widen runtime/public roles. |
+| L7 adapter operation endpoint | Add a versioned bounded request, for example `POST /egress/v1/operations`, in the trusted adapter, not the BFF. Carry operation ID, registration/profile reference, typed operation/input and gateway proof; derive identity, route, audience and credential server-side. Return sanitized data/stream and existing owner receipt references, never a redeemable token. Do not expose unrestricted CONNECT or token endpoints. |
+| Runtime/action and Source Control guards | Bind each supported upstream operation to existing current action/Policy admissions and exact input/resource identity; add narrowly typed operations where the existing IDs cannot express the effect. Preserve merge approvals, native result and usage receipts, and Events ownership. |
+
+Before accepting this mode, resolve the selected adapters and exact SDK/profile,
+require the capabilities, provision, observe actual resource separation, verify
+the applied network generations, and negotiate the proved capabilities. Persist
+only the accepted evidence under the existing owner CAS/fences. Readiness and
+resume recheck the same current evidence. Missing L7, inaccessible Identity,
+unverified network enforcement, unsupported protocol/SDK mode or stale evidence
+returns an explicit unavailable/denied result; it never returns legacy readiness.
+The current Cilium-only implementation has no L7 adapter and cannot claim this
+mode. A ready legacy AgentHost also cannot claim it.
+
+Existing selections without this proposed field remain historical/legacy,
+not silently compliant. Introduce the mode only through an explicit platform
+and project-compatible profile and newly accepted binding; no automatic secret
+movement, selection-hash migration or change to old accounting receipts.
+The follow-on slice is bounded: first one trusted L7 operation profile, forced
+placement/network admission, guest proof, and supported model-runtime integration;
+then separately admit Git/Azure/other profiles with the cases below. Unknown SDK
+compatibility is a validation item for its profile, not a broad release blocker.
+This proposal is separate from the current P1 critical path and does not reopen
+accepted native accounting or add a new P1 acceptance prerequisite.
+
+### Planned acceptance matrix
+
+**Unexecuted requirements.** Documentation checks do not prove runtime isolation,
+SDK compatibility, token-free deployment or permission for live testing.
+
+| Case | Positive evidence | Negative evidence |
+| --- | --- | --- |
+| Boundary and proof | Exact provider/placement proof reaches only the admitted gateway operation; upstream sees only the trusted-side credential. | Guest environment/files/process memory/caches/mounts/sockets/snapshots contain no upstream token or projected assertion; copied proof from another placement/session, raw redemption, IMDS, Kubernetes and token exchange all deny. |
+| Current authorization | Exact user/app mode, connection, audience/scopes, resource/action and current registration/selection/lease/network generations pass before and after waits. | Change or revoke each binding during acquisition, DNS/TLS or owner waits; no authenticated upstream request follows a failed postcheck. Cache hits, allowlists, shell grants and forged owner headers cannot bypass action guards. |
+| Forced mediation | Approved request succeeds via the selected L3/L4 and L7 providers with current enforcement evidence. | Direct IP/FQDN/IPv6, alternate ports, UDP/QUIC, CONNECT, proxy chains, guest DNS/NO_PROXY and gateway loss never reach protected upstreams directly. |
+| HTTP/TLS safety | Approved route resolves to a validated peer, with exact Host/SNI, trusted TLS and outside-guest auth insertion. | DNS rebinding, private/metadata targets, redirects, forged auth/Host/SNI, malformed framing and invalid certificates deny; pins/mTLS do not trigger TLS-verification disablement or a guest key fallback. |
+| Model/native behavior | Supported exact SDK/native/profile preserves model/session IDs, streaming, tool results, cancellation/abort-idle, actual AIUC/TotalNanoAiu and existing Orchestrator/Events receipts. | Unsupported SDK authentication or WebSocket operations deny admission; no raw token in guest RPC or cache, no new turn after failed abort, no duplicate pricing or proxy-byte ledger. |
+| Git/GitHub | Exact repository smart-HTTP read and separately admitted write/API operation use least-privilege trusted tokens and Source Control guards. | Cross-repository/ref writes, unapproved merge, helper redemption, credential-returning API and unimplemented SSH/signing/mTLS modes deny explicitly. |
+| Azure/generic | Exact resource/audience/action uses an admitted transport or trusted SDK adapter and reviewed response schema. | Arbitrary GetToken scope, broader app fallback, credential-mint/list-secret operation, opaque unsupported protocol and guest cloud identity acquisition deny. |
+| Cache/response isolation | Partitioned cache reuse still rechecks authority; authorized data and safe receipt survive response loss under existing idempotency rules. | Cross-user/session/revision reuse, reflected/encoded credentials, auth cookies, signed secret URLs and log/trace/error/cache/snapshot leakage fail; uncertain writes are not blindly replayed. |
+| Rollout and readiness | Newly accepted credential-less mode has actual negotiated isolation, L7/protocol support and current enforcement evidence. | Legacy/absent mode, two containers sharing an unprotected guest, descriptor-only proof, policy-object-only proof and missing adapters never report credential-less readiness. |
+
 ## PostgreSQL authentication and workload boundary
 
 Runtime PostgreSQL connections use the explicit `WorkloadIdentityCredential`, no password, and `SslMode.VerifyFull`. Npgsql acquires an Entra token asynchronously through `UsePasswordProvider` for each new physical connection, using the fixed scope `https://ossrdbms-aad.database.windows.net/.default`. The runtime username is the separately bootstrapped Entra runtime role.

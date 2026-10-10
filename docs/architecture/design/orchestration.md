@@ -245,6 +245,33 @@ Confirmation is a durable gate with a request id, not a favorable sentence in an
 agent reply. The [coordination verbs](sessions-and-coordination.md#coordination-verbs)
 route the request and record an explicit answer.
 
+## Schedule and event trigger evaluation
+
+`Agentweaver.Orchestrator.Core` provides pure evaluation contracts for daily,
+weekly, and monthly schedules and a curated GitHub event-predicate language.
+Schedule `TimeOfDay` values are UTC; evaluation normalizes the caller-supplied
+`DateTimeOffset` to UTC. Weekly schedules select a weekday, and monthly schedules
+select days 1 through 28. The evaluator reports invalid definitions, not-yet-due
+times, and due occurrences separately. Daily and weekly period keys use
+`yyyy-MM-dd`; monthly keys use `yyyy-MM`. The workflow ID, stable trigger ID, and
+period form the schedule idempotency input. That key is not a backlog task ID, run
+ID, claim, or proof that work was started.
+
+Event predicates are ANDed at the top level and support nested `or` and `not`.
+The supported leaves cover issue/pull-request labels, pull-request base branch,
+review state, pushed-ref equality or prefix, discussion category, and bounded
+comment matching. Matching follows the existing 0.x case rules. Comment patterns
+use a restricted, nonbacktracking regular-expression subset with a 200 ms match
+timeout; comment text is supplied only to the in-memory evaluator and is not a
+retained event field.
+
+These Core contracts do not persist trigger definitions, establish an authorized
+project/accountable-actor binding, subscribe to events, run a hosted scheduler,
+claim backlog work, or dispatch an execution. An occurrence key is only an
+idempotency input to the existing Orchestrator owner path. Automatic initiation
+remains unavailable until the real source-actor authority and owner claim path
+are integrated and revalidated at claim and dispatch.
+
 ## Step-snapped WorkPlans
 
 A WorkPlan is the proposed directed acyclic graph (DAG) of child work. Every subtask
@@ -461,6 +488,79 @@ GitHub raw bytes with the pinned webhook SecretRef and durably deduplicates deli
 after fresh Projects/Core checks. It does not approve a merge or trigger an
 unauthorized effect. Direct unauthenticated GitHub delivery is denied until a
 trusted relay identity is separately deployed.
+
+## Reviewed remote tool data
+
+The Core contracts bind a reviewed remote tool to one project, agent, and node.
+The immutable snapshot retains connection, configuration, catalog, tool, schema,
+and permission values with their revisions and digests. It contains no credentials.
+Its snapshot digest covers these values, including the endpoint, resource URI,
+authentication mode, Identity reference, and transport profile.
+
+`ReviewedRemoteToolCall.Create` requires the exact reviewed agent, node, and tool.
+It combines the snapshot with the supplied runtime registration, actor, tenant,
+run, session, step, accepted-selection hash, and execution fence.
+It sorts JSON object properties and rejects duplicate property names.
+The event ID is stable for one project, run, session, step, and native call ID.
+The input hash also covers the full snapshot, execution binding, and arguments.
+Changing the input preserves the event ID but changes its input hash.
+
+The internal snapshot store persists and resolves exact snapshot references.
+It rejects conflicting reuse of a snapshot ID and checks the stored digest and
+identity fields on every read. The embedded 018 SQL resource rejects row updates
+and deletes. The normal owner migration path does not yet apply that resource.
+PostgreSQL tests apply it directly and check persistence, conflicts, corruption,
+and rejected row changes.
+
+The result envelope retains opaque content and matching execution metadata.
+Its constructor does not verify a current grant or a durable Events acknowledgment.
+This source does not add Projects configuration references, selection resolution,
+a current connection read, credential use, or native remote dispatch.
+Those checks must be integrated before any protected remote request can be sent.
+A matching data object is not permission to send a request.
+
+```mermaid
+classDiagram
+    class ReviewedRemoteToolSnapshot {
+        +ConnectionConfigurationAndReview
+        +SnapshotDigest
+    }
+    class ReviewedRemoteToolSnapshotReference {
+        +ProjectId
+        +SnapshotId
+        +SnapshotDigest
+        +AgentId
+        +NodeId
+    }
+    class ReviewedRemoteToolSnapshotStore {
+        +PersistImmutableSnapshot
+        +ResolveExactReference
+    }
+    class RemoteToolCallExecutionBinding {
+        +RuntimeActorAndRun
+        +AcceptedSelectionHash
+        +ExecutionFence
+    }
+    class ReviewedRemoteToolCall {
+        +EventId
+        +InputHash
+        +CanonicalArguments
+    }
+    class RemoteToolCallAuthorityBinding {
+        +ExecutionMetadata
+        +GrantIdAndRevision
+    }
+    class RemoteToolResultEnvelope {
+        +OperationId
+        +OpaqueContent
+    }
+    ReviewedRemoteToolSnapshot --> ReviewedRemoteToolSnapshotReference : exact identity
+    ReviewedRemoteToolSnapshotReference ..> ReviewedRemoteToolSnapshotStore : exact row lookup
+    ReviewedRemoteToolSnapshot --> ReviewedRemoteToolCall : reviewed input
+    RemoteToolCallExecutionBinding --> ReviewedRemoteToolCall : execution input
+    ReviewedRemoteToolCall --> RemoteToolResultEnvelope : result context
+    RemoteToolCallAuthorityBinding --> RemoteToolResultEnvelope : metadata match only
+```
 
 ## Rules in code
 

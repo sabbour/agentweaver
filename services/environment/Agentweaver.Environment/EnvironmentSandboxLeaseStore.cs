@@ -149,9 +149,35 @@ public sealed class EnvironmentSandboxLeaseStore(
         return lease;
     }
 
-    public async Task<TResult> GetCurrentAsync<TResult>(
+    public Task<TResult> GetCurrentAsync<TResult>(
         EnvironmentGenerationFence fence,
         Func<SandboxLeaseSnapshot?, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        return GetCurrentCoreAsync(
+            fence, (lease, _, _, token) => callback(lease, token), cancellationToken);
+    }
+
+    public Task<TResult> GetCurrentWithWorkspaceAsync<TResult>(
+        EnvironmentGenerationFence fence,
+        string volumeId,
+        Func<SandboxLeaseSnapshot?, EnvironmentWorkspaceVolumeSnapshot?, CancellationToken, Task<TResult>> callback,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumeId);
+        ArgumentNullException.ThrowIfNull(callback);
+        return GetCurrentCoreAsync(fence, async (lease, connection, transaction, token) =>
+        {
+            var workspace = await EnvironmentLifecycleStore.ReadWorkspaceVolumeInTransactionAsync(
+                connection, transaction, fence, volumeId, token).ConfigureAwait(false);
+            return await callback(lease, workspace, token).ConfigureAwait(false);
+        }, cancellationToken);
+    }
+
+    private async Task<TResult> GetCurrentCoreAsync<TResult>(
+        EnvironmentGenerationFence fence,
+        Func<SandboxLeaseSnapshot?, NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task<TResult>> callback,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(fence);
@@ -163,7 +189,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         await RequireActiveOwnerAsync(connection, transaction, fence, cancellationToken).ConfigureAwait(false);
         var lease = await ReadCurrentAsync(
             connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
-        var result = await callback(lease, cancellationToken).ConfigureAwait(false);
+        var result = await callback(lease, connection, transaction, cancellationToken).ConfigureAwait(false);
         var currentLease = await ReadCurrentAsync(
             connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
         if (!SameLeaseVersion(lease, currentLease))

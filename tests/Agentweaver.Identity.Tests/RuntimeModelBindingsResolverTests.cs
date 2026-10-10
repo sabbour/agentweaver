@@ -1,4 +1,7 @@
 using System.Collections.Immutable;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 using Xunit;
@@ -66,7 +69,7 @@ public sealed class RuntimeModelBindingsResolverTests
         {
             "reference" => pin with { ModelSelectionReference = "other-reference" },
             "model" => pin with { ModelId = "other-model" },
-            "mode" => pin with { SourceMode = ModelSourceMode.Byok },
+            "mode" => pin with { SourceMode = ModelSourceMode.Byok, ProviderType = "azure" },
             "revision" => pin with { ConfigurationRevision = "model-bindings-v2" },
             _ => pin with { ConfigurationHash = new string('0', 64) }
         };
@@ -84,6 +87,63 @@ public sealed class RuntimeModelBindingsResolverTests
         Assert.Equal("runtime_model_source_mode_mismatch",
             Assert.Throws<RuntimeAuthorizationException>(() =>
                 Resolver().Resolve("accepted-reference", mode)).Code);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("unsupported")]
+    public void ByokPinRequiresAnExplicitSupportedProvider(string? providerType)
+    {
+        var pin = Resolver().Pin("accepted-reference", ModelSourceMode.HostedCopilot) with
+        {
+            SourceMode = ModelSourceMode.Byok, ProviderType = providerType
+        };
+        Assert.Equal("runtime_model_binding_pin_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeModelBindingsResolver.ValidatePin(pin)).Code);
+    }
+
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("reference")]
+    [InlineData("mode")]
+    [InlineData("provider")]
+    [InlineData("hash")]
+    [InlineData("unknown-field")]
+    [InlineData("malformed")]
+    public void AcceptedSelectionDecoderPreservesOnlyMatchingByokPins(string change)
+    {
+        var pin = Resolver().Pin("accepted-reference", ModelSourceMode.HostedCopilot) with
+        {
+            SourceMode = ModelSourceMode.Byok, ProviderType = "azure"
+        };
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+        var selection = JsonSerializer.SerializeToNode(new
+        {
+            modelSelection = new
+            {
+                reference = "accepted-reference", sourceMode = "byok", modelBindingPin = pin
+            }
+        }, options)!;
+        var model = selection["modelSelection"]!;
+        switch (change)
+        {
+            case "reference": model["modelBindingPin"]!["modelSelectionReference"] = "foreign"; break;
+            case "mode": model["sourceMode"] = "hostedCopilot"; break;
+            case "provider": model["modelBindingPin"]!["providerType"] = null; break;
+            case "hash": model["modelBindingPin"]!["configurationHash"] = "invalid"; break;
+            case "unknown-field": model["modelBindingPin"]!["credentialValue"] = "not-authority"; break;
+            case "malformed": model["modelBindingPin"] = new JsonArray(); break;
+        }
+        var snapshot = JsonSerializer.SerializeToElement(selection);
+        if (change == "valid")
+            Assert.Equal(pin, RuntimeAcceptedModelSelection.Read(snapshot).ModelBindingPin);
+        else
+            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeAcceptedModelSelection.Read(snapshot));
+        Assert.DoesNotContain("providerType", JsonSerializer.Serialize(
+            Resolver().Pin("accepted-reference", ModelSourceMode.HostedCopilot), options));
     }
 
     [Fact]

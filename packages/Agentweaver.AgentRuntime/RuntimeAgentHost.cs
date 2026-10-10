@@ -59,6 +59,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private RuntimeSessionMaterialHttpClient? _material;
     private RuntimeUsageSourceHttpClient? _usageSource;
     private Task? _usage;
+    private RuntimeHostSuspendRequest? _suspendRequest;
+    private PendingTurn? _lastTurn;
     private DateTimeOffset? _configuredAt;
     private DateTimeOffset? _readyAt;
     private int _disposed;
@@ -191,6 +193,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             }
             else
             {
+                if (_suspendRequest is not null)
+                    throw new RuntimeAuthorizationException("runtime_session_suspended");
                 if (_immediate.Count + _enqueue.Count >= _options.MaximumPendingTurns)
                     throw new RuntimeAuthorizationException("runtime_a2a_pending_capacity_exceeded");
                 pending = new(message.MessageId, fingerprint, request, message.Metadata.Runtime, actor,
@@ -202,6 +206,51 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             }
         }
         return await pending.Completion.Task.WaitAsync(token).ConfigureAwait(false);
+    }
+
+    public async Task<RuntimeHostSuspendReceipt> SuspendAsync(
+        RuntimeHostSuspendRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.OperationId == Guid.Empty || request.ManifestId == Guid.Empty || request.PhaseVersion <= 0 ||
+            request.OperationId == request.ManifestId)
+            throw new RuntimeAuthorizationException("runtime_suspend_request_invalid");
+        var session = await RequireSessionAsync(request.Proof, actor, token).ConfigureAwait(false);
+        await RequireCurrentSuspendAsync(request, actor, token).ConfigureAwait(false);
+        Task[] admitted;
+        lock (_queueLock)
+        {
+            RequireAvailable();
+            if (_suspendRequest is not null && _suspendRequest != request)
+                throw new RuntimeAuthorizationException("runtime_suspend_operation_conflict");
+            _suspendRequest = request;
+            admitted = _turns.Values.Where(turn => !turn.Completion.Task.IsCompleted)
+                .Select(turn => (Task)turn.Completion.Task).ToArray();
+        }
+        await Task.WhenAll(admitted).WaitAsync(token).ConfigureAwait(false);
+        lock (_queueLock)
+        {
+            RequireAvailable();
+            if (_lastTurn?.Completion.Task.Status != TaskStatus.RanToCompletion)
+                throw new RuntimeAuthorizationException("runtime_native_suspend_receipt_unavailable");
+        }
+        await RequireCurrentSuspendAsync(request, actor, token).ConfigureAwait(false);
+        await session.FlushUsageAsync(token).ConfigureAwait(false);
+        RequireAvailable();
+        return await session.SuspendAsync(
+            _material!, request, cancellation => RequireCurrentSuspendAsync(request, actor, cancellation), token)
+            .ConfigureAwait(false);
+    }
+
+    private async Task RequireCurrentSuspendAsync(
+        RuntimeHostSuspendRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        var current = await RuntimeOwnerHttpTransport.SendAsync<RuntimeHostSuspendRequest>(
+            _http, _options.OrchestratorAddress, "/internal/runtime/suspend/require-current",
+            actor, request, token).ConfigureAwait(false);
+        if (current != request)
+            throw new RuntimeAuthorizationException("runtime_suspend_authority_changed");
+        token.ThrowIfCancellationRequested();
     }
 
     public async Task<RuntimeHostReadinessReceipt> ReadinessAsync(CancellationToken token)
@@ -389,7 +438,10 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 await _available.WaitAsync(_stop.Token).ConfigureAwait(false);
                 PendingTurn pending;
                 lock (_queueLock)
+                {
                     pending = _immediate.Count > 0 ? _immediate.Dequeue() : _enqueue.Dequeue();
+                    _lastTurn = pending;
+                }
                 using var turn = CancellationTokenSource.CreateLinkedTokenSource(pending.Cancellation, _stop.Token);
                 try
                 {
