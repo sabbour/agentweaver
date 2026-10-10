@@ -106,6 +106,7 @@ sequenceDiagram
     participant E as Environment manager
     participant I as Identity and policy
     participant H as AgentHost
+    participant G as Trusted outbound gateway outside guest
     O->>C: Read platform defaults and enabled descriptors
     O->>R: Resolve project overrides and cardinality
     R->>R: Check advertised capabilities and cross-seam compatibility
@@ -114,9 +115,19 @@ sequenceDiagram
     E-->>O: Resource generations and negotiated capabilities
     O->>R: Verify pairing and pin effective binding
     loop Each turn or resume
-        O->>I: Revalidate authorization and policy, redeem SecretRefs
-        I-->>H: Deliver scoped short-lived credentials
-        O->>H: Dispatch with pinned binding and fencing generation
+        O->>I: Revalidate authorization and policy
+        alt Proposed credential-less mode
+            O->>H: Bind gateway-only identity and supported runtime profile
+            O->>H: Dispatch with pinned binding and fencing generation
+            H->>G: Request bound operation without upstream credentials
+            G->>O: Validate current action, registration and fences
+            G->>I: Acquire exact upstream credential
+            I-->>G: Credential for trusted use only
+            G->>O: Recheck authority after waits before authenticated dispatch
+        else Explicit legacy credential delivery
+            I-->>H: Deliver scoped short-lived credentials
+            O->>H: Dispatch with pinned binding and fencing generation
+        end
     end
 ```
 
@@ -201,11 +212,19 @@ gateway reports a permissive capability.
 
 ### Credentials and adapter hosting
 
-A binding stores a `SecretRef`, never a token. The Identity service alone redeems or mints purpose-bound,
-run-bound, short-lived credentials. It sends only the necessary scoped credential over authenticated
-AgentHost configure/refresh channels, or injects one at the L7 gateway. Resume refreshes credentials that
-may have survived in guest memory. A provider receives credentials only for its operation; neither project
-options nor snapshot metadata carry their values.
+A binding stores a `SecretRef` or accepted connection reference, never a token.
+Identity alone redeems or mints purpose/run-bound upstream credentials.
+Authenticated delivery into the current guest AgentHost is **legacy credential
+delivery**, not credential-less execution. In the proposed credential-less mode,
+upstream credentials stay in trusted services outside the guest and are inserted
+only after current action, destination and binding validation at the L7 gateway.
+An incompatible SDK requires a supported trusted external runtime profile or
+explicit unavailable capability, never a raw token fallback. Resume repeats
+current authority and placement checks; it cannot restore credential-bearing guest
+state. A provider receives credentials only for its trusted operation; project
+options and snapshot metadata never carry their values. See the
+[credential-less sandbox proposal](../identity-secrets.md#credential-less-sandbox-proposal)
+for protocol limits, trust assumptions and proposed admission changes.
 
 Adapters have five deployment patterns. The contract and enforcement boundary remain the same even when the
 implementation is outside the service process.
@@ -348,7 +367,10 @@ sandbox claims rather than only direct pods, and capture/restore within the Agen
 AgentHost moves to the Kata v2 RuntimeClass only after that gate: the capability depends on the supported VM
 runtime and identical restore resources. The current two regular containers are compatible; init,
 native-sidecar, and ephemeral containers must be excluded. After a restored guest receives a new address,
-the authenticated A2A client reconnects, configure is idempotent, and Identity refreshes guest credentials.
+the authenticated A2A client reconnects and configure is idempotent. Legacy mode
+refreshes delivered guest credentials. Credential-less mode rebinds only the
+gateway identity and current trusted runtime profile; credential-bearing guest
+snapshots are not admissible.
 None of this is a cutover prerequisite ([R3](../decisions/0001-platform-architecture.md#risk-register)).
 
 ## Sandbox
@@ -649,9 +671,16 @@ failures are journaled; classifier transport and credentials remain outside prom
 **Owner:** Environment manager. **Cardinality:** layered. The core compiles one `EgressIntent` per
 environment and run from **platform baseline ∩ project narrowing ∩ run needs**. It groups FQDN patterns,
 CIDRs, ports, and protocols by purpose: pinned model endpoint, enabled MCP servers, source control, package
-registries, Key Vault and Entra, preview ingress, and control-plane callbacks. Optional L7 rules name MCP
+registries, preview ingress, and control-plane callbacks. Key Vault and Entra
+credential acquisition are trusted-side egress, not direct guest permissions.
+Optional L7 rules name MCP
 servers/tools, A2A peers, or HTTP methods/paths, plus gateway `SecretRef` credential injection and audit
 level.
+
+L7 is required for the proposed credential-less mode. Its exact protocol profile,
+trusted credential insertion, forced mediation and current action checks are
+defined in the [credential-less sandbox proposal](../identity-secrets.md#credential-less-sandbox-proposal);
+this is not current L7 adapter or datapath evidence.
 
 `Apply(environmentSelector, intent, generation)` returns the applied generation; `Verify` and `Revoke`
 reconcile it. Capabilities advertise L3/L4, FQDN, MCP/A2A/model-aware L7, credential injection, rate limits,
@@ -812,7 +841,11 @@ The current source enum and resolver do not yet implement this sixteenth seam.
 1.0 backend. Core and adapters exchange `SecretRef`s and purpose-bound credential requests, not secret
 values in provider descriptors, run bindings, Postgres state, workspace files, or snapshot manifests. The
 trusted control plane redeems references and refreshes short-lived run credentials over authenticated
-channels. The L7 gateway can inject scoped outbound credentials without exposing them inside the sandbox.
+channels. In the proposed credential-less mode, only trusted external consumers
+receive upstream values; the L7 gateway validates current action authority and
+injects authentication outside the sandbox. A guest-redeemable reference or
+federated assertion is not a substitute for that boundary. The current Secrets
+contract does not implement this L7 admission or guest isolation.
 Kubernetes Secrets are not the credential store. This generalizes 0.x Key Vault-backed BYOK and GitHub
 references (`apps/Agentweaver.Api/Auth/UserModelProviderSettingsService.cs`,
 `apps/Agentweaver.Api/Auth/GitHubConnectionsCredentialVault.cs`).

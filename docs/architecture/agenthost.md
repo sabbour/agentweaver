@@ -5,6 +5,16 @@ It uses `GitHub.Copilot.SDK` 1.0.18 and the compatible native runtime 1.0.79.
 Microsoft Agent Framework remains an Orchestrator dependency, not an AgentHost runtime.
 This source does not provide an automatic scheduler, deployment, live OAuth acceptance, or paid model evidence.
 
+The current native SDK path consumes a real hosted access token or BYOK key inside
+the selected Sandbox. This is legacy credential delivery, **not credential-less
+guest execution**, even when subprocess environment variables contain no secrets.
+The [credential-less sandbox proposal](identity-secrets.md#credential-less-sandbox-proposal)
+requires trusted-side request authentication or a supported model-runtime adapter
+outside the guest, with the same guards, native results and accounting contracts.
+Two containers sharing a Kata guest and private host directories alone do not
+prove that separation. This proposal does not change the executable or its current
+readiness contract; unsupported modes must not claim compliance.
+
 ## Authentication and immutable bindings
 
 AgentHost requires an explicit HTTPS issuer, audience, owner addresses, image identity, and registered model bindings.

@@ -143,6 +143,16 @@ Its internal readiness owner read retains the exact lease across fresh egress an
 It uses the retained selection snapshot, not a recursive accepted-selection lookup.
 Object readback does not prove Cilium datapath enforcement.
 
+For the [proposed credential-less mode](identity-secrets.md#minimal-contract-changes-and-admission),
+admission must also prove that credential-consuming services are outside the
+untrusted guest, with no guest-accessible private memory, volumes, sockets or
+cloud assertions. The existing `ISandboxProvider` negotiated capability and
+lease/profile surfaces carry placement evidence; the selected L3/L4 and L7
+providers must supply current forced-mediation evidence. Two containers in one
+Kata guest, a VM-isolation descriptor, or policy readback alone do not prove this
+boundary. These are proposed readiness additions, not current Sandbox capability
+or deployment evidence; legacy placement must not be relabeled credential-less.
+
 ## Agent Sandbox resources and recovery
 
 The adapter uses the `extensions.agents.x-k8s.io/v1beta1` API. For each owner

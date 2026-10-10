@@ -28,6 +28,7 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
 | [Services and release](docs/architecture/design/services-and-release.md) | Service decomposition, data plane, per-service versioning and release |
 | [Projects & Config service](docs/architecture/projects-config.md) | Implemented candidate API, revisioned records, and immutable run-selection semantics |
 | [AgentHost source candidate](docs/architecture/agenthost.md) | Authenticated native SDK execution, guarded effects, durable turns, startup evidence, and pinned image |
+| [Credential-less sandbox proposal](docs/architecture/identity-secrets.md#credential-less-sandbox-proposal) | Keep upstream credentials outside untrusted guests; proposed gateway flow, provider admission, SDK/protocol limits, and acceptance cases |
 
 ## What 1.0 changes
 

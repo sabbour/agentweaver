@@ -133,6 +133,16 @@ it is not permission to start a model run. Any automated/model-run execution
 must separately validate its existing Orchestrator action grant. `DatapathEnforcementVerified`
 remains false because an API readback is not datapath evidence.
 
+The [credential-less sandbox proposal](identity-secrets.md#network-tls-and-hostile-input)
+extends this layered design with a required trusted L7 gateway for that mode,
+not a new credential-sourcing provider. L3/L4 enforcement must force protected
+traffic through it and deny guest credential acquisition and direct bypass.
+The gateway independently validates current action/resource authority before
+trusted-side credential injection. Proxy environment variables and static
+allowlists are insufficient. The current Cilium-only candidate has no L7
+adapter and cannot report credential-less readiness; existing generation,
+owner fences, and explicit unsupported behavior remain unchanged.
+
 ```mermaid
 sequenceDiagram
     participant E as Environment manager
