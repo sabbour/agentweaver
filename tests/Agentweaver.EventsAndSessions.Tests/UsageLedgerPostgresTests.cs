@@ -5,7 +5,13 @@ using Agentweaver.EventsAndSessions.Cost;
 using Agentweaver.Identity;
 using Agentweaver.Providers;
 using System.Collections.Immutable;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -577,18 +583,37 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     {
         var selection = RunAdmissionSelection();
         var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
-        var model = RuntimeAcceptedModelSelection.Read(selection);
-        var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
-            new Dictionary<string, RuntimeModelBinding>
-            {
-                [model.Reference] = new("native-model", ModelSourceMode.HostedCopilot)
-            });
-        var receipt = await NativeConsumer().ReadRunAdmissionAsync(
-            "tenant-1", "project-1", "run-1", request, selection, model,
-            resolver.Pin(model.Reference, ModelSourceMode.HostedCopilot), _ => Task.CompletedTask, default);
+        var clock = new AdmissionClock(DateTimeOffset.UtcNow);
+        using var services = AdmissionAuthentication(clock.GetUtcNow().AddMinutes(1));
+        var context = AdmissionContext(services);
+        var projects = new AdmissionProjectsClient(AdmissionAuthority());
+        var owner = new AdmissionSelectionHandler(_ => selection);
+        using var client = new HttpClient(owner);
+        var receipt = await AdmissionService(client, projects, clock).ReadAsync(
+            context, "project-1", "run-1", request, default);
+        var replay = await AdmissionService(client, projects, clock).ReadAsync(
+            context, "project-1", "run-1", request, default);
         Assert.Equal("native-model", receipt.ModelBindingPin.ModelId);
+        Assert.Equal(receipt.ModelBindingPin, replay.ModelBindingPin);
+        var binding = Assert.IsType<CostBinding>(receipt.CostBinding);
+        var replayBinding = Assert.IsType<CostBinding>(replay.CostBinding);
+        Assert.True(binding.NegotiatedCapabilities.SetEquals(replayBinding.NegotiatedCapabilities));
+        Assert.True(CopilotCostProvider.RateCardsEqual(
+            binding.RateCard, replayBinding.RateCard));
+        Assert.Equal(binding, replayBinding with
+        {
+            NegotiatedCapabilities = binding.NegotiatedCapabilities,
+            RateCard = binding.RateCard
+        });
+        Assert.True(CopilotCostProvider.RateCardsEqual(
+            receipt.Quote.RateCard, Assert.IsType<CostRateCard>(replay.Quote.RateCard)));
+        Assert.Equal(receipt.Quote, replay.Quote with { RateCard = receipt.Quote.RateCard });
+        Assert.Equal(4, owner.CallCount);
+        Assert.Equal(4, projects.CallCount);
         Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
             receipt, request, "tenant-1", "project-1", "run-1", selection));
+        Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
+            replay, request, "tenant-1", "project-1", "run-1", selection));
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var counts = new NpgsqlCommand($"""
             SELECT (SELECT count(*) FROM "{_schema}".usage_ledger),
@@ -602,36 +627,178 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         Assert.Equal(1L, reader.GetInt64(3));
     }
 
-    [Fact]
-    public async Task RunAdmissionAuthorityLossRollsBackTheRealCostPin()
+    [Theory]
+    [InlineData("tenant", "runtime_run_admission_authority_changed", 2)]
+    [InlineData("project", "runtime_run_admission_authority_changed", 2)]
+    [InlineData("run", "runtime_run_admission_authority_changed", 2)]
+    [InlineData("actor", "runtime_run_admission_authority_changed", 2)]
+    [InlineData("accept-permission", "runtime_run_admission_authority_changed", 2)]
+    [InlineData("read-permission", "runtime_usage_authority_denied", 2)]
+    [InlineData("selection", "runtime_run_admission_selection_changed", 2)]
+    [InlineData("expiry", "runtime_run_admission_authority_changed", 2)]
+    [InlineData("initial-read", "runtime_usage_authority_denied", 0)]
+    [InlineData("initial-accept", "runtime_run_admission_authority_denied", 0)]
+    [InlineData("initial-scope", "runtime_run_admission_authority_denied", 0)]
+    [InlineData("owner", "runtime_run_admission_owner_unavailable", 0)]
+    [InlineData("actor-expired", "runtime_usage_actor_expired", 0)]
+    [InlineData("model", "runtime_run_admission_model_mode_invalid", 1)]
+    public async Task RunAdmissionServiceRejectsUnavailableOrChangedAuthorityWithoutPersistingCostBinding(
+        string fault, string expectedCode, int expectedOwnerReads)
     {
-        var selection = RunAdmissionSelection();
+        var selection = RunAdmissionSelection(includeConnection: fault != "model");
         var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
-        var model = RuntimeAcceptedModelSelection.Read(selection);
-        var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
-            new Dictionary<string, RuntimeModelBinding>
+        var clock = new AdmissionClock(DateTimeOffset.UtcNow);
+        using var services = AdmissionAuthentication(
+            clock.GetUtcNow().AddMinutes(fault == "actor-expired" ? -1 : 1));
+        var context = AdmissionContext(services);
+        var authority = AdmissionAuthority();
+        var first = fault switch
+        {
+            "initial-read" => AdmissionAuthority("acceptRunSelection"),
+            "initial-accept" => AdmissionAuthority("readRunSelection"),
+            "initial-scope" => authority with { BoundRunId = "another-run" },
+            _ => authority
+        };
+        var current = fault switch
+        {
+            "tenant" => authority with { TenantId = "another-tenant" },
+            "project" => authority with
             {
-                [model.Reference] = new("native-model", ModelSourceMode.HostedCopilot)
-            });
-        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => NativeConsumer().ReadRunAdmissionAsync(
-            "tenant-1", "project-1", "run-1", request, selection, model,
-            resolver.Pin(model.Reference, ModelSourceMode.HostedCopilot),
-            _ => throw new RuntimeAuthorizationException("runtime_run_admission_authority_changed"), default));
+                BoundProjectId = "another-project",
+                EffectiveAuthority = [new("project", "another-project", authority.EffectiveAuthority[0].Permissions)]
+            },
+            "run" => authority with { BoundRunId = "another-run" },
+            "actor" => authority with { ActorId = "another-actor" },
+            "accept-permission" => AdmissionAuthority("readRunSelection"),
+            "read-permission" => AdmissionAuthority("acceptRunSelection"),
+            _ => authority
+        };
+        var projects = new AdmissionProjectsClient(first, current);
+        var owner = new AdmissionSelectionHandler(call =>
+        {
+            if (call == 2 && fault == "expiry")
+                clock.UtcNow = clock.GetUtcNow().AddMinutes(2);
+            return call == 2 && fault == "selection"
+                ? RunAdmissionSelection(contextRevision: "changed-selection")
+                : selection;
+        });
+        using var client = new HttpClient(owner);
+        var service = AdmissionService(client, projects, clock,
+            fault == "owner" ? "not-an-absolute-address" : "https://projects.test/");
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            service.ReadAsync(context, "project-1", "run-1", request, default));
+        Assert.Equal(expectedCode, failure.Code);
+        Assert.Equal(expectedOwnerReads, owner.CallCount);
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var count = new NpgsqlCommand(
             $"SELECT count(*) FROM \"{_schema}\".usage_run_cost_bindings", connection);
         Assert.Equal(0L, await count.ExecuteScalarAsync());
     }
 
-    private static JsonElement RunAdmissionSelection() => JsonSerializer.SerializeToElement(new
+    private RuntimeRunAdmissionService AdmissionService(
+        HttpClient client, IProjectsAuthorizationContextClient projects, TimeProvider clock,
+        string ownerAddress = "https://projects.test/") =>
+        new(client, new(ownerAddress, "events-api", "https://identity.test/"), projects, NativeConsumer(),
+            new RuntimeModelBindingsResolver("model-bindings-v1", new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-native-reference"] = new("native-model", ModelSourceMode.HostedCopilot)
+            }), clock);
+
+    private static ProjectsAuthorizationContextResponse AdmissionAuthority(params string[] permissions) =>
+        new(1, "https://identity.test/", "actor-1", "tenant-1", 1, "project-1", "run-1",
+            [new("project", "project-1",
+                (permissions.Length == 0 ? ["readRunSelection", "acceptRunSelection"] : permissions)
+                .Select(permission => new ProjectsAuthorizationPermissionGrant(permission, 1))
+                .ToImmutableArray())]);
+
+    private static ServiceProvider AdmissionAuthentication(DateTimeOffset expiry) =>
+        new ServiceCollection()
+            .AddSingleton<IAuthenticationService>(new AdmissionAuthenticationService(expiry))
+            .BuildServiceProvider();
+
+    private static HttpContext AdmissionContext(IServiceProvider services)
+    {
+        var context = new DefaultHttpContext
+        {
+            RequestServices = services,
+            User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "actor-1")], "admission-test"))
+        };
+        context.Request.Headers.Authorization = "Bearer admission-original-bearer";
+        context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        return context;
+    }
+
+    private sealed class AdmissionClock(DateTimeOffset now) : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = now;
+        public override DateTimeOffset GetUtcNow() => UtcNow;
+    }
+
+    private sealed class AdmissionProjectsClient(
+        params ProjectsAuthorizationContextResponse[] responses) : IProjectsAuthorizationContextClient
+    {
+        public int CallCount { get; private set; }
+
+        public Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
+            HttpContext context, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(responses[Math.Min(CallCount++, responses.Length - 1)]);
+        }
+    }
+
+    private sealed class AdmissionSelectionHandler(Func<int, JsonElement> selection) : HttpMessageHandler
+    {
+        public int CallCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Equal("https://projects.test/api/projects/project-1/runs/run-1/selection",
+                request.RequestUri?.AbsoluteUri);
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            Assert.Equal("admission-original-bearer", request.Headers.Authorization?.Parameter);
+            Assert.Equal(["tenant-1"], request.Headers.GetValues("X-Agentweaver-Tenant"));
+            Assert.True(request.Headers.CacheControl?.NoStore);
+            Assert.True(request.Headers.CacheControl?.NoCache);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } },
+                Content = new StringContent(selection(++CallCount).GetRawText(), Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class AdmissionAuthenticationService(DateTimeOffset expiry) : IAuthenticationService
+    {
+        public Task<AuthenticateResult> AuthenticateAsync(HttpContext context, string? scheme) =>
+            Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
+                context.User, new AuthenticationProperties { ExpiresUtc = expiry }, scheme ?? "admission-test")));
+
+        public Task ChallengeAsync(HttpContext context, string? scheme, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+        public Task ForbidAsync(HttpContext context, string? scheme, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+        public Task SignInAsync(
+            HttpContext context, string? scheme, ClaimsPrincipal principal, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+        public Task SignOutAsync(HttpContext context, string? scheme, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+    }
+
+    private static JsonElement RunAdmissionSelection(
+        bool includeConnection = true, string contextRevision = "selection-v1") => JsonSerializer.SerializeToElement(new
     {
         projectId = "project-1", runId = "run-1", projectRevision = 1, projectConfigurationRevision = 1,
-        platformRuntimeRevision = 1, contextRevision = "selection-v1",
+        platformRuntimeRevision = 1, contextRevision,
         projectConfiguration = new { },
         modelSelection = new
         {
             reference = "accepted-native-reference", sourceMode = "hostedCopilot",
-            connectionId = "11111111-1111-1111-1111-111111111111"
+            connectionId = includeConnection ? "11111111-1111-1111-1111-111111111111" : null
         }
     });
 

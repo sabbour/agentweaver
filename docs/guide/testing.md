@@ -168,6 +168,10 @@ The PostgreSQL snapshot tests cover real pricing pins without synthetic usage,
 authority rollback, and Copilot-only totals with unpriced other meters.
 They also join actual source and ledger rows, including explicit unpriced entries,
 and reject changed registration, source, platform message, event, hash, or amount.
+Run-admission tests call the production service with its PostgreSQL consumer and controlled Projects HTTP responses.
+They preserve the original bearer, tenant, and no-store request settings, and verify replay through a new service instance.
+Missing initial authority and changed current authority, selection, or bearer expiry must not create a Cost binding.
+These tests do not prove a deployed Broker or a live provider.
 These tests require the disposable PostgreSQL lane; compilation is not execution evidence.
 The disposable-PostgreSQL tests cover concurrent duplicates, content conflicts,
 restart, immutable history, transaction rollback, and exact run/agent totals.
