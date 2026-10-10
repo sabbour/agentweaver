@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
 using Agentweaver.Abstractions;
@@ -47,6 +48,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private readonly Queue<PendingTurn> _immediate = new();
     private readonly Queue<PendingTurn> _enqueue = new();
     private readonly Dictionary<Guid, PendingTurn> _turns = new();
+    private readonly ConcurrentDictionary<Guid, RuntimeUsageCostReceiptReference> _accountedUsage = new();
     private readonly SemaphoreSlim _available = new(0);
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _dispatcher;
@@ -55,6 +57,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private RuntimeActorAuthorization? _actor;
     private AuthorizedRuntimeSession? _session;
     private RuntimeSessionMaterialHttpClient? _material;
+    private RuntimeUsageSourceHttpClient? _usageSource;
     private Task? _usage;
     private DateTimeOffset? _configuredAt;
     private DateTimeOffset? _readyAt;
@@ -130,7 +133,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             _session = await receiver.ConfigureAsync(
                 bootstrap, bytes, request.ConsumeOperationId, request.ExchangeOperationId, token).ConfigureAwait(false);
             _configuredAt ??= _time.GetUtcNow();
-            var source = new RuntimeUsageSourceHttpClient(_http, _options.OrchestratorAddress, retained);
+            var source = _usageSource ??= new(_http, _options.OrchestratorAddress, retained);
             if (_usage is null)
             {
                 await _session.RegisterUsageAsync(source, token).ConfigureAwait(false);
@@ -190,7 +193,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             {
                 if (_immediate.Count + _enqueue.Count >= _options.MaximumPendingTurns)
                     throw new RuntimeAuthorizationException("runtime_a2a_pending_capacity_exceeded");
-                pending = new(message.MessageId, fingerprint, part.Text, message.Metadata.Runtime, actor,
+                pending = new(message.MessageId, fingerprint, request, message.Metadata.Runtime, actor,
                     token, new(TaskCreationOptions.RunContinuationsAsynchronously));
                 _turns.Add(message.MessageId, pending);
                 (message.Metadata.DeliveryMode == AddressedMessageDeliveryMode.Immediate
@@ -299,9 +302,16 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             owner.WorkflowStepId != binding.WorkflowStepId ||
             owner.ModelSelectionReference != binding.ModelSelectionReference ||
             owner.ModelSourceMode != binding.ModelSourceMode ||
+            owner.ModelBindingPin != binding.ModelBindingPin ||
             owner.ModelCredentialReference != binding.ModelCredentialReference ||
             owner.ModelConnectionId != binding.ModelConnectionId ||
-            owner.ModelConnectionScope != binding.ModelConnectionScope)
+            owner.ModelConnectionScope != binding.ModelConnectionScope ||
+            owner.MaxModelTurns != binding.MaxModelTurns ||
+            owner.MaxToolCalls != binding.MaxToolCalls ||
+            owner.MaxPromptTokens != binding.MaxPromptTokens ||
+            owner.MaxRevisionAttempts != binding.MaxRevisionAttempts ||
+            owner.CopilotSoftCreditLimit != binding.CopilotSoftCreditLimit ||
+            owner.CopilotHardCreditLimit != binding.CopilotHardCreditLimit)
             throw new RuntimeAuthorizationException("runtime_owner_context_stale");
         var phases = observation.StartupPhases;
         if (phases.IsDefault || phases.Length != 3 ||
@@ -352,6 +362,10 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                     acknowledgment.Accounting.EventId != receipt.Usage.EventId ||
                     acknowledgment.Accounting.Attribution != receipt.Usage.Attribution)
                     throw new RuntimeAuthorizationException("runtime_usage_accounting_mismatch");
+                var reference = new RuntimeUsageCostReceiptReference(receipt.ReceiptId, acknowledgment.Accounting);
+                if (!_accountedUsage.TryAdd(receipt.Usage.EventId, reference) &&
+                    _accountedUsage[receipt.Usage.EventId] != reference)
+                    throw new RuntimeAuthorizationException("runtime_usage_accounting_mismatch");
             }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
@@ -381,10 +395,29 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 {
                     turn.Token.ThrowIfCancellationRequested();
                     var session = await RequireSessionAsync(pending.Proof, pending.Actor, turn.Token).ConfigureAwait(false);
-                    var answer = await session.SendTurnAsync(
-                        pending.Prompt, _material!, turn.Token, pending.MessageId).ConfigureAwait(false);
+                    string answer;
+                    RuntimeNativeTurnRecordedReceipt? recorded = null;
+                    if (session.Registration.Binding.WorkflowStepId is not null)
+                        (answer, recorded) = await session.SendNativeTurnAsync(
+                            pending.Request, _material!, _usageSource!, turn.Token).ConfigureAwait(false);
+                    else
+                        answer = await session.SendTurnAsync(
+                            pending.Request.Message.Parts[0].Text, _material!, turn.Token, pending.MessageId)
+                            .ConfigureAwait(false);
                     await session.FlushUsageAsync(turn.Token).ConfigureAwait(false);
                     RequireAvailable();
+                    if (recorded is not null)
+                    {
+                        var references = recorded.Observation.UsageEventIds.Select(nativeId =>
+                        {
+                            var eventId = SdkUsageIdentity.Create(
+                                session.Facts.RuntimeInstanceId, session.Facts.SdkSessionId, nativeId.ToString("D"));
+                            return _accountedUsage.TryGetValue(eventId, out var reference)
+                                ? reference : throw new RuntimeAuthorizationException("runtime_usage_accounting_pending");
+                        }).ToImmutableArray();
+                        await _usageSource!.CompleteNativeTurnAsync(session, recorded, references, turn.Token)
+                            .ConfigureAwait(false);
+                    }
                     pending.Completion.TrySetResult(new(
                         "message", Guid.NewGuid(), session.Facts.SdkSessionId, "agent", [new("text", answer)]));
                 }
@@ -445,6 +478,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     }
 
     private sealed record PendingTurn(
-        Guid MessageId, string Fingerprint, string Prompt, RuntimeHostSessionProof Proof,
+        Guid MessageId, string Fingerprint, RuntimeA2ASendRequest Request, RuntimeHostSessionProof Proof,
         RuntimeActorAuthorization Actor, CancellationToken Cancellation, TaskCompletionSource<RuntimeA2AResponse> Completion);
 }

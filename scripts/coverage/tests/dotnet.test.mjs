@@ -27,6 +27,12 @@ const brokerTestProject = readFileSync(resolve(
 const mcpTestProject = readFileSync(resolve(
   root, 'tests', 'Agentweaver.Mcp.Tests', 'Agentweaver.Mcp.Tests.csproj'), 'utf8');
 
+test('the existing coverage artifact retains per-suite TRX case receipts without a test filter', () => {
+  assert.match(runner, /'--logger', `trx;LogFileName=\$\{name\}\.trx`/);
+  assert.match(runner, /'--results-directory', directory/);
+  assert.doesNotMatch(runner, /'--filter'/);
+});
+
 test('the explicit .NET coverage runner covers Agent Runtime through the Broker suite', () => {
   assert.match(runner, /\['identity-broker', 'Agentweaver\.Identity\.Broker\.Tests'\]/);
   assert.match(runner, /'Agentweaver\.AgentRuntime',/);

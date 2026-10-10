@@ -105,6 +105,9 @@ internal sealed class MafExecutionCheckpointStore
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
+        MafExecutionCheckpointContract.ValidateState(state);
+        MafExecutionCheckpointContract.ValidateBuildTestBinding(
+            state, _binding.Identity, _binding.ExecutionFence, checkpointId);
         var latest = await _checkpoints.ReadLatestCheckpointInTransactionAsync(
             connection, transaction, _binding, cancellationToken).ConfigureAwait(false);
         await AcquireExecutionLockInTransactionAsync(
@@ -143,6 +146,7 @@ internal sealed class MafExecutionCheckpointStore
                 state.DecisionStateVersion < previous.DecisionStateVersion)
                 throw new CoordinationException("maf_execution_checkpoint_revision_invalid",
                     StatusCodes.Status409Conflict);
+            MafExecutionCheckpointContract.ValidateTransition(previous, state);
         }
 
         var payload = MafExecutionCheckpointContract.Serialize(state);

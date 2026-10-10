@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Persistence.Postgres;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
@@ -61,13 +62,18 @@ internal sealed partial class CoordinationOwnerStore
         CoordinationActor actor,
         AuthorizedRunSelection selection,
         string sessionId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task<RuntimeRunAdmissionReceipt>>? readRunAdmission = null,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         ValidateAcceptRootInput(actor, selection, sessionId);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var accepted = await AcceptRootInTransactionAsync(
-            connection, transaction, actor, selection, sessionId, cancellationToken).ConfigureAwait(false);
+            connection, transaction, actor, selection, sessionId, cancellationToken,
+            readRunAdmission, revalidateCurrentAuthority).ConfigureAwait(false);
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return accepted;
     }
@@ -78,7 +84,9 @@ internal sealed partial class CoordinationOwnerStore
         CoordinationActor actor,
         AuthorizedRunSelection selection,
         string sessionId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task<RuntimeRunAdmissionReceipt>>? readRunAdmission = null,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -90,6 +98,9 @@ internal sealed partial class CoordinationOwnerStore
         var effectiveSelection = selection.Selection;
         var snapshot = effectiveSelection.Snapshot.GetRawText();
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(snapshot)));
+        await PrepareRunAdmissionInTransactionAsync(
+            connection, transaction, selection, readRunAdmission, revalidateCurrentAuthority, cancellationToken)
+            .ConfigureAwait(false);
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_runs}
                 (project_id, run_id, accepted_selection, accepted_selection_hash,
@@ -374,6 +385,7 @@ internal sealed partial class CoordinationOwnerStore
                 "run_selection_permission_denied", StatusCodes.Status403Forbidden);
         CoordinationIdentity.ValidateIdentity(sessionId, nameof(sessionId));
         ValidateSelection(effectiveSelection);
+        _ = RequiresRunAdmission(effectiveSelection.Snapshot);
     }
 
     public async Task<RegisteredChild> RegisterChildAsync(

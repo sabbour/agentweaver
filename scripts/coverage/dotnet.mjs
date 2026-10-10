@@ -82,10 +82,16 @@ for (const [name, project] of suites) {
     'test', join('tests', project, `${project}.csproj`),
     '--no-build', '--no-restore', '--configuration', 'Release',
     '--settings', 'coverage.runsettings', '--collect', 'XPlat Code Coverage',
+    '--logger', `trx;LogFileName=${name}.trx`,
     '--results-directory', directory,
   ]);
   if (code) {
     console.error(`${project} exited with code ${code}`);
+    failed = true;
+  }
+  const receipt = join(directory, `${name}.trx`);
+  if (!existsSync(receipt) || !statSync(receipt).size) {
+    console.error(`Missing or empty TRX case receipt for ${project}`);
     failed = true;
   }
   const found = reportsIn(directory);

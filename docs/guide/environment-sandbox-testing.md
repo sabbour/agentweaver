@@ -8,6 +8,18 @@ dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.cs
   --configuration Release --no-restore --verbosity quiet
 ```
 
+BuildTest contracts, checkpoint verification, configuration, and migration/model consistency have a separate non-container selection:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --filter "FullyQualifiedName~SandboxBuildTestCommandContractTests|FullyQualifiedName~EnvironmentSandboxBuildTestAcceptedCommandVerifierTests|FullyQualifiedName~SandboxBuildTestProductionWiringTests" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+These tests cover immutable accepted intent, bounded receipts, collector interruption, missing required output, and server-pinned capability configuration.
+The migration/model test generates metadata only; it does not connect to PostgreSQL.
+These results do not prove durable provider effects, Kubernetes isolation, Cilium datapath enforcement, or MAF recovery.
+
 The lease tests use the test project's disposable PostgreSQL 16 container. They
 cover per-Environment capacity, idempotent reservation, owner lifecycle fencing,
 explicit abandonment, supported terminal evidence, exact release receipts,

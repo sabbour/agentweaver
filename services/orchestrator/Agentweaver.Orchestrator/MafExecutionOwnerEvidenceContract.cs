@@ -116,6 +116,16 @@ internal static class MafExecutionOwnerEvidenceContract
                 !obligationsByPath.TryGetValue(file.Path, out var matches))
                 throw InvalidEvidence();
             var obligation = matches[0];
+            foreach (var (stepId, receipt) in root.Checkpoint.State.BuildTestReceipts)
+            {
+                if (obligation.WorkItemId != MafExecutionIds.CreateBuildTestAssociationId(
+                        root.Identity, root.WorkPlan.Plan.Id, stepId))
+                    continue;
+                var evidence = receipt.Outputs.SingleOrDefault(output => output.RelativePath == file.Path);
+                if (evidence is null || !evidence.Exists || evidence.CapturedSha256 != file.Sha256 ||
+                    evidence.CapturedBytes != file.ByteLength)
+                    throw InvalidEvidence();
+            }
             if (!seenOutputs.Add((obligation.WorkItemId, file.Path)))
                 throw InvalidEvidence();
             captureOutputs.Add(new MafExecutionOwnerEvidenceOutputRow(
@@ -314,6 +324,7 @@ internal static class MafExecutionOwnerEvidenceContract
         MafExecutionCheckpointSnapshot checkpoint) =>
         plan.Workflow.Definition.Steps.Any(step =>
             step.Mode == WorkflowStepMode.Platform &&
+            !IsVerifiedBuildTest(step, checkpoint) &&
             (step.Cardinality.Minimum > 0 ||
              checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(step.Id) != MafExecutionTaskStatus.Pending));
 
@@ -324,8 +335,16 @@ internal static class MafExecutionOwnerEvidenceContract
         plan.Workflow.Definition.Steps.Any(step =>
             step.Mode == WorkflowStepMode.Platform &&
             step.Id != selectedMerge?.Id &&
+            !IsVerifiedBuildTest(step, checkpoint) &&
             (step.Cardinality.Minimum > 0 ||
              checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(step.Id) != MafExecutionTaskStatus.Pending));
+
+    private static bool IsVerifiedBuildTest(
+        WorkflowStepDefinition step, MafExecutionCheckpointSnapshot checkpoint) =>
+        MafBuildTestCommandContract.IsExecutable(step) &&
+        checkpoint.State.BuildTestIntents.TryGetValue(step.Id, out var intent) &&
+        checkpoint.State.BuildTestReceipts.TryGetValue(step.Id, out var receipt) &&
+        receipt.ValidateFor(intent) == MafExecutionTaskStatus.Succeeded;
 
     private static CoordinationException InvalidEvidence() =>
         new("maf_execution_output_witness_evidence_invalid", StatusCodes.Status409Conflict);

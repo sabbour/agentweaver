@@ -161,6 +161,7 @@ public static partial class CoordinationEndpoints
                     .GetService<IBacklogPrerequisiteEvidenceReader>()
                     ?? throw new CoordinationException(
                         "backlog_evidence_unavailable", StatusCodes.Status503ServiceUnavailable);
+                var admission = context.RequestServices.GetService<RuntimeRunAdmissionClient>();
                 var result = await backlog.ClaimTaskAsync(
                     actor,
                     selection,
@@ -172,7 +173,8 @@ public static partial class CoordinationEndpoints
                     coordination,
                     decisions,
                     revalidate,
-                    ct).ConfigureAwait(false);
+                    ct, admission is null ? null : token => admission.ReadAsync(context, selection, token))
+                    .ConfigureAwait(false);
                 if (!result.IsSuccess)
                     return BacklogResult(result);
 

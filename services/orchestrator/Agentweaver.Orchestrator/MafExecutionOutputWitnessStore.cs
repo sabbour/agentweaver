@@ -340,6 +340,18 @@ internal sealed partial class MafExecutionOutputWitnessStore
                 state.Progress.FixedWorkItems.GetValueOrDefault(association.AssociationId) !=
                     MafExecutionTaskStatus.Succeeded ||
                 !state.Results.ContainsKey(association.AssociationId)) ||
+             state.BuildTestIntents.Values.Any(intent =>
+                intent.Identity != root || intent.WorkPlanId != plan.Plan.Id ||
+                intent.AcceptedSelectionHash != acceptedSelectionHash ||
+                intent.ExecutionFence != executionFence ||
+                intent.DecisionStateVersion != decisionStateVersion ||
+                !MafBuildTestCommandContract.MatchesProvider(
+                    plan.IsolationProviderBinding, intent.ExpectedBinding, root.RunId) ||
+                !plan.Workflow.Definition.Steps.Any(step =>
+                    step.Id == intent.StepId && MafBuildTestCommandContract.IsExecutable(step) &&
+                    JsonElement.DeepEquals(
+                        JsonSerializer.SerializeToElement(step.BuildTestCommand),
+                        JsonSerializer.SerializeToElement(intent.Command)))) ||
             plan.Workflow.Definition.Steps.Any(step =>
                 step.Mode == WorkflowStepMode.Platform &&
                 step.Cardinality.Minimum > 0 &&

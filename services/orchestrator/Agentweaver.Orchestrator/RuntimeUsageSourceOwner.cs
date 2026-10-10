@@ -15,6 +15,19 @@ internal sealed class RuntimeUsageBrokerClient(HttpClient client, RuntimeUsageSo
         RuntimeActorAuthorization actor, RuntimeCredentialHttpRequest proof, CancellationToken cancellationToken) =>
         RuntimeOwnerHttpTransport.SendAsync<RuntimeGrantReceipt>(
             client, options.BrokerOwnerAddress, "/internal/runtime/source/verify", actor, proof, cancellationToken);
+
+    internal Task<RuntimeUsageCostSnapshotReceipt> ReadCostSnapshotAsync(
+        RuntimeActorAuthorization actor, string eventsOwnerAddress, RuntimeUsageCostSnapshotRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!Uri.TryCreate(eventsOwnerAddress, UriKind.Absolute, out var address))
+            throw new RuntimeAuthorizationException("runtime_usage_cost_owner_unavailable");
+        var scope = request.Registration.Binding;
+        return RuntimeOwnerHttpTransport.SendAsync<RuntimeUsageCostSnapshotReceipt>(
+            client, RuntimeOwnerHttpTransport.RequireOwnerAddress(address),
+            $"/internal/projects/{Uri.EscapeDataString(scope.ProjectId)}/runs/{Uri.EscapeDataString(scope.RunId)}" +
+            "/usage/copilot-cost-snapshot", actor, request, cancellationToken);
+    }
 }
 
 internal sealed class RuntimeUsageSourceOwner(
@@ -31,7 +44,7 @@ internal sealed class RuntimeUsageSourceOwner(
         if (request.Authorization.RuntimeInstanceId != runtimeInstanceId)
             throw new RuntimeAuthorizationException("runtime_usage_binding_invalid");
         return ExecuteWriteAsync(context, request.Authorization,
-            (connection, transaction, registration, grant, token) =>
+            (connection, transaction, registration, grant, actor, token) =>
                 store.RegisterWithinTransactionAsync(
                     connection, transaction, registration, grant, request.Source, token), cancellationToken);
     }
@@ -42,9 +55,112 @@ internal sealed class RuntimeUsageSourceOwner(
         ArgumentNullException.ThrowIfNull(request.Authorization);
         ArgumentNullException.ThrowIfNull(request.Observation);
         return ExecuteWriteAsync(context, request.Authorization,
-            (connection, transaction, registration, grant, token) =>
+            (connection, transaction, registration, grant, actor, token) =>
                 store.AppendWithinTransactionAsync(
                     connection, transaction, registration, grant, request.Observation, token), cancellationToken);
+    }
+
+    internal async Task<RuntimeNativeTurnAdmissionReceipt> BeginNativeTurnAsync(
+        HttpContext context, RuntimeNativeTurnBeginRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request.Authorization);
+        ArgumentNullException.ThrowIfNull(request.Message);
+        ArgumentNullException.ThrowIfNull(request.Source);
+        var receipt = await ExecuteWriteAsync(context, request.Authorization,
+            (connection, transaction, registration, grant, actor, token) =>
+                store.BeginNativeTurnWithinTransactionAsync(
+                    connection, transaction, registration, grant, request,
+                    (source, currentToken) => broker.ReadCostSnapshotAsync(actor, options.EventsOwnerBaseAddress,
+                        new(1, registration, source), currentToken), token), cancellationToken).ConfigureAwait(false);
+        return receipt ?? throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+    }
+
+    internal async Task PrepareNativeTurnAsync(
+        HttpContext context, RuntimeRegistration expected, SessionIdentity root,
+        MafExecutionCheckpointSnapshot checkpoint, MafExecutionDispatchIntent intent,
+        RuntimeA2ASendRequest message,
+        Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> requireCurrentOwner,
+        CancellationToken cancellationToken)
+    {
+        var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
+        var expiry = context.User.GetExpirationDate() ?? authentication.Properties?.ExpiresUtc;
+        if (!authentication.Succeeded || expiry is null || expiry <= timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_actor_expired");
+        var bearer = new SecretCredential(
+            CoordinationIdentity.RequireBearer(context).Parameter!, expiry.Value, timeProvider);
+        bool prepared;
+        try
+        {
+            var actor = new RuntimeActorAuthorization(bearer, CoordinationIdentity.ReadTenantSelector(context));
+            prepared = await store.ExecuteLockedAsync(expected.RuntimeInstanceId,
+            (connection, transaction, token) => registrations.ExecuteCurrentAsync(
+                context, expected.RuntimeInstanceId, async (registration, currentToken) =>
+                {
+                    if (registration != expected)
+                        throw new RuntimeAuthorizationException("runtime_registration_stale");
+                    await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
+                    var admitted = await store.PrepareNativeTurnWithinTransactionAsync(
+                        connection, transaction, root, checkpoint, intent, registration, message,
+                        (source, quoteToken) => broker.ReadCostSnapshotAsync(
+                            actor, options.EventsOwnerBaseAddress, new(1, registration, source), quoteToken), currentToken)
+                        .ConfigureAwait(false);
+                    await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
+                    if (!bearer.IsUsable() ||
+                        registration.ExpiresAt <= timeProvider.GetUtcNow())
+                        throw new RuntimeAuthorizationException("runtime_actor_expired");
+                    await transaction.CommitAsync(currentToken).ConfigureAwait(false);
+                    return admitted;
+                }, token), cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            bearer.Invalidate();
+        }
+        if (!prepared)
+            throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+    }
+
+    internal Task RequireNativeTurnAccountedAsync(
+        HttpContext context, RuntimeRegistration expected, RuntimeA2ASendRequest message, string answer,
+        Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> requireCurrentOwner,
+        CancellationToken cancellationToken) =>
+        store.ExecuteLockedAsync(expected.RuntimeInstanceId,
+            (connection, transaction, token) => registrations.ExecuteCurrentAsync(
+                context, expected.RuntimeInstanceId, async (registration, currentToken) =>
+                {
+                    if (registration != expected)
+                        throw new RuntimeAuthorizationException("runtime_registration_stale");
+                    await requireCurrentOwner(connection, transaction, currentToken).ConfigureAwait(false);
+                    await store.RequireNativeTurnAccountedWithinTransactionAsync(
+                        connection, transaction, registration, message, answer, currentToken).ConfigureAwait(false);
+                    return true;
+                }, token), cancellationToken);
+
+    internal Task<RuntimeNativeTurnRecordedReceipt> RecordNativeTurnAsync(
+        HttpContext context, RuntimeNativeTurnObservationRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request.Authorization);
+        ArgumentNullException.ThrowIfNull(request.Admission);
+        ArgumentNullException.ThrowIfNull(request.Observation);
+        return ExecuteWriteAsync(context, request.Authorization,
+            (connection, transaction, registration, grant, actor, token) =>
+                store.RecordNativeTurnWithinTransactionAsync(
+                    connection, transaction, registration, grant, request, token), cancellationToken);
+    }
+
+    internal Task<RuntimeNativeTurnAccountingReceipt> CompleteNativeTurnAsync(
+        HttpContext context, RuntimeNativeTurnAccountingRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request.Authorization);
+        var snapshotRequest = RuntimeNativeTurnContract.AccountingSnapshotRequest(
+            request.Recorded, request.RequiredReceipts);
+        return ExecuteWriteAsync(context, request.Authorization,
+            (connection, transaction, registration, grant, actor, token) =>
+                store.CompleteNativeTurnWithinTransactionAsync(
+                    connection, transaction, registration, grant, request,
+                    currentToken => broker.ReadCostSnapshotAsync(
+                        actor, options.EventsOwnerBaseAddress, snapshotRequest, currentToken), token),
+            cancellationToken);
     }
 
     internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceAsync(
@@ -64,7 +180,7 @@ internal sealed class RuntimeUsageSourceOwner(
 
     private async Task<T> ExecuteWriteAsync<T>(
         HttpContext context, RuntimeCredentialHttpRequest proof,
-        Func<NpgsqlConnection, NpgsqlTransaction, RuntimeRegistration, RuntimeGrantReceipt,
+        Func<NpgsqlConnection, NpgsqlTransaction, RuntimeRegistration, RuntimeGrantReceipt, RuntimeActorAuthorization,
             CancellationToken, Task<T>> action, CancellationToken cancellationToken)
     {
         if (proof.GrantId == Guid.Empty || proof.Revision < 1 ||
@@ -97,7 +213,7 @@ internal sealed class RuntimeUsageSourceOwner(
                         credential.LimitLifetime(grant.ExpiresAt);
                         RequireLive(registration, bearer, credential);
                         var result = await action(
-                            connection, transaction, registration, grant, currentToken).ConfigureAwait(false);
+                            connection, transaction, registration, grant, actor, currentToken).ConfigureAwait(false);
                         var finalGrant = await broker.VerifyAsync(actor, proof, currentToken).ConfigureAwait(false);
                         RequireGrant(finalGrant, registration, proof);
                         RequireLive(registration, bearer, credential);
@@ -136,6 +252,35 @@ internal sealed class RuntimeUsageSourceOwner(
             first.Selection.Snapshot.GetRawText() != current.Selection.Snapshot.GetRawText())
             throw new RuntimeAuthorizationException("runtime_usage_receipt_scope_invalid");
         return receipt;
+    }
+
+    internal async Task<UsageDispatchSourceCompletionManifest> ReadSourceCompletionAsync(
+        HttpContext context, string projectId, string runId, string sessionId, Guid dispatchId,
+        CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.ValidateIdentifier(projectId);
+        RuntimeContractValidation.ValidateIdentifier(runId);
+        RuntimeContractValidation.ValidateIdentifier(sessionId);
+        if (dispatchId == Guid.Empty)
+            throw new ArgumentException("A non-empty native dispatch identity is required.", nameof(dispatchId));
+        var first = await projects.ReadSelectionForReadWithAuthorityAsync(
+            context, projectId, runId, cancellationToken).ConfigureAwait(false);
+        var stored = await store.ReadSourceCompletionAsync(
+            projectId, runId, sessionId, dispatchId, cancellationToken).ConfigureAwait(false);
+        var current = await projects.ReadSelectionForReadWithAuthorityAsync(
+            context, projectId, runId, cancellationToken).ConfigureAwait(false);
+        if (first.Authorization.TenantId != current.Authorization.TenantId ||
+            first.Selection.Snapshot.GetRawText() != current.Selection.Snapshot.GetRawText())
+            throw new RuntimeAuthorizationException("runtime_usage_receipt_scope_invalid");
+        // Native output receipts never populate the source-completion fields.
+        if (stored is not { } proof)
+            throw new CoordinationException(
+                "runtime_usage_source_completion_unavailable", StatusCodes.Status404NotFound);
+        if (proof.Manifest.TenantId != current.Authorization.TenantId ||
+            proof.SelectionHash != RuntimeContractValidation.Hash(
+                Encoding.UTF8.GetBytes(current.Selection.Snapshot.GetRawText())))
+            throw new RuntimeAuthorizationException("runtime_usage_receipt_scope_invalid");
+        return proof.Manifest;
     }
 
     private void RequireGrant(

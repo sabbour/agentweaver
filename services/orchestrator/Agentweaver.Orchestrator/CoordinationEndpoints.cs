@@ -41,6 +41,9 @@ public static partial class CoordinationEndpoints
         coordination.MapGet(
             "/sessions/{sessionId}/decisions",
             ReadCoordinatorDecisionStateAsync);
+        coordination.MapGet(
+            "/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}",
+            ReadCoordinatorBuildTestCommandAsync);
         coordination.MapGet("/sessions/{sessionId}/tree", ReadSessionTreeAsync);
         coordination.MapGet("/sessions/{sessionId}/status", ReadSessionStatusAsync);
         coordination.MapPost("/sessions/{sessionId}/turn-failure", ReportRunFailureAsync);
@@ -1203,7 +1206,8 @@ public static partial class CoordinationEndpoints
     private static bool RequiresProviderBinding(CoordinatorDecisionState state, WorkPlan? plan) =>
         plan?.Items.IsDefaultOrEmpty == false ||
         state.SelectedWorkflow?.Definition.Steps.Any(step =>
-            step.Mode == WorkflowStepMode.Fixed && step.FixedWork is not null) == true;
+            step.Mode == WorkflowStepMode.Fixed && step.FixedWork is not null ||
+            step.BuildTestCommand is not null) == true;
 
     private static long GetProjectRoleRevision(
         ProjectsAuthorizationContext authorization,
@@ -1299,8 +1303,12 @@ public static partial class CoordinationEndpoints
                 context, projectId, runId, cancellationToken).ConfigureAwait(false);
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            var admission = context.RequestServices.GetService<RuntimeRunAdmissionClient>();
             var accepted = await store.AcceptRootAsync(
-                actor, selection, request.SessionId, cancellationToken).ConfigureAwait(false);
+                actor, selection, request.SessionId, cancellationToken,
+                admission is null ? null : token => admission.ReadAsync(context, selection, token),
+                token => RequireUnchangedAuthorizedSelectionAsync(
+                    context, projectId, runId, selection, projects, token)).ConfigureAwait(false);
             await decisions.InitializeRootAsync(
                 actor,
                 new SessionIdentity(projectId, runId, accepted.RootSessionId),
