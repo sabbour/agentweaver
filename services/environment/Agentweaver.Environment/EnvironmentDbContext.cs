@@ -13,6 +13,8 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
     internal DbSet<EnvironmentOwnerEffectRow> OwnerEffects => Set<EnvironmentOwnerEffectRow>();
     internal DbSet<EnvironmentWorkspaceVolumeCleanupRow> WorkspaceVolumeCleanup =>
         Set<EnvironmentWorkspaceVolumeCleanupRow>();
+    internal DbSet<EnvironmentProviderLifecycleReportRow> ProviderLifecycleReports =>
+        Set<EnvironmentProviderLifecycleReportRow>();
     internal DbSet<RemoteMcpConnectionRow> RemoteMcpConnections => Set<RemoteMcpConnectionRow>();
     internal DbSet<RemoteMcpConnectionConfigurationRow> RemoteMcpConnectionConfigurations =>
         Set<RemoteMcpConnectionConfigurationRow>();
@@ -299,6 +301,8 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
                 .HasForeignKey(row => row.SourceReplaceOperationId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
+
+        EnvironmentProviderLifecycleReportModel.Configure(modelBuilder);
     }
 }
 
