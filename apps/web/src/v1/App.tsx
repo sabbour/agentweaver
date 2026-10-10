@@ -35,6 +35,7 @@ import {
 } from './authProtocol';
 import { gatewayClient, GatewayError } from './api';
 import { CopilotPopupCallbackPage, CopilotUserConnectionPanel } from './CopilotUserConnectionPanel';
+import { SkillsMarketplacePanel } from './SkillsMarketplacePanel';
 import { COPILOT_CALLBACK_PATH } from './copilotCallback';
 import { RemoteMcpOAuthPopupCallbackPage } from './RemoteMcpOAuthCallbackPage';
 import {
@@ -728,6 +729,7 @@ function ProjectConfigurationPage() {
   const [editor, setEditor] = useState('');
   const [loading, setLoading] = useState(true);
   const [savingScope, setSavingScope] = useState<string | null>(null);
+  const [skillAssignmentPending, setSkillAssignmentPending] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [errorScope, setErrorScope] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -782,7 +784,7 @@ function ProjectConfigurationPage() {
   const save = async (event: FormEvent) => {
     event.preventDefault();
     const scope = requestScope;
-    if (!versioned || loadedScope !== scope || versioned.projectId !== projectId) return;
+    if (!versioned || loadedScope !== scope || versioned.projectId !== projectId || skillAssignmentPending) return;
     let configuration: ProjectConfiguration;
     try {
       const parsed: unknown = JSON.parse(editor);
@@ -829,6 +831,59 @@ function ProjectConfigurationPage() {
     ? versioned
     : null;
   const currentLoading = loading || loadedScope !== requestScope;
+  const skillAgents = useMemo(() => {
+    if (!currentConfiguration) return [];
+    const names = new Map(currentConfiguration.configuration.agentCharters.map((item) => [item.agentId, item.name]));
+    return currentConfiguration.configuration.casting.map((item) => ({
+      agentId: item.agentId,
+      displayName: names.get(item.agentId) || item.agentId,
+    }));
+  }, [currentConfiguration]);
+  const skillActions = useMemo(() => ({
+    listSources: (scope: string) => apiCall(
+      (token, tenantSelector) => gatewayClient.listMarketplaceSources(token, scope, tenantSelector),
+      null,
+    ),
+    createSource: (scope: string, request: Parameters<typeof gatewayClient.createMarketplaceSource>[2]) =>
+      apiCall((token, tenantSelector) =>
+        gatewayClient.createMarketplaceSource(token, scope, request, tenantSelector), null),
+    updateSource: (
+      scope: string,
+      sourceId: string,
+      request: Parameters<typeof gatewayClient.updateMarketplaceSource>[3],
+    ) => apiCall((token, tenantSelector) =>
+      gatewayClient.updateMarketplaceSource(token, scope, sourceId, request, tenantSelector), null),
+    removeSource: (scope: string, sourceId: string, expectedRevision: number) =>
+      apiCall((token, tenantSelector) =>
+        gatewayClient.removeMarketplaceSource(token, scope, sourceId, expectedRevision, tenantSelector), null),
+    browseSource: (
+      scope: string,
+      sourceId: string,
+      request: Parameters<typeof gatewayClient.browseMarketplaceSource>[3],
+    ) => apiCall((token, tenantSelector) =>
+      gatewayClient.browseMarketplaceSource(token, scope, sourceId, request, tenantSelector), null),
+    previewSkillContent: (candidate: Parameters<typeof gatewayClient.previewSkillContent>[1]) =>
+      apiCall((token, tenantSelector) =>
+        gatewayClient.previewSkillContent(token, candidate, tenantSelector), null),
+    importSkillContent: (
+      scope: string,
+      request: Parameters<typeof gatewayClient.importSkillContent>[2],
+    ) => apiCall((token, tenantSelector) =>
+      gatewayClient.importSkillContent(token, scope, request, tenantSelector), null),
+    updateSkillAssignment: (
+      scope: string,
+      skillId: string,
+      request: Parameters<typeof gatewayClient.updateSkillAssignment>[3],
+    ) => apiCall((token, tenantSelector) =>
+      gatewayClient.updateSkillAssignment(token, scope, skillId, request, tenantSelector), null),
+  }), [apiCall]);
+  const assignmentDisabledReason = skillAssignmentPending
+    ? 'Wait for the current assignment update to finish.'
+    : savingScope === requestScope
+      ? 'Wait for the current configuration save to finish.'
+      : currentConfiguration && editor !== JSON.stringify(currentConfiguration.configuration, null, 2)
+        ? 'Save or reload the edited project configuration before assigning a skill.'
+        : null;
 
   return (
     <>
@@ -838,30 +893,51 @@ function ProjectConfigurationPage() {
       {currentError != null && <ErrorNotice code={errorCode(currentError)}>{errorMessage(currentError)}</ErrorNotice>}
       {currentNotice && <MessageBar intent="success"><MessageBarBody>{currentNotice}</MessageBarBody></MessageBar>}
       {currentLoading ? <Loading /> : currentConfiguration && (
-        <Panel title={`Revision ${currentConfiguration.revision}`}>
-          <form className="v1-form" onSubmit={(event) => void save(event)}>
-            <p className="v1-muted">
-              Model references and provider IDs are opaque. Only IDs already present in this project or returned by the Gateway are shown.
-              The owner validates all changes and rejects unavailable selections. Secret references are metadata; credential values are never entered here.
-            </p>
-            <Field label="Typed ProjectConfiguration JSON" hint="Keep the complete current document to preserve unrelated settings, GitHub App connection references, and legacy source-control SecretRefs.">
-              <Textarea
-                className="v1-json-editor"
-                value={editor}
-                onChange={(_, data) => setEditor(data.value)}
-                resize="vertical"
-                rows={24}
-                spellCheck={false}
-              />
-            </Field>
-            <div className="v1-actions">
-              <Button appearance="primary" type="submit" disabled={savingScope === requestScope || !editor.trim()}>
-                {savingScope === requestScope ? 'Saving…' : 'Append configuration revision'}
-              </Button>
-              <Button appearance="secondary" type="button" disabled={savingScope === requestScope} onClick={() => void load()}>Reload owner revision</Button>
-            </div>
-          </form>
-        </Panel>
+        <>
+          <Panel title={`Revision ${currentConfiguration.revision}`}>
+            <form className="v1-form" onSubmit={(event) => void save(event)}>
+              <p className="v1-muted">
+                Model references and provider IDs are opaque. Only IDs already present in this project or returned by the Gateway are shown.
+                The owner validates all changes and rejects unavailable selections. Secret references are metadata; credential values are never entered here.
+              </p>
+              <Field label="Typed ProjectConfiguration JSON" hint="Keep the complete current document to preserve unrelated settings, GitHub App connection references, and legacy source-control SecretRefs.">
+                <Textarea
+                  className="v1-json-editor"
+                  value={editor}
+                  onChange={(_, data) => {
+                    if (!skillAssignmentPending) setEditor(data.value);
+                  }}
+                  readOnly={skillAssignmentPending}
+                  resize="vertical"
+                  rows={24}
+                  spellCheck={false}
+                />
+              </Field>
+              <div className="v1-actions">
+                <Button appearance="primary" type="submit" disabled={savingScope === requestScope || skillAssignmentPending || !editor.trim()}>
+                  {savingScope === requestScope ? 'Saving…' : 'Append configuration revision'}
+                </Button>
+                <Button appearance="secondary" type="button" disabled={savingScope === requestScope || skillAssignmentPending} onClick={() => void load()}>Reload owner revision</Button>
+              </div>
+            </form>
+          </Panel>
+          <SkillsMarketplacePanel
+            projectId={projectId}
+            configurationRevision={currentConfiguration.revision}
+            assignments={currentConfiguration.configuration.skills}
+            agents={skillAgents}
+            actions={session ? skillActions : null}
+            assignmentDisabledReason={assignmentDisabledReason}
+            onAssignmentPendingChange={setSkillAssignmentPending}
+            onConfigurationChanged={(updated) => {
+              if (activeScope.current !== requestScope || updated.projectId !== projectId) return;
+              setVersioned(updated);
+              setEditor(JSON.stringify(updated.configuration, null, 2));
+              setError(null);
+              setErrorScope(null);
+            }}
+          />
+        </>
       )}
     </>
   );

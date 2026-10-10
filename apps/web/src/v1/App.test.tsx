@@ -11,6 +11,14 @@ const mocks = vi.hoisted(() => ({
   getProject: vi.fn(),
   getProjectConfiguration: vi.fn(),
   updateProjectConfiguration: vi.fn(),
+  listMarketplaceSources: vi.fn(),
+  createMarketplaceSource: vi.fn(),
+  updateMarketplaceSource: vi.fn(),
+  removeMarketplaceSource: vi.fn(),
+  browseMarketplaceSource: vi.fn(),
+  previewSkillContent: vi.fn(),
+  importSkillContent: vi.fn(),
+  updateSkillAssignment: vi.fn(),
   getRunStatus: vi.fn(),
   getRunSelection: vi.fn(),
   getRunUsage: vi.fn(),
@@ -47,6 +55,14 @@ vi.mock('./api', () => ({
     getProject: mocks.getProject,
     getProjectConfiguration: mocks.getProjectConfiguration,
     updateProjectConfiguration: mocks.updateProjectConfiguration,
+    listMarketplaceSources: mocks.listMarketplaceSources,
+    createMarketplaceSource: mocks.createMarketplaceSource,
+    updateMarketplaceSource: mocks.updateMarketplaceSource,
+    removeMarketplaceSource: mocks.removeMarketplaceSource,
+    browseMarketplaceSource: mocks.browseMarketplaceSource,
+    previewSkillContent: mocks.previewSkillContent,
+    importSkillContent: mocks.importSkillContent,
+    updateSkillAssignment: mocks.updateSkillAssignment,
     getRunStatus: mocks.getRunStatus,
     getRunSelection: mocks.getRunSelection,
     getRunUsage: mocks.getRunUsage,
@@ -352,6 +368,14 @@ describe('v1 web project scoping', () => {
     mocks.getProject.mockReset();
     mocks.getProjectConfiguration.mockReset();
     mocks.updateProjectConfiguration.mockReset();
+    mocks.listMarketplaceSources.mockReset().mockResolvedValue([]);
+    mocks.createMarketplaceSource.mockReset();
+    mocks.updateMarketplaceSource.mockReset();
+    mocks.removeMarketplaceSource.mockReset();
+    mocks.browseMarketplaceSource.mockReset();
+    mocks.previewSkillContent.mockReset();
+    mocks.importSkillContent.mockReset();
+    mocks.updateSkillAssignment.mockReset();
     mocks.getRunStatus.mockReset();
     mocks.getRunSelection.mockReset();
     mocks.getRunUsage.mockReset();
@@ -1249,7 +1273,7 @@ describe('v1 web project scoping', () => {
     });
 
     await screen.findByRole('heading', { name: 'Revision 2' });
-    const editor = screen.getByRole('textbox') as HTMLTextAreaElement;
+    const editor = screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement;
     expect(editor.value).toContain('"projectMarker": "p2"');
 
     await act(async () => {
@@ -1257,7 +1281,8 @@ describe('v1 web project scoping', () => {
       await oldProjectLoad.promise;
     });
 
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('"projectMarker": "p2"');
+    expect((screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement).value)
+      .toContain('"projectMarker": "p2"');
     fireEvent.click(screen.getByRole('button', { name: 'Append configuration revision' }));
     await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
     expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
@@ -1267,6 +1292,97 @@ describe('v1 web project scoping', () => {
       expect.objectContaining({ projectMarker: 'p2' }),
       'tenant-1',
     );
+  });
+
+  it('loads marketplace sources through the selected project with the current tenant', async () => {
+    mocks.getProjectConfiguration.mockResolvedValue(projectConfiguration('p1', 4));
+    mocks.listMarketplaceSources.mockResolvedValue([]);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Skills and marketplace' });
+    await waitFor(() => expect(mocks.listMarketplaceSources).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      'tenant-1',
+    ));
+    expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
+  });
+
+  it('prevents configuration edits while a skill assignment is pending', async () => {
+    const base = projectConfiguration('p1', 4);
+    const configured = {
+      ...base,
+      configuration: {
+        ...base.configuration,
+        agentCharters: [{ agentId: 'agent-1', name: 'Agent One' }],
+        casting: [{ agentId: 'agent-1' }],
+      },
+    };
+    const assignment = {
+      skillId: 'skill-1',
+      enabled: true,
+      order: 0,
+      revision: 1,
+      contentDigest: 'sha256:sample',
+      agentIds: ['agent-1'],
+    };
+    const saved = {
+      ...configured,
+      revision: 5,
+      configuration: {
+        ...configured.configuration,
+        skills: [assignment],
+      },
+    };
+    const pendingAssignment = deferred<typeof saved>();
+    mocks.getProjectConfiguration.mockResolvedValue(configured);
+    mocks.previewSkillContent.mockResolvedValue({
+      name: 'Sample skill',
+      description: 'A sample skill',
+      contentDigest: 'sha256:sample',
+      resourceCount: 0,
+      totalBytes: 14,
+    });
+    mocks.importSkillContent.mockResolvedValue({
+      ...assignment,
+      skillId: 'skill-1',
+      name: 'Sample skill',
+      description: 'A sample skill',
+      resourceCount: 0,
+      totalBytes: 14,
+    });
+    mocks.updateSkillAssignment.mockReturnValue(pendingAssignment.promise);
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Revision 4' });
+    await screen.findByRole('heading', { name: 'Skills and marketplace' });
+    const editor = screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement;
+    const originalEditor = editor.value;
+    fireEvent.change(screen.getByLabelText('Skill folder or files'), {
+      target: { files: [new File(['# Sample skill'], 'SKILL.md', { type: 'text/markdown' })] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate skill files' }));
+    await screen.findByText('sha256:sample');
+    fireEvent.click(screen.getByRole('button', { name: 'Import skill to project' }));
+    await screen.findByText(/The Skills owner imported Sample skill at revision 1/);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Agent One' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Assign to selected agents' }));
+    await waitFor(() => expect(mocks.updateSkillAssignment).toHaveBeenCalledOnce());
+
+    expect(editor.readOnly).toBe(true);
+    fireEvent.change(editor, { target: { value: '{"projectMarker":"unsaved edit"}' } });
+    expect(editor.value).toBe(originalEditor);
+
+    await act(async () => {
+      pendingAssignment.resolve(saved);
+      await pendingAssignment.promise;
+    });
+
+    await screen.findByText(/saved this assignment in configuration revision 5/);
+    expect(editor.value).toBe(JSON.stringify(saved.configuration, null, 2));
+    expect(editor.value).not.toContain('unsaved edit');
+    expect(editor.readOnly).toBe(false);
   });
 
   it('clears an accepted selection and usage after a later snapshot read fails', async () => {
