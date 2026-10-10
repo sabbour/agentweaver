@@ -611,11 +611,20 @@ public sealed class RuntimeUsageSourceReceiptTests
         var hosted = Receipt();
         var registration = hosted.Registration with
         {
-            Binding = hosted.Registration.Binding with { ModelSourceMode = ModelSourceMode.Byok }
+            Binding = hosted.Registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = new(1, hosted.Usage.SdkSource!.ModelSelectionReference,
+                    hosted.Usage.SdkSource.ModelId, ModelSourceMode.Byok, "byok-bindings-v1", new string('a', 64))
+                {
+                    ProviderType = "azure"
+                }
+            }
         };
         var source = hosted.Usage.SdkSource! with
         {
-            SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null
+            SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null,
+            ByokProvider = new("azure", hosted.Usage.SdkSource.ModelId, new string('a', 64))
         };
         var eventId = Guid.NewGuid().ToString("D");
         var observation = new SdkUsageObservation(
@@ -631,7 +640,13 @@ public sealed class RuntimeUsageSourceReceiptTests
             usage with { Measurement = usage.Measurement with { ProviderUnits = 0 } },
             usage with { Measurement = usage.Measurement with { ProviderUnit = "nano_aiu" } },
             usage with { SdkSource = source with { SourceMode = "hosted-copilot" } },
-            usage with { SdkSource = source with { ModelMultiplier = 0 } }
+            usage with { SdkSource = source with { ModelMultiplier = 0 } },
+            usage with { SdkSource = source with { ByokProvider = null } },
+            usage with { SdkSource = source with { ByokProvider = source.ByokProvider! with { Type = "openai" } } },
+            usage with { SdkSource = source with { ByokProvider = source.ByokProvider! with { DeploymentId = "foreign" } } },
+            usage with { SdkSource = source with { ByokProvider = source.ByokProvider! with { ConfigurationHash = new string('b', 64) } } },
+            usage with { Measurement = usage.Measurement with { InputTokens = null } },
+            usage with { Measurement = usage.Measurement with { OutputTokens = null } }
         })
             Assert.Throws<RuntimeAuthorizationException>(() =>
                 RuntimeUsageSourceReceiptContract.ValidateUsage(registration, invalid));

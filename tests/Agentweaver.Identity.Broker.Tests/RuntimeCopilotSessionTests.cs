@@ -46,9 +46,7 @@ public sealed class RuntimeCopilotSessionTests
     public async Task ByokPromptCapacityUsesItsPinnedConcreteBindingAndActualProviderOption()
     {
         await using var external = new ControlledCopilotRuntime { Byok = true };
-        var factory = new RuntimeCopilotSessionFactory(external.Connection,
-            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
-            new Dictionary<string, RuntimeModelBinding>
+        var models = new RuntimeModelBindingsResolver("byok-bindings-v1", new Dictionary<string, RuntimeModelBinding>
             {
                 ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
                     new RuntimeByokProvider("openai", new Uri("https://byok.test/v1")))
@@ -56,10 +54,16 @@ public sealed class RuntimeCopilotSessionTests
                     PromptCapacityTokens = 16000
                 }
             });
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
         var registration = Registration();
         registration = registration with
         {
-            Binding = registration.Binding with { ModelSourceMode = ModelSourceMode.Byok, MaxPromptTokens = 20000 }
+            Binding = registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok, MaxPromptTokens = 20000,
+                ModelBindingPin = models.Pin("accepted-model-reference", ModelSourceMode.Byok)
+            }
         };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var session = await factory.CreateAsync(
@@ -441,16 +445,20 @@ public sealed class RuntimeCopilotSessionTests
         await using var external = new ControlledCopilotRuntime { Byok = true };
         var provider = new RuntimeByokProvider(type, new Uri(
             type == "azure" ? "https://byok.test/" : "https://byok.test/v1"), wireApi, azureApiVersion);
-        var factory = new RuntimeCopilotSessionFactory(external.Connection,
-            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
-            new Dictionary<string, RuntimeModelBinding>
+        var models = new RuntimeModelBindingsResolver("byok-bindings-v1", new Dictionary<string, RuntimeModelBinding>
             {
                 ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok, provider)
             });
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
         var registration = Registration();
         registration = registration with
         {
-            Binding = registration.Binding with { ModelSourceMode = ModelSourceMode.Byok }
+            Binding = registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = models.Pin("accepted-model-reference", ModelSourceMode.Byok)
+            }
         };
         using var credential = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var session = await factory.CreateAsync(registration,
@@ -471,10 +479,55 @@ public sealed class RuntimeCopilotSessionTests
         Assert.Equal("byok", session.Facts.SourceMode);
         Assert.Equal(SdkMeterSources.ByokTokens, session.Facts.MeterSource);
         Assert.Null(session.Facts.ModelMultiplier);
+        Assert.Equal(new SdkByokProviderFacts(type, external.ModelId, models.ConfigurationHash),
+            session.Facts.ByokProvider);
         await using var usage = session.ReadUsageAsync(credential.Token).GetAsyncEnumerator();
         Assert.True(await usage.MoveNextAsync());
         Assert.Equal(17, usage.Current.InputTokens);
         Assert.Null(usage.Current.TotalNanoAiu);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("provider")]
+    [InlineData("effective-model")]
+    public async Task ByokRejectsMissingOrChangedAcceptedProviderBeforeUsage(string change)
+    {
+        await using var external = new ControlledCopilotRuntime { Byok = true };
+        var models = new RuntimeModelBindingsResolver("byok-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
+                    new("azure", new Uri("https://byok.test/")))
+            });
+        var pin = models.Pin("accepted-model-reference", ModelSourceMode.Byok);
+        var registration = Registration();
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = change == "missing" ? null :
+                    change == "provider" ? pin with { ProviderType = "openai" } : pin
+            }
+        };
+        if (change == "effective-model")
+            external.EffectiveModelId = "foreign-model";
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => factory.CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            new SecretCredential(external.SdkCredential, DateTimeOffset.UtcNow.AddMinutes(2)),
+            _ => Task.CompletedTask, timeout.Token));
+        Assert.Equal(change switch
+        {
+            "missing" => "runtime_byok_binding_pin_required",
+            "provider" => "runtime_model_binding_pin_mismatch",
+            _ => "runtime_sdk_effective_model_mismatch"
+        }, failure.Code);
+        if (change != "effective-model")
+            Assert.Empty(external.Requests);
     }
 
     [Theory]

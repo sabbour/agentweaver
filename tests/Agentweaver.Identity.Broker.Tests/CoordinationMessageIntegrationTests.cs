@@ -112,7 +112,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         bool revokeSourceBeforeSdk,
         string? sourceLoss,
         bool stopAfterProducedRunCapture,
-        OwnerRunFailureState captureFailureState)
+        OwnerRunFailureState captureFailureState,
+        bool azureByok = false)
     {
         var sourceControlSecretBackend = new RecordingSecretRedemption();
         await RestartBrokerForSourceControlAsync(sourceControlSecretBackend);
@@ -155,7 +156,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var project = await createdProject.Content.ReadFromJsonAsync<ProjectSummary>(AuthorizationJsonOptions);
         Assert.NotNull(project);
         using var copilotConnection = new ControlledCopilotConnection();
-        var linkedConnection = await LinkRuntimeCopilotConnectionAsync(
+        var linkedConnection = azureByok ? null : await LinkRuntimeCopilotConnectionAsync(
             projects, platformAdminToken, copilotConnection);
 
         var bootstrapToken = await IssueTokenAsync(
@@ -249,9 +250,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ExpectedRevision = 0,
                 Defaults = new PlatformRuntimeDefaults
                 {
-                    ModelSelection = new ModelSelectionSettings(
+                    ModelSelection = azureByok ? new ModelSelectionSettings(
+                        "platform-model", new SecretRef("model-api", "model-v1"), ModelSourceMode.Byok)
+                    {
+                        ModelBindingPin = AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok)
+                    } : new ModelSelectionSettings(
                         "platform-model", SourceMode: ModelSourceMode.HostedCopilot,
-                        ConnectionId: linkedConnection.ConnectionId),
+                        ConnectionId: linkedConnection!.ConnectionId),
                     EgressBaseline = [],
                     RunLimits = new CopilotRunLimits
                     {
@@ -3003,10 +3008,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal("child", runtimeOwner.SessionId);
             Assert.Equal("test-agent", runtimeOwner.AgentId);
             Assert.Equal("platform-model", runtimeOwner.ModelSelectionReference);
-            Assert.Null(runtimeOwner.ModelCredentialReference);
-            Assert.Equal(linkedConnection.ConnectionId, runtimeOwner.ModelConnectionId);
-            Assert.Equal(ProjectAuthorityResourceType.Platform, runtimeOwner.ModelConnectionScope);
-            Assert.Equal(ModelSourceMode.HostedCopilot, runtimeOwner.ModelSourceMode);
+            Assert.Equal(azureByok ? new SecretRef("model-api", "model-v1") : null,
+                runtimeOwner.ModelCredentialReference);
+            Assert.Equal(linkedConnection?.ConnectionId, runtimeOwner.ModelConnectionId);
+            Assert.Equal(azureByok ? (ProjectAuthorityResourceType?)null : ProjectAuthorityResourceType.Platform,
+                runtimeOwner.ModelConnectionScope);
+            Assert.Equal(azureByok ? ModelSourceMode.Byok : ModelSourceMode.HostedCopilot,
+                runtimeOwner.ModelSourceMode);
+            if (azureByok)
+                Assert.Equal(AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok),
+                    runtimeOwner.ModelBindingPin);
             Assert.Equal(child.ExecutionFence, runtimeOwner.ExecutionFence);
             Assert.Equal(boundary.LogicalTurnOrdinal, runtimeOwner.LogicalTurnOrdinal);
             Assert.Equal(boundary.StateVersion, runtimeOwner.OwnerStateVersion);
@@ -3321,14 +3332,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             await AssertStatusAsync(currentRuntimeOwnerResponse, HttpStatusCode.OK);
             var currentRuntimeOwner = await ReadJsonAsync<RuntimeOwnerContext>(currentRuntimeOwnerResponse);
-            if (!revokeSourceBeforeSdk && sourceLoss is null)
+            if (!azureByok && !revokeSourceBeforeSdk && sourceLoss is null)
             {
                 using var beforeRotation = await SendAsync(projects.Client, HttpMethod.Get,
                     $"/api/projects/{project.ProjectId}/runs/{RunId}/selection", runToken, [TenantId]);
                 await AssertStatusAsync(beforeRotation, HttpStatusCode.OK);
                 var acceptedBytes = await beforeRotation.Content.ReadAsByteArrayAsync();
                 await RefreshRuntimeCopilotConnectionAsync(
-                    projects, platformAdminToken, copilotConnection, linkedConnection);
+                    projects, platformAdminToken, copilotConnection, linkedConnection!);
                 using var afterRotation = await SendAsync(projects.Client, HttpMethod.Get,
                     $"/api/projects/{project.ProjectId}/runs/{RunId}/selection", runToken, [TenantId]);
                 await AssertStatusAsync(afterRotation, HttpStatusCode.OK);
@@ -3348,7 +3359,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     else
                         await RevokeRoleAsync(projects.PrivilegedFixtureDataSource,
                             runnerRole.AssignmentId, runnerRole.Revision);
-                });
+                }, azureByok ? sourceControlSecretBackend : null);
         }
 
         using var sendReply = await SendJsonAsync(

@@ -26,7 +26,11 @@ public sealed record SdkSessionFacts(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? MaxPromptTokens { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SdkByokProviderFacts? ByokProvider { get; init; }
 }
+
+public sealed record SdkByokProviderFacts(string Type, string DeploymentId, string ConfigurationHash);
 
 public sealed record SdkUsageObservation(
     Guid EventId,
