@@ -257,6 +257,40 @@ public sealed class MafCheckpointStorePostgresTests : IAsyncLifetime
         Assert.Equal(outputSet.Digest, saved.OutputSetSha256);
         Assert.Equal("no-output", saved.OwnerEvidenceJson[0].GetProperty("kind").GetString());
         Assert.Equal(64, saved.ProofSha256.Length);
+
+        var currentCheckpoint = await execution.AppendAsync(
+            "execution-witness-current",
+            checkpoint.Info,
+            checkpoint.State with { Revision = 2 },
+            CancellationToken.None);
+        await using (var staleConnection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var staleTransaction = await staleConnection.BeginTransactionAsync())
+        {
+            var stale = await Assert.ThrowsAsync<CoordinationException>(() =>
+                new MafExecutionOutputWitnessStore(_schema).AppendOutputWitnessInTransactionAsync(
+                    staleConnection,
+                    staleTransaction,
+                    checkpoints,
+                    checkpointBinding,
+                    identity,
+                    fence,
+                    plan,
+                    checkpoint,
+                    decisionStateVersion,
+                    selectionHash,
+                    outputSet,
+                    ownerEvidence,
+                    CancellationToken.None));
+            Assert.Equal("maf_execution_output_witness_stale", stale.Code);
+            Assert.Equal(409, stale.StatusCode);
+            await staleTransaction.RollbackAsync();
+        }
+
+        Assert.Equal(2, currentCheckpoint.State.Revision);
+        AssertCheckpointEqual(currentCheckpoint, await execution.ReadLatestAsync(CancellationToken.None));
+        await using var witnessCount = new NpgsqlCommand(
+            $"SELECT count(*) FROM \"{_schema}\".maf_execution_output_witnesses", connection);
+        Assert.Equal(1L, Assert.IsType<long>(await witnessCount.ExecuteScalarAsync()));
     }
 
     [Fact]
