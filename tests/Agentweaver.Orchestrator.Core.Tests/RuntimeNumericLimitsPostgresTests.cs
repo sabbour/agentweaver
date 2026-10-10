@@ -80,6 +80,8 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             {
                 WorkflowStepId = "implement", ModelSelectionReference = "model:selected",
                 ModelSourceMode = ModelSourceMode.HostedCopilot,
+                PlacementProviderId = "sandbox-provider",
+                EnvironmentLifecycleGeneration = 1, EnvironmentLeaseRevision = 1,
                 EnvironmentCurrentFencingGeneration = 1, EnvironmentProviderFencingGeneration = 1,
                 MaxModelTurns = 1, MaxToolCalls = 1
             };
@@ -92,6 +94,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             connection))
             Assert.Equal(2, await command.ExecuteNonQueryAsync());
         await WriteCheckpointAsync(accepted.ExecutionFence, decision.StateVersion, "numeric-checkpoint", _intents);
+        Assert.Equal(0, await CountRuntimeGrantsAsync());
     }
 
     public async Task DisposeAsync()
@@ -153,7 +156,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             Assert.Equal("runtime_model_turn_admission_required",
                 (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => IssueAsync(index, changed))).Code);
         }
-        Assert.Equal(1, await CountAsync("executable_action_grants"));
+        Assert.Equal(1, await CountRuntimeGrantsAsync());
     }
 
     [Fact]
@@ -175,7 +178,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
                 GrantStore().RequireToolInvocationReservationAsync(
                     _registrations[0], Action(0, toolInvocation: true), default))).Code);
         Assert.Equal(1, await CountToolReservationsAsync());
-        Assert.Equal(2, await CountAsync("executable_action_grants"));
+        Assert.Equal(2, await CountRuntimeGrantsAsync());
     }
 
     [Fact]
@@ -191,7 +194,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             TryReserveAsync(() => ReserveAsync(1), "runtime_tool_call_limit_exhausted"));
         Assert.Single(admitted, value => value);
         Assert.Equal(1, await CountToolReservationsAsync());
-        Assert.Equal(1, await CountAsync("executable_action_grants"));
+        Assert.Equal(1, await CountRuntimeGrantsAsync());
     }
 
     [Fact]
@@ -381,6 +384,15 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             SELECT count(*) FROM "{_schema}".outbox_events
             WHERE event_type = 'orchestrator.runtime.tool_invocation_admitted'
             """, connection);
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task<long> CountRuntimeGrantsAsync()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            $"SELECT count(*) FROM \"{_schema}\".executable_action_grants WHERE purpose = @purpose", connection);
+        command.Parameters.AddWithValue("purpose", RuntimeActionContract.Purpose);
         return (long)(await command.ExecuteScalarAsync())!;
     }
 
