@@ -121,6 +121,8 @@ Its profile callback reads actual Orchestrator work-item context under the retai
 The module tests retire a lease before lifecycle advancement, as the admitted lifecycle guard requires.
 The readiness module test retains the actual PostgreSQL advisory lock during Cilium and Sandbox observations.
 It observes a competing retirement through `pg_locks` and releases it only after readiness completes.
+It persists the versioned recovery record through the lease store, then reads it from a new store.
+It checks the nested provision request's exact network generation and valid Workspace mount path.
 The retained snapshot supplies selection data without a recursive Projects selection request.
 The combined source scenarios then exercise actual Broker delivery, SDK callbacks,
 immutable Orchestrator receipts, and reference-only Events accounting.

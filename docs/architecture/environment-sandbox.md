@@ -153,6 +153,8 @@ from Kubernetes observations. It does not emit `configured` or dispatch
 The separate [AgentHost handshake](agenthost.md) adds authenticated configuration and current readiness evidence.
 Its internal readiness owner read retains the exact lease across fresh egress and Sandbox observations.
 It uses the retained selection snapshot, not a recursive accepted-selection lookup.
+It validates the stored recovery record and reads its nested provision request.
+That request supplies the exact network generation and Workspace mount path.
 Object readback does not prove Cilium datapath enforcement.
 
 ## Agent Sandbox resources and recovery
