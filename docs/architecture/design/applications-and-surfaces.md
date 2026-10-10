@@ -465,6 +465,29 @@ Approval, publish, tool, workflow, and artifact actions retain their original ow
 Local focus, selection, and layout need no model turn.
 Artifact edits create new revisions through their owner; they do not mutate accepted bundle bytes.
 
+#### Local schema profile
+
+The C1 structural validator uses a bounded local schema profile.
+This profile is not JSON Schema 2020-12 conformance, an A2UI schema, or a GitHub Canvas contract.
+It does not prove upstream SDK or renderer compatibility.
+
+The profile accepts boolean schemas and object schemas.
+It accepts `type`, `properties`, `required`, `items`, and `additionalProperties:false`.
+It also accepts `minProperties`, `maxProperties`, `minItems`, `maxItems`, `minLength`, and `maxLength`.
+It accepts `uniqueItems`, `enum`, `const`, `minimum`, `maximum`, `exclusiveMinimum`, and `exclusiveMaximum`.
+The accepted types are `object`, `array`, `string`, `integer`, `number`, `boolean`, and `null`.
+The `type` keyword accepts one name or a non-empty list of unique names.
+The profile accepts `title` and `description` string annotations.
+The `$schema` annotation must use the exact local profile identifier.
+References, patterns, combinators, and unknown keywords fail explicitly.
+
+Schema documents have a 32 KiB limit. JSON inputs have a 64 KiB limit.
+Both schemas and inputs have a maximum nesting depth of 32.
+Numbers have at most 28 significant digits, a fractional scale of at most 28, and an exponent magnitude of at most 64.
+The absolute numeric value cannot exceed `1000000000000`.
+The validator compares object values without regard to property order and preserves array order.
+It treats equal decimal values, such as `1` and `1.0`, as equal JSON numbers.
+
 #### Selection, state, and lifecycle
 
 Trusted composition registers versioned adapters and profiles through .NET DI.
