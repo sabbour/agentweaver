@@ -31,7 +31,7 @@ public static partial class CoordinationEndpoints
         HttpContext context,
         OrchestratorOptions options,
         ProjectsRunSelectionClient projects,
-        RuntimeRegistrationOwner registrations,
+        [Microsoft.AspNetCore.Mvc.FromServices] RuntimeRegistrationOwner registrations,
         SessionSuspendResumeCoordinator coordinator,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
