@@ -11,6 +11,22 @@ namespace Agentweaver.Tests.Memory;
 public sealed class AddressedMessageAuthorshipTests
 {
     [Fact]
+    public async Task OperatorWithoutRunHeaders_ResolvesAsHumanSender()
+    {
+        var context = new DefaultHttpContext
+        {
+            User = CallerContextClaimsAdapter.ToPrincipal(
+                new CallerContext { User = "operator" }, AgentweaverAuthenticationSchemes.BrokerBearer),
+        };
+        var (author, failure) = await RunAuthorship.ResolveMessageAsync(
+            context, "project-a", new FakeResolver("project-a"), new FakeCapabilities(), default);
+        failure.Should().BeNull();
+        author!.AgentName.Should().Be("operator");
+        author.SourceRunId.Should().BeNull();
+        author.SourceIdentity.Should().Be("operator");
+    }
+
+    [Fact]
     public async Task BrokerRunHeaders_RequireValidProjectBoundCapability()
     {
         const string project = "project-a";

@@ -40,6 +40,17 @@ public sealed class AddressedMessageTools(AgentweaverApiClient api)
         JsonSerializer.Serialize(await api.GetAsync<object>(
             $"{Route(project_id)}/{Uri.EscapeDataString(message_id)}", ct));
 
+    [McpServerTool(Name = "agent_message_retry"), Description("Retry your expired or undeliverable message against an active recipient run with a new idempotency key.")]
+    public async Task<string> RetryAsync(
+        [Description("Project ID")] string project_id,
+        [Description("Failed message ID")] string message_id,
+        [Description("New retry-stable idempotency key")] string idempotency_key,
+        [Description("Optional replacement active recipient run ID")] string? target_run_id = null,
+        CancellationToken ct = default) =>
+        JsonSerializer.Serialize(await api.PostAsync<object>(
+            $"{Route(project_id)}/{Uri.EscapeDataString(message_id)}/retry",
+            new { idempotency_key, target_run_id }, ct));
+
     [McpServerTool(Name = "agent_message_claim"), Description("At a recipient turn boundary, lease the oldest pending addressed message.")]
     public async Task<string> ClaimAsync(
         [Description("Project ID")] string project_id,

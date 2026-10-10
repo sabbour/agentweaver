@@ -25,7 +25,6 @@ public static class AddressedMessagesEndpoints
             var (author, authorFailure) = await RunAuthorship.ResolveMessageAsync(
                 http, id, resolver, capabilities, ct);
             if (authorFailure is not null) return authorFailure;
-            if (author!.SourceRunId is null) return Conflict("sender_run_required");
             var reader = new SquadReader(project!.WorkingDirectory);
             try
             {
@@ -33,6 +32,29 @@ public static class AddressedMessagesEndpoints
                     return Conflict("layout_conflict");
                 var team = reader.ReadTeam();
                 var message = await messages.SendAsync(id, author!, request,
+                    name => team?.Members.Any(m => m.Status == CastMemberStatus.Active
+                        && string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)) == true, ct);
+                return Results.Created($"/api/projects/{id}/agent-messages/{message.Id}", message);
+            }
+            catch (AddressedMessageError error) { return Conflict(error.Code); }
+        });
+
+        group.MapPost("agent-messages/{messageId}/retry", async (string id, string messageId,
+            RetryAddressedMessage request, HttpContext http, IProjectStore projects,
+            IConfiguration configuration, AddressedMessageService messages,
+            IRunSubmittingUserResolver resolver, IRunAuthorshipCapabilityStore capabilities, CancellationToken ct) =>
+        {
+            var (project, failure) = await AuthorizeAsync(id, http, projects, configuration, ProjectRole.Contributor, ct);
+            if (failure is not null) return failure;
+            var (author, authorFailure) = await RunAuthorship.ResolveMessageAsync(
+                http, id, resolver, capabilities, ct);
+            if (authorFailure is not null) return authorFailure;
+            var reader = new SquadReader(project!.WorkingDirectory);
+            if (reader.DetectLayout().HasConflict) return Conflict("layout_conflict");
+            var team = reader.ReadTeam();
+            try
+            {
+                var message = await messages.RetryAsync(id, messageId, author!, request,
                     name => team?.Members.Any(m => m.Status == CastMemberStatus.Active
                         && string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase)) == true, ct);
                 return Results.Created($"/api/projects/{id}/agent-messages/{message.Id}", message);
