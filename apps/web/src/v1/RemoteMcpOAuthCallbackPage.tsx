@@ -17,7 +17,7 @@ export function RemoteMcpOAuthPopupCallbackPage() {
     window.history.replaceState(null, '', window.location.pathname);
 
     if (!callback) {
-      setMessage('The response was invalid or did not include an authorization code. Close this window and try again.');
+      setMessage('The response was invalid. Close this window and try again.');
       return;
     }
     const opener = window.opener;

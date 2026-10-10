@@ -322,6 +322,31 @@ describe('Gateway API client', () => {
     expect(init?.credentials).toBe('omit');
   });
 
+  it('sends provider cancellation without adding a code to the callback request', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response('{}', { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+
+    await client.completeRemoteMcpOAuthCallback(
+      'current-user-token',
+      { state: 'B'.repeat(43), error: 'access_denied' },
+      'tenant-1',
+    );
+
+    const [url, init] = fetcher.mock.calls[0];
+    expect(String(url)).toBe(
+      'https://gateway.example.test/api/connections/remote-mcp/v1/callback',
+    );
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({
+      state: 'B'.repeat(43),
+      error: 'access_denied',
+    });
+    expect(new Headers(init?.headers).get('X-Agentweaver-Tenant')).toBe('tenant-1');
+    expect(init?.credentials).toBe('omit');
+  });
+
   it('sends refresh revisions to the connection-bound Gateway route', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('{}', { status: 200 }),

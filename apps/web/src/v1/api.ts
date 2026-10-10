@@ -327,7 +327,9 @@ export class AgentweaverGatewayClient {
       '/api/connections/remote-mcp/v1/callback',
       {
         method: 'POST',
-        body: JSON.stringify({ state: request.state, code: request.code }),
+        body: JSON.stringify(request.error === 'access_denied'
+          ? { state: request.state, error: request.error }
+          : { state: request.state, code: request.code }),
       },
       this.gatewayRootUrl,
       tenantSelector,

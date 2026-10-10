@@ -74,11 +74,14 @@ and issuer. It rejects redirects, bounds metadata responses, and validates the
 resource, issuer, scopes, S256/code profile, and exact operator-approved OAuth
 endpoints. It returns a constructed authorization URI and stores only a
 protected verifier reference and correlation state; the web application uses a
-same-origin popup callback page to relay only the authorization code and state
-to its opener. The Gateway forwards that pair with the current user's bearer to
-Identity. Identity rechecks current Projects authority and Environment
-configuration, claims the callback once, redeems the protected verifier, and
-exchanges the code only at the metadata-approved token endpoint. It stores
+same-origin popup callback page to relay either the code or the bounded
+`access_denied` result to its opener. The Gateway forwards only that callback
+shape with the current user's bearer to Identity. Identity rechecks the current
+provider client, redirect, resource, and scope approvals, Projects authority,
+and Environment configuration, then claims the callback once and redeems the
+protected verifier. Identity exchanges only a code at the metadata-approved
+token endpoint and closes a provider-cancelled consent without treating it as
+authorization. It stores
 returned access and refresh tokens only as protected `SecretRef` versions and
 publishes them with connection and credential revision checks. A timeout or
 secret-store failure after a possible provider request resolves the callback

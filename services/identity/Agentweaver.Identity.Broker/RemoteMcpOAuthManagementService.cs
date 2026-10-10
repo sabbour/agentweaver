@@ -381,11 +381,7 @@ internal sealed class RemoteMcpOAuthManagementService(
 
         var binding = CreateBinding(
             row, row.ConfigurationRevision, row.EnvironmentConfigurationHash, row.IdentityBindingReference);
-        var providerOptions = options.Providers.SingleOrDefault(item =>
-            string.Equals(item.IssuerUri, binding.Issuer.AbsoluteUri, StringComparison.Ordinal))
-            ?? throw Denied("remote_mcp_oauth_provider_unapproved");
-        if (!providerOptions.ApprovedResources.Contains(binding.Resource.AbsoluteUri, StringComparer.Ordinal))
-            throw Denied("remote_mcp_oauth_resource_unapproved");
+        var providerOptions = RequireBoundProvider(binding);
         var metadata = await DiscoverMetadataAsync(binding, providerOptions, cancellationToken)
             .ConfigureAwait(false);
         if (!metadata.SupportsRefreshToken)
@@ -671,11 +667,7 @@ internal sealed class RemoteMcpOAuthManagementService(
             throw RevisionConflict();
 
         var binding = CreateLinkedBinding(row, receipt);
-        var providerOptions = options.Providers.SingleOrDefault(item =>
-            string.Equals(item.IssuerUri, binding.Issuer.AbsoluteUri, StringComparison.Ordinal))
-            ?? throw Denied("remote_mcp_oauth_provider_unapproved");
-        if (!providerOptions.ApprovedResources.Contains(binding.Resource.AbsoluteUri, StringComparer.Ordinal))
-            throw Denied("remote_mcp_oauth_resource_unapproved");
+        var providerOptions = RequireBoundProvider(binding);
 
         var metadata = await DiscoverMetadataAsync(
             binding, providerOptions, cancellationToken).ConfigureAwait(false);
@@ -816,11 +808,7 @@ internal sealed class RemoteMcpOAuthManagementService(
             consentRecord.ConnectionRevision != row.ConnectionRevision)
             throw RevisionConflict();
 
-        var providerOptions = options.Providers.SingleOrDefault(item =>
-            string.Equals(item.IssuerUri, binding.Issuer.AbsoluteUri, StringComparison.Ordinal))
-            ?? throw Denied("remote_mcp_oauth_provider_unapproved");
-        if (!providerOptions.ApprovedResources.Contains(binding.Resource.AbsoluteUri, StringComparer.Ordinal))
-            throw Denied("remote_mcp_oauth_resource_unapproved");
+        var providerOptions = RequireBoundProvider(binding);
 
         await RequireWriteProjectsAsync(actor, issuer, actorId, row, cancellationToken)
             .ConfigureAwait(false);
@@ -1065,6 +1053,22 @@ internal sealed class RemoteMcpOAuthManagementService(
             accessToken?.Invalidate();
             refreshToken?.Invalidate();
         }
+    }
+
+    private RemoteMcpOAuthProviderOptions RequireBoundProvider(
+        RemoteMcpOAuthConnectionBinding binding)
+    {
+        var provider = options.Providers.SingleOrDefault(item =>
+            string.Equals(item.IssuerUri, binding.Issuer.AbsoluteUri, StringComparison.Ordinal))
+            ?? throw Denied("remote_mcp_oauth_provider_unapproved");
+        if (!provider.ApprovedResources.Contains(binding.Resource.AbsoluteUri, StringComparer.Ordinal))
+            throw Denied("remote_mcp_oauth_resource_unapproved");
+        if (!string.Equals(binding.ClientId, provider.ClientId, StringComparison.Ordinal) ||
+            !string.Equals(binding.RedirectUri.AbsoluteUri, provider.RedirectUri, StringComparison.Ordinal))
+            throw Denied("remote_mcp_oauth_provider_unapproved");
+        if (binding.Scopes.Any(scope => !provider.ApprovedScopes.Contains(scope, StringComparer.Ordinal)))
+            throw Denied("remote_mcp_oauth_scope_unapproved");
+        return provider;
     }
 
     private async Task<RemoteMcpOAuthServerMetadata> DiscoverMetadataAsync(

@@ -421,7 +421,7 @@ describe('v1 web project scoping', () => {
     }
   });
 
-  it('relays only code and state from the Remote MCP OAuth callback', async () => {
+  it('relays a Remote MCP OAuth authorization-code callback', async () => {
     const previousOpener = Object.getOwnPropertyDescriptor(window, 'opener');
     const opener = { postMessage: vi.fn() } as unknown as Window;
     Object.defineProperty(window, 'opener', { configurable: true, value: opener });
@@ -439,6 +439,39 @@ describe('v1 web project scoping', () => {
           type: 'agentweaver.remote-mcp.oauth.callback',
           state,
           code: 'provider-code',
+        },
+        window.location.origin,
+      ));
+      expect(window.location.search).toBe('');
+      expect(mocks.authProvider).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      close.mockRestore();
+      if (previousOpener)
+        Object.defineProperty(window, 'opener', previousOpener);
+      else
+        Reflect.deleteProperty(window, 'opener');
+    }
+  });
+
+  it('relays provider cancellation through the Remote MCP OAuth callback', async () => {
+    const previousOpener = Object.getOwnPropertyDescriptor(window, 'opener');
+    const opener = { postMessage: vi.fn() } as unknown as Window;
+    Object.defineProperty(window, 'opener', { configurable: true, value: opener });
+    const close = vi.spyOn(window, 'close').mockImplementation(() => {});
+    const state = 'C'.repeat(43);
+    window.history.replaceState(
+      {},
+      '',
+      `/auth/remote-mcp/oauth/callback?state=${state}&error=access_denied`,
+    );
+    try {
+      render(<App />);
+      await waitFor(() => expect(opener.postMessage).toHaveBeenCalledWith(
+        {
+          type: 'agentweaver.remote-mcp.oauth.callback',
+          state,
+          error: 'access_denied',
         },
         window.location.origin,
       ));
@@ -480,6 +513,35 @@ describe('v1 web project scoping', () => {
     ));
     expect(await screen.findByText(
       'The Remote MCP authorization was received by Identity.',
+    )).toBeDefined();
+  });
+
+  it('submits provider cancellation to Identity using the current bearer session', async () => {
+    const popup = { closed: false } as unknown as Window;
+    const state = 'D'.repeat(43);
+    render(<App />);
+
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: window.location.origin,
+      source: popup,
+      data: {
+        type: 'agentweaver.remote-mcp.oauth.callback',
+        state,
+        error: 'access_denied',
+      },
+    }));
+
+    await waitFor(() => expect(mocks.completeRemoteMcpOAuthCallback).toHaveBeenCalledWith(
+      'broker-token',
+      {
+        type: 'agentweaver.remote-mcp.oauth.callback',
+        state,
+        error: 'access_denied',
+      },
+      'tenant-1',
+    ));
+    expect(await screen.findByText(
+      'The Remote MCP authorization was canceled.',
     )).toBeDefined();
   });
 

@@ -728,6 +728,126 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
         }
     }
 
+    [Theory]
+    [InlineData("client")]
+    [InlineData("redirect")]
+    [InlineData("scope")]
+    public async Task ConsentPreparationRejectsCurrentProviderDriftBeforeMetadataOrSecretWrites(
+        string drift)
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
+            var providerHandler = new MetadataProviderHandler();
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            var (clientId, redirectUri, approvedScopes, expectedCode) = ProviderDrift(drift);
+            var service = CreateService(
+                db, projects, environment, provider, secrets,
+                clientId: clientId, redirectUri: redirectUri, approvedScopes: approvedScopes);
+
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.PrepareConsentAsync(
+                    Actor(), Issuer, ActorId, ConnectionId, Request(), CancellationToken.None));
+
+            Assert.Equal(expectedCode, error.Code);
+            Assert.Empty(providerHandler.Requests);
+            Assert.Empty(providerHandler.TokenGrantTypes);
+            Assert.Empty(secrets.Values);
+            Assert.Empty(secrets.RedeemedReferences);
+        }
+    }
+
+    [Theory]
+    [InlineData("client")]
+    [InlineData("redirect")]
+    [InlineData("scope")]
+    public async Task CallbackRejectsCurrentProviderDriftBeforeMetadataOrSecretRedemption(
+        string drift)
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
+            var providerHandler = new MetadataProviderHandler();
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            var preparingService = CreateService(db, projects, environment, provider, secrets);
+            var preparation = await preparingService.PrepareConsentAsync(
+                Actor(), Issuer, ActorId, ConnectionId, Request(), CancellationToken.None);
+            var metadataRequestCount = providerHandler.Requests.Count;
+            var (clientId, redirectUri, approvedScopes, expectedCode) = ProviderDrift(drift);
+            var currentService = CreateService(
+                db, projects, environment, provider, secrets, secrets,
+                clientId: clientId, redirectUri: redirectUri, approvedScopes: approvedScopes);
+
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                currentService.CompleteCallbackAsync(
+                    Actor(), Issuer, ActorId,
+                    new RemoteMcpOAuthCallbackRequest(preparation.State, "authorization-code", null),
+                    CancellationToken.None));
+
+            Assert.Equal(expectedCode, error.Code);
+            Assert.Equal(metadataRequestCount, providerHandler.Requests.Count);
+            Assert.Empty(providerHandler.TokenGrantTypes);
+            Assert.Empty(secrets.RedeemedReferences);
+        }
+    }
+
+    [Theory]
+    [InlineData("client")]
+    [InlineData("redirect")]
+    [InlineData("scope")]
+    public async Task RefreshRejectsCurrentProviderDriftBeforeMetadataOrSecretRedemption(
+        string drift)
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedAuthorizedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(
+                row.IdentityBindingReference, linked: true);
+            var providerHandler = new MetadataProviderHandler();
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-access",
+                "version-1", "stored-access-token");
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-refresh",
+                "version-1", "stored-refresh-token");
+            var (clientId, redirectUri, approvedScopes, expectedCode) = ProviderDrift(drift);
+            var service = CreateService(
+                db, projects, environment, provider, secrets, secrets,
+                clientId: clientId, redirectUri: redirectUri, approvedScopes: approvedScopes);
+
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.RefreshAsync(
+                    Actor(), Issuer, ActorId, ConnectionId,
+                    new RemoteMcpOAuthRefreshRequest(
+                        row.ConnectionRevision, row.CredentialRevision, row.ConfigurationRevision),
+                    CancellationToken.None));
+
+            Assert.Equal(expectedCode, error.Code);
+            Assert.Empty(providerHandler.Requests);
+            Assert.Empty(providerHandler.TokenGrantTypes);
+            Assert.Empty(secrets.RedeemedReferences);
+        }
+    }
+
     [Fact]
     public async Task WriteProjectsRevocationAfterProtectedWriteDoesNotPersistPendingConsent()
     {
@@ -950,7 +1070,10 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
         HttpClient provider,
         ISecretVersionWriter? secretWriter,
         ISecretRedemption? secretRedemption = null,
-        IReadOnlyList<string>? approvedResources = null) =>
+        IReadOnlyList<string>? approvedResources = null,
+        string? clientId = null,
+        string? redirectUri = null,
+        IReadOnlyList<string>? approvedScopes = null) =>
         new(db, new RemoteMcpOAuthOptions
         {
             ProjectsOwnerAddress = ProjectsOwnerAddress,
@@ -961,17 +1084,29 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                 {
                     IssuerUri = "https://issuer.example.test/",
                     ApprovedResources = approvedResources ?? ["https://mcp.example.test/resource"],
-                    ClientId = "registered-client",
-                    RedirectUri = "https://web.example.test/auth/remote-mcp/oauth/callback",
+                    ClientId = clientId ?? "registered-client",
+                    RedirectUri = redirectUri ??
+                        "https://web.example.test/auth/remote-mcp/oauth/callback",
                     ApprovedOAuthEndpoints =
                     [
                         "https://issuer.example.test/authorize",
                         "https://issuer.example.test/token"
                     ],
-                    ApprovedScopes = ["tools.read"]
+                    ApprovedScopes = approvedScopes ?? ["tools.read"]
                 }
             ]
         }, projects, environment, provider, new FrozenTimeProvider(Now), secretWriter, secretRedemption);
+
+    private static (string? ClientId, string? RedirectUri, string[]? ApprovedScopes, string ExpectedCode)
+        ProviderDrift(string drift) =>
+        drift switch
+        {
+            "client" => ("replaced-client", null, null, "remote_mcp_oauth_provider_unapproved"),
+            "redirect" => (null, "https://web.example.test/new-callback",
+                null, "remote_mcp_oauth_provider_unapproved"),
+            "scope" => (null, null, ["tools.write"], "remote_mcp_oauth_scope_unapproved"),
+            _ => throw new ArgumentOutOfRangeException(nameof(drift))
+        };
 
     private static Dictionary<string, string> ParseQuery(Uri uri) =>
         uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
@@ -1033,6 +1168,7 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
         public List<string> SecretIds { get; } = [];
         public List<string> Values { get; } = [];
         public List<SecretRef> References { get; } = [];
+        public System.Collections.Concurrent.ConcurrentQueue<SecretRef> RedeemedReferences { get; } = new();
         public Exception? WriteFailure { get; init; }
 
         public void AddSecret(string id, string version, string value)
@@ -1063,6 +1199,7 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             SecretRedemptionRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            RedeemedReferences.Enqueue(request.Secret);
             Assert.Contains(request.Purpose,
                 new[] { "remote-mcp-oauth-verifier", "remote-mcp-oauth-refresh-token" });
             var value = _values.GetValueOrDefault((request.Secret.Id, request.Secret.Version));

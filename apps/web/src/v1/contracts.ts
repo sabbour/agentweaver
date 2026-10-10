@@ -199,10 +199,9 @@ export interface RemoteMcpOAuthConsentPreparation {
   configurationSha256: string;
 }
 
-export interface RemoteMcpOAuthCallbackRequest {
-  state: string;
-  code: string;
-}
+export type RemoteMcpOAuthCallbackRequest =
+  | { state: string; code: string; error?: never }
+  | { state: string; error: 'access_denied'; code?: never };
 
 export interface RemoteMcpOAuthDisconnectRequest {
   expectedConnectionRevision: number;
