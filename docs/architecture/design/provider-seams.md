@@ -678,6 +678,18 @@ and tool results. Later ordered checks can add Microsoft Purview DLP, Llama Guar
 Guardrails. Projects can select or reorder only platform-enabled checks. The ordered result, versions, and
 failures are journaled; classifier transport and credentials remain outside prompt content.
 
+The Orchestrator Core `GuardrailsContentGate` source is a typed, fail-closed candidate for this contract.
+It consumes an owner-produced ordered stage/content pin, runs checks in that exact order, sends bounded
+finding codes to the existing AGT provider, records redacted provider/version metadata through an injected
+journal contract, and rechecks owner authority after classifier and journal waits. It hashes the exact
+immutable classifier input with SHA-256 and includes that digest beside the owner snapshot digest in
+authority checks and evidence. Its declared default capabilities are limited to text at the user-input
+and tool-result stages; model input/output, MCP discovery, structured results, and non-text content require
+an exact capability on every check in the accepted stage pin. No production Prompt Shields transport,
+trusted journal writer, current-authority adapter, or MAF gate is wired in this source candidate, so it
+does not prove runtime content protection. Permission metadata and MCP annotations are provenance only
+and never grant tool authority.
+
 ## Network Policy
 
 ### Egress intent and contract
