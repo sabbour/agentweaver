@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["environment", "projects"],
-      "label": "Placement retains its lease during authority and bootstrap-context reads.\nLater effects recheck independently; public write permission is unchanged."
+      "label": "Placement retains its lease during authority and bootstrap reads.\nReadiness validates the stored recovery record for network generation and mount path."
     },
     {
       "type": "message",

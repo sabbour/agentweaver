@@ -33,6 +33,14 @@ generation and rate-card content.
 converts reported nano-AIU to AIC without a second model multiplier. Missing
 measurements or model rates return `Unpriced` with a reason and no amount.
 These methods do not authorize a model session or caller.
+The standalone Azure Cost adapter uses an explicitly configured, versioned card
+for model-scoped standard input/output token rates in the declared currency. It
+does not fetch rates or quote BYOK work. Missing token counts, unsupported cache
+categories, unknown models, and changed bindings remain `Unpriced`. Events must
+verify trusted Azure provider and deployment facts against the accepted runtime
+model pin before using this adapter for receipts. Until that source contract is
+admitted, BYOK receipt accounting remains `Unpriced`; provisioned-throughput
+usage also remains unpriced without trusted usage-share evidence.
 
 ## Gateway REST and SSE entry
 

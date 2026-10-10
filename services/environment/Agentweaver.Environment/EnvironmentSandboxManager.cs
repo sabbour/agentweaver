@@ -448,11 +448,7 @@ public sealed class EnvironmentSandboxManager(
                         .Deserialize<EffectiveNetworkPolicySelection>(JsonOptions)
                         ?? throw new EnvironmentLifecycleException(
                             "sandbox_selection_unavailable", "The Sandbox lease has no retained run selection.");
-                    var provision = pinnedLease.ProvisionIntent.ProviderRequest
-                        .Deserialize<SandboxProvisionApiRequest>(JsonOptions)
-                        ?? throw new EnvironmentLifecycleException(
-                            "sandbox_provision_intent_unavailable", "The Sandbox lease has no recorded provision request.");
-                    provision.Validate();
+                    var provision = ReadProvisionRequest(pinnedLease);
                     if (selection.ProjectId != projectId || selection.RunId != runId)
                         throw new EnvironmentLifecycleException(
                             "sandbox_selection_stale", "The retained Sandbox selection has a different owner.");
@@ -1286,6 +1282,9 @@ public sealed class EnvironmentSandboxManager(
                 "workspace_detachment_completion_invalid",
                 "The Workspace owner did not commit the exact Sandbox detachment.");
     }
+
+    internal static SandboxProvisionApiRequest ReadProvisionRequest(SandboxLeaseSnapshot lease) =>
+        ReadProviderRecoveryIntent(lease).Request;
 
     private static SandboxProviderRecoveryIntent ReadProviderRecoveryIntent(SandboxLeaseSnapshot lease)
     {

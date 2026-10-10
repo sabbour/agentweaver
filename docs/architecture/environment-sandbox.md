@@ -153,6 +153,8 @@ from Kubernetes observations. It does not emit `configured` or dispatch
 The separate [AgentHost handshake](agenthost.md) adds authenticated configuration and current readiness evidence.
 Its internal readiness owner read retains the exact lease across fresh egress and Sandbox observations.
 It uses the retained selection snapshot, not a recursive accepted-selection lookup.
+It validates the stored recovery record and reads its nested provision request.
+That request supplies the exact network generation and Workspace mount path.
 Object readback does not prove Cilium datapath enforcement.
 
 ## Agent Sandbox resources and recovery
@@ -207,6 +209,9 @@ Environment resolves the complete checkpoint with Core under current authorizati
 Core returns the immutable accepted command, execution options, selection hash, and stable operation ID.
 The manager records the intent and request fingerprint in the existing `owner_effects` row before provider effects.
 Attempts, Pod references, and results use the same operation.
+The store writes UTC timestamps at PostgreSQL microsecond precision so JSON and row timestamps agree after restart.
+A terminal snapshot is immutable except for its update timestamp.
+Identical saves and additional durable attempt markers cannot replace its status, Pod references, or evidence.
 An uncertain create remains `ReconciliationRequired`; it does not authorize another Pod.
 Command create, read, and reconcile responses use `SandboxBuildTestOperationResult`, which contains the operation and replay flag.
 Reconcile requests retain the same complete checkpoint and expected binding as the original command request.
@@ -217,6 +222,8 @@ The profile pins the executable allowlist, image digests, resource limits, offli
 An absent profile does not advertise the capability.
 An invalid profile fails configuration validation; the provider does not use a default profile.
 The active lease retains its accepted profile even if current server defaults change.
+BuildTest reads the same string-enum JSON format that Sandbox provisioning persists.
+It obtains the original mount request through the validated Sandbox recovery record, not a separate caller-supplied request.
 
 Before each effect, Environment rechecks the owner, accepted command, Sandbox lease, Workspace generation, and Cilium binding.
 The command Pod uses the exact writable Workspace PVC and an operation/role-scoped offline deny-all policy.
@@ -225,6 +232,8 @@ The collector uses the pinned image and executable with a read-only Workspace mo
 AgentHost routes `--build-test-output-collector-v1` before web configuration or native SDK startup.
 This Linux-only mode accepts one bounded encoded request.
 It opens accepted paths without following symlinks, checks regular files and mount identity, and returns a bounded receipt.
+Native directory and no-follow flags match the executing Linux architecture; unsupported architectures fail before collection.
+The stream matches the synchronous native file descriptor and keeps bounded cancellable reads.
 The receipt binds the collector Pod UID, container, operation, checkpoint, and request fingerprint.
 Missing required files or an invalid collector receipt are `Failed`.
 Bound collector timeout, cancellation, or output-limit termination is `Interrupted`, even after the command exits successfully.
@@ -232,7 +241,8 @@ Logs are bounded command output, not file evidence.
 
 BuildTest does not advance MAF checkpoints, turns, or run status.
 Core retains that state and its interruption acknowledgement.
-These source contracts and tests do not prove PostgreSQL execution, Kubernetes isolation, Cilium datapath enforcement, or complete native accounting.
+Disposable PostgreSQL tests verify owner-store reservation, restart replay, and terminal-evidence preservation.
+They do not prove command-Pod execution, Kubernetes isolation, Cilium datapath enforcement, or complete native accounting.
 
 ## Retirement and storage retention
 

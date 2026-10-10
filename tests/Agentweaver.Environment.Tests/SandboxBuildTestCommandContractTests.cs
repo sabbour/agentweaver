@@ -311,7 +311,9 @@ public sealed class SandboxBuildTestCommandContractTests
                 .Validate(fixture.Command, fixture.Command.ExecutionOptions.MaximumOutputBytes));
     }
 
-    private static Fixture CreateFixture()
+    internal static Fixture CreateFixture(
+        SandboxBuildTestExpectedBinding? binding = null,
+        Guid? operationId = null)
     {
         var owner = new EnvironmentOwnerIdentity("tenant", "project", "run", "environment");
         var fence = new EnvironmentGenerationFence(owner, 3);
@@ -334,9 +336,10 @@ public sealed class SandboxBuildTestCommandContractTests
         {
             SandboxProviderBinding = providerBinding
         };
+        expectedBinding = binding ?? expectedBinding;
         var checkpoint = new SandboxBuildTestCheckpointReference(
-            "project",
-            "run",
+            expectedBinding.Fence.Owner.ProjectId,
+            expectedBinding.Fence.Owner.RunId,
             "session",
             "checkpoint",
             "plan",
@@ -365,7 +368,7 @@ public sealed class SandboxBuildTestCommandContractTests
             SandboxBuildTestLimits.OutputCollectorContainerName);
         var command = new SandboxBuildTestAcceptedCommand(
             1,
-            Guid.Parse("9dd33480-4e5b-49c5-b678-03d6766a3864"),
+            operationId ?? Guid.Parse("9dd33480-4e5b-49c5-b678-03d6766a3864"),
             checkpoint,
             "/usr/bin/make",
             ["test"],
@@ -378,7 +381,7 @@ public sealed class SandboxBuildTestCommandContractTests
         return new(command, request);
     }
 
-    private static SandboxBuildTestOperationSnapshot CreateSnapshot(Fixture fixture)
+    internal static SandboxBuildTestOperationSnapshot CreateSnapshot(Fixture fixture)
     {
         var operationId = fixture.Command.OperationId;
         var commandSelector = ImmutableDictionary.CreateRange(StringComparer.Ordinal,
@@ -441,7 +444,7 @@ public sealed class SandboxBuildTestCommandContractTests
             output,
             null,
             null,
-            collectorPolicy,
+            fixture.Command.Outputs.IsEmpty ? null : collectorPolicy,
             null,
             [],
             null,
@@ -593,7 +596,7 @@ public sealed class SandboxBuildTestCommandContractTests
         }
     }
 
-    private sealed record Fixture(
+    internal sealed record Fixture(
         SandboxBuildTestAcceptedCommand Command,
         SandboxBuildTestApiRequest Request);
 }

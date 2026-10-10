@@ -73,6 +73,9 @@ Cost selection. The source also connects authenticated native SDK observations
 to immutable Orchestrator receipts and reference-only Events accounting.
 The local harness covers current owner authority and exact Copilot AI-credit pricing.
 It does not prove deployment, paid model execution, or automatic AgentHost scheduling.
+Separate [P1 API/UI/MCP harness candidates](docs/guide/testing.md#p1-retained-surface-harness-candidates)
+retain current owner contracts and redacted evidence.
+Their controlled local tests are not deployed cross-surface acceptance.
 Application Hosting per-app selection remains subsequent work; callers
 receive an explicit error for unsupported single-provider resolution rather than a
 fallback. Resolving a descriptor produces a candidate, not a provisioned resource.
