@@ -12,19 +12,26 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 public sealed class MafBuildTestCheckpointTests
 {
     [Fact]
-    public void VersionTwoCheckpointRetainsTheExactSeedAndItsAcceptedBinding()
+    public void VersionTwoCheckpointRetainsOnlyTheExactSeedOriginAndItsAcceptedBinding()
     {
         var intent = SeedIntent();
         var running = CoordinationEndpoints.PrepareBuildTestCheckpoint(Initial(), intent)!;
 
         var recovered = MafExecutionCheckpointContract.Deserialize(
             MafExecutionCheckpointContract.Serialize(running));
+        var json = MafExecutionCheckpointContract.Serialize(running).GetRawText();
+        Assert.DoesNotContain("\"workspaceSeed\":", json);
+        Assert.Contains("\"workspaceSeedReference\":", json);
         var restored = recovered.BuildTestIntents["build-test"];
-        var accepted = restored.ToAcceptedCommand();
+        var accepted = restored.ToAcceptedCommand(requireSeed: false);
 
         Assert.Equal(2, accepted.ContractVersion);
         Assert.Equal(intent.Command.WorkspaceSource, accepted.WorkspaceSource);
-        Assert.Equal(intent.WorkspaceSeed!.Value.ToArray(), accepted.WorkspaceSeed!.Value.ToArray());
+        Assert.Null(restored.WorkspaceSeed);
+        Assert.Equal(intent.WorkspaceSeedReference, restored.WorkspaceSeedReference);
+        Assert.Throws<ArgumentException>(() => restored.ToAcceptedCommand());
+        Assert.Equal(intent.WorkspaceSeed!.Value.ToArray(),
+            (restored with { WorkspaceSeed = intent.WorkspaceSeed }).ToAcceptedCommand().WorkspaceSeed!.Value.ToArray());
         Assert.True(MafExecutionCheckpointContract.BuildTestIntentsMatch(intent, restored));
     }
 
@@ -43,6 +50,29 @@ public sealed class MafBuildTestCheckpointTests
         Assert.Throws<ArgumentException>(() =>
             MafExecutionCheckpointContract.ValidateTransition(running, next));
         Assert.Throws<ArgumentException>(() => changed.ToAcceptedCommand());
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("checkpoint")]
+    [InlineData("operation")]
+    [InlineData("length")]
+    [InlineData("digest")]
+    public void VersionTwoIntentRejectsAnUnboundSeedOrigin(string fault)
+    {
+        var intent = SeedIntent();
+        var reference = intent.WorkspaceSeedReference!;
+        reference = fault switch
+        {
+            "checkpoint" => reference with { Origin = reference.Origin with { CheckpointId = "other" } },
+            "operation" => reference with { OperationId = Guid.NewGuid() },
+            "length" => reference with { SeedByteLength = reference.SeedByteLength + 1 },
+            "digest" => reference with { SeedSha256 = new string('b', 64) },
+            _ => reference
+        };
+        intent = intent with { WorkspaceSeedReference = fault == "missing" ? null : reference };
+
+        Assert.Throws<ArgumentException>(() => intent.ToAcceptedCommand(requireSeed: false));
     }
 
     [Fact]
@@ -70,6 +100,8 @@ public sealed class MafBuildTestCheckpointTests
         {
             Command = intent.Command with { WorkspaceSource = source },
             WorkspaceSeed = seed.ToImmutableArray(),
+            WorkspaceSeedReference = new(
+                intent.CheckpointReference(), intent.OperationId, source.SeedSha256, source.SeedByteLength),
             ExecutionOptions = intent.ExecutionOptions with
             {
                 CollectorMode = SandboxBuildTestLimits.WorkspaceCollectorMode

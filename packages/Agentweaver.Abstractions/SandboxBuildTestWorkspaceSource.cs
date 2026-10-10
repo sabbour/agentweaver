@@ -4,6 +4,29 @@ using System.Text.Json.Serialization;
 namespace Agentweaver.Abstractions;
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record SandboxBuildTestWorkspaceSeedReference(
+    SandboxBuildTestCheckpointReference Origin,
+    Guid OperationId,
+    string SeedSha256,
+    long SeedByteLength)
+{
+    public SandboxBuildTestWorkspaceSeedReference Validate(
+        SandboxBuildTestCheckpointReference checkpoint,
+        Guid operationId,
+        SandboxBuildTestWorkspaceSource source)
+    {
+        ArgumentNullException.ThrowIfNull(Origin);
+        ArgumentNullException.ThrowIfNull(source);
+        _ = Origin.Validate();
+        _ = source.Validate();
+        if (Origin != checkpoint || OperationId != operationId || OperationId == Guid.Empty ||
+            SeedSha256 != source.SeedSha256 || SeedByteLength != source.SeedByteLength)
+            throw new ArgumentException("The BuildTest seed reference differs from its originating intent.");
+        return this;
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SandboxBuildTestWorkspaceSource(
     int ContractVersion,
     SessionIdentity Identity,

@@ -158,7 +158,7 @@ public sealed record SandboxBuildTestAcceptedCommand(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SandboxBuildTestWorkspaceSource? WorkspaceSource { get; init; }
 
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonIgnore]
     public ImmutableArray<byte>? WorkspaceSeed { get; init; }
 
     private static readonly JsonWriterOptions CanonicalJsonOptions = new()
@@ -168,7 +168,11 @@ public sealed record SandboxBuildTestAcceptedCommand(
         SkipValidation = false
     };
 
-    public SandboxBuildTestAcceptedCommand Validate()
+    public SandboxBuildTestAcceptedCommand Validate() => Validate(requireSeed: true);
+
+    public SandboxBuildTestAcceptedCommand ValidateMetadata() => Validate(requireSeed: false);
+
+    private SandboxBuildTestAcceptedCommand Validate(bool requireSeed)
     {
         ArgumentNullException.ThrowIfNull(Checkpoint);
         ArgumentNullException.ThrowIfNull(ExecutionOptions);
@@ -183,9 +187,10 @@ public sealed record SandboxBuildTestAcceptedCommand(
                 WorkspaceSource.Identity.RunId != Checkpoint.RunId ||
                 WorkspaceSource.Identity.SessionId != Checkpoint.SessionId ||
                 WorkspaceSource.AcceptedSelectionHash != Checkpoint.AcceptedSelectionHash ||
-                WorkspaceSeed is not { IsDefault: false } seed ||
-                seed.Length != WorkspaceSource.SeedByteLength ||
-                SandboxBuildTestHashes.UnprefixedSha256(seed.AsSpan()) != WorkspaceSource.SeedSha256) ||
+                requireSeed && WorkspaceSeed is null ||
+                WorkspaceSeed is { } seed && (seed.IsDefault ||
+                    seed.Length != WorkspaceSource.SeedByteLength ||
+                    SandboxBuildTestHashes.UnprefixedSha256(seed.AsSpan()) != WorkspaceSource.SeedSha256)) ||
             OperationId == Guid.Empty ||
             !SandboxBuildTestPaths.IsAbsoluteExecutable(ExecutableReference) ||
             !ExecutionOptions.AllowedExecutables.Contains(ExecutableReference, StringComparer.Ordinal) ||

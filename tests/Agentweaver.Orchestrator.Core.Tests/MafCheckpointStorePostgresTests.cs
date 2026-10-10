@@ -12,7 +12,7 @@ using Xunit;
 namespace Agentweaver.Orchestrator.Core.Tests;
 
 [Collection("Coordination PostgreSQL")]
-public sealed class MafCheckpointStorePostgresTests : IAsyncLifetime
+public sealed partial class MafCheckpointStorePostgresTests : IAsyncLifetime
 {
     private readonly CoordinationPostgresFixture _fixture;
     private readonly string _schema = "maf_checkpoint_" + Guid.NewGuid().ToString("N");
