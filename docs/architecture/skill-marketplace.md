@@ -18,8 +18,8 @@ cached as a success-shaped source state.
 All operations are project-scoped, require `api.read`, and recheck current
 Projects authority. Reading or browsing requires a current project Owner,
 Contributor, or Viewer role (or tenant administrator). Creating, updating, and
-removing a source requires the same current project Owner or tenant administrator
-authority used for other project configuration writes. Responses use
+removing a source also require `projects.admin` and current project Owner or tenant
+administrator authority. Responses use
 `Cache-Control: no-store`.
 
 ```mermaid
