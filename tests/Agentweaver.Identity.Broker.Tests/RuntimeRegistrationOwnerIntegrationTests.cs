@@ -154,6 +154,23 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             $"/internal/runtime/registrations/{registration.RuntimeInstanceId:D}", runToken, [owner.TenantId]);
         await AssertStatusAsync(current, HttpStatusCode.OK);
         Assert.Equal(registration, await current.Content.ReadFromJsonAsync<RuntimeRegistration>(CoordinationJsonOptions));
+        using var skills = await SendAsync(client, HttpMethod.Get,
+            $"/internal/runtime/registrations/{registration.RuntimeInstanceId:D}/skills", runToken, [owner.TenantId]);
+        await AssertStatusAsync(skills, HttpStatusCode.OK);
+        Assert.True(skills.Headers.CacheControl?.NoStore);
+        var skillProjection = await skills.Content.ReadFromJsonAsync<SkillRuntimeContentProjectionV1>(
+            CoordinationJsonOptions);
+        Assert.NotNull(skillProjection);
+        Assert.Equal(registration.RuntimeInstanceId, skillProjection.RuntimeInstanceId);
+        Assert.Equal(registration.Revision, skillProjection.RegistrationRevision);
+        Assert.Equal(registration.Binding.ProjectConfigurationRevision, skillProjection.ProjectConfigurationRevision);
+        Assert.Equal(registration.Binding.ExecutionFence, skillProjection.ExecutionFence);
+        Assert.Equal(registration.Binding.TenantId, skillProjection.TenantId);
+        Assert.Equal(registration.Binding.ProjectId, skillProjection.ProjectId);
+        Assert.Equal(registration.Binding.RunId, skillProjection.RunId);
+        Assert.Equal(registration.Binding.SessionId, skillProjection.SessionId);
+        Assert.Equal(registration.Binding.AgentId, skillProjection.AgentId);
+        Assert.Equal(registration.Binding.AcceptedSelectionHash, skillProjection.AcceptedSelectionHash);
         await using var source = NpgsqlDataSource.Create(_connectionString);
         await using var connection = await source.OpenConnectionAsync();
         await using var count = new NpgsqlCommand(
@@ -321,7 +338,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 runtimeHttp, broker.BaseAddress!, IdentityBrokerWebApplicationFactory.Issuer, actor, runtimeTimeProvider);
             sdk.ExpectedAvailableToolsCount = 7;
             sdk.PersistNativeSessionState = true;
-            var bootstrap = new RuntimeSessionBootstrap(currentOwner, runtimeBroker, factory, actor, runtimeTimeProvider,
+            var bootstrap = new RuntimeSessionBootstrap(currentOwner, runtimeBroker, factory,
+                new RuntimeSkillContentHttpClient(runtimeHttp, new("https://orchestrator.test/"), actor),
+                actor, runtimeTimeProvider,
                 actions: new RuntimeActionHttpClient(runtimeHttp, new("https://orchestrator.test/"), actor));
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.ConfigureAsync(
                 bootstrap, "forged"u8.ToArray(), Guid.NewGuid(), Guid.NewGuid(), default));

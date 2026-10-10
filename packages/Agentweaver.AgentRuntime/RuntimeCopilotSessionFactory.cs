@@ -74,11 +74,13 @@ public sealed class RuntimeCopilotSessionFactory
         SecretCredential sdkCredential,
         Func<CancellationToken, Task> requireCreationAuthority,
         CancellationToken cancellationToken,
+        SkillRuntimeContentProjectionV1 acceptedSkills,
         RuntimeSessionRecovery? recovery = null,
         Func<string, ReadOnlyMemory<byte>, bool, CancellationToken, Task>? requireActionAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(requireCreationAuthority);
         RuntimeContractValidation.Validate(registration);
+        RuntimeSkillContentHttpClient.ValidateForRegistration(acceptedSkills, registration);
         if (acceptedModelSelectionReference != registration.Binding.ModelSelectionReference)
             throw new RuntimeAuthorizationException("runtime_model_reference_unavailable");
         var model = _modelBindings.Resolve(acceptedModelSelectionReference,
@@ -119,6 +121,7 @@ public sealed class RuntimeCopilotSessionFactory
         var turns = new RuntimeCopilotTurnObserver();
         var nativeFiles = new RuntimeNativeSessionFiles(
             token, (_connection as UriRuntimeConnection)?.ConnectionToken ?? "");
+        var skillProvider = new RuntimeAcceptedSkillProvider(acceptedSkills);
         var recoveryMode = RuntimeSessionRecoveryMode.Fresh;
         string? recoveryReason = null;
         try
@@ -185,6 +188,7 @@ public sealed class RuntimeCopilotSessionFactory
                     recoveryReason = recovery.Cache is null ? "runtime_sdk_cache_missing" : "runtime_sdk_cache_incompatible";
                 }
             }
+            nativeFiles.InstallSkillResources(acceptedSkills);
             await requireCreationAuthority(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (!sdkCredential.IsUsable())
@@ -207,6 +211,8 @@ public sealed class RuntimeCopilotSessionFactory
                     : null;
                 options.EnableConfigDiscovery = false;
                 options.EnableSessionStore = false;
+                options.EnableSkills = !acceptedSkills.Skills.IsEmpty;
+                options.SkillProvider = acceptedSkills.Skills.IsEmpty ? null : skillProvider;
                 options.AvailableTools = requireActionAuthority is null
                     ? [] : ["view", "create", "edit", "bash", "read_bash", "write_bash", "stop_bash"];
                 options.WorkingDirectory = _workingDirectory;

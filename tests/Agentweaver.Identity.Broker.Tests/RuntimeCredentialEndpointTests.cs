@@ -275,10 +275,12 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             SdkCredential = EndpointStorageSecretRedemption.CredentialValue
         };
         var initialize = new RuntimeSessionBootstrap(
-            owner, runtime, RuntimeCopilotSessionTests.Factory(sdk, ModelSourceMode.Byok), actor, TimeProvider.System,
+            owner, runtime, RuntimeCopilotSessionTests.Factory(sdk, ModelSourceMode.Byok),
+            RuntimeSkillContentTests.Client(owner.Registration, actor), actor, TimeProvider.System,
             owner.Registration.Binding.Image);
         var mismatchedImage = new RuntimeSessionBootstrap(
-            owner, runtime, RuntimeCopilotSessionTests.Factory(sdk, ModelSourceMode.Byok), actor, TimeProvider.System,
+            owner, runtime, RuntimeCopilotSessionTests.Factory(sdk, ModelSourceMode.Byok),
+            RuntimeSkillContentTests.Client(owner.Registration, actor), actor, TimeProvider.System,
             owner.Registration.Binding.Image! with { CompressedPullBytes = 1 });
         Assert.Equal("runtime_image_mismatch",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => mismatchedImage.ConfigureAsync(
@@ -344,7 +346,8 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             SdkCredential = EndpointStorageSecretRedemption.CredentialValue
         };
         var failedInitialize = new RuntimeSessionBootstrap(
-            owner, runtime, RuntimeCopilotSessionTests.Factory(mismatchedSdk, ModelSourceMode.Byok), actor, TimeProvider.System);
+            owner, runtime, RuntimeCopilotSessionTests.Factory(mismatchedSdk, ModelSourceMode.Byok),
+            RuntimeSkillContentTests.Client(owner.Registration, actor), actor, TimeProvider.System);
         var modelFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             failedInitialize.ConfigureAsync(configuration, failedBootstrap, Guid.NewGuid(), Guid.NewGuid(),
                 timeout.Token));
@@ -367,7 +370,8 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
                 owner.Registration with { State = RuntimeRegistrationState.Revoked }
         };
         var interruptedInitialize = new RuntimeSessionBootstrap(
-            owner, runtime, RuntimeCopilotSessionTests.Factory(interruptedSdk, ModelSourceMode.Byok), actor, TimeProvider.System);
+            owner, runtime, RuntimeCopilotSessionTests.Factory(interruptedSdk, ModelSourceMode.Byok),
+            RuntimeSkillContentTests.Client(owner.Registration, actor), actor, TimeProvider.System);
         var authorityLoss = await Assert.ThrowsAsync<AggregateException>(() =>
             interruptedInitialize.ConfigureAsync(configuration, interruptedBootstrap, Guid.NewGuid(), Guid.NewGuid(),
                 timeout.Token));

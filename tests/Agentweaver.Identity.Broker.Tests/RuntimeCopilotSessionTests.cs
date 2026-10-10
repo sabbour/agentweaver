@@ -602,3 +602,35 @@ public sealed class RuntimeCopilotSessionTests
         },
         RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(5));
 }
+
+internal static class RuntimeCopilotSessionFactoryTestExtensions
+{
+    internal static Task<RuntimeCopilotSession> CreateAsync(
+        this RuntimeCopilotSessionFactory factory,
+        RuntimeRegistration registration,
+        string modelSelectionReference,
+        SecretCredential credential,
+        Func<CancellationToken, Task> requireCreationAuthority,
+        CancellationToken cancellationToken,
+        RuntimeSessionRecovery? recovery = null,
+        Func<string, ReadOnlyMemory<byte>, bool, CancellationToken, Task>? requireActionAuthority = null)
+    {
+        var binding = registration.Binding;
+        var acceptedSkills = new SkillRuntimeContentProjectionV1(
+            SkillRuntimeContentContract.CurrentVersion,
+            registration.RuntimeInstanceId,
+            registration.Revision,
+            binding.ProjectConfigurationRevision,
+            binding.ExecutionFence,
+            binding.TenantId,
+            binding.ProjectId,
+            binding.RunId,
+            binding.SessionId,
+            binding.AgentId,
+            binding.AcceptedSelectionHash,
+            []);
+        return factory.CreateAsync(
+            registration, modelSelectionReference, credential,
+            requireCreationAuthority, cancellationToken, acceptedSkills, recovery, requireActionAuthority);
+    }
+}
