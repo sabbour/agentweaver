@@ -22,7 +22,10 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
     TimeProvider timeProvider,
     CiliumEgressProviderOptions ciliumOptions)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+    };
     private static readonly JsonSerializerOptions PolicyJsonOptions = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
@@ -1373,9 +1376,7 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
                 "sandbox_provider_binding_mismatch",
                 "The current Sandbox lease does not match its immutable selected provider profile.");
 
-        var provisionRequest = Deserialize<SandboxProvisionApiRequest>(
-            intent.ProviderRequest,
-            "sandbox_provision_intent_invalid").Validate();
+        var provisionRequest = EnvironmentSandboxManager.ReadProvisionRequest(lease);
         var workspace = await lifecycleStore.GetWorkspaceVolumeAsync(
             lifecycle.Fence,
             provisionRequest.VolumeId,

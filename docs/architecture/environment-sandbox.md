@@ -220,6 +220,8 @@ The profile pins the executable allowlist, image digests, resource limits, offli
 An absent profile does not advertise the capability.
 An invalid profile fails configuration validation; the provider does not use a default profile.
 The active lease retains its accepted profile even if current server defaults change.
+BuildTest reads the same string-enum JSON format that Sandbox provisioning persists.
+It obtains the original mount request through the validated Sandbox recovery record, not a separate caller-supplied request.
 
 Before each effect, Environment rechecks the owner, accepted command, Sandbox lease, Workspace generation, and Cilium binding.
 The command Pod uses the exact writable Workspace PVC and an operation/role-scoped offline deny-all policy.

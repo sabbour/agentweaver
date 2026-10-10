@@ -1287,6 +1287,9 @@ public sealed class EnvironmentSandboxManager(
                 "The Workspace owner did not commit the exact Sandbox detachment.");
     }
 
+    internal static SandboxProvisionApiRequest ReadProvisionRequest(SandboxLeaseSnapshot lease) =>
+        ReadProviderRecoveryIntent(lease).Request;
+
     private static SandboxProviderRecoveryIntent ReadProviderRecoveryIntent(SandboxLeaseSnapshot lease)
     {
         SandboxProviderRecoveryIntent recovery;

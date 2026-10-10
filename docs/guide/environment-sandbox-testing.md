@@ -109,6 +109,13 @@ policy-resource boundary are controlled. It is not a live Kubernetes or
 datapath test. Sandbox observations remain `Pending` without AgentHost configure
 evidence.
 
+The same integration checks BuildTest binding preparation from the current selected profile.
+The BuildTest route rejects viewers, foreign owners, missing selection authority,
+and a different execution profile. An unknown operation returns 404.
+An unresolved command returns 503 without a BuildTest row or provider creation.
+These checks use the production manager and stores, but do not execute an accepted
+Orchestrator checkpoint, a command Pod, or the output collector.
+
 The separate native SDK harness reuses the canonical placement manager.
 Its profile callback reads actual Orchestrator work-item context under the retained lease.
 The module tests retire a lease before lifecycle advancement, as the admitted lifecycle guard requires.

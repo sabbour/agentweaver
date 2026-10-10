@@ -71,7 +71,7 @@
     {
       "type": "note",
       "over": ["environment", "workspace-egress"],
-      "label": "Before each effect, recheck authorization, accepted intent, current Sandbox lease, exact writable PVC, and network binding."
+      "label": "Validate the stored Sandbox mount request. Before each effect, recheck authority, accepted intent, current lease, exact PVC, and network binding."
     },
     {
       "type": "message",
