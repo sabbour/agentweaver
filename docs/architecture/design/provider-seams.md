@@ -106,6 +106,7 @@ sequenceDiagram
     participant E as Environment manager
     participant I as Identity and policy
     participant H as AgentHost
+    participant G as Trusted outbound gateway outside guest
     O->>C: Read platform defaults and enabled descriptors
     O->>R: Resolve project overrides and cardinality
     R->>R: Check advertised capabilities and cross-seam compatibility
@@ -114,9 +115,19 @@ sequenceDiagram
     E-->>O: Resource generations and negotiated capabilities
     O->>R: Verify pairing and pin effective binding
     loop Each turn or resume
-        O->>I: Revalidate authorization and policy, redeem SecretRefs
-        I-->>H: Deliver scoped short-lived credentials
-        O->>H: Dispatch with pinned binding and fencing generation
+        O->>I: Revalidate authorization and policy
+        alt Proposed credential-less mode
+            O->>H: Bind gateway-only identity and supported runtime profile
+            O->>H: Dispatch with pinned binding and fencing generation
+            H->>G: Request bound operation without upstream credentials
+            G->>O: Validate current action, registration and fences
+            G->>I: Acquire exact upstream credential
+            I-->>G: Credential for trusted use only
+            G->>O: Recheck authority after waits before authenticated dispatch
+        else Explicit legacy credential delivery
+            I-->>H: Deliver scoped short-lived credentials
+            O->>H: Dispatch with pinned binding and fencing generation
+        end
     end
 ```
 
@@ -201,11 +212,19 @@ gateway reports a permissive capability.
 
 ### Credentials and adapter hosting
 
-A binding stores a `SecretRef`, never a token. The Identity service alone redeems or mints purpose-bound,
-run-bound, short-lived credentials. It sends only the necessary scoped credential over authenticated
-AgentHost configure/refresh channels, or injects one at the L7 gateway. Resume refreshes credentials that
-may have survived in guest memory. A provider receives credentials only for its operation; neither project
-options nor snapshot metadata carry their values.
+A binding stores a `SecretRef` or accepted connection reference, never a token.
+Identity alone redeems or mints purpose/run-bound upstream credentials.
+Authenticated delivery into the current guest AgentHost is **legacy credential
+delivery**, not credential-less execution. In the proposed credential-less mode,
+upstream credentials stay in trusted services outside the guest and are inserted
+only after current action, destination and binding validation at the L7 gateway.
+An incompatible SDK requires a supported trusted external runtime profile or
+explicit unavailable capability, never a raw token fallback. Resume repeats
+current authority and placement checks; it cannot restore credential-bearing guest
+state. A provider receives credentials only for its trusted operation; project
+options and snapshot metadata never carry their values. See the
+[credential-less sandbox proposal](../identity-secrets.md#credential-less-sandbox-proposal)
+for protocol limits, trust assumptions and proposed admission changes.
 
 Adapters have five deployment patterns. The contract and enforcement boundary remain the same even when the
 implementation is outside the service process.
@@ -260,7 +279,7 @@ other services.
 | Snapshots | Capture and explicitly restore environments | Environment manager | `None` at cutover; gated AKS Blob-backed pod snapshots | OpenSandbox-native; managed-runtime snapshots after Azure support | Exclusive, paired |
 | Sandbox | Provision, observe, fence, and release AgentHost environments | Environment manager | agent-sandbox on AKS | OpenSandbox; Agent Substrate after AKS proof; Container Apps Sandboxes (P3 evaluation) | Exclusive |
 | Storage | Durable agent workspace volumes and bindings | Environment manager | Azure Files CSI | Elastic SAN deferred outside P2; future agent filesystem providers | Exclusive |
-| Memory | Authoritative knowledge records and retrieval | Knowledge | Native Postgres | Cosmos source candidate; Redis (P2) | Exclusive |
+| Memory | Authoritative knowledge records and retrieval | Knowledge | Native Postgres | Cosmos and Redis source candidates (P2) | Exclusive |
 | Policy | Decide permitted actions through AGT | Orchestrator | AGT .NET kernel, YAML rules | —; other rule languages configure AGT, not another adapter | Platform-singleton |
 | Guardrails | Classify untrusted model inputs/results/output | Orchestrator | Azure AI Content Safety Prompt Shields for supported checks | Purview DLP; Llama Guard/Prompt Guard; NeMo Guardrails | Ordered composite |
 | Network Policy | Materialize and verify egress intent | Environment manager | Cilium L3/L4/FQDN; own Tool & MCP gateway L7 | Plain Kubernetes NetworkPolicy where sufficient; agentgateway L7 | Layered |
@@ -348,7 +367,10 @@ sandbox claims rather than only direct pods, and capture/restore within the Agen
 AgentHost moves to the Kata v2 RuntimeClass only after that gate: the capability depends on the supported VM
 runtime and identical restore resources. The current two regular containers are compatible; init,
 native-sidecar, and ephemeral containers must be excluded. After a restored guest receives a new address,
-the authenticated A2A client reconnects, configure is idempotent, and Identity refreshes guest credentials.
+the authenticated A2A client reconnects and configure is idempotent. Legacy mode
+refreshes delivered guest credentials. Credential-less mode rebinds only the
+gateway identity and current trusted runtime profile; credential-bearing guest
+snapshots are not admissible.
 None of this is a cutover prerequisite ([R3](../decisions/0001-platform-architecture.md#risk-register)).
 
 ## Sandbox
@@ -371,17 +393,17 @@ selector. The immutable run selection must contain exactly one matching Sandbox 
 adapter version, schema, options revision, and capabilities must match the configured adapter. Missing or
 mismatched selection is denied without fallback.
 
-Environment now persists provider lifecycle reports and reconciles them against
-the exact lease and provider fence. The report route remains unavailable until
-provider identity authentication and the Core interruption command are
-admitted, so this is not end-to-end suspend, relocation, or resume. The Sandbox
-provider also runs only the immutable BuildTest command accepted by Core; it
-does not own MAF checkpoint or run state, or provide automatic model dispatch.
-The separate [AgentHost candidate](../agenthost.md) implements authenticated
-configuration and A2A source routes. Environment owns registered
-endpoint/profile and placement evidence; Orchestrator owns runtime registration
-and accepted run bindings. No provider can weaken VM isolation when the
-selection requires it.
+The adapter does not implement suspend/resume, provider lifecycle events, or automatic model dispatch.
+Its optional accepted BuildTest profile enables a separate immutable command operation.
+Environment resolves the full Core checkpoint, reserves the original operation ID, and rechecks owner and placement before provider effects.
+The command and trusted file collector use separate gated Pods and offline, role-scoped policies.
+Only command exit zero permits the collector; command logs are not required-file evidence.
+The collector uses the exact Workspace PVC read-only and validates bounded no-follow file receipts.
+Missing or invalid required output fails; bound collector interruption cannot become successful command completion.
+Core retains MAF checkpoints, run status, and interruption acknowledgement.
+The separate [AgentHost candidate](../agenthost.md) implements authenticated configuration and A2A source routes.
+Environment owns registered endpoint/profile and placement evidence; Orchestrator owns runtime registration and accepted run bindings.
+No provider can weaken VM isolation when the selection requires it.
 
 The current lease source stores the full Environment owner tuple, lifecycle generation,
 resource generation, provider/current fencing generations, lease revision, and expiry.
@@ -579,19 +601,22 @@ contract absorbs changes to future volume APIs
 ## Memory
 
 **Owner:** Knowledge. **Cardinality:** exclusive. Native Postgres remains the default.
-The optional `cosmos.memory` source candidate joins it behind the same Memory contract;
-Redis remains planned P2 work. Each selected provider owns its authoritative memory
-records, decisions, session context, revisions, and accepted-effect delivery state.
-Knowledge keeps the authorization, context composition, and provider-binding boundary.
-The Sessions journal and transactional control-plane state remain in PostgreSQL.
+The optional `cosmos.memory` and `redis.memory` source candidates join it behind the
+same Memory contract. Each selected provider owns its authoritative memory records,
+decisions, session context, revisions, and accepted-effect delivery state. Knowledge
+keeps the authorization, context composition, and provider-binding boundary. The
+Sessions journal and transactional control-plane state remain in PostgreSQL.
 
 The contract reads, writes, searches, and versions records within project and agent
 authorization. Every adapter must preserve revision checks, idempotency, proposal
 promotion, scope isolation, and durable retention before enablement. Cosmos validates
 an existing `/projectId`-partitioned container, its required search composite index,
-and its non-expiring default TTL; it never provisions the container. Redis is a Memory
-provider, not merely a cache in front of PostgreSQL; its persistence and eviction policy
-must not discard authoritative records. No run silently switches providers after a failure.
+and its non-expiring default TTL; it never provisions the container. Redis requires a
+TLS endpoint and negotiates a standalone primary with healthy AOF-always persistence,
+`noeviction`, no replicas or cluster, and non-expiring namespace data. Redis is a
+Memory provider, not merely a cache in front of PostgreSQL; its persistence and eviction
+policy must not discard authoritative records. No run silently switches providers
+after a failure.
 Read-only workspace projections remain views, not another writable store. No particular
 preview toolkit or remote Python service is required
 ([R7](../decisions/0001-platform-architecture.md#risk-register)).
@@ -653,9 +678,16 @@ failures are journaled; classifier transport and credentials remain outside prom
 **Owner:** Environment manager. **Cardinality:** layered. The core compiles one `EgressIntent` per
 environment and run from **platform baseline ∩ project narrowing ∩ run needs**. It groups FQDN patterns,
 CIDRs, ports, and protocols by purpose: pinned model endpoint, enabled MCP servers, source control, package
-registries, Key Vault and Entra, preview ingress, and control-plane callbacks. Optional L7 rules name MCP
+registries, preview ingress, and control-plane callbacks. Key Vault and Entra
+credential acquisition are trusted-side egress, not direct guest permissions.
+Optional L7 rules name MCP
 servers/tools, A2A peers, or HTTP methods/paths, plus gateway `SecretRef` credential injection and audit
 level.
+
+L7 is required for the proposed credential-less mode. Its exact protocol profile,
+trusted credential insertion, forced mediation and current action checks are
+defined in the [credential-less sandbox proposal](../identity-secrets.md#credential-less-sandbox-proposal);
+this is not current L7 adapter or datapath evidence.
 
 `Apply(environmentSelector, intent, generation)` returns the applied generation; `Verify` and `Revoke`
 reconcile it. Capabilities advertise L3/L4, FQDN, MCP/A2A/model-aware L7, credential injection, rate limits,
@@ -675,10 +707,10 @@ consistency manifest.
 The unpublished `Agentweaver.Environment` candidate compiles typed purpose-grouped rules from the
 platform/project/run intersection, rechecks Projects & Config authorization on each operation, and uses
 Kubernetes resource-version and intent-generation fences before pinning the verified L3/L4 binding. Its
-readback proves the exact Cilium policy object only, not enforcement in the datapath. Environment propagates
-the verified selectors into Sandbox templates and validates them on the actual Pod. BuildTest adds separate
-operation- and role-scoped deny-all policies for command and collector Pods. These source paths do not
-include deployed Kubernetes identity/RBAC or prove datapath enforcement. See
+readback proves the exact Cilium policy object only, not enforcement in the datapath.
+Environment propagates verified selectors into Sandbox templates and validates them on the actual Pod.
+BuildTest adds separate operation- and role-scoped deny-all policies for command and collector Pods.
+These source paths do not include deployed Kubernetes identity/RBAC or prove datapath enforcement. See
 [Environment egress](../environment-egress.md) for the source and test boundary.
 
 The platform's own **Tool & MCP gateway** fills the default L7 data-plane slot at cutover. It handles
@@ -726,10 +758,16 @@ only to explicitly unweighted AI credits. Each entry retains an immutable rate-c
 version. Missing measurements or unsupported sources remain unpriced.
 The optional HTTP consumer accepts only immutable source receipt references.
 
-The Azure BYOK adapter uses deployment token rates from Azure Retail Prices, allocates
-provisioned-throughput capacity by usage share, and may reconcile estimates with Azure Cost Management
-exports filtered by resource tags. Other meter sources provide their own pricing; unknown sources remain
-`unpriced`, not zero-cost. Sandbox compute cost is a later meter source, not part of the 1.0 model-cost
+The standalone Azure BYOK cost adapter accepts an explicitly configured, versioned
+Azure Retail Prices card with model-scoped standard input/output token rates and a
+declared currency. It does not fetch live prices or quote BYOK work. Missing token
+counts, unsupported cache categories, unknown models, and changed bindings remain
+`unpriced`, not zero-cost. Its receipt-consumer integration must also verify trusted
+Azure provider and deployment facts bound to the accepted runtime model pin; until
+that source contract is admitted, Events must keep BYOK usage unpriced. Provisioned
+throughput remains `unpriced` until trusted resource- and time-window-level usage
+share supplies its denominator. Other meter sources provide their own pricing.
+Sandbox compute cost is a later meter source, not part of the 1.0 model-cost
 contract.
 
 ### Budgets and combined data flow
@@ -818,7 +856,11 @@ The current source enum and resolver do not yet implement this sixteenth seam.
 1.0 backend. Core and adapters exchange `SecretRef`s and purpose-bound credential requests, not secret
 values in provider descriptors, run bindings, Postgres state, workspace files, or snapshot manifests. The
 trusted control plane redeems references and refreshes short-lived run credentials over authenticated
-channels. The L7 gateway can inject scoped outbound credentials without exposing them inside the sandbox.
+channels. In the proposed credential-less mode, only trusted external consumers
+receive upstream values; the L7 gateway validates current action authority and
+injects authentication outside the sandbox. A guest-redeemable reference or
+federated assertion is not a substitute for that boundary. The current Secrets
+contract does not implement this L7 admission or guest isolation.
 Kubernetes Secrets are not the credential store. This generalizes 0.x Key Vault-backed BYOK and GitHub
 references (`apps/Agentweaver.Api/Auth/UserModelProviderSettingsService.cs`,
 `apps/Agentweaver.Api/Auth/GitHubConnectionsCredentialVault.cs`).
@@ -901,26 +943,34 @@ superseded, and the original grant is superseded and not current. This handling 
 to merge execution; ordinary intent reads do not expose stale intents, and no merge request
 is sent.
 
-Projects stores one repository identity and either legacy API/checkout `SecretRef`s or
-`authMode: "githubApp"` with an Identity connection ID; the optional webhook `SecretRef`
-remains separate. App mode has no API or checkout `SecretRef`. The short-lived
-repository-selection code is submitted only in the initial authorized Orchestrator
-`/pin` request; it is never persisted in project/run configuration or the durable pin.
-Identity binds the code's first use to that project and run, stores only its hash, and
-allows later mint requests for the same project using the hash. The durable Orchestrator
-pin contains only the Identity connection/revision, installation and repository IDs,
-selection hash, actual permission digest, and the verified `IssueWriteGranted` bit.
-Legacy secret mode continues to redeem its API reference through Identity.Broker. In
-App mode, each GitHub API or checkout operation instead requests a fresh installation
-token from Identity, which rechecks the active run grant and exact repository binding.
-The token is limited to one repository with `contents:write` and
-`pull_requests:write`; `issues:write` is requested only when required by the pinned
-provider and must be present in GitHub's returned permission map before IssueWrite is
-retained. A denied requested permission fails closed without a narrower retry. The
-digest is computed from the actual returned permissions, historical remints preserve
-the accepted scope, GitHub's expiry is honored, and the token is invalidated after the
-operation. The default Orchestrator audience remains unchanged; the internal Identity
-endpoint requires the validated run-bound Broker bearer.
+Projects stores one repository identity and an explicit Source Control authentication
+mode. Legacy secret mode uses versioned API and checkout `SecretRef`s plus an optional
+webhook `SecretRef`; configurations that omit `authMode` remain in secret mode.
+GitHub App mode uses a stable Identity-owned `appConnectionId`, has no API or checkout
+`SecretRef`, and does not store provider tokens or numeric installation/repository IDs.
+The short-lived, actor-bound repository-selection code is submitted only in the initial
+authorized Orchestrator `/pin` request; it is never persisted in project/run
+configuration or the durable pin. Identity binds its first use to that project and run,
+stores only its hash, and allows later mint requests for the same project using the
+hash. The durable Orchestrator pin contains only the Identity connection/revision,
+installation and repository IDs, selection hash, actual permission digest, and the
+verified `IssueWriteGranted` bit. After resolving the exact provider from the accepted
+run selection, Orchestrator rechecks current Projects and Core authority and persists
+the provider/resource generation and negotiated capabilities against the accepted
+selection hash and execution fence.
+
+Legacy secret mode redeems its API reference through Identity.Broker; secret values
+are operation-scoped and invalidated. In GitHub App mode, each API or checkout
+operation instead requests a fresh installation token from Identity, which rechecks
+the active run grant and exact repository binding. The token is limited to one
+repository with `contents:write` and `pull_requests:write`; `issues:write` is requested
+only when required by the pinned provider and must be present in GitHub's returned
+permission map before IssueWrite is retained. A denied requested permission fails
+closed without a narrower retry. The digest is computed from the actual returned
+permissions, historical remints preserve the accepted scope, GitHub's expiry is
+honored, and the token is invalidated after the operation. The default Orchestrator
+audience remains unchanged; the internal Identity endpoint requires the validated
+run-bound Broker bearer.
 
 The authenticated run-scoped Orchestrator API exposes issue creation, exact-head/base pull-request
 create-or-reuse, review reads, workspace preparation/diff, typed merge intents, and the relay endpoint.
@@ -985,6 +1035,29 @@ unpublished source candidate, not a deployed service or public webhook endpoint.
   </a>
 </p>
 <p align="center" class="aw-diagram-links"><a href="../../diagrams/flagship/v1-source-control-owner-flow.png">Open full-size PNG</a> · <a href="../../diagrams/drawio/generated/flagship/v1-source-control-owner-flow.drawio">Open editable draw.io source</a></p>
+
+The drawing above focuses on the legacy `SecretRef` owner path. GitHub App mode
+uses the following separate source contract; it does not establish that the
+Identity or Source Control owner routes are admitted or deployed:
+
+```mermaid
+flowchart LR
+    Browser["Retained v1 browser"]
+    Gateway["Gateway BFF"]
+    Identity["Identity Broker"]
+    Config["Accepted config: githubApp + appConnectionId"]
+    Source["Source Control owner"]
+    Core["Projects & Core"]
+    Store["Source Control owner store"]
+    Browser -->|"Current user bearer; safe repository selection"| Gateway
+    Gateway -->|"Same bearer; no tenant selector"| Identity
+    Identity -->|"Metadata + single-use selectionCode"| Browser
+    Config --> Source
+    Browser -->|"Run bearer + tenant + selectionCode"| Gateway
+    Gateway -->|"Same run bearer and tenant"| Source
+    Source -->|"Current authority and accepted repository"| Core
+    Source -->|"Pin exact provider IDs server-side"| Store
+```
 
 ## Telemetry
 

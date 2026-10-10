@@ -33,6 +33,14 @@ generation and rate-card content.
 converts reported nano-AIU to AIC without a second model multiplier. Missing
 measurements or model rates return `Unpriced` with a reason and no amount.
 These methods do not authorize a model session or caller.
+The standalone Azure Cost adapter uses an explicitly configured, versioned card
+for model-scoped standard input/output token rates in the declared currency. It
+does not fetch rates or quote BYOK work. Missing token counts, unsupported cache
+categories, unknown models, and changed bindings remain `Unpriced`. Events must
+verify trusted Azure provider and deployment facts against the accepted runtime
+model pin before using this adapter for receipts. Until that source contract is
+admitted, BYOK receipt accounting remains `Unpriced`; provisioned-throughput
+usage also remains unpriced without trusted usage-share evidence.
 
 ## Gateway REST and SSE entry
 
@@ -53,14 +61,83 @@ describes the SSE response as `text/event-stream`; an invalid cursor is `400`.
 | Method and path | Contract |
 | --- | --- |
 | `GET /openapi/v1.json` | Anonymous live OpenAPI 3.1 route and error discovery. |
+| `GET /api/v1/authorization/context` | Fresh no-store Projects & Config context for the validated Broker bearer and optional tenant selector; no query parameters. The context is informational, not an authorization grant. |
 | `GET /api/v1/projects/{projectId}/runs/{runId}/events` | Bounded replay from the committed Events journal. The owner remains responsible for current run authorization. |
 | `GET /api/v1/projects/{projectId}/runs/{runId}/events/live` | SSE fan-out from committed Events pages. The Gateway rechecks exact run-bound `ReadProjects` authority before writing each event; each `id` is the Events journal cursor and is accepted on reconnect through `Last-Event-ID` or `cursor`. |
 | Other `/api/v1` routes | Explicit routes in the live OpenAPI catalog delegate to Projects & Config, Orchestrator, Knowledge, or Events; no generic pass-through exists. |
 
+The context route delegates to the existing Projects & Config
+`GET /api/authorization/context` contract using the same validated bearer and,
+when explicitly supplied, the owner-validated `X-Agentweaver-Tenant` selector.
+The owner requires `api.read` and a non-purpose token. The response identifies
+the actor, current tenant and membership revision, optional project/run bindings,
+and effective authority; the Gateway validates the exact versioned JSON response
+and marks it `Cache-Control: no-store`. This context does not authorize later
+operations. The retained Web client forwards the selector only on its explicitly
+allow-listed Projects/configuration, run Coordination, Knowledge, run
+Selection/Usage, and finite journal replay routes; live SSE and unrelated calls
+remain selector-free. GitHub Repo App and ordinary Identity Broker browser
+calls remain selector-free; Copilot user-connection BFF lifecycle calls forward
+only the optional explicit tenant selector to their owning Broker.
+
 The Gateway requires HTTPS `Identity:Issuer`, `Identity:Audience`, and HTTPS service
 root addresses for `Gateway:Owners:Projects`, `Gateway:Owners:Orchestrator`,
-`Gateway:Owners:Knowledge`, and `Gateway:Owners:Events`. The optional finite
+`Gateway:Owners:Knowledge`, `Gateway:Owners:Events`, and
+`Gateway:Owners:IdentityBrokerAddress`. The optional finite
 `Gateway:OwnerRequestTimeoutSeconds` is 1–120 seconds and defaults to 15.
+
+### GitHub Repo App and Copilot connection BFF
+
+These explicit Gateway-to-Identity Broker routes are outside the OpenAPI catalog
+and describe source mappings, not deployment availability. Repo App source
+operations were released in #1934; Copilot operations require #1906. Missing
+owner routes/configuration remain explicit failures.
+User-level authorization, status, refresh/revoke, and repository discovery require
+the current Broker bearer and no tenant selector. The status response exposes only
+`connected`, `githubLogin`, and the stable opaque Identity `connectionId`; provider
+tokens, numeric installation/repository IDs, and permissions remain owner-held.
+Repository discovery returns safe metadata, while `POST /api/github/repository-selections`
+accepts `{ "fullName": "owner/repository" }` and returns only a short-lived
+single-use `{ "selectionCode", "expiresAt" }`.
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /api/auth/github/repo-app/authorizations` | Begin user OAuth with optional allow-listed `returnRouteKey`; returns `authorizationUrl`, `transactionId`, and `expiresAt`. |
+| `GET /api/auth/github/repo-app/authorization/status` | Read `{ connected, githubLogin, connectionId }`. |
+| `GET /api/auth/github/repo-app/authorizations/{transactionId}` | Read the transaction's `{ status }`. |
+| `POST /api/auth/github/repo-app/authorization/refresh` / `DELETE /api/auth/github/repo-app/authorization` | Refresh or revoke owner-held user authorization; no token payload. |
+| `GET /api/github/repository-selections` | Read repository and installation display metadata without provider IDs or permissions. |
+| `POST /api/github/repository-selections` | Exchange `{ fullName }` for an opaque short-lived `{ selectionCode, expiresAt }`. |
+| `GET /auth/github/repo-app/callback` | Bearerless OAuth callback; only `code`, `state`, and `error` are forwarded with the exact transaction cookie. |
+| `GET /auth/github/repo-app/installation/callback` | Bearerless installation callback; only `installation_id`, `setup_action`, and `state` are forwarded with the exact transaction cookie. |
+| `POST /api/connections/copilot-user/v1/{begin,complete,refresh,revoke}` / `GET /api/connections/copilot-user/v1/{connectionId}` | Copilot user-connection lifecycle; forwards the unchanged bearer and optional explicit tenant selector, and complete forwards only the exact `__Host-agentweaver-copilot-link` cookie. |
+
+The OAuth and installation callbacks preserve the owner's `Location` and every
+`Set-Cookie` header. Their host-only cookies are
+`__Host-agentweaver-repo-app-auth` and
+`__Host-agentweaver-repo-app-install-auth`; the browser does not forward an
+Identity Broker session cookie. The Copilot begin flow uses only
+`__Host-agentweaver-copilot-link`. No Gateway token exchange or caller-supplied
+actor/project/redirect authority is added.
+
+For accepted project configuration, optional `sourceControl.authMode` is
+`secret` or `githubApp`; older configurations that omit it remain legacy secret
+mode without rewriting omitted defaults. `sourceControl.appConnectionId` is the
+stable Identity reference for GitHub App mode, and `apiSecretReference` remains
+for secret mode only. The existing run-bound
+`POST /api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/pin`
+accepts an optional `{ "selectionCode": "..." }` body for App mode; omitting the
+body preserves legacy behavior. Both modes keep the existing
+`SourceControlRepositoryPinView` response and `200`/`202` semantics. The owner
+matches the opaque code against the accepted repository and stores exact provider
+IDs server-side.
+
+The browser lifecycle, user-level selection APIs, and callbacks are not exposed
+as first-party MCP tools. Run-bound repository operations in the finite OpenAPI
+catalog remain available as ordinary MCP tools and require `tenantSelector`.
+Run-produced-file list/diff/content reads remain unavailable until the durable
+manifest/object-version owner in P2 #1917 is admitted; no raw filesystem Gateway
+proxy is part of this contract.
 
 ## First-party MCP client
 
@@ -92,6 +169,14 @@ The MCP host requires HTTPS `Identity:Issuer`, `Identity:Audience`, and
 `Gateway:BaseAddress` service-root settings. Its tool catalog is fetched from the
 configured Gateway; callers cannot override this address.
 
+## Environment remote MCP connections
+
+The Environment source candidate stores owner-authorized remote MCP connection
+configuration and immutable catalog pins. Its routes use current Projects &
+Config authority and no-store responses. The exact route list, revision fields,
+Identity correlation boundary, parser limits, and missing discovery/transport
+proof are described in [Remote MCP connections](../architecture/remote-mcp-connections.md).
+
 `UsageSubmission` contains an event ID, occurrence time, attribution, model
 metadata, and nullable measurements. `IUsageLedger.AppendAsync` validates and
 commits the immutable entry and rate card before returning. It returns the original
@@ -105,14 +190,57 @@ amounts. Unknown measurements stay null. Incomplete pricing remains explicit.
 Native submissions retain `TurnId`, `SdkEventId`, and the complete `SdkSource`
 snapshot. Cache-read and cache-write measurements remain separate. Native callbacks
 do not supply a request count, so `RequestCount` stays null.
+Optional `A2AMessageId` and `SdkAccounting` bind native provenance to the canonical payload.
+Null metadata does not change historical canonical hashes.
+Hosted `nano_aiu` pricing does not require optional accounting identity or credit status.
+A supplied identity must have valid text, a positive sequence, and the same SDK session.
+The exact hosted source, meter, and measured units remain required.
+An unpriced entry keeps run and agent pricing incomplete.
+BYOK token pricing remains separate from hosted credit status.
+
+`RuntimeUsageCostSnapshotRequest` carries the admitted registration and actual SDK source.
+`POST /internal/projects/{projectId}/runs/{runId}/usage/copilot-cost-snapshot` returns
+the source hash, existing run-pinned Cost binding, zero-work quote, and Copilot-only totals.
+Events checks the current signed run authority before committing the pin.
+The quote uses the actual model and `ProviderWeightedNanoAiu` basis.
+It writes no synthetic usage entry, source receipt, or accounting acknowledgment.
+The same Cost lock protects pricing resolution and the observed totals read.
+Missing pricing remains `Unpriced`; an empty ledger is zero only with a valid priced quote.
+Snapshot validation rejects other meters, non-AIC units, and unpriced Copilot entries.
+These observed totals do not prove future accounting-source finality.
+An optional `DispatchId` and up to 512 `RequiredReceipts` request an observed accounting join.
+References must have unique source and event IDs with exact runtime attribution.
+`RepresentedReceipts` contains the matching immutable source and ledger receipts.
+Events checks actual registration, source, platform message, accounting hash, and price under the same transaction.
+`ValidateObservedReceipt` allows explicit unpriced accounting.
+The separate priced validator still rejects unavailable pricing for configured hosted credit admission.
 
 `RuntimeUsageSourceReceipt` contains the immutable runtime registration, native
 usage submission, source hash, receipt ID, version, and recorded timestamp.
 `RuntimeUsageSourceReceiptContract` validates exact owner, SDK, model, catalog,
-event, turn, and accepted-selection pins. It rejects BYOK and changed hashes.
+event, turn, and accepted-selection pins. It rejects changed hashes and Copilot units on BYOK sources.
 This receipt proves a source observation, not a price or accounting acknowledgment.
 A stored source receipt remains readable after its original lease expires.
 That historical read does not authorize another observation.
+
+`RuntimeNativeTurnAdmissionReceipt` binds a stable platform message to its current
+registration, SDK source, request hash, prompt hash, and committed owner revision.
+It contains no predicted native message or turn ID.
+`MaxModelTurns` reserves whole-run send capacity when that existing MAF dispatch is prepared.
+Exact replay consumes no new slot; sending or uncertain work cannot be resent or refunded.
+This is not a count of internal SDK model API calls.
+`RuntimeNativeTurnObservation` carries actual native IDs, the durable completion range,
+output hash, observed root usage-event IDs, and an optional accounting checkpoint.
+`RuntimeNativeTurnRecordedReceipt` binds that observation hash to the admitted intent.
+The source writer records it as partial, not source-complete.
+`RuntimeNativeTurnAccountingRequest` carries the recorded native proof and exactly its observed usage references.
+`POST /internal/runtime/turns/accounting` verifies the existing Events join before completing that dispatch.
+`RuntimeNativeTurnAccountingReceipt` binds the observation, represented references, and newer owner revision.
+The source report stays partial; no source-finality or strict retirement proof is written.
+The Host returns the actual answer after this durable observed completion.
+MAF verifies real pricing before preparing capped hosted work and repeats it at native begin.
+After the response, MAF rereads the completed dispatch and exact output hash before retaining a result.
+Uncapped unpriced output remains available; later usage affects the next capped boundary.
 
 `PostgresUsageLedger.AppendWithinTransactionAsync` uses the caller's owned
 PostgreSQL transaction without a separate commit. The trusted Events consumer
@@ -163,6 +291,17 @@ route's configured audience. Each operation also revalidates current Projects & 
 authority and the accepted run selection; the caller's claims alone do not establish
 current permission. Internal Events calls use the configured Events audience and the
 same caller bearer.
+
+Reviewed remote tool contracts retain immutable snapshot data, exact call identity,
+canonical arguments, and matching result metadata. The internal snapshot store checks
+the full stored snapshot digest and rejects conflicting reuse of an ID. Its embedded
+018 SQL resource is tested directly but is not registered in the normal migration path.
+The accepted Projects configuration may carry exact `reviewedRemoteToolSnapshots`
+references. Orchestrator resolves these references against the immutable store and
+checks the stored digest, project, and exact reference. It refreshes Projects authority
+after resolution and rejects missing, changed, duplicate, or foreign references.
+These checks do not verify a current remote connection or per-call grant.
+They do not authorize credential use or native network requests.
 
 Typed action mutations use strict request contracts, expected state versions, and
 idempotency keys. Proposing or revising non-empty or fixed work requires the server's
@@ -274,6 +413,7 @@ role claims are not required.
 | `POST /internal/sessions/{sessionId}/material` | Optional typed `SessionMaterialWriteRequest` route. Accepts actual `TurnContent` or `SdkCache` bytes, at most 1 MiB, with event ID, runtime ID, registration revision, and execution fence. Requires the original bearer, current Projects authority, recorded SDK source, and exact current runtime binding. Stores bytes before the journal reference. Rechecks authority after waits and on retries. Returns the original no-store acknowledgment for identical material, `409` for changed event reuse, or an explicit authority/storage error. |
 | `GET /internal/sessions/{sessionId}/material/{eventId}/{kind}` | Reads only committed material by session, event, and kind. `TurnContent` requires current `ReadRunSelection` or actually supplied `ReadProjects` entitlement, exact signed project/run binding, and recorded session membership. Project-summary access alone does not authorize opaque bytes. `SdkCache` retains Core `ReadRunSelection` authority. The route verifies the recorded Sessions provider, digest, length, kind, and version, then rechecks read authority after retrieval. Historical content does not require dispatchability, a live lease, or model credentials. Returns a no-store `SessionMaterialReadResult`. Arbitrary object keys, paths, and URLs are not accepted. |
 | `GET /internal/projects/{projectId}/runs/{runId}/usage` | Optional native usage totals route. Requires current `ReadRunSelection` for the exact signed project/run and returns exact run and agent totals. |
+| `POST /internal/projects/{projectId}/runs/{runId}/usage/copilot-run-admission` | Optional run-start pricing route. Accepts contract version 1 and only the accepted-selection hash. Requires current `ReadRunSelection` and `AcceptRunSelection`, rereads the trusted Projects selection, and resolves the shared versioned AgentHost model map. Returns a no-store receipt with the concrete model/connection, real Cost pin, zero-work quote, and Copilot-only totals. Missing or unpriced pricing rejects before capped root acceptance; no SDK or usage evidence is invented. |
 | `GET /internal/sessions/{sessionId}/events?cursor={cursor}&limit={limit}` | Read an ordered page for one session after an optional opaque cursor. Positions are run-wide and may have gaps in a session-only page. |
 | `GET /internal/sessions/{sessionId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll durable journal state and stream NDJSON `SessionEventDelivery` records, each containing the event and a reconnectable `nextCursor`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events?cursor={cursor}&limit={limit}` | Read a bounded, run-ordered page across all sessions in the authorized project/run. |
@@ -413,7 +553,25 @@ values; the selection route rejects nonpositive installation and repository IDs.
 `providerRepositoryId`, `defaultBranch`, `isPrivate`, and `pinnedAt`; it does not
 expose the selection code or any credential value.
 
-The service has no secret-grant administration HTTP endpoint. The browser consent UI is not implemented.
+The service has no secret-grant administration HTTP endpoint. The browser consent
+experience belongs to Web; these routes provide its broker protocol.
+
+`IdentityBroker:WebOrigin` is an optional, origin-only HTTPS value, required when
+`IdentityBroker:GitHubRepoApp` is configured. It has no path, credentials, query, or
+fragment. Identity normalizes it and allows credentialed CORS only for the browser
+authorize, resume, consent, token, and Repo App fetch routes, with `GET`/`POST` and
+the `Content-Type`/`X-CSRF-TOKEN` headers. CORS runs before authentication so valid
+preflights do not require a session; the endpoints still enforce their existing
+authentication, owner, and antiforgery checks. Internal redemption, installation-token,
+runtime, diagnostics, and health routes do not receive this CORS policy.
+
+The Repo App provider callback remains an absolute Broker-origin URI. After a valid
+callback, Identity redirects to the fixed absolute Web completion path
+`/settings/source-control?repoApp=connected`; it does not accept a caller-supplied
+return URL. Broker cookies remain host-only, Secure, HttpOnly, and SameSite=Lax. The
+Web and Broker origins must remain within the same schemeful site for these cookies;
+CORS does not override SameSite.
+
 The Repo App routes are mapped only when the optional `IdentityBroker:GitHubRepoApp`
 configuration is present. The local-cookie routes do not constitute a settings UI;
 the token-mint route is an internal source boundary, not a public GitHub endpoint.
@@ -427,6 +585,15 @@ These routes require the existing validated Broker audience and return
 `Cache-Control: no-store`. A bearer or a configure body alone cannot prove a
 runtime nonce. Current owner authority, exact registration, purpose, audience,
 configuration hash, revision, expiry, and cryptographic verifier must match.
+
+These source contracts can deliver a model credential to the current guest
+AgentHost; they do not implement credential-less execution. The
+[proposed contract changes](../architecture/identity-secrets.md#minimal-contract-changes-and-admission)
+bind an explicit mode and supported gateway/runtime profile to existing
+registration, action, provider and ready-check surfaces. In that proposed mode,
+raw redemption/exchange routes accept trusted external consumers only; a guest
+gateway proof cannot redeem an upstream credential. The proposed L7 operation
+endpoint is not a currently mapped Broker or Gateway/BFF route.
 
 | Method and path | Contract |
 | --- | --- |
@@ -535,6 +702,7 @@ Identity verifies the separate purpose-bound nonce for those operations.
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Public Environment control read. Requires current `WriteProjects`; returns the exact active, unexpired, owner-fenced lease projection. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Internal run-bound placement read. Uses existing current `ReadRunSelection` for the exact signed run. Its additive `providerPin` records the actual successful consumer's provider, adapter/options revisions, resource generation, and negotiated capabilities, without option values or recovery metadata. Does not grant public write permission. |
 | `GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}` | Uses the canonical manager's retained lease callback to read current Orchestrator context and match a registered profile to the exact placement. Requires current run-bound `ReadRunSelection`. |
+| `GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/workspace` | Returns `EnvironmentRuntimeWorkspaceContext` with the current placement, exact validated Workspace mount negotiation, and attached transition revision. One owner lock protects both lease and Workspace during the Core context read. Requires current run-bound `ReadRunSelection`. This is metadata, not flush or content evidence. |
 | `POST /internal/runtime/sources/{runtimeInstanceId}` | Registers actual immutable SDK facts under the validated bearer and separate observe credential. Rechecks current owner and grant authority after waits. |
 | `POST /internal/runtime/observations` | Commits a native SDK observation under the exact current registration/source grant. Identical SDK events return the original source receipt. Changed content conflicts. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/usage-receipts/{receiptId}` | Returns the immutable source receipt only after fresh accepted-selection and run-read checks. Events cannot substitute caller-supplied usage. |
@@ -565,6 +733,24 @@ Only a source receipt ID crosses the accounting admission route.
 No caller supplies a price or multiplies weighted nano-AIU again.
 The ledger preserves explicit `Estimate`, `Reconciled`, and `Unpriced` dispositions.
 
+`RuntimeActionRequest` optionally carries `DispatchId` for `model.turn` and `IsToolInvocation` for registered pre-tool hooks.
+A configured model-turn cap requires the exact prepared dispatch, runtime binding, and prompt hash.
+The default false invocation flag and null dispatch ID stay omitted from historical payloads and hashes.
+After current Policy allows a tool invocation, Orchestrator reserves its event ID and request hash in the existing outbox.
+`MaxToolCalls` counts those reservations across the whole run, including after store restart.
+Exact HTTP retry reuses the event ID; a new invocation cannot reuse an arguments hash as identity.
+Permission callbacks do not debit another slot.
+Verify requires the retained exact reservation before dispatch.
+
+Optional `SdkSessionFacts.MaxPromptTokens` records the effective per-prompt/context capacity, not aggregate token usage.
+Configured capacity must be positive and no greater than the accepted limit.
+The session-material owner derives this pin from the actual source receipt and rejects a changed value.
+AgentHost sets actual SDK capability overrides; BYOK also uses the provider's prompt-capacity field.
+Hosted catalog capacity and optional server-owned `PromptCapacityTokens` can only narrow the accepted limit.
+Unknown capacity denies configured startup, and smaller capacity denies cached resume.
+Absent optional pins preserve historical payloads; they do not authorize configured-capacity resume.
+These source contracts do not claim a live token-count or truncation guarantee.
+
 `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context`
 requires the authenticated current run owner and returns `Cache-Control: no-store`.
 The response contains the active child turn, accepted revisions and hash, and
@@ -586,6 +772,13 @@ Every asynchronous redemption and SDK preparation boundary revalidates that proo
 Rotation changes the credential revision, not the immutable accepted selection.
 Controlled native transport evidence does not prove GitHub entitlement or deployed connection services.
 BYOK usage retains token measurements and rejects Copilot nano-AIU attribution.
+BYOK selections also retain the server-owned `ModelBindingPin`, including its provider type and configuration hash.
+The Host compares this pin before SDK use. A missing or changed pin denies the session without a hosted fallback.
+`SdkSessionFacts.ByokProvider` records the actual provider type, effective deployment ID, and accepted configuration hash.
+The deployment ID must equal both source and usage model IDs.
+Core rejects missing input/output measurements, changed provider facts, and Copilot units.
+The controlled Azure fixture proves a dispatched native usage event through Broker, Core PostgreSQL, and reference-only Events accounting.
+This proof does not authorize paid Azure calls.
 Without an admitted Cost provider, its accounting remains `Unpriced`, not zero-cost or hard-bound admission proof.
 
 ## Projects & Config authorization context
@@ -606,8 +799,10 @@ candidate. Protected routes require the configured OpenIddict issuer and audienc
 Each privileged request forwards its original validated bearer token to Projects &
 Config for a fresh authorization-context check; Knowledge does not keep memberships,
 roles, or authorization caches. Private content reads and writes require fresh effective
-`WriteProjects` for the target project; `ReadProjects` alone is metadata-only and does
-not authorize private Knowledge records, revisions, or context. Memory-provider
+`AccessPrivateKnowledge` for the target project; `ReadProjects` alone is metadata-only
+and does not authorize private Knowledge records, revisions, or context. A run-bound
+project Owner with `projects.admin` receives this Knowledge-specific permission but
+not generic `WriteProjects`. Memory-provider
 resolution additionally requires effective project `ReadRunSelection`. If the validated
 caller token is already bound to a project/run, those bindings must match the requested
 route and the authority response.
@@ -617,19 +812,19 @@ route and the authority response.
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL and current owned-schema readiness; returns `503` when migrations, tables, or required runtime grants are missing. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records` | Create a Memory, SessionContext, or Proposal record. Requires one `Idempotency-Key`; a new write returns `201`, an identical retry returns `200`, and reuse with different request content returns `409`. |
-| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records?kind={kind}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` | Search only the requested project and agent, with bounded pages; requires current `WriteProjects` for private content. |
-| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Read one record in the requested project/agent scope; requires current `WriteProjects` for private content. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records?kind={kind}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` | Search only the requested project and agent, with bounded pages; requires current `AccessPrivateKnowledge` for private content. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Read one record in the requested project/agent scope; requires current `AccessPrivateKnowledge` for private content. |
 | `PUT /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Append a revision using `expectedRevision` compare-and-swap and an `Idempotency-Key`; stale revisions return `409`. Memory and Decision records may be archived; only Decisions may be superseded, and the replacement link must identify a Decision. |
-| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/revisions?page={n}&pageSize={n}` | Read bounded immutable revision history; requires current `WriteProjects` for private content. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/revisions?page={n}&pageSize={n}` | Read bounded immutable revision history; requires current `AccessPrivateKnowledge` for private content. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/restore` | Body selects a historical `revision` and supplies current `expectedRevision` plus optional `reason`; with an `Idempotency-Key`, appends a new head rather than rewinding history. The restored record is Active+Pending; a Decision requires explicit approval before it is trusted again. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/approve` | Explicitly approve an Active Pending or Legacy Decision using `expectedRevision`, optional `reason`, and an `Idempotency-Key`; appends an approval revision. This does not promote a proposal or deliver an accepted project fact. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/export` | No-store export of the exact project/agent's Memory and Decision records with complete immutable revision chains in `agentweaver.knowledge-transfer.v1` schema 1; bounded to 25 records, 500 revisions, and 1 MiB. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/import` | Import a version-1 transfer bundle whose project and agent must match the authorized route; requires an `Idempotency-Key`. Preserves transferred history and appends an `imported` revision, setting current records Active+Pending. Unsupported/incomplete input returns `400`, collisions or graph conflicts return `409`, and size-limit violations return `413`; initial and identical requests return `201` and `200`. |
-| `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/proposals/{proposalId}/promote` | Explicitly promote an owned pending proposal using its expected revision and an `Idempotency-Key`. The response includes `delivery` (`DELIVERED` or `PENDING`); pending delivery does not undo the committed promotion. An identical retry uses the same immutable receipt. |
+| `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/proposals/{proposalId}/promote` | Requires current `AccessPrivateKnowledge`; explicitly promote an owned pending proposal using its expected revision and an `Idempotency-Key`. Events separately requires current `WriteProjects`, so the response can report `PENDING` without undoing the committed promotion. An identical retry uses the same immutable receipt. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/proposals/{proposalId}/reject` | Explicitly reject a pending proposal using its expected revision and an `Idempotency-Key`. |
-| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/context?q={text}&maxItems={n}&maxTokens={n}` | Compose bounded context with immutable revision references; requires current `WriteProjects` for private content. Invalid narrowing is `400`; mandatory-content, candidate, or output budget overflow is returned explicitly as `413`. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/context?q={text}&maxItems={n}&maxTokens={n}` | Compose bounded context with immutable revision references; requires current `AccessPrivateKnowledge` for private content. Invalid narrowing is `400`; mandatory-content, candidate, or output budget overflow is returned explicitly as `413`. |
 | `GET /internal/accepted-effects/{receiptId}` | Legacy no-store redacted accepted-effect receipt from native PostgreSQL for the original issuer/subject and matching bounds, after a fresh current project `WriteProjects` check. Does not return proposal or decision content. |
-| `GET /internal/projects/{projectId}/runs/{runId}/accepted-effects/{receiptId}` | Current no-store redacted receipt scoped to the selected, already-pinned Memory provider and exact project/run. A missing or changed immutable provider binding fails closed without creating a replacement or falling back to the legacy route. |
+| `GET /internal/projects/{projectId}/runs/{runId}/accepted-effects/{receiptId}` | Current no-store redacted receipt scoped to the selected, already-pinned Memory provider and exact project/run; requires current `WriteProjects`. A missing or changed immutable provider binding fails closed without creating a replacement or falling back to the legacy route. |
 
 The service owns a separate `knowledge` PostgreSQL schema. Revisions are append-only,
 provider bindings are immutable, and current records cannot be physically deleted;
@@ -639,7 +834,7 @@ Pending; a separate explicit approval appends the approval revision. Versioned
 transfers preserve the complete Memory/Decision revision chains and provenance while
 rejecting ID collisions instead of merging record heads; imported records are
 Active+Pending. Proposal promotion checks current
-`WriteProjects`, agent ownership, source run, pending state, and expected revision. It
+`AccessPrivateKnowledge`, agent ownership, source run, pending state, and expected revision. It
 commits the proposal revision, approved decision, redacted immutable receipt, and
 Knowledge-owned outbox intent in one transaction. Events fetches the receipt and
 appends a separate project fact; this is not a native Sessions journal event. Failed
@@ -661,6 +856,7 @@ Configuration:
 | `Knowledge:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Separate explicit migration workload identity. |
 | `Knowledge:Provider:{ResourceId,DatabaseName,ResourceGeneration,Schema,OptionsRevision,OptionsSchemaVersion}` | Expected resource identity and immutable provider options used during negotiation/pinning. |
 | `Knowledge:CosmosProvider:{Endpoint,DatabaseId,ContainerId,ResourceId,ResourceGeneration,OptionsRevision,OptionsSchemaVersion}` | Optional Cosmos Memory adapter configuration. The catalog must register the adapter and a run must select it; negotiation requires the existing container partition key `/projectId`, the search composite index, and a non-expiring default TTL. The schema version defaults to `1`. These settings do not provision Cosmos resources. |
+| `Knowledge:RedisProvider:{Endpoint,ResourceId,ResourceGeneration,OptionsRevision,OptionsSchemaVersion,Database,KeyPrefix,UserName,Password}` | Optional Redis Memory adapter configuration. The catalog must register `redis.memory` and a run must select it. `Endpoint` must be an absolute `rediss://` URI with an explicit port; ACL username/password must be paired. Negotiation requires a standalone Redis 6+ primary with healthy AOF-always persistence, noeviction, no replicas or cluster, and persistent namespace data. Defaults are schema version `1`, database `0`, and key prefix `agentweaver:knowledge`. These settings do not provision Redis resources. |
 | `Knowledge:Context:{MaximumCandidates,MaximumItems,MaximumTokens}` | Service-owned hard limits; each request can only narrow them and the current run's prompt-token limit. |
 
 Both PostgreSQL connections omit passwords and use TLS `VerifyFull` with the
@@ -682,6 +878,7 @@ current event-delivery boundaries.
 | `IdentityBroker:ExternalProvider:Authority` | Absolute HTTPS OIDC authority. |
 | `IdentityBroker:ExternalProvider:ClientId` and `ClientSecret` | Registered upstream confidential client. |
 | `IdentityBroker:Clients` | Registered client IDs, types, redirect URIs, scopes, resources, and secrets. |
+| `IdentityBroker:WebOrigin` | Optional normalized HTTPS origin of the Web application; required when `IdentityBroker:GitHubRepoApp` is configured. |
 | `IdentityBroker:SecretRedemption:Audience` | Required HTTPS audience registered as a client resource. |
 | `IdentityBroker:SecretRedemption:VaultUri` | Azure Key Vault root URI. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTenantId` | Explicit Entra tenant ID. |

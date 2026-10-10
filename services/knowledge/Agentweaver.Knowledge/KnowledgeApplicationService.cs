@@ -25,10 +25,11 @@ public sealed class KnowledgeApplicationService(
         ValidateAgent(agentId);
         ValidateCreateRequest(request);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
         await RevalidateProviderAsync(
-            projectId, runId, context, cancellationToken).ConfigureAwait(false);
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         var input = new KnowledgeRecordCreate(
             projectId,
             agentId,
@@ -60,12 +61,14 @@ public sealed class KnowledgeApplicationService(
     {
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
         var result = await context.Provider.SearchAsync(
             new KnowledgeRecordQuery(projectId, agentId, kind, query, includeInactive, page, pageSize),
             cancellationToken).ConfigureAwait(false);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         return result;
     }
 
@@ -78,11 +81,13 @@ public sealed class KnowledgeApplicationService(
     {
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
         var record = await context.Provider.ReadAsync(projectId, recordId, cancellationToken)
             .ConfigureAwait(false);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         return RequireAgentRecord(record, agentId);
     }
 
@@ -97,14 +102,16 @@ public sealed class KnowledgeApplicationService(
     {
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
         _ = RequireAgentRecord(
             await context.Provider.ReadAsync(projectId, recordId, cancellationToken).ConfigureAwait(false),
             agentId);
         var result = await context.Provider.ReadRevisionsAsync(
             projectId, recordId, page, pageSize, cancellationToken).ConfigureAwait(false);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         return result;
     }
 
@@ -121,7 +128,7 @@ public sealed class KnowledgeApplicationService(
         ValidateAgent(agentId);
         ValidateUpdateRequest(request);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
         var existing = RequireAgentRecord(
             await context.Provider.ReadAsync(projectId, recordId, cancellationToken).ConfigureAwait(false),
@@ -138,7 +145,9 @@ public sealed class KnowledgeApplicationService(
                 "invalid_replacement",
                 "Only a Decision can be superseded by another Decision.",
                 StatusCodes.Status409Conflict);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         return await context.Provider.UpdateAsync(
             new KnowledgeRecordUpdate(
                 projectId,
@@ -171,7 +180,7 @@ public sealed class KnowledgeApplicationService(
         ValidateAgent(agentId);
         ValidateRestoreRequest(request);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
         var existing = RequireAgentRecord(
             await context.Provider.ReadAsync(projectId, recordId, cancellationToken).ConfigureAwait(false),
@@ -181,7 +190,9 @@ public sealed class KnowledgeApplicationService(
                 "record_restore_not_supported",
                 "Only Memory and Decision records can be restored from revision history.",
                 StatusCodes.Status409Conflict);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         return await context.Provider.RestoreAsync(
             new KnowledgeRecordRestore(
                 projectId,
@@ -207,7 +218,7 @@ public sealed class KnowledgeApplicationService(
         ValidateAgent(agentId);
         ValidateApprovalRequest(request);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
         var existing = RequireAgentRecord(
             await context.Provider.ReadAsync(projectId, recordId, cancellationToken).ConfigureAwait(false),
@@ -217,7 +228,9 @@ public sealed class KnowledgeApplicationService(
                 "decision_not_found",
                 "The requested Decision was not found for this project and agent.",
                 StatusCodes.Status404NotFound);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         return await context.Provider.ApproveDecisionAsync(
             new KnowledgeDecisionApproval(
                 projectId,
@@ -237,11 +250,13 @@ public sealed class KnowledgeApplicationService(
     {
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
         var bundle = await context.Provider.ExportAsync(projectId, agentId, cancellationToken)
             .ConfigureAwait(false);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         return bundle;
     }
 
@@ -262,9 +277,11 @@ public sealed class KnowledgeApplicationService(
                 "Knowledge transfer project and agent scope must match the authorized route.",
                 StatusCodes.Status400BadRequest);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         return await context.Provider.ImportAsync(
             request,
             runId,
@@ -287,7 +304,7 @@ public sealed class KnowledgeApplicationService(
         var context = await ResolveProviderAsync(
             projectId,
             runId,
-            ProjectAuthorizationPermission.WriteProjects,
+            ProjectAuthorizationPermission.AccessPrivateKnowledge,
             cancellationToken,
             requireExistingBinding: true)
             .ConfigureAwait(false);
@@ -299,9 +316,11 @@ public sealed class KnowledgeApplicationService(
                 "proposal_not_found",
                 "The requested proposal was not found for this project and agent.",
                 StatusCodes.Status404NotFound);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         var permission = ProjectsConfigClient.GetEffectiveProjectPermission(
-            context.Authority, projectId, ProjectAuthorizationPermission.WriteProjects);
+            context.Authority, projectId, ProjectAuthorizationPermission.AccessPrivateKnowledge);
         var result = await context.Provider.PromoteProposalAsync(
             projectId,
             runId,
@@ -396,7 +415,9 @@ public sealed class KnowledgeApplicationService(
                 "accepted_effect_receipt_not_found",
                 "The accepted-effect receipt was not found.",
                 StatusCodes.Status404NotFound);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            .ConfigureAwait(false);
         return receipt;
     }
 
@@ -412,7 +433,7 @@ public sealed class KnowledgeApplicationService(
         ArgumentNullException.ThrowIfNull(request);
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
         var proposal = RequireAgentRecord(
             await context.Provider.ReadAsync(projectId, proposalId, cancellationToken).ConfigureAwait(false),
@@ -422,7 +443,9 @@ public sealed class KnowledgeApplicationService(
                 "proposal_not_found",
                 "The requested proposal was not found for this project and agent.",
                 StatusCodes.Status404NotFound);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         return await context.Provider.RejectProposalAsync(
             projectId,
             runId,
@@ -444,7 +467,7 @@ public sealed class KnowledgeApplicationService(
     {
         ValidateAgent(agentId);
         var context = await ResolveProviderAsync(
-            projectId, runId, ProjectAuthorizationPermission.WriteProjects, cancellationToken)
+            projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
         var allowedTokens = Math.Min(options.DefaultContextTokens, context.Selection.RunLimits.MaxPromptTokens);
         var itemLimit = maximumItems ?? options.DefaultContextItems;
@@ -469,7 +492,9 @@ public sealed class KnowledgeApplicationService(
             relevanceText,
             itemLimit,
             tokenLimit);
-        await RevalidateProviderAsync(projectId, runId, context, cancellationToken).ConfigureAwait(false);
+        await RevalidateProviderAsync(
+            projectId, runId, context, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
+            .ConfigureAwait(false);
         return compilation;
     }
 
@@ -497,12 +522,13 @@ public sealed class KnowledgeApplicationService(
         string projectId,
         string runId,
         AuthorizedProvider expected,
+        ProjectAuthorizationPermission permission,
         CancellationToken cancellationToken)
     {
         var authority = await projects.GetCurrentAuthorityAsync(projectId, runId, cancellationToken)
             .ConfigureAwait(false);
         ProjectsConfigClient.RequireProjectPermission(
-            authority, projectId, ProjectAuthorizationPermission.WriteProjects);
+            authority, projectId, permission);
         if (!string.Equals(authority.Issuer, expected.Authority.Issuer, StringComparison.Ordinal) ||
             !string.Equals(authority.ActorId, expected.Authority.ActorId, StringComparison.Ordinal) ||
             !string.Equals(authority.TenantId, expected.Authority.TenantId, StringComparison.Ordinal) ||

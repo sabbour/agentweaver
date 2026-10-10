@@ -1,9 +1,13 @@
 using System.Collections.Immutable;
+using System.Text;
 
 namespace Agentweaver.Orchestrator.Core;
 
 public static class WorkflowDefinitionValidator
 {
+    public static bool IsValidOutputPath(string? path) =>
+        WorkflowValidationSupport.IsValidOutputPath(path);
+
     public static WorkflowValidationResult<WorkflowDefinitionSnapshot> ValidateAndSnapshot(
         WorkflowDefinition? definition)
     {
@@ -90,6 +94,7 @@ public static class WorkflowDefinitionValidator
                 WorkflowValidationCode.InvalidStepDependency,
                 WorkflowValidationCode.DuplicateStepDependency, issues);
             ValidateMode(step, path, issues);
+            ValidateBuildTestCommand(step, path, issues);
         }
 
         var minimumOpenWorkItems = steps
@@ -199,6 +204,47 @@ public static class WorkflowDefinitionValidator
         ValidateOutputPaths(work.DeclaredOutputs, path + ".fixedWork.declaredOutputs", issues);
     }
 
+    private static void ValidateBuildTestCommand(
+        WorkflowStepDefinition step,
+        string path,
+        ImmutableArray<WorkflowValidationIssue>.Builder issues)
+    {
+        if (step.BuildTestCommand is not { } command)
+            return;
+        if (step.Mode != WorkflowStepMode.Platform ||
+            step.PlatformGate != WorkflowPlatformGate.BuildTest ||
+            !IsValidBuildTestCommand(command))
+            Add(issues, WorkflowValidationCode.InvalidBuildTestCommand, path + ".buildTestCommand",
+                "BuildTest requires a bounded typed command, execution profile, workspace paths, and output obligations.");
+    }
+
+    public static bool IsValidBuildTestCommand(WorkflowBuildTestCommand? command)
+    {
+        if (command is null ||
+            !WorkflowValidationSupport.IsOpaqueReference(command.ExecutionProfileReference) ||
+            command.ExecutableReference is not { Length: > 1 and <= 512 } executable ||
+            executable[0] != '/' || executable.Contains('\\') || executable.Contains(':') ||
+            executable.Any(char.IsControl) ||
+            executable.Split('/').Skip(1).Any(segment => segment.Length == 0 || segment is "." or "..") ||
+            command.Arguments.IsDefault || command.Arguments.Length > 256 ||
+            command.Arguments.Any(argument => argument is null || argument.Length > 4096 ||
+                argument.Any(char.IsControl)) ||
+            command.Arguments.Sum(argument => (long)Encoding.UTF8.GetByteCount(argument)) > 32768 ||
+            command.WorkingDirectory != "." ||
+            command.Outputs.IsDefault || command.Outputs.Length > 32 ||
+            command.Outputs.Any(output => output is null ||
+                !WorkflowValidationSupport.IsStableId(output.Name) ||
+                output.RelativePath is not { Length: <= 512 } ||
+                !WorkflowValidationSupport.IsValidOutputPath(output.RelativePath) ||
+                output.MaximumBytes is < 1 or > 67_108_864) ||
+            command.Outputs.Select(output => output.Name).Distinct(StringComparer.Ordinal).Count() !=
+                command.Outputs.Length ||
+            command.Outputs.Select(output => output.RelativePath).Distinct(StringComparer.Ordinal).Count() !=
+                command.Outputs.Length)
+            return false;
+        return true;
+    }
+
     private static void ValidateStepGraph(
         IReadOnlyDictionary<string, WorkflowStepDefinition> steps,
         ImmutableArray<WorkflowValidationIssue>.Builder issues)
@@ -281,10 +327,7 @@ public static class WorkflowDefinitionValidator
 
         foreach (var step in steps.OrderBy(item => item.Order))
         {
-            if (step.FixedWork is null)
-                continue;
-
-            foreach (var output in step.FixedWork.DeclaredOutputs)
+            foreach (var output in WorkflowValidationSupport.PrescribedOutputs(step))
             {
                 var owners = seen
                     .Where(entry => WorkflowValidationSupport.OutputPathsMatch(entry.Output, output))
@@ -300,7 +343,7 @@ public static class WorkflowDefinitionValidator
                 }
             }
 
-            seen.AddRange(step.FixedWork.DeclaredOutputs.Select(output => (output, step.Id)));
+            seen.AddRange(WorkflowValidationSupport.PrescribedOutputs(step).Select(output => (output, step.Id)));
         }
 
         return [.. steps.Select(step => step with { DependsOn = dependencies[step.Id] })];

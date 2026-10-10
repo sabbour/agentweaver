@@ -7,16 +7,23 @@ namespace Agentweaver.Identity.Broker;
 
 internal static class GitHubRepoAppEndpoints
 {
-    internal static void MapGitHubRepoAppEndpoints(this IEndpointRouteBuilder app)
+    internal static void MapGitHubRepoAppEndpoints(this IEndpointRouteBuilder app, Uri webOrigin)
     {
         app.MapPost("/auth/github/repo-app/connect", BeginUserAuthorizationAsync);
         app.MapPost("/auth/github/repo-app/install", BeginInstallationSetupAsync);
-        app.MapGet("/auth/github/repo-app/callback", CompleteCallbackAsync);
-        app.MapGet("/auth/github/repo-app/csrf", GetAntiforgeryTokenAsync);
-        app.MapGet("/auth/github/repo-app/status", GetStatusAsync);
-        app.MapPost("/auth/github/repo-app/disconnect", DisconnectAsync);
-        app.MapGet("/auth/github/repo-app/repositories", ListRepositoriesAsync);
-        app.MapPost("/auth/github/repo-app/selection", CreateRepositorySelectionAsync);
+        app.MapGet("/auth/github/repo-app/callback", (
+            HttpContext context,
+            GitHubRepoAppConnectionService connectionService,
+            CancellationToken cancellationToken) =>
+            CompleteCallbackAsync(context, connectionService, webOrigin, cancellationToken));
+
+        var browserApi = app.MapGroup("/auth/github/repo-app")
+            .RequireCors(IdentityBrokerOptions.WebCorsPolicyName);
+        browserApi.MapGet("/csrf", GetAntiforgeryTokenAsync);
+        browserApi.MapGet("/status", GetStatusAsync);
+        browserApi.MapPost("/disconnect", DisconnectAsync);
+        browserApi.MapGet("/repositories", ListRepositoriesAsync);
+        browserApi.MapPost("/selection", CreateRepositorySelectionAsync);
     }
 
     private static async Task<IResult> BeginUserAuthorizationAsync(
@@ -72,6 +79,7 @@ internal static class GitHubRepoAppEndpoints
     private static async Task<IResult> CompleteCallbackAsync(
         HttpContext context,
         GitHubRepoAppConnectionService connectionService,
+        Uri webOrigin,
         CancellationToken cancellationToken)
     {
         var ownerId = await TryGetOwnerIdAsync(context, cancellationToken).ConfigureAwait(false);
@@ -108,7 +116,7 @@ internal static class GitHubRepoAppEndpoints
                 installationId,
                 setupAction,
                 cancellationToken).ConfigureAwait(false);
-            return Results.Redirect("/settings/source-control?repoApp=connected");
+            return Results.Redirect(new Uri(webOrigin, "/settings/source-control?repoApp=connected").AbsoluteUri);
         }
         catch (GitHubRepoAppConnectionException error)
         {

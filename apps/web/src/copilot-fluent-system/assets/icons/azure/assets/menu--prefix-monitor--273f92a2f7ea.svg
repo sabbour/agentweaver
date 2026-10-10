@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="ab9b6e35-c638-4b47-ab30-50bfe048cbab" x1="8.086" y1="14.101" x2="8.086" y2="4.544" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset="0.775" stop-color="#5ea0ef" />
+    </linearGradient>
+    <linearGradient id="bfb01d75-ea01-4e69-b62c-b19c77bc6217" x1="9.651" y1="12.665" x2="9.651" y2="7.744" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c3f1ff" />
+      <stop offset="0.999" stop-color="#9cebff" />
+    </linearGradient>
+    <linearGradient id="ebfbefdb-e438-463c-9788-23f40d9a5a55" x1="6.241" y1="10.651" x2="6.241" y2="5.73" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9cebff" />
+      <stop offset="0.817" stop-color="#50e6ff" />
+    </linearGradient>
+    <linearGradient id="b2e921c3-3213-4ef9-84b3-7f1b10f0ab93" x1="8.821" y1="7.935" x2="7.326" y2="10.064" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#32bedd" />
+      <stop offset="1" stop-color="#50e6ff" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+  <g id="f6eab371-0eac-4757-bccc-be0b98a1ffd2">
+    <path d="M0,4.544H16.173a0,0,0,0,1,0,0V13.56a.54.54,0,0,1-.54.54H.54A.54.54,0,0,1,0,13.56V4.544A0,0,0,0,1,0,4.544Z" fill="url(#ab9b6e35-c638-4b47-ab30-50bfe048cbab)" />
+    <path d="M.543,1.1H15.629a.54.54,0,0,1,.54.54V4.544a0,0,0,0,1,0,0H0a0,0,0,0,1,0,0V1.638A.54.54,0,0,1,.543,1.1Z" fill="#0078d4" />
+    <g>
+      <path d="M10.941,7.744H8.324A2.291,2.291,0,0,0,6.155,9.759h.822A1.438,1.438,0,0,1,8.324,8.637h2.617a1.5,1.5,0,0,1,1.406,1.568,1.5,1.5,0,0,1-1.406,1.568H8.324a1.438,1.438,0,0,1-1.347-1.122H6.155a2.291,2.291,0,0,0,2.169,2.014h2.617a2.347,2.347,0,0,0,2.206-2.46A2.347,2.347,0,0,0,10.941,7.744Z" fill="url(#bfb01d75-ea01-4e69-b62c-b19c77bc6217)" />
+      <path d="M7.568,9.759H4.951A1.5,1.5,0,0,1,3.545,8.19,1.5,1.5,0,0,1,4.951,6.622H7.568A1.438,1.438,0,0,1,8.915,7.744h.822A2.291,2.291,0,0,0,7.568,5.73H4.951A2.347,2.347,0,0,0,2.745,8.19a2.347,2.347,0,0,0,2.206,2.461H7.568A2.291,2.291,0,0,0,9.737,8.637H8.915A1.439,1.439,0,0,1,7.568,9.759Z" fill="url(#ebfbefdb-e438-463c-9788-23f40d9a5a55)" />
+      <path d="M7.568,9.759H5.814v.892H7.568A2.291,2.291,0,0,0,9.737,8.637H8.915A1.439,1.439,0,0,1,7.568,9.759Z" fill="url(#b2e921c3-3213-4ef9-84b3-7f1b10f0ab93)" />
+    </g>
+    <circle cx="13.536" cy="13.558" r="4.464" fill="#50e6ff" />
+    <polygon points="16 11.413 14.288 14.462 12.478 12.616 10.608 15.035 11.049 15.379 12.528 13.467 14.411 15.387 16.487 11.689 16 11.413" fill="#c3f1ff" />
+    <path d="M13.2,13.032a.7.7,0,1,1-.711-.7A.7.7,0,0,1,13.2,13.032Zm1.2,1.059a.707.707,0,1,0,.711.7A.7.7,0,0,0,14.4,14.091Zm1.773-3.159a.707.707,0,1,0,.711.7A.706.706,0,0,0,16.176,10.932ZM10.893,14.4a.707.707,0,1,0,.711.7A.7.7,0,0,0,10.893,14.4Z" fill="#fff" />
+  </g>
+</svg>

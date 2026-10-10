@@ -221,7 +221,7 @@ public sealed class EnvironmentProviderLifecycleReportPostgresTests(EnvironmentP
 
         await using (var context = new EnvironmentDbContext(options))
             await context.GetService<IMigrator>()
-                .MigrateAsync("20261009060000_ProviderLifecycleReports");
+                .MigrateAsync("20261010151941_ProviderLifecycleReports");
         await using (var connection = await dataSource.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand(
             """

@@ -11,6 +11,86 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RuntimeActionHttpClientTests
 {
+    [Fact]
+    public async Task NativePermissionCheckAndPreToolHookDebitOnlyTheHookInvocation()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var external = new ControlledCopilotRuntime
+        {
+            ExpectedAvailableToolsCount = 7,
+            BeforeTurnResponse = token => release.Task.WaitAsync(token)
+        };
+        var registration = RuntimeCopilotSessionTests.Registration();
+        var invocations = new List<bool>();
+        await using var session = await RuntimeCopilotSessionTests.Factory(external).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token,
+            requireActionAuthority: (action, _, toolInvocation, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                Assert.Equal("tool.read", action);
+                invocations.Add(toolInvocation);
+                return Task.CompletedTask;
+            });
+        var turn = session.SendTurnAsync("A bounded user request.", timeout.Token);
+        await external.TurnReceived.Task.WaitAsync(timeout.Token);
+        try
+        {
+            await external.RequestReadPermissionAsync(timeout.Token);
+            var response = await external.InvokeSdkCallbackAsync("hooks.invoke", new
+            {
+                sessionId = session.Facts.SdkSessionId, hookType = "preToolUse",
+                input = new
+                {
+                    sessionId = session.Facts.SdkSessionId, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    workingDirectory = "/workspace", toolName = "view", toolArgs = new { path = "readme.txt" }
+                }
+            }, timeout.Token);
+            Assert.Equal("ask", response.GetProperty("output").GetProperty("permissionDecision").GetString());
+            Assert.Equal(new[] { false, true }, invocations);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+        Assert.Equal(external.AssistantResponse, await turn);
+    }
+
+    [Fact]
+    public async Task LostAuthorizationResponseRetriesTheSameInvocationButIdenticalNewArgsGetANewEvent()
+    {
+        var requests = new List<RuntimeActionRequest>();
+        RuntimeActionAdmission? issued = null;
+        using var http = new HttpClient(new Handler(async request =>
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/authorize", StringComparison.Ordinal))
+            {
+                var action = await request.Content!.ReadFromJsonAsync<RuntimeActionRequest>();
+                Assert.NotNull(action);
+                Assert.True(action.IsToolInvocation);
+                requests.Add(action);
+                issued = new(1, action, action.EventId.ToString("N"), "1", action.EventId,
+                    PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed);
+                if (requests.Count == 1)
+                    throw new HttpRequestException("Lost authorization response after owner commit.");
+            }
+            return Response(request, issued!);
+        }));
+        var actor = new RuntimeActorAuthorization(
+            new SecretCredential("protected-actor", DateTimeOffset.UtcNow.AddMinutes(1)), "tenant");
+        var actions = new RuntimeActionHttpClient(http, new("https://orchestrator.test/"), actor);
+        var registration = RuntimeCopilotSessionTests.Registration();
+        await actions.RequireAsync(registration, "tool.read", "same args"u8.ToArray(),
+            _ => Task.CompletedTask, default, isToolInvocation: true);
+        await actions.RequireAsync(registration, "tool.read", "same args"u8.ToArray(),
+            _ => Task.CompletedTask, default, isToolInvocation: true);
+        Assert.Equal(3, requests.Count);
+        Assert.Equal(requests[0], requests[1]);
+        Assert.NotEqual(requests[1].EventId, requests[2].EventId);
+        Assert.Equal(requests[1].InputHash, requests[2].InputHash);
+    }
+
     [Theory]
     [InlineData("allow")]
     [InlineData("deny")]
@@ -92,10 +172,11 @@ public sealed class RuntimeActionHttpClientTests
         await using var session = await RuntimeCopilotSessionTests.Factory(external).CreateAsync(
             registration, registration.Binding.ModelSelectionReference!,
             RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token,
-            requireActionAuthority: (action, input, token) =>
+            requireActionAuthority: (action, input, toolInvocation, token) =>
             {
                 token.ThrowIfCancellationRequested();
                 Assert.NotEmpty(input.ToArray());
+                Assert.True(toolInvocation);
                 actions.Add(action);
                 if (deny)
                     throw new RuntimeAuthorizationException("runtime_action_denied");

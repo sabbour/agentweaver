@@ -24,6 +24,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     private Task? _turnOutput;
     private Task? _abortOutput;
     private CancellationTokenSource? _turnStop;
+    private readonly List<JsonElement> _durableEvents = [];
+    private readonly object _eventsLock = new();
 
     public ControlledCopilotRuntime(TimeSpan? lifetime = null)
     {
@@ -38,18 +40,28 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public string AssistantResponse { get; set; } = "controlled response";
     public string ExpectedPrompt { get; set; } = "A bounded user request.";
     public string? EffectiveModelId { get; set; }
+    public long? MaxPromptTokens { get; set; } = 200000;
     public Action? BeforeEffectiveModelResponse { get; set; }
     public Func<CancellationToken, Task>? BeforeStatusResponse { get; set; }
     public bool EmitUsageAfterCreate { get; set; } = true;
     public bool Byok { get; set; }
     public int ExpectedAvailableToolsCount { get; set; }
     public Func<CancellationToken, Task>? BeforeTurnResponse { get; set; }
+    public Func<CancellationToken, Task>? AfterNativeCompletionReceipt { get; set; }
     public Func<CancellationToken, Task>? BeforeAbortIdle { get; set; }
     public bool AbortSucceeds { get; set; } = true;
     public string? LateAbortAssistantContent { get; set; }
     public bool PersistNativeSessionState { get; set; }
+    public bool EmitNativeCompletionReceipt { get; set; }
+    public bool EmitUsageWithTurn { get; set; }
+    public Guid NativeUsageEventId { get; private set; }
+    public Guid NativeMessageId { get; private set; }
+    public Guid NativeTurnEndEventId { get; private set; }
+    public Guid NativeCompletionReceiptEventId { get; private set; }
     public TaskCompletionSource TurnReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource AbortAcknowledged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource<JsonElement> PermissionResponded { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     public Guid UsageEventId { get; } = Guid.NewGuid();
     public DateTimeOffset UsageTimestamp { get; } = DateTimeOffset.UtcNow;
     public RuntimeConnection Connection => RuntimeConnection.ForUri(
@@ -100,6 +112,33 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                 }
             }
         });
+    }
+
+    public async Task<JsonElement> RequestReadPermissionAsync(CancellationToken cancellationToken)
+    {
+        await WriteAsync(new
+        {
+            jsonrpc = "2.0",
+            method = "session.event",
+            @params = new
+            {
+                sessionId = _sessionId,
+                @event = new
+                {
+                    type = "permission.requested", id = Guid.NewGuid(), timestamp = DateTimeOffset.UtcNow,
+                    parentId = (Guid?)null, agentId = (string?)null,
+                    data = new
+                    {
+                        requestId = "read-permission",
+                        permissionRequest = new
+                        {
+                            kind = "read", intention = "Read the workspace file.", path = "/workspace/readme.txt"
+                        }
+                    }
+                }
+            }
+        });
+        return await PermissionResponded.Task.WaitAsync(cancellationToken);
     }
 
     private async Task EmitAssistantAsync(string content)
@@ -212,6 +251,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                                     new
                                     {
                                         id = ModelId, name = "Controlled catalog model",
+                                        capabilities = new { limits = new { max_prompt_tokens = MaxPromptTokens } },
                                         policy = new { state = "enabled" },
                                         billing = new { multiplier = 2.5 }
                                     }
@@ -252,12 +292,41 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                             BeforeEffectiveModelResponse?.Invoke();
                             result = new { modelId = EffectiveModelId ?? ModelId };
                             break;
+                        case "session.permissions.handlePendingPermissionRequest":
+                            Assert.Equal(_sessionId, parameters.GetProperty("sessionId").GetString());
+                            Assert.Equal("read-permission", parameters.GetProperty("requestId").GetString());
+                            PermissionResponded.TrySetResult(parameters.Clone());
+                            result = new { };
+                            break;
                         case "session.send":
                             Assert.Equal(ExpectedPrompt, parameters.GetProperty("prompt").GetString());
                             _turnStop?.Dispose();
                             _turnStop = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+                            NativeMessageId = Guid.NewGuid();
                             TurnReceived.TrySetResult();
-                            result = new { };
+                            result = new { messageId = NativeMessageId.ToString("D") };
+                            break;
+                        case "session.eventLog.tail":
+                            lock (_eventsLock)
+                                result = new { cursor = $"controlled-cursor-{_durableEvents.Count}" };
+                            break;
+                        case "session.eventLog.read":
+                            Assert.False(parameters.GetProperty("includeEphemeral").GetBoolean());
+                            Assert.Equal("all", parameters.GetProperty("agentScope").GetString());
+                            var cursor = parameters.GetProperty("cursor").GetString()!;
+                            var offset = int.Parse(cursor["controlled-cursor-".Length..], CultureInfo.InvariantCulture);
+                            var maximum = parameters.GetProperty("max").GetInt32();
+                            lock (_eventsLock)
+                            {
+                                var page = _durableEvents.Skip(offset).Take(maximum).ToArray();
+                                result = new
+                                {
+                                    cursor = $"controlled-cursor-{offset + page.Length}",
+                                    cursorStatus = "ok",
+                                    events = page,
+                                    hasMore = offset + page.Length < _durableEvents.Count
+                                };
+                            }
                             break;
                         case "session.abort":
                             if (AbortSucceeds)
@@ -279,6 +348,10 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                         case "session.destroy":
                             if (_turnStop is not null)
                                 await _turnStop.CancelAsync();
+                            result = new { success = true };
+                            break;
+                        case "session.detach":
+                            Assert.Equal(_sessionId, parameters.GetProperty("sessionId").GetString());
                             result = new { success = true };
                             break;
                         default:
@@ -312,6 +385,12 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     {
         try
         {
+            if (EmitNativeCompletionReceipt)
+            {
+                await EmitNativeEventAsync("user.message", NativeMessageId, new { content = ExpectedPrompt });
+                await EmitNativeEventAsync("assistant.turn_start", Guid.NewGuid(),
+                    new { turnId = "controlled-native-turn", model = ModelId });
+            }
             if (BeforeTurnResponse is not null)
                 await BeforeTurnResponse(cancellationToken);
             if (PersistNativeSessionState)
@@ -322,7 +401,35 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                 Assert.Equal(JsonValueKind.Null, result.ValueKind);
             }
             cancellationToken.ThrowIfCancellationRequested();
+            if (EmitUsageWithTurn)
+            {
+                NativeUsageEventId = Guid.NewGuid();
+                await EmitNativeEventAsync("assistant.usage", NativeUsageEventId, UsageData());
+            }
             await EmitAssistantAsync(answer);
+            if (EmitNativeCompletionReceipt)
+            {
+                NativeTurnEndEventId = Guid.NewGuid();
+                NativeCompletionReceiptEventId = Guid.NewGuid();
+                await EmitNativeEventAsync("assistant.turn_end", NativeTurnEndEventId,
+                    new { turnId = "controlled-native-turn", model = ModelId });
+                await EmitNativeEventAsync("session.completion_receipt", NativeCompletionReceiptEventId, new
+                {
+                    schemaVersion = 1,
+                    attempt = 1,
+                    sourceEventId = NativeTurnEndEventId.ToString("D"),
+                    eventRange = new
+                    {
+                        startEventId = NativeMessageId.ToString("D"),
+                        endEventId = NativeTurnEndEventId.ToString("D")
+                    },
+                    stopReason = "natural",
+                    successfulToolCount = 0,
+                    failedToolCount = 0
+                });
+                if (AfterNativeCompletionReceipt is not null)
+                    await AfterNativeCompletionReceipt(cancellationToken);
+            }
             await EmitIdleAsync();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -339,9 +446,34 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
         await EmitIdleAsync();
     }
 
+    private Task EmitNativeEventAsync(string type, Guid id, object data) =>
+        WriteAsync(new
+        {
+            jsonrpc = "2.0",
+            method = "session.event",
+            @params = new
+            {
+                sessionId = _sessionId,
+                @event = new
+                {
+                    type, id, timestamp = DateTimeOffset.UtcNow,
+                    parentId = (Guid?)null, agentId = (string?)null, data
+                }
+            }
+        });
+
     private async Task WriteAsync(object message)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(message);
+        using (var document = JsonDocument.Parse(payload))
+        {
+            var root = document.RootElement;
+            if (root.TryGetProperty("method", out var method) && method.GetString() == "session.event")
+            {
+                lock (_eventsLock)
+                    _durableEvents.Add(root.GetProperty("params").GetProperty("event").Clone());
+            }
+        }
         var header = Encoding.ASCII.GetBytes($"Content-Length: {payload.Length}\r\n\r\n");
         await _writes.WaitAsync(_stop.Token);
         try

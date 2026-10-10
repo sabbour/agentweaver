@@ -275,6 +275,57 @@ internal sealed class SourceControlOwnerStore(
         return snapshot;
     }
 
+    internal async Task<SourceControlMergeIntentSnapshot?> ReadMergeIntentInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        string intentId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (!ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
+        if (!IsIdentifier(intentId))
+            throw new CoordinationException(
+                "source_control_intent_invalid", StatusCodes.Status400BadRequest);
+        return await ReadIntentByIdAsync(
+            connection, transaction, identity, intentId, forUpdate: true, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal async Task<(SourceControlMergeIntentSnapshot? Intent, OwnerBindingSnapshot CurrentOwner)>
+        ReadPrerequisiteMergeIntentInTransactionAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            CoordinationActor actor,
+            SessionIdentity identity,
+            string tenantId,
+            string acceptedSelectionHash,
+            long executionFence,
+            string intentId,
+            CancellationToken cancellationToken)
+    {
+        if (!IsIdentifier(intentId))
+            throw new CoordinationException(
+                "source_control_intent_invalid", StatusCodes.Status400BadRequest);
+        var owner = await ReadPrerequisiteOwnerBindingInTransactionAsync(
+            connection, transaction, actor, identity, tenantId, acceptedSelectionHash,
+            executionFence, cancellationToken).ConfigureAwait(false);
+        var intent = await ReadIntentByIdAsync(
+            connection, transaction, identity, intentId, forUpdate: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (intent is null)
+            return (null, owner);
+        if (!MatchesPrerequisiteAcceptedRun(
+                intent.AcceptedRun, actor, identity, tenantId, acceptedSelectionHash, executionFence) ||
+            !MatchesPrerequisiteAcceptedRun(
+                intent.Pin.AcceptedRun, actor, identity, tenantId, acceptedSelectionHash, executionFence))
+            throw new CoordinationException(
+                "source_control_intent_unavailable", StatusCodes.Status404NotFound);
+        return (intent, owner);
+    }
+
     public async Task<SourceControlRepositoryPin> ReadRepositoryPinAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -549,6 +600,167 @@ internal sealed class SourceControlOwnerStore(
             return null;
         ValidateOutputCaptureRecord(record);
         return record;
+    }
+
+    internal async Task<SourceControlOutputCaptureRecord?> ReadOutputCaptureInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SessionIdentity identity,
+        string captureId,
+        string acceptedSelectionHash,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (!ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
+        if (!IsOutputCaptureId(captureId) ||
+            acceptedSelectionHash.Length != 64 ||
+            !acceptedSelectionHash.All(Uri.IsHexDigit))
+            throw new CoordinationException(
+                "source_control_output_capture_invalid", StatusCodes.Status400BadRequest);
+        var record = await ReadOutputCaptureRowAsync(
+            connection, transaction, identity, captureId, forUpdate: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (record is null ||
+            !string.Equals(
+                record.Proof.AcceptedSelectionHash, acceptedSelectionHash, StringComparison.Ordinal))
+            return null;
+        ValidateOutputCaptureRecord(record);
+        return record;
+    }
+
+    internal async Task<(SourceControlOutputCaptureRecord? Capture, OwnerBindingSnapshot CurrentOwner)>
+        ReadPrerequisiteOutputCaptureInTransactionAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            CoordinationActor actor,
+            SessionIdentity identity,
+            string tenantId,
+            string acceptedSelectionHash,
+            long executionFence,
+            string captureId,
+            CancellationToken cancellationToken)
+    {
+        if (!IsOutputCaptureId(captureId))
+            throw new CoordinationException(
+                "source_control_output_capture_invalid", StatusCodes.Status400BadRequest);
+        var owner = await ReadPrerequisiteOwnerBindingInTransactionAsync(
+            connection, transaction, actor, identity, tenantId, acceptedSelectionHash,
+            executionFence, cancellationToken).ConfigureAwait(false);
+        var capture = await ReadOutputCaptureRowAsync(
+            connection, transaction, identity, captureId, forUpdate: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (capture is null)
+            return (null, owner);
+
+        ValidateOutputCaptureRecord(capture);
+        var pin = await ReadPinAsync(
+            connection, transaction, identity, acceptedSelectionHash, cancellationToken)
+            .ConfigureAwait(false);
+        var proof = capture.Proof;
+        if (proof.Identity != identity ||
+            proof.ActorIssuer != actor.Issuer ||
+            proof.ActorSubject != actor.Subject ||
+            proof.TenantId != tenantId ||
+            proof.AcceptedSelectionHash != acceptedSelectionHash ||
+            pin is null ||
+            proof.SourceControlPinId != pin.PinId ||
+            !MatchesPrerequisiteAcceptedRun(
+                pin.AcceptedRun, actor, identity, tenantId, acceptedSelectionHash, executionFence))
+            throw new CoordinationException(
+                "source_control_output_capture_unavailable", StatusCodes.Status404NotFound);
+        return (capture, owner);
+    }
+
+    internal async Task<ImmutableArray<ProducedRunCaptureProof>>
+        ReadPrerequisiteOutputCaptureProofsInTransactionAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            CoordinationActor actor,
+            SessionIdentity identity,
+            string tenantId,
+            string acceptedSelectionHash,
+            long executionFence,
+            CancellationToken cancellationToken)
+    {
+        const int maximumProofs = 100;
+        _ = await ReadPrerequisiteOwnerBindingInTransactionAsync(
+            connection,
+            transaction,
+            actor,
+            identity,
+            tenantId,
+            acceptedSelectionHash,
+            executionFence,
+            cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand($"""
+            SELECT project_id, run_id, session_id, capture_id, event_id, pin_id, issuer, actor_id,
+                tenant_id, accepted_selection_hash, workspace_id, workspace_incarnation_id,
+                branch_name, repository_id, resource_generation, base_sha, output_tree_sha, manifest_sha256,
+                manifest_byte_length, patch_sha256, patch_byte_length, package_sha256,
+                package_byte_length, captured_at
+            FROM {OutputCaptures}
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+              AND accepted_selection_hash = @selectionHash AND capture_state = 'admitted'
+            ORDER BY captured_at DESC, capture_id DESC
+            LIMIT @limit
+            """, connection, transaction);
+        AddScope(command, identity);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
+        command.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, acceptedSelectionHash);
+        command.Parameters.AddWithValue("limit", NpgsqlDbType.Integer, maximumProofs + 1);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var proofs = ImmutableArray.CreateBuilder<ProducedRunCaptureProof>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var proof = new ProducedRunCaptureProof(
+                ProducedRunCaptureLimits.ContractVersion,
+                new SessionIdentity(reader.GetString(0), reader.GetString(1), reader.GetString(2)),
+                reader.GetString(3),
+                reader.GetGuid(4),
+                reader.GetString(6),
+                reader.GetString(7),
+                reader.GetString(8),
+                reader.GetString(5),
+                reader.GetString(9),
+                reader.GetString(10),
+                reader.GetGuid(11),
+                reader.GetString(12),
+                reader.GetString(13),
+                reader.GetInt64(14),
+                reader.GetString(15),
+                reader.GetString(16),
+                reader.GetString(17),
+                reader.GetInt64(18),
+                reader.GetString(19),
+                reader.GetInt64(20),
+                reader.GetString(21),
+                reader.GetInt64(22),
+                reader.GetFieldValue<DateTimeOffset>(23));
+            try
+            {
+                ProducedRunCaptureContractValidation.Validate(proof);
+            }
+            catch (ArgumentException)
+            {
+                throw new CoordinationException(
+                    "source_control_output_capture_corrupt", StatusCodes.Status503ServiceUnavailable);
+            }
+            if (proof.Identity != identity ||
+                proof.ActorIssuer != actor.Issuer ||
+                proof.ActorSubject != actor.Subject ||
+                proof.TenantId != tenantId ||
+                proof.AcceptedSelectionHash != acceptedSelectionHash)
+                throw new CoordinationException(
+                    "source_control_output_capture_unavailable", StatusCodes.Status404NotFound);
+            proofs.Add(proof);
+        }
+
+        if (proofs.Count > maximumProofs)
+            throw new CoordinationException(
+                "source_control_output_capture_limit_exceeded", StatusCodes.Status409Conflict);
+        return proofs.ToImmutable();
     }
 
     internal async Task<ImmutableArray<SourceControlOutputCaptureSummary>> ReadOutputCapturePageAsync(
@@ -1520,6 +1732,80 @@ internal sealed class SourceControlOwnerStore(
             : null;
     }
 
+    internal Task<OwnerBindingSnapshot> ReadPrerequisiteOwnerBindingSnapshotInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        string tenantId,
+        string acceptedSelectionHash,
+        long executionFence,
+        CancellationToken cancellationToken) =>
+        ReadPrerequisiteOwnerBindingInTransactionAsync(
+            connection,
+            transaction,
+            actor,
+            identity,
+            tenantId,
+            acceptedSelectionHash,
+            executionFence,
+            cancellationToken);
+
+    private async Task<OwnerBindingSnapshot> ReadPrerequisiteOwnerBindingInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        string tenantId,
+        string acceptedSelectionHash,
+        long executionFence,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(actor);
+        if (!ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
+        if (string.IsNullOrWhiteSpace(tenantId) ||
+            acceptedSelectionHash is not { Length: 64 } ||
+            !acceptedSelectionHash.All(Uri.IsHexDigit) ||
+            executionFence < 1)
+            throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+
+        var owner = await ReadOwnerBindingAsync(
+            connection,
+            transaction,
+            actor,
+            identity,
+            tenantId,
+            acceptedSelectionHash,
+            forUpdate: true,
+            cancellationToken).ConfigureAwait(false);
+        if (owner.RunFence != executionFence ||
+            owner.SessionFence != executionFence ||
+            owner.RootSessionId != identity.SessionId)
+            throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+        return owner;
+    }
+
+    private static bool MatchesPrerequisiteAcceptedRun(
+        SourceControlAcceptedRunBinding acceptedRun,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        string tenantId,
+        string acceptedSelectionHash,
+        long executionFence) =>
+        acceptedRun.Issuer == actor.Issuer &&
+        acceptedRun.Subject == actor.Subject &&
+        acceptedRun.TenantId == tenantId &&
+        acceptedRun.ProjectId == identity.ProjectId &&
+        acceptedRun.RunId == identity.RunId &&
+        acceptedRun.RootSessionId == identity.SessionId &&
+        acceptedRun.AcceptedSelectionHash == acceptedSelectionHash &&
+        acceptedRun.Fence == executionFence;
+
     private async Task<OwnerBindingSnapshot> ReadOwnerBindingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -2049,7 +2335,7 @@ internal sealed class SourceControlOwnerStore(
     internal static string HashSelection(EffectiveRunSelection selection) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(selection.Snapshot.GetRawText())));
 
-    private static bool IsIdentifier(string? value) =>
+    internal static bool IsIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 128 &&
         value.All(character =>
@@ -2087,7 +2373,7 @@ internal sealed class SourceControlOwnerStore(
         string WriterSubject,
         string SessionLifecycle);
 
-    private sealed record OwnerBindingSnapshot(
+    internal sealed record OwnerBindingSnapshot(
         string AcceptedSelectionHash,
         string AcceptedIssuer,
         string AcceptedSubject,

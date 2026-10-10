@@ -36,13 +36,11 @@ The separate read-only path uses current `ReadRunSelection` without new roles or
 The local combined harness exercises SDK source persistence and reference-only accounting.
 It does not prove deployed AgentHost scheduling or paid model execution.
 
-Environment's separate BuildTest path resolves only Core's immutable accepted
-checkpoint, persists one stable operation in existing owner-effects state, and
-uses gated offline command and read-only output-collector Pods. Core remains the
-owner of MAF checkpoint and run state. Provider lifecycle reports reconcile
-against the current lease and fence, while the HTTP report route stays
-fail-closed until provider identity and Core interruption acknowledgement are
-admitted.
+Environment's [BuildTest path](environment-sandbox#buildtest-command-and-output-collection) resolves Core's immutable accepted checkpoint and persists one stable operation in existing owner-effects state.
+It uses gated offline command Pods and a separate read-only output-collector Pod.
+The optional server profile pins capability, images, executable allowlist, resource limits, and collector mode.
+Core retains MAF checkpoint and run-state ownership.
+Source checks do not prove live provider effects or complete native accounting.
 
 ## Canonical component overview
 
@@ -101,7 +99,7 @@ their external boundaries.
 | `Agentweaver.Telemetry.AzureMonitor` | Opt-in Azure Monitor exporters. | `Agentweaver.Telemetry` |
 | `Agentweaver.Identity.Broker` | OAuth, secret-redemption, and Identity-owned GitHub App connection/token-mint host; caller-authentication boundary. | `Agentweaver.Identity`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.SourceControl` |
 | `Agentweaver.EventsAndSessions` | Native journal, addressed messages, reference-only SDK usage admission, immutable Cost pricing, and exact usage totals. Unpublished host candidate. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
-| `Agentweaver.Knowledge` | Project-scoped Memory API, context compiler, native PostgreSQL default, and optional Cosmos adapter candidate. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
+| `Agentweaver.Knowledge` | Project-scoped Memory API, context compiler, native PostgreSQL default, and optional Cosmos and Redis adapter candidates. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Telemetry` |
 | `Agentweaver.Environment` | Environment-owned egress, workspace volumes, Sandbox leases, registered runtime profiles, and authenticated nonce delivery; not deployed. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Providers`, `Agentweaver.Providers.Storage.AzureFiles`, `Agentweaver.Providers.Sandbox.AgentSandbox` |
 | `Agentweaver.Orchestrator` | HTTP owner for session trees, forks, recovery, turn boundaries, runtime registration, immutable SDK source receipts, message outbox, and parent notifications. It checks current Projects authority. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `Agentweaver.Orchestrator.Core`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres` |
 | `Agentweaver.FoundationProbe` | Acceptance-only infrastructure probe executable. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`, `Agentweaver.ObjectStore.AzureBlob`, `Agentweaver.Telemetry.AzureMonitor` |
@@ -129,7 +127,10 @@ Sandbox mounting or durable flush.
 
 The [AgentHost source candidate](agenthost.md) includes a pinned image definition and authenticated runtime routes.
 Its local fixtures and CI image receipt do not prove deployed scheduling or paid model execution.
-The repository does not contain a published platform image.
+The repository does not contain a published platform image, AgentHost scheduler,
+or product MCP server. It also includes an unpublished v1 browser client over the
+Gateway/BFF and Identity Broker; that source does not establish a deployed
+application or automatic work scheduling. See the [v1 web client guide](../guide/web-client).
 
 The Knowledge source candidate and its current native Memory boundary are described in
 the [Knowledge and Memory reference](knowledge-memory.md).

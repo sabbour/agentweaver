@@ -163,12 +163,19 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
         })
             Assert.DoesNotContain(secret, string.Join('\n', factory.LogMessages));
 
+        var byokModels = new RuntimeModelBindingsResolver("legacy-unversioned",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
+                    new RuntimeByokProvider("openai", new Uri("https://byok.test/v1"), "responses"))
+            });
         owner.Registration = owner.Registration with
         {
             Binding = owner.Registration.Binding with
             {
                 ModelSelectionReference = "accepted-model-reference",
                 ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = byokModels.Pin("accepted-model-reference", ModelSourceMode.Byok),
                 ModelCredentialReference = new SecretRef("model-api", "model-v1")
             }
         };
@@ -342,7 +349,7 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             failedInitialize.ConfigureAsync(configuration, failedBootstrap, Guid.NewGuid(), Guid.NewGuid(),
                 timeout.Token));
         Assert.Equal("runtime_sdk_effective_model_mismatch", modelFailure.Code);
-        Assert.Contains(mismatchedSdk.Requests, item => item.Method == "session.destroy");
+        Assert.Contains(mismatchedSdk.Requests, item => item.Method == "session.detach");
 
         var interruptedDelivery = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
             broker, broker.BaseAddress!, "/internal/runtime/bootstrap/request", actor,
@@ -365,7 +372,7 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             interruptedInitialize.ConfigureAsync(configuration, interruptedBootstrap, Guid.NewGuid(), Guid.NewGuid(),
                 timeout.Token));
         Assert.All(authorityLoss.InnerExceptions, error => Assert.IsType<RuntimeAuthorizationException>(error));
-        Assert.Contains(interruptedSdk.Requests, item => item.Method == "session.destroy");
+        Assert.Contains(interruptedSdk.Requests, item => item.Method == "session.detach");
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();

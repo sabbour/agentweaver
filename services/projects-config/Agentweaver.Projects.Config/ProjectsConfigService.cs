@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Data;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -50,12 +51,25 @@ public sealed record EffectiveRunSelection(
     ImmutableArray<NetworkEgressRule>? ProjectEgressNarrowing,
     ImmutableArray<NetworkEgressRule> RequiredEgress);
 
-public sealed class ProjectsConfigService(
-    ProjectsConfigDbContext db,
-    ProviderCatalog providerCatalog,
-    TimeProvider timeProvider)
+public sealed partial class ProjectsConfigService
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private readonly ProjectsConfigDbContext db;
+    private readonly ProviderCatalog providerCatalog;
+    private readonly TimeProvider timeProvider;
+    private readonly IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory;
+
+    public ProjectsConfigService(
+        ProjectsConfigDbContext db,
+        ProviderCatalog providerCatalog,
+        TimeProvider timeProvider,
+        IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory = null)
+    {
+        this.db = db;
+        this.providerCatalog = providerCatalog;
+        this.timeProvider = timeProvider;
+        this.dbContextFactory = dbContextFactory;
+    }
 
     public async Task<ProjectSummary> CreateProjectAsync(
         ProjectAuthorizationContext caller,
@@ -228,6 +242,12 @@ public sealed class ProjectsConfigService(
         var normalized = ProjectConfigurationValidator.Validate(configuration);
         var project = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
             .ConfigureAwait(false);
+        if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
+            reviewedSnapshots.Any(snapshot => snapshot.ProjectId != project.ProjectId))
+            throw new ProjectConfigException(
+                "invalid_configuration",
+                "Reviewed remote tool snapshot references must belong to this project.",
+                (int)HttpStatusCode.BadRequest);
         if (project.State != ProjectLifecycleState.Active)
             throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
         if (project.ConfigurationRevision != expectedRevision)

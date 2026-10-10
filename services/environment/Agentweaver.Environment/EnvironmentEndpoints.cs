@@ -3,6 +3,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Providers.Storage.AzureFiles;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Environment;
 
@@ -128,12 +129,13 @@ public static class EnvironmentEndpoints
             })
             .RequireAuthorization();
 
-        MapRuntimePlacement(readiness: false);
-        MapRuntimePlacement(readiness: true);
+        MapRuntimePlacement("");
+        MapRuntimePlacement("/readiness");
+        MapRuntimePlacement("/workspace");
 
-        void MapRuntimePlacement(bool readiness) => endpoints.MapGet(
+        void MapRuntimePlacement(string suffix) => endpoints.MapGet(
             "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}" +
-                (readiness ? "/readiness" : ""),
+                suffix,
             async (
                 string projectId,
                 string runId,
@@ -157,7 +159,14 @@ public static class EnvironmentEndpoints
                 try
                 {
                     var actor = new RuntimeActorAuthorization(bearer, caller.TenantSelector);
-                    if (readiness)
+                    if (suffix == "/workspace")
+                    {
+                        var workspace = await reader.GetWorkspaceContextAsync(
+                            actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken)
+                            .ConfigureAwait(false);
+                        return workspace is null ? Results.NotFound() : Results.Ok(workspace);
+                    }
+                    if (suffix == "/readiness")
                     {
                         var observed = await reader.GetReadinessContextAsync(
                             actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken)
@@ -390,7 +399,7 @@ public static class EnvironmentEndpoints
             string sessionId,
             string executionProfileReference,
             HttpContext context,
-            EnvironmentSandboxBuildTestCommandManager manager,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
@@ -398,13 +407,8 @@ public static class EnvironmentEndpoints
                 return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
                 Results.Ok(await manager.PrepareBindingAsync(
-                    caller!,
-                    projectId,
-                    runId,
-                    environmentId,
-                    sessionId,
-                    executionProfileReference,
-                    cancellationToken).ConfigureAwait(false)),
+                    caller!, projectId, runId, environmentId, sessionId,
+                    executionProfileReference, cancellationToken).ConfigureAwait(false)),
                 cancellationToken).ConfigureAwait(false);
         });
         sandboxes.MapPost("/build-test/commands", async (
@@ -413,22 +417,22 @@ public static class EnvironmentEndpoints
             string environmentId,
             SandboxBuildTestApiRequest request,
             HttpContext context,
-            EnvironmentSandboxBuildTestCommandManager manager,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
-                    return Results.Unauthorized();
+                return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
             {
-                    var result = await manager.ExecuteAsync(
-                        caller!, projectId, runId, environmentId, request, cancellationToken)
-                        .ConfigureAwait(false);
-                    return result.Operation.Status is SandboxBuildTestOperationStatus.Reserved or
-                        SandboxBuildTestOperationStatus.Running or
-                        SandboxBuildTestOperationStatus.ReconciliationRequired
-                        ? Results.Accepted(value: result)
-                        : Results.Ok(result);
+                var result = await manager.ExecuteAsync(
+                    caller!, projectId, runId, environmentId, request, cancellationToken)
+                    .ConfigureAwait(false);
+                return result.Operation.Status is SandboxBuildTestOperationStatus.Reserved or
+                    SandboxBuildTestOperationStatus.Running or
+                    SandboxBuildTestOperationStatus.ReconciliationRequired
+                    ? Results.Accepted(value: result)
+                    : Results.Ok(result);
             }, cancellationToken).ConfigureAwait(false);
         });
         sandboxes.MapGet("/build-test/commands/{operationId:guid}", async (
@@ -437,18 +441,18 @@ public static class EnvironmentEndpoints
             string environmentId,
             Guid operationId,
             HttpContext context,
-            EnvironmentSandboxBuildTestCommandManager manager,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
-                    return Results.Unauthorized();
+                return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
             {
-                    var result = await manager.GetAsync(
-                        caller!, projectId, runId, environmentId, operationId, cancellationToken)
-                        .ConfigureAwait(false);
-                    return result is null ? Results.NotFound() : Results.Ok(result);
+                var result = await manager.GetAsync(
+                    caller!, projectId, runId, environmentId, operationId, cancellationToken)
+                    .ConfigureAwait(false);
+                return result is null ? Results.NotFound() : Results.Ok(result);
             }, cancellationToken).ConfigureAwait(false);
         });
         sandboxes.MapPost("/build-test/commands/{operationId:guid}/reconcile", async (
@@ -458,22 +462,22 @@ public static class EnvironmentEndpoints
             Guid operationId,
             SandboxBuildTestApiRequest request,
             HttpContext context,
-            EnvironmentSandboxBuildTestCommandManager manager,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
             if (!TryReadCaller(context, out var caller))
-                    return Results.Unauthorized();
+                return Results.Unauthorized();
             return await ExecuteSandboxApiAsync(async () =>
             {
-                    var result = await manager.ReconcileAsync(
-                        caller!, projectId, runId, environmentId, operationId, request, cancellationToken)
-                        .ConfigureAwait(false);
-                    return result.Operation.Status is SandboxBuildTestOperationStatus.Reserved or
-                        SandboxBuildTestOperationStatus.Running or
-                        SandboxBuildTestOperationStatus.ReconciliationRequired
-                        ? Results.Accepted(value: result)
-                        : Results.Ok(result);
+                var result = await manager.ReconcileAsync(
+                    caller!, projectId, runId, environmentId, operationId, request, cancellationToken)
+                    .ConfigureAwait(false);
+                return result.Operation.Status is SandboxBuildTestOperationStatus.Reserved or
+                    SandboxBuildTestOperationStatus.Running or
+                    SandboxBuildTestOperationStatus.ReconciliationRequired
+                    ? Results.Accepted(value: result)
+                    : Results.Ok(result);
             }, cancellationToken).ConfigureAwait(false);
         });
         sandboxes.MapPost("/abandon", async (

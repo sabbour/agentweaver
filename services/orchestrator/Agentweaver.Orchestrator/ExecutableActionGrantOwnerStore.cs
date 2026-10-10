@@ -5,6 +5,7 @@ using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
+using Agentweaver.Persistence.Postgres;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
 using NpgsqlTypes;
@@ -22,11 +23,13 @@ internal sealed class ExecutableActionGrantOwnerStore(
     IExecutableActionPolicyEvaluationReceiptWriter
 {
     private const int MaximumIdLength = 256;
+    private const string ToolInvocationEventType = "orchestrator.runtime.tool_invocation_admitted";
     private readonly string _schema = $"\"{options.Schema}\"";
+    private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
 
     internal async Task<ExecutableActionGrantReference> IssueRuntimeActionGrantAsync(
         HttpContext context, RuntimeRegistration registration, RuntimeActionRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool reserveToolInvocation = false)
     {
         RuntimeActionContract.Validate(request);
         var binding = registration.Binding;
@@ -42,6 +45,16 @@ internal sealed class ExecutableActionGrantOwnerStore(
         var requestHash = RuntimeActionContract.Hash(request);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        if (reserveToolInvocation)
+        {
+            if (!request.IsToolInvocation)
+                throw new RuntimeAuthorizationException("runtime_tool_invocation_invalid");
+            await using var acquire = new NpgsqlCommand(
+                "SELECT pg_advisory_xact_lock(hashtext('agentweaver.runtime.tools'), hashtext(@runScope))",
+                connection, transaction);
+            acquire.Parameters.AddWithValue("runScope", $"{binding.ProjectId}/{binding.RunId}");
+            await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
         Guid decisionId;
         long decisionVersion;
         await using (var current = new NpgsqlCommand($"""
@@ -86,6 +99,25 @@ internal sealed class ExecutableActionGrantOwnerStore(
             RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(authorized.Selection.Snapshot.GetRawText())) !=
                 binding.AcceptedSelectionHash || registration.ExpiresAt <= timeProvider.GetUtcNow())
             throw new RuntimeAuthorizationException("runtime_action_selection_changed");
+        if (request.ActionId == "model.turn" && request.DispatchId is { } dispatchId)
+        {
+            await using var dispatch = new NpgsqlCommand($"""
+                SELECT 1 FROM {_schema}.maf_execution_dispatches
+                WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
+                    AND child_session_id = @session AND runtime_instance_id = @runtime
+                    AND registration_revision = @revision AND execution_fence = @fence
+                    AND runtime_binding_hash = @binding AND prompt_hash = @prompt
+                    AND dispatch_state IN ('prepared', 'sending')
+                """, connection, transaction);
+            BindRuntime(dispatch, binding);
+            dispatch.Parameters.AddWithValue("dispatch", dispatchId);
+            dispatch.Parameters.AddWithValue("runtime", registration.RuntimeInstanceId);
+            dispatch.Parameters.AddWithValue("revision", registration.Revision);
+            dispatch.Parameters.AddWithValue("binding", RuntimeContractValidation.RegistrationHash(registration));
+            dispatch.Parameters.AddWithValue("prompt", request.InputHash);
+            if (await dispatch.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+                throw new RuntimeAuthorizationException("runtime_model_turn_admission_required");
+        }
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.executable_action_grants
                 (project_id, run_id, grant_id, revision, is_current, grant_state,
@@ -130,8 +162,65 @@ internal sealed class ExecutableActionGrantOwnerStore(
             if ((string?)await exact.ExecuteScalarAsync(cancellationToken) != requestHash)
                 throw new RuntimeAuthorizationException("runtime_action_conflict");
         }
+        if (reserveToolInvocation && !await HasToolInvocationReservationAsync(
+            connection, transaction, request, cancellationToken).ConfigureAwait(false))
+        {
+            if (binding.MaxToolCalls is { } maxToolCalls)
+            {
+                await using var count = new NpgsqlCommand($"""
+                    SELECT count(*) FROM {_schema}.outbox_events
+                    WHERE event_type = @type
+                        AND payload->>'projectId' = @project AND payload->>'runId' = @run
+                    """, connection, transaction);
+                count.Parameters.AddWithValue("type", ToolInvocationEventType);
+                count.Parameters.AddWithValue("project", binding.ProjectId);
+                count.Parameters.AddWithValue("run", binding.RunId);
+                RuntimeActionContract.RequireInvocationCapacity(maxToolCalls,
+                    (long)(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!,
+                    "runtime_tool_call_limit_exhausted");
+            }
+            await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
+                request.EventId, $"coordination/{binding.ProjectId}/{binding.RunId}/{binding.SessionId}",
+                $"runtime-tool-invocation/{request.EventId:N}", ToolInvocationEventType, 1,
+                JsonSerializer.SerializeToElement(new
+                {
+                    projectId = binding.ProjectId, runId = binding.RunId, binding.SessionId,
+                    binding.ExecutionFence, binding.MaxToolCalls, requestHash
+                }), timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
+        }
         await transaction.CommitAsync(cancellationToken);
         return reference;
+    }
+
+    internal async Task RequireToolInvocationReservationAsync(
+        RuntimeRegistration registration, RuntimeActionRequest request, CancellationToken cancellationToken)
+    {
+        if (!request.IsToolInvocation || request.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            request.RegistrationRevision != registration.Revision ||
+            request.ExecutionFence != registration.Binding.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_tool_invocation_invalid");
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        if (!await HasToolInvocationReservationAsync(
+            connection, null, request, cancellationToken).ConfigureAwait(false))
+            throw new RuntimeAuthorizationException("runtime_tool_invocation_admission_required");
+    }
+
+    private async Task<bool> HasToolInvocationReservationAsync(
+        NpgsqlConnection connection, NpgsqlTransaction? transaction, RuntimeActionRequest request,
+        CancellationToken cancellationToken)
+    {
+        await using var read = new NpgsqlCommand($"""
+            SELECT event_type, payload->>'requestHash'
+            FROM {_schema}.outbox_events WHERE id = @event
+            """, connection, transaction);
+        read.Parameters.AddWithValue("event", request.EventId);
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return false;
+        if (reader.GetString(0) != ToolInvocationEventType ||
+            reader.IsDBNull(1) || reader.GetString(1) != RuntimeActionContract.Hash(request))
+            throw new RuntimeAuthorizationException("runtime_tool_invocation_conflict");
+        return true;
     }
 
     private static void BindRuntime(NpgsqlCommand command, RuntimeBinding binding)

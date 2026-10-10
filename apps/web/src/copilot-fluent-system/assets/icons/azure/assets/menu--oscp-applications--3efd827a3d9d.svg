@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="af7499c6-4f91-46aa-a51a-a1a7166e8c80" x1="19.543" y1="4.536" x2="3.787" y2="20.292" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a67af4" />
+      <stop offset="0.584" stop-color="#773adc" />
+    </linearGradient>
+    <linearGradient id="a3611ba5-8021-4c12-9ac2-9c919f9aaffd" x1="10.847" y1="1.073" x2="1.434" y2="10.487" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#50e6ff" />
+      <stop offset="0.721" stop-color="#32bedd" />
+    </linearGradient>
+  </defs>
+  <g id="bd4a19be-d355-49b3-9461-c62a183adb0b">
+    <g>
+      <path d="M6.3,12.6h5.4V18H6.3ZM.754,18H5.4V12.6H0v4.646A.753.753,0,0,0,.754,18ZM12.6,18h4.657A.754.754,0,0,0,18,17.246V12.6H12.6Zm0-6.3H18V6.3H12.6ZM12.6,0V5.4H18V.754A.754.754,0,0,0,17.257,0Z" fill="url(#af7499c6-4f91-46aa-a51a-a1a7166e8c80)" />
+      <path d="M0,5.4H5.4V0H.754A.753.753,0,0,0,0,.754Zm0,6.3H5.4V6.3H0Zm6.3,0h5.4V6.3H6.3Zm0-6.3h5.4V0H6.3Z" fill="url(#a3611ba5-8021-4c12-9ac2-9c919f9aaffd)" />
+    </g>
+  </g>
+</svg>

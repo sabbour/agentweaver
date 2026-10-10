@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 
@@ -40,6 +41,51 @@ public sealed class RuntimeUsageSourceHttpClient(
             session.Registration, session.Facts, observation);
         if (receipt.Registration != session.Registration || receipt.Usage != expected)
             throw new RuntimeAuthorizationException("runtime_usage_receipt_mismatch");
+        return receipt;
+    }
+
+    internal async Task<RuntimeNativeTurnAdmissionReceipt> BeginNativeTurnAsync(
+        AuthorizedRuntimeSession session, RuntimeA2ASendRequest message, CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnAdmissionReceipt>(
+            client, _address, "/internal/runtime/turns/begin", actor,
+            new RuntimeNativeTurnBeginRequest(Request(session.Proof()), message, session.Facts), cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeNativeTurnContract.ValidateAdmission(receipt, session.Registration, session.Facts, message);
+        return receipt;
+    }
+
+    internal async Task<RuntimeNativeTurnRecordedReceipt> RecordNativeTurnAsync(
+        AuthorizedRuntimeSession session, RuntimeNativeTurnAdmissionReceipt admission,
+        RuntimeNativeTurnObservation observation, CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        RuntimeNativeTurnContract.ValidateObservation(admission, observation);
+        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnRecordedReceipt>(
+            client, _address, "/internal/runtime/turns/observations", actor,
+            new RuntimeNativeTurnObservationRequest(Request(session.Proof()), admission, observation), cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeNativeTurnContract.ValidateRecorded(receipt);
+        if (receipt.Admission != admission ||
+            receipt.CanonicalPayloadHash != RuntimeNativeTurnContract.ObservationHash(observation))
+            throw new RuntimeAuthorizationException("runtime_native_turn_receipt_invalid");
+        return receipt;
+    }
+
+    internal async Task<RuntimeNativeTurnAccountingReceipt> CompleteNativeTurnAsync(
+        AuthorizedRuntimeSession session, RuntimeNativeTurnRecordedReceipt recorded,
+        ImmutableArray<RuntimeUsageCostReceiptReference> references, CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        RuntimeNativeTurnContract.AccountingSnapshotRequest(recorded, references);
+        await session.RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnAccountingReceipt>(
+            client, _address, "/internal/runtime/turns/accounting", actor,
+            new RuntimeNativeTurnAccountingRequest(Request(session.Proof()), recorded, references), cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeNativeTurnContract.ValidateAccounted(receipt, recorded, references);
+        await session.RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
         return receipt;
     }
 

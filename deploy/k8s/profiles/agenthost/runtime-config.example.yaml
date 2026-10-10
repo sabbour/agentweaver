@@ -23,6 +23,7 @@ data:
           "Authority": "https://identity.example.invalid/",
           "Audience": "https://runtime.example.invalid/runtime/v1/configure"
         },
+        "ModelBindingsRevision": "REQUIRED_SHARED_MODEL_BINDINGS_REVISION",
         "ModelBindings": {
           "REQUIRED_ACCEPTED_MODEL_REFERENCE": {
             "ModelId": "REQUIRED_NATIVE_SDK_MODEL_ID",

@@ -122,6 +122,33 @@ public sealed class ProjectRunSelectionRecord
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+public enum ProjectCastingProposalState
+{
+    Pending,
+    Confirmed,
+    Rejected
+}
+
+public sealed class ProjectCastingProposalRecord
+{
+    public Guid ProposalId { get; set; }
+    public required string ProjectId { get; set; }
+    public long BaseConfigurationRevision { get; set; }
+    public long DraftRevision { get; set; }
+    public ProjectCastingProposalState State { get; set; }
+    public required string DraftJson { get; set; }
+    public long? ConfirmedConfigurationRevision { get; set; }
+    public string? ResultJson { get; set; }
+    public int? TransferFormatVersion { get; set; }
+    public string? TransferSourceProjectId { get; set; }
+    public long? TransferSourceConfigurationRevision { get; set; }
+    public string? TransferContentDigest { get; set; }
+    public required string CreatedByActorId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public required string UpdatedByActorId { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
 public sealed class ProjectConfigException(
     string code,
     string message,
@@ -135,6 +162,12 @@ public sealed class ProjectConfigException(
 
     public static ProjectConfigException Conflict(string message) =>
         new("revision_conflict", message, StatusCodes.Status409Conflict);
+
+    public static ProjectConfigException Conflict(string code, string message) =>
+        new(code, message, StatusCodes.Status409Conflict);
+
+    public static ProjectConfigException Invalid(string code, string message) =>
+        new(code, message, StatusCodes.Status400BadRequest);
 
     public static ProjectConfigException IdempotencyConflict() =>
         new("run_selection_conflict", "The run ID already has a different immutable selection.", StatusCodes.Status409Conflict);

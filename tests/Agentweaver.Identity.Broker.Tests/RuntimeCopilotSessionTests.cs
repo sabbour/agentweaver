@@ -8,6 +8,155 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RuntimeCopilotSessionTests
 {
+    [Theory]
+    [InlineData(20000, 16000, 16000)]
+    [InlineData(20000, 20000, 20000)]
+    [InlineData(20000, 200000, 20000)]
+    public async Task PromptCapacityIsNarrowedAgainstTheConcreteCatalogBeforeNativeCreate(
+        int accepted, long supported, int expected)
+    {
+        await using var external = new ControlledCopilotRuntime { MaxPromptTokens = supported };
+        var registration = Registration();
+        registration = registration with { Binding = registration.Binding with { MaxPromptTokens = accepted } };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var session = await Factory(external).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!, SdkCredential(),
+            _ => Task.CompletedTask, timeout.Token);
+        Assert.Equal(expected, session.Facts.MaxPromptTokens);
+        var create = Assert.Single(external.Requests, request => request.Method == "session.create");
+        Assert.Equal(expected, create.Parameters.GetProperty("modelCapabilities")
+            .GetProperty("limits").GetProperty("max_prompt_tokens").GetInt32());
+    }
+
+    [Fact]
+    public async Task AConfiguredPromptLimitRejectsUnknownConcreteCapacityBeforeNativeCreate()
+    {
+        await using var external = new ControlledCopilotRuntime { MaxPromptTokens = null };
+        var registration = Registration();
+        registration = registration with { Binding = registration.Binding with { MaxPromptTokens = 20000 } };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => Factory(external).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!, SdkCredential(),
+            _ => Task.CompletedTask, timeout.Token));
+        Assert.Equal("runtime_model_prompt_capacity_unavailable", failure.Code);
+        Assert.DoesNotContain(external.Requests, request => request.Method is "session.create" or "session.resume");
+    }
+
+    [Fact]
+    public async Task ByokPromptCapacityUsesItsPinnedConcreteBindingAndActualProviderOption()
+    {
+        await using var external = new ControlledCopilotRuntime { Byok = true };
+        var models = new RuntimeModelBindingsResolver("byok-bindings-v1", new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
+                    new RuntimeByokProvider("openai", new Uri("https://byok.test/v1")))
+                {
+                    PromptCapacityTokens = 16000
+                }
+            });
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
+        var registration = Registration();
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok, MaxPromptTokens = 20000,
+                ModelBindingPin = models.Pin("accepted-model-reference", ModelSourceMode.Byok)
+            }
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var session = await factory.CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            new SecretCredential(external.SdkCredential, DateTimeOffset.UtcNow.AddMinutes(2)),
+            _ => Task.CompletedTask, timeout.Token);
+        Assert.Equal(16000, session.Facts.MaxPromptTokens);
+        var create = Assert.Single(external.Requests, request => request.Method == "session.create");
+        Assert.Equal(16000, create.Parameters.GetProperty("provider").GetProperty("maxPromptTokens").GetInt32());
+        Assert.DoesNotContain(external.Requests, request => request.Method == "models.list");
+    }
+
+    [Theory]
+    [InlineData("model")]
+    [InlineData("revision")]
+    [InlineData("hash")]
+    public async Task AcceptedModelBindingMismatchDeniesBeforeAnyNativeSdkRequest(string changed)
+    {
+        await using var external = new ControlledCopilotRuntime();
+        var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        var accepted = resolver.Pin("accepted-model-reference", ModelSourceMode.HostedCopilot);
+        accepted = changed switch
+        {
+            "model" => accepted with { ModelId = "other-model" },
+            "revision" => accepted with { ConfigurationRevision = "model-bindings-v2" },
+            _ => accepted with { ConfigurationHash = new string('0', 64) }
+        };
+        var registration = Registration();
+        registration = registration with
+        {
+            Binding = registration.Binding with { ModelBindingPin = accepted }
+        };
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), resolver);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            factory.CreateAsync(registration, registration.Binding.ModelSelectionReference!,
+                SdkCredential(), _ => Task.CompletedTask, timeout.Token));
+
+        Assert.Equal("runtime_model_binding_pin_mismatch", failure.Code);
+        Assert.Empty(external.Requests);
+    }
+
+    [Fact]
+    public async Task NativeReceiptBridgeReadsTheActualSdkDurableJournalAndNativeSendIdentity()
+    {
+        await using var external = new ControlledCopilotRuntime
+        {
+            EmitNativeCompletionReceipt = true,
+            EmitUsageAfterCreate = false
+        };
+        var registration = Registration();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var session = await Factory(external).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            SdkCredential(), _ => Task.CompletedTask, timeout.Token);
+
+        var result = await session.SendTurnWithNativeReceiptAsync("A bounded user request.", timeout.Token);
+
+        Assert.Equal(external.AssistantResponse, result.Response);
+        Assert.Equal(external.NativeMessageId.ToString("D"), result.Receipt.NativeMessageId);
+        Assert.Equal(external.NativeTurnEndEventId, result.Receipt.NativeTurnEndEventId);
+        Assert.Equal(external.NativeCompletionReceiptEventId, result.Receipt.NativeCompletionReceiptEventId);
+        Assert.Null(result.Receipt.AccountingCheckpoint);
+        Assert.Equal(
+            ["session.eventLog.tail", "session.send", "session.eventLog.read"],
+            external.Requests.Where(request => request.Method is
+                    "session.eventLog.tail" or "session.send" or "session.eventLog.read")
+                .Select(request => request.Method));
+    }
+
+    [Fact]
+    public async Task IdleWithoutAnActualNativeCompletionReceiptCannotProduceNativeProof()
+    {
+        await using var external = new ControlledCopilotRuntime { EmitUsageAfterCreate = false };
+        var registration = Registration();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var session = await Factory(external).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            SdkCredential(), _ => Task.CompletedTask, timeout.Token);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            session.SendTurnWithNativeReceiptAsync("A bounded user request.", timeout.Token));
+
+        Assert.Equal("runtime_native_turn_receipt_unavailable", failure.Code);
+        Assert.Single(external.Requests, request => request.Method == "session.send");
+    }
+
     [Fact]
     public async Task ActualSdkTransportCallbackPreservesNativeMeasurementsAndEffectiveModelPins()
     {
@@ -154,7 +303,7 @@ public sealed class RuntimeCopilotSessionTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => turn);
         await Task.WhenAll(disposal, repeatedDisposal).WaitAsync(timeout.Token);
         Assert.True(session.UsageCompletion.IsCompletedSuccessfully);
-        Assert.Single(external.Requests, request => request.Method == "session.destroy");
+        Assert.Single(external.Requests, request => request.Method == "session.detach");
         await Assert.ThrowsAsync<ObjectDisposedException>(() =>
             session.SendTurnAsync("A bounded user request.", timeout.Token));
     }
@@ -169,7 +318,7 @@ public sealed class RuntimeCopilotSessionTests
             Factory(external).CreateAsync(registration,
                 registration.Binding.ModelSelectionReference!, SdkCredential(), _ => Task.CompletedTask, timeout.Token));
         Assert.Equal("runtime_sdk_effective_model_mismatch", error.Code);
-        Assert.Contains(external.Requests, request => request.Method == "session.destroy");
+        Assert.Contains(external.Requests, request => request.Method == "session.detach");
     }
 
     [Fact]
@@ -211,7 +360,7 @@ public sealed class RuntimeCopilotSessionTests
             Factory(external).CreateAsync(
                 registration, registration.Binding.ModelSelectionReference!, credential, _ => Task.CompletedTask, timeout.Token));
         Assert.Equal("runtime_sdk_credential_unavailable", failure.Code);
-        Assert.Contains(external.Requests, request => request.Method == "session.destroy");
+        Assert.Contains(external.Requests, request => request.Method == "session.detach");
         Assert.False(credential.IsUsable());
     }
 
@@ -296,16 +445,20 @@ public sealed class RuntimeCopilotSessionTests
         await using var external = new ControlledCopilotRuntime { Byok = true };
         var provider = new RuntimeByokProvider(type, new Uri(
             type == "azure" ? "https://byok.test/" : "https://byok.test/v1"), wireApi, azureApiVersion);
-        var factory = new RuntimeCopilotSessionFactory(external.Connection,
-            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
-            new Dictionary<string, RuntimeModelBinding>
+        var models = new RuntimeModelBindingsResolver("byok-bindings-v1", new Dictionary<string, RuntimeModelBinding>
             {
                 ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok, provider)
             });
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
         var registration = Registration();
         registration = registration with
         {
-            Binding = registration.Binding with { ModelSourceMode = ModelSourceMode.Byok }
+            Binding = registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = models.Pin("accepted-model-reference", ModelSourceMode.Byok)
+            }
         };
         using var credential = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var session = await factory.CreateAsync(registration,
@@ -326,10 +479,55 @@ public sealed class RuntimeCopilotSessionTests
         Assert.Equal("byok", session.Facts.SourceMode);
         Assert.Equal(SdkMeterSources.ByokTokens, session.Facts.MeterSource);
         Assert.Null(session.Facts.ModelMultiplier);
+        Assert.Equal(new SdkByokProviderFacts(type, external.ModelId, models.ConfigurationHash),
+            session.Facts.ByokProvider);
         await using var usage = session.ReadUsageAsync(credential.Token).GetAsyncEnumerator();
         Assert.True(await usage.MoveNextAsync());
         Assert.Equal(17, usage.Current.InputTokens);
         Assert.Null(usage.Current.TotalNanoAiu);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("provider")]
+    [InlineData("effective-model")]
+    public async Task ByokRejectsMissingOrChangedAcceptedProviderBeforeUsage(string change)
+    {
+        await using var external = new ControlledCopilotRuntime { Byok = true };
+        var models = new RuntimeModelBindingsResolver("byok-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
+                    new("azure", new Uri("https://byok.test/")))
+            });
+        var pin = models.Pin("accepted-model-reference", ModelSourceMode.Byok);
+        var registration = Registration();
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = change == "missing" ? null :
+                    change == "provider" ? pin with { ProviderType = "openai" } : pin
+            }
+        };
+        if (change == "effective-model")
+            external.EffectiveModelId = "foreign-model";
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => factory.CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            new SecretCredential(external.SdkCredential, DateTimeOffset.UtcNow.AddMinutes(2)),
+            _ => Task.CompletedTask, timeout.Token));
+        Assert.Equal(change switch
+        {
+            "missing" => "runtime_byok_binding_pin_required",
+            "provider" => "runtime_model_binding_pin_mismatch",
+            _ => "runtime_sdk_effective_model_mismatch"
+        }, failure.Code);
+        if (change != "effective-model")
+            Assert.Empty(external.Requests);
     }
 
     [Theory]

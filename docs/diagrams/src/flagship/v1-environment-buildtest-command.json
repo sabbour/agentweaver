@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Environment BuildTest accepted command and output collection",
-  "alt": "Environment resolves only Core's immutable accepted command and persists the stable operation before provider effects. It rechecks current authorization, Sandbox lease, writable Workspace PVC, and Cilium binding for each effect. A gated command Pod runs under an operation-scoped offline policy; only verified exit zero starts a separate gated collector Pod with a read-only PVC. The pinned collector returns a bounded no-follow file receipt tied to its Pod UID and the request fingerprint. Unknown effects reconcile the same operation, and Core retains MAF checkpoint and run-state ownership.",
+  "alt": "Environment resolves only Core's immutable accepted command and persists the stable operation with PostgreSQL-precision UTC timestamps before provider effects. It rechecks current authorization, Sandbox lease, writable Workspace PVC, and Cilium binding for each effect. A gated command Pod runs under an operation-scoped offline policy; only verified exit zero starts a separate gated collector Pod with a read-only PVC. The pinned collector returns a bounded no-follow file receipt tied to its Pod UID and the request fingerprint. Restart replay preserves terminal evidence; unknown effects reconcile the same operation, and Core retains MAF checkpoint and run-state ownership.",
   "autonumber": true,
   "participants": [
     {
@@ -64,14 +64,14 @@
       "type": "message",
       "from": "environment",
       "to": "environment",
-      "label": "Persist accepted intent and request fingerprint in the existing owner_effects row",
+      "label": "Persist accepted intent and fingerprint with PostgreSQL-precision UTC timestamps in owner_effects",
       "line": "solid",
       "arrow": "filled"
     },
     {
       "type": "note",
       "over": ["environment", "workspace-egress"],
-      "label": "Before each effect, recheck authorization, accepted intent, current Sandbox lease, exact writable PVC, and network binding."
+      "label": "Validate the stored Sandbox mount request. Before each effect, recheck authority, accepted intent, current lease, exact PVC, and network binding."
     },
     {
       "type": "message",
@@ -149,7 +149,7 @@
               "type": "message",
               "from": "execution",
               "to": "execution",
-              "label": "Run the pinned collector against accepted output paths",
+              "label": "Read accepted paths with native no-follow flags and bounded reads on the read-only Workspace",
               "line": "solid",
               "arrow": "filled"
             },
@@ -169,7 +169,7 @@
       "type": "message",
       "from": "environment",
       "to": "environment",
-      "label": "Persist one terminal result; reconcile uncertain effects against the same operation, never a replacement",
+      "label": "Persist one immutable terminal snapshot; restart replay preserves evidence, and uncertain effects reconcile the same operation",
       "line": "solid",
       "arrow": "filled"
     },

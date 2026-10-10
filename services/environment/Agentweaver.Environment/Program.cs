@@ -86,6 +86,7 @@ builder.Services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore
 builder.Services.AddScoped<IEnvironmentProviderLifecycleReportStore, EnvironmentProviderLifecycleReportStore>();
 builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
 builder.Services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
+builder.Services.AddScoped<RemoteMcpConnectionStore>();
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
 builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
@@ -198,6 +199,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
 });
 app.MapEnvironmentEndpoints();
+app.MapRemoteMcpConnectionEndpoints();
 app.MapProviderLifecycleReportEndpoints();
 app.Run();
 
@@ -331,8 +333,27 @@ public partial class Program
                 section.GetValue("StartupBudgets:TotalSeconds", 0)))
         {
             AgentHost = section.GetSection("AgentHost")
-                .Get<AgentSandboxOptions.AgentSandboxAgentHostProfile>()
+                .Get<AgentSandboxOptions.AgentSandboxAgentHostProfile>(),
+            AcceptedBuildTestProfile = ReadBuildTestProfile(section.GetSection("AcceptedBuildTestProfile"))
         }.Validate();
+    }
+
+    private static SandboxBuildTestAcceptedExecutionOptions? ReadBuildTestProfile(IConfigurationSection section)
+    {
+        if (!section.Exists())
+            return null;
+        var profile = section.Get<SandboxBuildTestAcceptedExecutionOptions>()
+            ?? throw new InvalidOperationException("An accepted BuildTest profile is required.");
+        // ConfigurationBinder does not populate ImmutableArray record parameters.
+        return profile with
+        {
+            AllowedExecutables = (section.GetSection("AllowedExecutables").Get<string[]>()
+                ?? throw new InvalidOperationException("The accepted BuildTest executable allowlist is required."))
+                .ToImmutableArray(),
+            CollectorAssemblyArguments = (section.GetSection("CollectorAssemblyArguments").Get<string[]>()
+                ?? throw new InvalidOperationException("The accepted BuildTest collector assembly arguments are required."))
+                .ToImmutableArray()
+        };
     }
 
     internal static string Required(string? value, string name) =>

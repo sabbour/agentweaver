@@ -40,12 +40,34 @@ public static class RuntimeUsageSourceEndpoints
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
                 ExecuteAsync(context, () => owner.AppendAsync(context, request, cancellationToken)))
             .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/begin",
+            (RuntimeNativeTurnBeginRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.BeginNativeTurnAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/observations",
+            (RuntimeNativeTurnObservationRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.RecordNativeTurnAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/accounting",
+            (RuntimeNativeTurnAccountingRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.CompleteNativeTurnAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
         endpoints.MapGet(
             "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/usage-receipts/{receiptId:guid}",
             (string projectId, string runId, string sessionId, Guid receiptId, HttpContext context,
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
                 ExecuteAsync(context, () => owner.ReadReceiptAsync(
                     context, projectId, runId, sessionId, receiptId, cancellationToken)))
+            .RequireAuthorization();
+        endpoints.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/usage-dispatch-completions/{dispatchId:guid}",
+            (string projectId, string runId, string sessionId, Guid dispatchId, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.ReadSourceCompletionAsync(
+                    context, projectId, runId, sessionId, dispatchId, cancellationToken)))
             .RequireAuthorization();
         return endpoints;
     }
@@ -63,9 +85,15 @@ public static class RuntimeUsageSourceEndpoints
         }
         catch (RuntimeAuthorizationException exception)
         {
-            return Results.Json(new { error = exception.Code }, statusCode:
-                exception.Code.EndsWith("_conflict", StringComparison.Ordinal)
-                    ? StatusCodes.Status409Conflict : StatusCodes.Status403Forbidden);
+            var status = exception.Code switch
+            {
+                "runtime_native_turn_admission_unavailable" => StatusCodes.Status503ServiceUnavailable,
+                "runtime_native_turn_indeterminate" => StatusCodes.Status409Conflict,
+                _ when exception.Code.EndsWith("_conflict", StringComparison.Ordinal) =>
+                    StatusCodes.Status409Conflict,
+                _ => StatusCodes.Status403Forbidden
+            };
+            return Results.Json(new { error = exception.Code }, statusCode: status);
         }
         catch (ArgumentException)
         {

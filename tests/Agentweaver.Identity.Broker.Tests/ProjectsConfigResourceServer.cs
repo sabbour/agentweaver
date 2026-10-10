@@ -65,7 +65,6 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         {
             Username = runtimeRole,
             Password = runtimePassword,
-            Pooling = false,
         }.ConnectionString;
         var dataSource = NpgsqlDataSource.Create(runtimeConnectionString);
         var dbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
@@ -192,6 +191,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT SELECT ON projects_config.tenant_memberships TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.project_role_assignments TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.authority_audit TO \"{runtimeRole}\"",
+            $"GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean) TO \"{runtimeRole}\"",
         };
         foreach (var statement in statements)
         {

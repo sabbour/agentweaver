@@ -41,6 +41,16 @@
           "Microsoft.TestPlatform.TestHost": "17.14.1"
         }
       },
+      "Microsoft.Playwright": {
+        "type": "Direct",
+        "requested": "[1.63.0, )",
+        "resolved": "1.63.0",
+        "contentHash": "O9F45Tt5vjauIo7mTTgQtahigL7cfRLvBMpErLJfdvgCnQ14yue5BmRASNnfNBWRBni4Mqp2YiD1eFGIO4nUUw==",
+        "dependencies": {
+          "Microsoft.Bcl.AsyncInterfaces": "6.0.0",
+          "System.ComponentModel.Annotations": "5.0.0"
+        }
+      },
       "Testcontainers.PostgreSql": {
         "type": "Direct",
         "requested": "[4.14.0, )",
@@ -181,8 +191,8 @@
       },
       "GitHub.Copilot.SDK": {
         "type": "Transitive",
-        "resolved": "1.0.11",
-        "contentHash": "92CcbAoPQ60Lr7ho7uO5uNYkkxlVux6AhsoZv2WbZz6DcXfvUihHaX8rxNdxM5xv1bIa/WrBE4EadZgJakp3Lw==",
+        "resolved": "1.0.18",
+        "contentHash": "7Nm7/LTWo0Fat8SL/iKSBdm+UV4tx4q1k+0AiL8xRUaV5UBKk8dTUhK0qA6S2V00yrvGq63n2avmRqi6Kq2zEQ==",
         "dependencies": {
           "Microsoft.Extensions.AI.Abstractions": "10.2.0",
           "Microsoft.Extensions.Logging.Abstractions": "10.0.2"
@@ -1208,6 +1218,11 @@
           "System.Threading.RateLimiting": "8.0.0"
         }
       },
+      "RESPite": {
+        "type": "Transitive",
+        "resolved": "3.3.1",
+        "contentHash": "1Ky6rOjP9YjA8eXWWSJDTSRgVQiRXwsKnET+X5hDuONJqq8KbYLQrTUjMg8gsdyKzwj74ivEioTuQd4mVhthdQ=="
+      },
       "SharpZipLib": {
         "type": "Transitive",
         "resolved": "1.4.2",
@@ -1222,6 +1237,16 @@
           "Microsoft.Extensions.Logging.Abstractions": "8.0.3"
         }
       },
+      "StackExchange.Redis": {
+        "type": "Transitive",
+        "resolved": "3.3.1",
+        "contentHash": "AnA3ZuYnOQl2Hh/PXqV+JagA6QO8hiHovHBOc0PKz+uafVSsI0lYPQy8D0rklCC5Wpmc9MznEw+Lpt8e+LaB9w==",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "10.0.5",
+          "RESPite": "3.3.1",
+          "System.IO.Hashing": "10.0.12"
+        }
+      },
       "System.ClientModel": {
         "type": "Transitive",
         "resolved": "1.8.0",
@@ -1230,6 +1255,11 @@
           "Microsoft.Extensions.Logging.Abstractions": "8.0.3",
           "System.Memory.Data": "8.0.1"
         }
+      },
+      "System.ComponentModel.Annotations": {
+        "type": "Transitive",
+        "resolved": "5.0.0",
+        "contentHash": "dMkqfy2el8A8/I76n2Hi1oBFEbG1SfxD2l5nhwXV3XjlnOmwxJlQbYpJH4W51odnU9sARCSAgv7S3CyAFMkpYg=="
       },
       "System.Configuration.ConfigurationManager": {
         "type": "Transitive",
@@ -1264,8 +1294,8 @@
       },
       "System.IO.Hashing": {
         "type": "Transitive",
-        "resolved": "8.0.0",
-        "contentHash": "ne1843evDugl0md7Fjzy6QjJrzsjh46ZKbhf8GwBXb5f/gw97J4bxMs0NQKifDuThh/f0bZ0e62NPl1jzTuRqA=="
+        "resolved": "10.0.12",
+        "contentHash": "jDix4bBMYnpZdSPcnY+KDV6ik3SRMzpMKby/bZl/XUwIiflwRNAFZ0oOl61R/pSaveIJ8t1gs2BUlrGsPs/bcg=="
       },
       "System.Memory.Data": {
         "type": "Transitive",
@@ -1390,7 +1420,7 @@
         "dependencies": {
           "Agentweaver.Abstractions": "[0.0.0, )",
           "Agentweaver.Identity": "[0.0.0, )",
-          "GitHub.Copilot.SDK": "[1.0.11, )"
+          "GitHub.Copilot.SDK": "[1.0.18, )"
         }
       },
       "agentweaver.environment": {
@@ -1462,7 +1492,8 @@
           "Azure.Identity": "[1.17.1, )",
           "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
           "Microsoft.Azure.Cosmos": "[3.63.2, )",
-          "Newtonsoft.Json": "[13.0.4, )"
+          "Newtonsoft.Json": "[13.0.4, )",
+          "StackExchange.Redis": "[3.3.1, )"
         }
       },
       "agentweaver.mcp": {
@@ -1563,6 +1594,9 @@
         "dependencies": {
           "OpenTelemetry.Extensions.Hosting": "[1.15.3, )"
         }
+      },
+      "agentweaver.web.host": {
+        "type": "Project"
       }
     }
   }
