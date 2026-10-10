@@ -636,7 +636,8 @@ public static partial class CoordinationEndpoints
                     connection, transaction, token).ConfigureAwait(false)
                     ?? throw new CoordinationException(
                         "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
-                if (latest.Info != expectedCheckpoint.Info ||
+                if (latest.Info.SessionId != expectedCheckpoint.Info.SessionId ||
+                    latest.Info.CheckpointId != expectedCheckpoint.Info.CheckpointId ||
                     latest.State.Revision != expectedCheckpoint.State.Revision ||
                     latest.State.WorkPlanId != plan.Plan.Id ||
                     latest.State.DecisionStateVersion != decision.StateVersion)

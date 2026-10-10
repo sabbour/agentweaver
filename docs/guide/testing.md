@@ -282,6 +282,32 @@ The focused Copilot lifecycle cases cover cookie/subject/state rejection before 
 concurrent refresh, transient recovery, permanent rejection, uncertain rotation, account change, and current Core revocation.
 These cases use disposable PostgreSQL and controlled external transports, not live OAuth or paid model calls.
 
+## Public BuildTest dispatch
+
+The public suite covers six scenarios: successful completion, lost acknowledgment, command failure, revoked authority, foreign binding, and a stale decision.
+It uses broker-issued tokens, current Projects authority, real disposable PostgreSQL checkpoints, and controlled Environment responses.
+After plan confirmation, it pins and prepares a real temporary Git workspace through the public SourceControl actions.
+Before a completed response, it writes the required artifact and calls the existing authenticated SourceControl output-capture action.
+It requires an admitted capture and compares the captured file bytes and digest with the Environment collector evidence.
+This positive check uses an empty Git baseline; it does not prove capture from a populated repository or automatic production capture.
+The first lost-acknowledgment response and all four negative scenarios create no output capture.
+This explicit fixture action does not prove automatic production capture.
+It retains the accepted command across execution, recovery, and replay.
+Completion compares saved session and checkpoint IDs, then checks the revision, work plan, and decision state.
+
+The separate Core case `ExecutionWitnessAppendUsesProductionCheckpointStoreBinding` appends a newer real checkpoint, then rejects the older witness snapshot.
+It checks the canonical witness store, not a race in the public dispatch handler.
+
+A passing public suite reports **six executed, six passed, and zero failures, skips, or warnings**.
+Compilation or coverage alone is not a successful run.
+These cases do not prove live Kubernetes, paid model execution, deployed services, native SDK execution, or the complete BuildTest provider flow.
+
+After the Release build, run:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName=Agentweaver.Identity.Broker.Tests.ProjectsConfigBrokerAuthorizationTests.PublicBuildTestDispatchRetainsItsIntentAndRejectsChangedAuthority --collect "XPlat Code Coverage" --logger "trx;LogFileName=public-buildtest-dispatch.trx" --results-directory artifacts\tests\public-buildtest-dispatch
+```
+
 ## P1 retained-surface harness candidates
 
 The [API adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/api-harness/README.md), [UI adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/ui-harness/README.md),
