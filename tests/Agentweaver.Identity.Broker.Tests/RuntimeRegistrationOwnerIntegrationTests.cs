@@ -70,7 +70,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         EventsIntegrationFactory events, string runToken, RuntimeOwnerContext owner, Guid membershipId,
         ICoordinatorSandboxResourceProvider sandboxProvider, bool revokeSourceBeforeSdk, string? sourceLoss,
         ControlledCopilotConnection copilotConnection, string connectionOwnerToken,
-        Func<bool, Task> setHistoricalReadAuthority, RecordingSecretRedemption? byokSecrets = null)
+        Func<bool, Task> setHistoricalReadAuthority, RecordingSecretRedemption? byokSecrets = null,
+        SkillRuntimeContentV1? expectedAcceptedSkill = null, string? unassignedAgentId = null,
+        ProjectsConfigResourceServer? skillWriter = null)
     {
         await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membershipId,
             ProjectAuthorityResourceType.Project, owner.ProjectId, ProjectAuthorityRole.Owner);
@@ -171,6 +173,44 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(registration.Binding.SessionId, skillProjection.SessionId);
         Assert.Equal(registration.Binding.AgentId, skillProjection.AgentId);
         Assert.Equal(registration.Binding.AcceptedSelectionHash, skillProjection.AcceptedSelectionHash);
+        if (expectedAcceptedSkill is null)
+            Assert.Empty(skillProjection.Skills);
+        else
+        {
+            Assert.Equal("test-agent", registration.Binding.AgentId);
+            AssertPinnedSkill(expectedAcceptedSkill, Assert.Single(skillProjection.Skills));
+            using var acceptedRunSkills = await SendAsync(
+                projects.Client,
+                HttpMethod.Get,
+                $"/api/projects/{owner.ProjectId}/runs/{owner.RunId}/agents/{registration.Binding.AgentId}/skills",
+                runToken,
+                [owner.TenantId]);
+            await AssertStatusAsync(acceptedRunSkills, HttpStatusCode.OK);
+            AssertPinnedSkill(
+                expectedAcceptedSkill,
+                Assert.Single(await ReadJsonAsync<SkillRuntimeContentV1[]>(acceptedRunSkills)));
+            var provider = new RuntimeAcceptedSkillProvider(skillProjection);
+            var descriptor = Assert.Single(await provider.ListSkillsAsync(CancellationToken.None));
+            Assert.Equal(RuntimeAcceptedSkillProvider.RuntimeName(expectedAcceptedSkill.SkillId), descriptor.Name);
+            Assert.Equal(expectedAcceptedSkill.Description, descriptor.Description);
+            var resource = Assert.Single(expectedAcceptedSkill.Resources);
+            Assert.Equal(
+                $"{expectedAcceptedSkill.Instructions}\n\nBundled resources from revision " +
+                $"{expectedAcceptedSkill.Revision}:\n- `{resource.RelativePath}`: " +
+                $"`/workspace/{RuntimeAcceptedSkillProvider.ResourceDirectory(descriptor.Name)}/{resource.RelativePath}`",
+                await provider.ReadSkillAsync(descriptor.Name, CancellationToken.None));
+        }
+        if (unassignedAgentId is not null)
+        {
+            using var activeUnassignedSkills = await SendAsync(
+                projects.Client,
+                HttpMethod.Get,
+                $"/api/projects/{owner.ProjectId}/runs/{owner.RunId}/agents/{unassignedAgentId}/skills",
+                runToken,
+                [owner.TenantId]);
+            await AssertStatusAsync(activeUnassignedSkills, HttpStatusCode.OK);
+            Assert.Empty(await ReadJsonAsync<SkillRuntimeContentV1[]>(activeUnassignedSkills));
+        }
         await using var source = NpgsqlDataSource.Create(_connectionString);
         await using var connection = await source.OpenConnectionAsync();
         await using var count = new NpgsqlCommand(
@@ -182,8 +222,30 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
             registration, signingKey, runToken, routes, failures, projects, events.Schema, ownerSchema,
             revokeSourceBeforeSdk, sourceLoss, environment, copilotConnection,
-            connectionOwnerToken, setHistoricalReadAuthority, factory.Services, byokSecrets);
+            connectionOwnerToken, setHistoricalReadAuthority, factory.Services, byokSecrets,
+            expectedAcceptedSkill, skillWriter);
         TraceNativeStage(failures, "Runtime exercise and explicit cleanup completed.");
+    }
+
+    private static void AssertPinnedSkill(
+        SkillRuntimeContentV1 expected,
+        SkillRuntimeContentV1 actual)
+    {
+        Assert.Equal(expected.SkillId, actual.SkillId);
+        Assert.Equal(expected.Revision, actual.Revision);
+        Assert.Equal(expected.Name, actual.Name);
+        Assert.Equal(expected.Description, actual.Description);
+        Assert.Equal(expected.Instructions, actual.Instructions);
+        Assert.Equal(expected.ContentDigest, actual.ContentDigest);
+        Assert.Equal(expected.Resources.Length, actual.Resources.Length);
+        for (var index = 0; index < expected.Resources.Length; index++)
+        {
+            Assert.Equal(expected.Resources[index].RelativePath, actual.Resources[index].RelativePath);
+            Assert.Equal(expected.Resources[index].Sha256, actual.Resources[index].Sha256);
+            Assert.Equal(
+                expected.Resources[index].Content.ToArray(),
+                actual.Resources[index].Content.ToArray());
+        }
     }
 
     private async Task VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
@@ -192,7 +254,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         ProjectsConfigResourceServer projects, string eventsSchema, string ownerSchema, bool revokeSourceBeforeSdk,
         string? sourceLoss, RuntimePlacementTestServer environment, ControlledCopilotConnection copilotConnection,
         string connectionOwnerToken, Func<bool, Task> setHistoricalReadAuthority,
-        IServiceProvider orchestratorServices, RecordingSecretRedemption? byokSecrets = null)
+        IServiceProvider orchestratorServices, RecordingSecretRedemption? byokSecrets = null,
+        SkillRuntimeContentV1? expectedAcceptedSkill = null,
+        ProjectsConfigResourceServer? skillWriter = null)
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         var expiryTimeProvider = sourceLoss == "sdk-preparation-expiry"
@@ -513,6 +577,20 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var create = Assert.Single(sdk.Requests, request => request.Method == "session.create");
             Assert.False(create.Parameters.GetProperty("enableSessionStore").GetBoolean());
             Assert.False(create.Parameters.GetProperty("enableConfigDiscovery").GetBoolean());
+            Assert.Equal(expectedAcceptedSkill is not null,
+                create.Parameters.GetProperty("enableSkills").GetBoolean());
+            if (expectedAcceptedSkill is not null)
+            {
+                var resource = Assert.Single(expectedAcceptedSkill.Resources);
+                var runtimeName = RuntimeAcceptedSkillProvider.RuntimeName(expectedAcceptedSkill.SkillId);
+                var nativePath = $"workspace/{RuntimeAcceptedSkillProvider.ResourceDirectory(runtimeName)}/" +
+                    resource.RelativePath;
+                var nativeResource = await sdk.InvokeNativeFilesAsync(
+                    "sessionFs.readFile", nativePath, null, timeout.Token);
+                Assert.Equal(
+                    System.Text.Encoding.UTF8.GetString(resource.Content.AsSpan()),
+                    nativeResource.GetProperty("content").GetString());
+            }
             var sdkSessionCreateCount = sdk.Requests.Count(request => request.Method == "session.create");
             var configureReplay = await receiver.ConfigureAsync(
                 bootstrap, configuration, consumeOperationId, exchangeOperationId, timeout.Token);
@@ -574,6 +652,77 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     await VerifyNativeSessionMaterialAsync(session, runToken, actor,
                         projects, failures, sdk, async () =>
                         {
+                            if (expectedAcceptedSkill is not null)
+                            {
+                                using var revokeResponse = await SendJsonAsync(
+                                    skillWriter!.Client,
+                                    HttpMethod.Post,
+                                    $"/api/projects/{registration.Binding.ProjectId}/skills/" +
+                                    $"{expectedAcceptedSkill.SkillId}/revisions/{expectedAcceptedSkill.Revision}/revoke",
+                                    connectionOwnerToken,
+                                    new RevokeSkillRevisionRequest
+                                    {
+                                        Reason = "Integration test verifies revoked content cannot be delivered again."
+                                    });
+                                await AssertStatusAsync(revokeResponse, HttpStatusCode.NoContent);
+                                using var deniedRequest = new HttpRequestMessage(
+                                    HttpMethod.Get,
+                                    new Uri("https://orchestrator.test/internal/runtime/registrations/" +
+                                        $"{registration.RuntimeInstanceId:D}/skills"));
+                                AddBearerAndTenant(deniedRequest, runToken, registration.Binding.TenantId);
+                                using var deniedSkills = await owners.SendAsync(deniedRequest, timeout.Token);
+                                await AssertStatusAsync(deniedSkills, HttpStatusCode.Conflict);
+                                Assert.True(deniedSkills.Headers.CacheControl?.NoStore);
+                                Assert.Equal(sdkSessionCreateCount,
+                                    sdk.Requests.Count(request => request.Method == "session.create"));
+
+                                await using var retryReceiver = new RuntimeBootstrapReceiver(
+                                    registration, currentOwner, broker, broker.BaseAddress!, TimeProvider.System);
+                                using var retryHost = await new HostBuilder().ConfigureWebHost(web =>
+                                {
+                                    web.UseTestServer();
+                                    web.ConfigureServices(services =>
+                                    {
+                                        services.AddRouting();
+                                        AddJwtBearer(services, signingKey);
+                                        services.AddAuthorization();
+                                        services.ConfigureHttpJsonOptions(options =>
+                                            options.SerializerOptions.UnmappedMemberHandling =
+                                                JsonUnmappedMemberHandling.Disallow);
+                                    });
+                                    web.Configure(app =>
+                                    {
+                                        app.UseRouting();
+                                        app.UseAuthentication();
+                                        app.UseAuthorization();
+                                        app.UseEndpoints(endpoints => endpoints.MapRuntimeBootstrapReceiver(
+                                            registration.Binding.ConfigureEndpoint, retryReceiver));
+                                    });
+                                }).StartAsync();
+                                var registeredRuntimeRoute = routes["runtime.test"];
+                                routes["runtime.test"] = () => retryHost.GetTestServer().CreateHandler();
+                                try
+                                {
+                                    var retryInput = new RuntimeBootstrapRequest(
+                                        registration.RuntimeInstanceId,
+                                        Guid.NewGuid(),
+                                        RuntimeContractValidation.Hash(configuration));
+                                    using var retryDelivery = await SendJsonAsync(
+                                        broker, HttpMethod.Post, "/internal/runtime/bootstrap/request", runToken, retryInput);
+                                    await AssertStatusAsync(retryDelivery, HttpStatusCode.OK);
+                                    Assert.Equal(RuntimeBootstrapReceiverState.Pending, retryReceiver.State);
+                                    await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                                        retryReceiver.ConfigureAsync(
+                                            bootstrap, configuration, Guid.NewGuid(), Guid.NewGuid(), timeout.Token));
+                                    Assert.Equal(RuntimeBootstrapReceiverState.Failed, retryReceiver.State);
+                                    Assert.Equal(sdkSessionCreateCount,
+                                        sdk.Requests.Count(request => request.Method == "session.create"));
+                                }
+                                finally
+                                {
+                                    routes["runtime.test"] = registeredRuntimeRoute;
+                                }
+                            }
                             if (!sdk.Byok)
                             {
                                 using var currentConnection = await SendAsync(broker, HttpMethod.Get,
