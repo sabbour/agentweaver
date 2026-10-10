@@ -312,8 +312,8 @@ The Orchestrator accepted-run skill reader forwards the original bearer and tena
 It requires current `readRunSelection` permission and an exact runtime registration/selection match.
 It reads the accepted agent's ordered skill revisions, verifies content and resource hashes, and checks
 current permission again after the content read. Enabled legacy skills without imported pins are denied.
-This reader is source-only until the skill owner, runtime route, and SDK loader are wired together.
-It does not establish deployed skill loading or complete the skill-import workflow.
+The source connects this reader to the skill owner, runtime route, and SDK loader.
+Deployed skill loading and acceptance of the complete skill-import workflow remain unproved.
 
 ## Sessions
 
