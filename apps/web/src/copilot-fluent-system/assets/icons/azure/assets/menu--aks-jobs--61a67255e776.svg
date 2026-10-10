@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="bcfb0511-5e07-45ab-bd64-ab3068d98fc5" x1="-230.48" y1="1056.861" x2="-213.148" y2="1056.861" gradientTransform="translate(-1047.861 -212.977) rotate(-90)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#773adc" />
+      <stop offset="1" stop-color="#a67af4" />
+    </linearGradient>
+  </defs>
+  <g id="ae72e43d-f243-42be-b2c7-64eaa12e9686">
+    <g>
+      <path d="M1.277,4.884v8.232a.6.6,0,0,0,.3.515L8.7,17.747a.6.6,0,0,0,.594,0l7.129-4.116a.6.6,0,0,0,.3-.515V4.884a.6.6,0,0,0-.3-.515L9.3.253a.6.6,0,0,0-.594,0L1.574,4.369A.6.6,0,0,0,1.277,4.884Z" fill="url(#bcfb0511-5e07-45ab-bd64-ab3068d98fc5)" />
+      <rect x="7.574" y="9.659" width="2.811" height="2.811" rx="0.236" fill="#fff" opacity="0.6" style="isolation: isolate" />
+      <rect x="3.577" y="9.659" width="2.811" height="2.811" rx="0.236" fill="#fff" opacity="0.6" style="isolation: isolate" />
+      <rect x="11.571" y="9.659" width="2.811" height="2.811" rx="0.236" fill="#fff" opacity="0.6" style="isolation: isolate" />
+      <rect x="7.574" y="5.631" width="2.811" height="2.811" rx="0.236" fill="#fff" opacity="0.8" style="isolation: isolate" />
+      <rect x="3.577" y="5.631" width="2.811" height="2.811" rx="0.236" fill="#fff" opacity="0.8" style="isolation: isolate" />
+    </g>
+  </g>
+</svg>

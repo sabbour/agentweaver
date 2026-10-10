@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="f7e5d0bf-d152-4cf5-bd7b-23de8e362b26" x1="-1851.521" y1="-287.22" x2="-1846.574" y2="-287.22" gradientTransform="translate(-272.319 1851.819) rotate(90)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#50e6ff" />
+      <stop offset="1" stop-color="#32bedd" />
+    </linearGradient>
+    <linearGradient id="b21a37e8-f69a-4560-a753-2939c1cca098" x1="-835.937" y1="-287.22" x2="-840.884" y2="-287.22" gradientTransform="matrix(0, -1, -1, 0, -272.319, -823.224)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#50e6ff" />
+      <stop offset="1" stop-color="#32bedd" />
+    </linearGradient>
+    <linearGradient id="ed8e1980-d858-4ee6-8dcf-3438f89d3caa" x1="-555.728" y1="1014.333" x2="-558.399" y2="1019.393" gradientTransform="matrix(1, 0, 0, -1, 564, 1025.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1988d9" />
+      <stop offset="0.9" stop-color="#54aef0" />
+    </linearGradient>
+    <linearGradient id="e373d238-6fd6-4d19-b38b-c4c2938f7d52" x1="-556.878" y1="1015.803" x2="-555.032" y2="1012.619" gradientTransform="matrix(1, 0, 0, -1, 564, 1025.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0.1" stop-color="#54aef0" />
+      <stop offset="0.29" stop-color="#4fabee" />
+      <stop offset="0.51" stop-color="#41a2e9" />
+      <stop offset="0.74" stop-color="#2a93e0" />
+      <stop offset="0.88" stop-color="#1988d9" />
+    </linearGradient>
+  </defs>
+  <g id="b7d11a15-06d2-434a-9d8a-dea21bc738cb">
+    <g>
+      <path d="M6.162,2.315h0A1.015,1.015,0,0,0,5.148,3.333v.681l.2-.239a.567.567,0,0,1,.432-.2h0a.566.566,0,0,1,.431.2l.445.519V3.826h9.469V2.315Z" fill="#0078d4" />
+      <circle cx="14.901" cy="2.973" r="2.473" fill="url(#f7e5d0bf-d152-4cf5-bd7b-23de8e362b26)" />
+      <g>
+        <path d="M6.659,14.17V13.7l-.569.366a.57.57,0,0,1-.618,0l-.324-.212v.816a1.015,1.015,0,0,0,1.014,1.016h9.966V14.17Z" fill="#0078d4" />
+        <polygon points="5.785 11.841 6.659 11.282 6.659 10.266 5.148 10.266 5.148 11.427 5.785 11.841" fill="#0078d4" />
+      </g>
+      <circle cx="14.901" cy="15.026" r="2.473" fill="url(#b21a37e8-f69a-4560-a753-2939c1cca098)" />
+      <polygon points="1.208 9.551 5.777 12.517 10.427 9.54 11.01 10.221 5.777 13.59 0.626 10.221 1.208 9.551" fill="#50e6ff" />
+      <polygon points="1.554 9.171 5.777 4.14 10.087 9.176 5.777 11.899 1.554 9.171" fill="#fff" />
+      <polygon points="5.777 4.14 5.777 11.899 1.554 9.171 5.777 4.14" fill="#50e6ff" />
+      <polygon points="5.777 4.14 5.777 11.899 10.087 9.176 5.777 4.14" fill="url(#ed8e1980-d858-4ee6-8dcf-3438f89d3caa)" />
+      <polygon points="5.777 13.59 11.01 10.221 10.427 9.54 5.777 12.517 5.777 13.59" fill="url(#e373d238-6fd6-4d19-b38b-c4c2938f7d52)" />
+    </g>
+  </g>
+</svg>

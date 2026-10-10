@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="af7398ee-6dec-43b6-b79d-ace549fc24ed" x1="6.594" y1="7.535" x2="6.594" y2="14.811" gradientUnits="userSpaceOnUse">
+      <stop offset="0.203" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="f4debb71-f65b-4ef3-b7c5-b7dce93f403f" x1="13.455" y1="0.073" x2="13.455" y2="8.59" gradientUnits="userSpaceOnUse">
+      <stop offset="0.139" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="bdda60d4-3318-456c-80b3-a9acad0d4187" x1="13.874" y1="9.528" x2="13.874" y2="18.656" gradientUnits="userSpaceOnUse">
+      <stop offset="0.18" stop-color="#b4ec36" />
+      <stop offset="1" stop-color="#86d633" />
+    </linearGradient>
+    <linearGradient id="b17783e6-57cc-4520-aa16-657dcda3c620" x1="4.134" y1="-0.538" x2="4.134" y2="9.076" gradientUnits="userSpaceOnUse">
+      <stop offset="0.18" stop-color="#b4ec36" />
+      <stop offset="1" stop-color="#86d633" />
+    </linearGradient>
+  </defs>
+  <g id="acc95674-f325-47bf-aa5d-ec8f2a7a98ea">
+    <g>
+      <path d="M9.744,13.178v1.38h-.11a6.2,6.2,0,0,1-6.19-6.2v-.1h1.37v.1a4.829,4.829,0,0,0,4.82,4.82Z" fill="url(#af7398ee-6dec-43b6-b79d-ace549fc24ed)" />
+      <g>
+        <circle cx="13.455" cy="4.545" r="3.973" fill="url(#f4debb71-f65b-4ef3-b7c5-b7dce93f403f)" />
+        <path d="M16.252,4.763V4.327a.281.281,0,0,0-.281-.281H13.954V2.029a.281.281,0,0,0-.281-.281h-.436a.281.281,0,0,0-.282.281V4.046H10.939a.281.281,0,0,0-.282.281v.436a.282.282,0,0,0,.282.282h2.016V7.061a.282.282,0,0,0,.282.282h.436a.281.281,0,0,0,.281-.282V5.045h2.017A.281.281,0,0,0,16.252,4.763Z" fill="#fff" />
+      </g>
+    </g>
+    <path d="M18,10.338V17.4a.6.6,0,0,1-.6.6h-7.06a.6.6,0,0,1-.6-.6v-7.06a.6.6,0,0,1,.6-.6H17.4A.6.6,0,0,1,18,10.338Z" fill="url(#bdda60d4-3318-456c-80b3-a9acad0d4187)" />
+    <rect x="0.004" y="-0.002" width="8.26" height="8.26" rx="0.6" fill="url(#b17783e6-57cc-4520-aa16-657dcda3c620)" />
+  </g>
+</svg>

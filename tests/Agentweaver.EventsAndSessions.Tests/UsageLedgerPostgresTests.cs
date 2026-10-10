@@ -1,4 +1,5 @@
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
 using Agentweaver.EventsAndSessions;
 using Agentweaver.EventsAndSessions.Cost;
 using Agentweaver.Identity;
@@ -7,6 +8,7 @@ using System.Collections.Immutable;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Npgsql;
 using NpgsqlTypes;
 using Xunit;
@@ -460,6 +462,35 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         Assert.All(Enumerable.Range(0, 7), column => Assert.True(reader.IsDBNull(column)));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HostedPricedUsageIsFullyPricedWithMissingOrPartialOptionalAccounting(bool hasMetadata)
+    {
+        var source = new SdkSessionFacts(Guid.NewGuid(), "native-session", "1.0.18", "1.0.79",
+            "model/ref", "model-1", new string('a', 64), 1m, "hosted-copilot",
+            SdkMeterSources.CopilotNanoAiu, new string('b', 64), 1);
+        var card = UsageContractTests.Card() with { MeterSource = source.MeterSource };
+        var binding = UsageContractTests.Binding(card) with { MeterSource = source.MeterSource };
+        var usage = UsageContractTests.Submission() with
+        {
+            SdkSource = source,
+            ModelBinding = UsageContractTests.Submission().ModelBinding with { MeterSource = source.MeterSource },
+            Measurement = UsageContractTests.Submission().Measurement with { ProviderUnit = "nano_aiu" },
+            SdkAccounting = hasMetadata
+                ? new(new(source.SdkSessionId, 4, "usage-4"), SdkAiCreditsStatus.Partial, true)
+                : null
+        };
+        var price = UsageContractTests.Price(card);
+        await _ledger.AppendAsync(usage, binding, price);
+        var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        var agent = Assert.Single(totals.Agents);
+        Assert.True(totals.IsFullyPriced);
+        Assert.True(agent.IsFullyPriced);
+        Assert.Equal(price.Amount, Assert.Single(totals.Amounts).Amount);
+        Assert.Equal(price.Amount, Assert.Single(agent.Amounts).Amount);
+    }
+
     [Fact]
     public async Task UsageMustReferenceAnExistingNativeSession()
     {
@@ -539,6 +570,239 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             attribution,
             measurement: measurement);
         await _ledger.AppendAsync(usage, UsageContractTests.Binding(), price);
+    }
+
+    [Fact]
+    public async Task RunAdmissionUsesTheConcreteRealCostQuoteWithoutCreatingNativeOrUsageRows()
+    {
+        var selection = RunAdmissionSelection();
+        var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
+        var model = RuntimeAcceptedModelSelection.Read(selection);
+        var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                [model.Reference] = new("native-model", ModelSourceMode.HostedCopilot)
+            });
+        var receipt = await NativeConsumer().ReadRunAdmissionAsync(
+            "tenant-1", "project-1", "run-1", request, selection, model,
+            resolver.Pin(model.Reference, ModelSourceMode.HostedCopilot), _ => Task.CompletedTask, default);
+        Assert.Equal("native-model", receipt.ModelBindingPin.ModelId);
+        Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
+            receipt, request, "tenant-1", "project-1", "run-1", selection));
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var counts = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{_schema}".usage_ledger),
+                   (SELECT count(*) FROM "{_schema}".usage_source_receipts),
+                   (SELECT count(*) FROM "{_schema}".usage_rate_cards),
+                   (SELECT count(*) FROM "{_schema}".usage_run_cost_bindings)
+            """, connection);
+        await using var reader = await counts.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.All(Enumerable.Range(0, 3), column => Assert.Equal(0L, reader.GetInt64(column)));
+        Assert.Equal(1L, reader.GetInt64(3));
+    }
+
+    [Fact]
+    public async Task RunAdmissionAuthorityLossRollsBackTheRealCostPin()
+    {
+        var selection = RunAdmissionSelection();
+        var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
+        var model = RuntimeAcceptedModelSelection.Read(selection);
+        var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                [model.Reference] = new("native-model", ModelSourceMode.HostedCopilot)
+            });
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => NativeConsumer().ReadRunAdmissionAsync(
+            "tenant-1", "project-1", "run-1", request, selection, model,
+            resolver.Pin(model.Reference, ModelSourceMode.HostedCopilot),
+            _ => throw new RuntimeAuthorizationException("runtime_run_admission_authority_changed"), default));
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var count = new NpgsqlCommand(
+            $"SELECT count(*) FROM \"{_schema}\".usage_run_cost_bindings", connection);
+        Assert.Equal(0L, await count.ExecuteScalarAsync());
+    }
+
+    private static JsonElement RunAdmissionSelection() => JsonSerializer.SerializeToElement(new
+    {
+        projectId = "project-1", runId = "run-1", projectRevision = 1, projectConfigurationRevision = 1,
+        platformRuntimeRevision = 1, contextRevision = "selection-v1",
+        projectConfiguration = new { },
+        modelSelection = new
+        {
+            reference = "accepted-native-reference", sourceMode = "hostedCopilot",
+            connectionId = "11111111-1111-1111-1111-111111111111"
+        }
+    });
+
+    [Fact]
+    public async Task ZeroWorkCostSnapshotPinsPricingWithoutInventingUsageOrAccountingReceipts()
+    {
+        var native = NativeReceipt();
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!);
+        var snapshot = await NativeConsumer().ReadCostSnapshotAsync(request, _ => Task.CompletedTask, default);
+        Assert.Equal(0, RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, request));
+        Assert.Equal(0, snapshot.CopilotTotals.Events);
+        Assert.Empty(snapshot.CopilotTotals.Amounts);
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var counts = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{_schema}".usage_ledger),
+                   (SELECT count(*) FROM "{_schema}".usage_rate_cards),
+                   (SELECT count(*) FROM "{_schema}".usage_source_receipts),
+                   (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts),
+                   (SELECT count(*) FROM "{_schema}".usage_run_cost_bindings)
+            """, connection);
+        await using var reader = await counts.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.All(Enumerable.Range(0, 4), column => Assert.Equal(0L, reader.GetInt64(column)));
+        Assert.Equal(1L, reader.GetInt64(4));
+    }
+
+    [Fact]
+    public async Task CopilotCostSnapshotKeepsPricedObservedUsageSeparateFromUnpricedOtherMeters()
+    {
+        var native = NativeReceipt();
+        var usage = native.Usage with
+        {
+            SdkAccounting = new(null, SdkAiCreditsStatus.Partial, true)
+        };
+        native = native with
+        {
+            Usage = usage,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(native.Registration, usage)
+        };
+        var consumer = NativeConsumer();
+        var acknowledgment = await consumer.AppendAsync(native, _ => Task.CompletedTask, default);
+        var other = UsageContractTests.Submission();
+        await _ledger.AppendAsync(other, null, new(null, null, CostDisposition.Unpriced, null, "other-meter-unavailable"));
+        Assert.False((await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).IsFullyPriced);
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!);
+        var snapshot = await consumer.ReadCostSnapshotAsync(request, _ => Task.CompletedTask, default);
+        Assert.Equal(acknowledgment.Accounting.Amount,
+            RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, request));
+        Assert.Equal(1, snapshot.CopilotTotals.Events);
+        Assert.True(snapshot.CopilotTotals.IsFullyPriced);
+    }
+
+    [Fact]
+    public async Task CostSnapshotAuthorityFailureRollsBackItsRealPricingPin()
+    {
+        var native = NativeReceipt();
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => NativeConsumer().ReadCostSnapshotAsync(
+            request, _ => throw new RuntimeAuthorizationException("runtime_usage_authority_changed"), default));
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var count = new NpgsqlCommand(
+            $"SELECT count(*) FROM \"{_schema}\".usage_run_cost_bindings", connection);
+        Assert.Equal(0L, await count.ExecuteScalarAsync());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ObservedSnapshotJoinsActualSourceAndLedgerReceiptsIncludingExplicitUnpriced(bool unpriced)
+    {
+        var native = NativeReceipt(missingMeasurements: unpriced);
+        var dispatchId = Guid.NewGuid();
+        var usage = native.Usage with { A2AMessageId = dispatchId };
+        native = native with
+        {
+            Usage = usage, CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(native.Registration, usage)
+        };
+        var consumer = NativeConsumer();
+        var acknowledged = await consumer.AppendAsync(native, _ => Task.CompletedTask, default);
+        var reference = new RuntimeUsageCostReceiptReference(native.ReceiptId, acknowledged.Accounting);
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!)
+        {
+            DispatchId = dispatchId, RequiredReceipts = [reference]
+        };
+        var snapshot = await consumer.ReadCostSnapshotAsync(request, _ => Task.CompletedTask, default);
+        RuntimeUsageCostSnapshotContract.ValidateObservedReceipt(snapshot, request);
+        Assert.Equal(reference, Assert.Single(snapshot.RepresentedReceipts));
+        Assert.Equal(1, snapshot.CopilotTotals.Events);
+        if (unpriced)
+        {
+            Assert.Equal(CostDisposition.Unpriced, reference.Accounting.Disposition);
+            Assert.Null(reference.Accounting.Amount);
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, request));
+        }
+        else
+            Assert.Equal(reference.Accounting.Amount,
+                RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, request));
+        Assert.Equal(1, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
+    }
+
+    [Theory]
+    [InlineData("missing", "runtime_usage_accounting_pending")]
+    [InlineData("event", "runtime_usage_accounting_pending")]
+    [InlineData("dispatch", "runtime_usage_accounting_mismatch")]
+    [InlineData("registration", "runtime_usage_accounting_mismatch")]
+    [InlineData("source", "runtime_usage_accounting_mismatch")]
+    [InlineData("hash", "runtime_usage_accounting_mismatch")]
+    [InlineData("amount", "runtime_usage_accounting_mismatch")]
+    public async Task ObservedSnapshotRejectsForeignOrForgedPersistedReceiptReferences(string fault, string expectedCode)
+    {
+        var native = NativeReceipt();
+        var dispatchId = Guid.NewGuid();
+        var usage = native.Usage with { A2AMessageId = dispatchId };
+        native = native with
+        {
+            Usage = usage, CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(native.Registration, usage)
+        };
+        var consumer = NativeConsumer();
+        var acknowledged = await consumer.AppendAsync(native, _ => Task.CompletedTask, default);
+        var reference = new RuntimeUsageCostReceiptReference(native.ReceiptId, acknowledged.Accounting);
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!)
+        {
+            DispatchId = dispatchId, RequiredReceipts = [reference]
+        };
+        request = fault switch
+        {
+            "missing" => request with { RequiredReceipts = [reference with { SourceReceiptId = Guid.NewGuid() }] },
+            "event" => request with
+            {
+                RequiredReceipts = [reference with { Accounting = reference.Accounting with { EventId = Guid.NewGuid() } }]
+            },
+            "dispatch" => request with { DispatchId = Guid.NewGuid() },
+            "registration" => request with
+            {
+                Registration = request.Registration with { ExpiresAt = request.Registration.ExpiresAt.AddMinutes(1) }
+            },
+            "source" => request with { Source = request.Source with { SdkVersion = "changed-sdk" } },
+            "hash" => request with
+            {
+                RequiredReceipts = [reference with
+                {
+                    Accounting = reference.Accounting with { CanonicalPayloadHash = new string('f', 64) }
+                }]
+            },
+            "amount" => request with
+            {
+                RequiredReceipts = [reference with { Accounting = reference.Accounting with { Amount = 999 } }]
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(fault))
+        };
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            consumer.ReadCostSnapshotAsync(request, _ => Task.CompletedTask, default));
+        Assert.Equal(expectedCode, failure.Code);
+        Assert.Equal(1, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
+    }
+
+    [Fact]
+    public async Task MissingCostProviderReturnsUnpricedSnapshotNotAFreeQuote()
+    {
+        var native = NativeReceipt();
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!);
+        var consumer = new NativeUsageReceiptConsumer(_fixture.DataSource,
+            new("native-postgres", "test", 1, _schema, "native-options", 1), _ledger);
+        var snapshot = await consumer.ReadCostSnapshotAsync(request, _ => Task.CompletedTask, default);
+        Assert.Null(snapshot.Binding);
+        Assert.Null(snapshot.Quote.Amount);
+        Assert.Equal(CostDisposition.Unpriced, snapshot.Quote.Disposition);
+        Assert.Equal("cost-provider-unavailable", snapshot.Quote.UnpricedReason);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, request));
     }
 
     private NativeUsageReceiptConsumer NativeConsumer()

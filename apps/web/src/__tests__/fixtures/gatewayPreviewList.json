@@ -1,0 +1,22 @@
+[
+  {
+    "session_id": "gateway-token",
+    "local_port": 0,
+    "target_port": 8235,
+    "pod_name": "preview-pod",
+    "started_at": "2026-09-30T12:00:00+00:00",
+    "preview_url": "https://preview.example.test",
+    "keepalive_url": "/api/runs/{runId}/sandbox/preview/gateway-token/keepalive",
+    "preview_runner_session_id": "proc-sess-1"
+  },
+  {
+    "session_id": "manual-token",
+    "local_port": 0,
+    "target_port": 7234,
+    "pod_name": "preview-pod",
+    "started_at": "2026-09-30T12:00:00+00:00",
+    "preview_url": "https://manual.example.test",
+    "keepalive_url": "/api/runs/{runId}/sandbox/preview/manual-token/keepalive",
+    "preview_runner_session_id": null
+  }
+]

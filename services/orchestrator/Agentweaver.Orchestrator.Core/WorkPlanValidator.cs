@@ -58,11 +58,25 @@ public static class WorkPlanValidator
         var hasFixedWork = workflow is not null &&
                            workflow.Definition.Steps.Any(step =>
                                step.Mode == WorkflowStepMode.Fixed && step.FixedWork is not null);
+        var hasBuildTestCommand = workflow is not null &&
+                                 workflow.Definition.Steps.Any(step => step.BuildTestCommand is not null);
         var roleSelections = ValidateSelectionContext(
-            selectionContext, hasWorkItems || hasFixedWork, issues);
+            selectionContext, hasWorkItems || hasFixedWork || hasBuildTestCommand, issues);
         if (workflow is not null && hasFixedWork)
             ValidateFixedWorkSelections(
                 workflow.Definition, roleSelections, selectionContext, issues);
+        if (workflow is not null && hasBuildTestCommand &&
+            selectionContext?.IsolationProviderBinding is { } commandBinding)
+        {
+            foreach (var step in workflow.Definition.Steps.Where(step => step.BuildTestCommand is not null))
+            {
+                if (!commandBinding.NegotiatedCapabilities.Contains(SandboxCapabilities.BuildTestCommandPod) ||
+                    !step.RequiredProviderCapabilities.All(commandBinding.NegotiatedCapabilities.Contains))
+                    Add(issues, WorkflowValidationCode.RequiredCapabilityUnavailable,
+                        $"definition.steps[{step.Id}].requiredProviderCapabilities",
+                        $"The pinned provider lacks the command capability required by BuildTest step '{step.Id}'.");
+            }
+        }
 
         for (var index = 0; index < items.Length; index++)
         {
@@ -527,10 +541,11 @@ public static class WorkPlanValidator
                 !steps.TryGetValue(item.WorkflowStepId, out var itemStep))
                 continue;
             foreach (var fixedStep in steps.Values.Where(
-                         step => step.Mode == WorkflowStepMode.Fixed && step.FixedWork is not null))
+                         step => step.Mode == WorkflowStepMode.Fixed && step.FixedWork is not null ||
+                             step.BuildTestCommand is not null))
             {
                 var conflicts = item.DeclaredOutputs.Any(output =>
-                    fixedStep.FixedWork!.DeclaredOutputs.Any(fixedOutput =>
+                    WorkflowValidationSupport.PrescribedOutputs(fixedStep).Any(fixedOutput =>
                         WorkflowValidationSupport.OutputPathsMatch(output, fixedOutput)));
                 if (!conflicts)
                     continue;
@@ -542,7 +557,7 @@ public static class WorkPlanValidator
                 if (!ordered)
                     Add(issues, WorkflowValidationCode.OutputConflictWithFixedWork,
                         $"plan.items[{item.Id}].declaredOutputs",
-                        $"Outputs overlap fixed work in step '{fixedStep.Id}' without a catalog dependency ordering.");
+                        $"Outputs overlap prescribed work in step '{fixedStep.Id}' without a catalog dependency ordering.");
             }
         }
     }

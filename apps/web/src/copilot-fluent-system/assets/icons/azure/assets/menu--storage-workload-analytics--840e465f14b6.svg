@@ -1,0 +1,32 @@
+<svg id="uuid-d3832e79-c5af-49bf-8adb-68d2f10367c3" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-c8f8fdae-d077-4cd3-974b-2c8c858bdfee" x1="-557.573" y1="1018.57" x2="-557.573" y2="1022.064" gradientTransform="translate(564 1025.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#198ab3" />
+      <stop offset="1" stop-color="#32bedd" />
+    </linearGradient>
+    <linearGradient id="uuid-4a0192e5-9811-474e-9401-2c850ddcc824" x1="-552.861" y1="1014.239" x2="-552.861" y2="1017.723" gradientTransform="translate(564 1025.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#198ab3" />
+      <stop offset="1" stop-color="#32bedd" />
+    </linearGradient>
+    <linearGradient id="uuid-8a513a8e-7da8-467e-a663-ace6fbda4931" x1="-548.488" y1="1022.032" x2="-548.488" y2="1025.516" gradientTransform="translate(564 1025.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#198ab3" />
+      <stop offset="1" stop-color="#32bedd" />
+    </linearGradient>
+    <linearGradient id="uuid-cbaa87e2-45e8-4497-a5a0-847a7e0f8b41" x1="-561.512" y1="1013.488" x2="-561.512" y2="1016.971" gradientTransform="translate(564 1025.516) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#198ab3" />
+      <stop offset="1" stop-color="#32bedd" />
+    </linearGradient>
+    <clipPath id="uuid-4be32ecf-3d30-4be4-965f-9cf451e45668">
+      <circle cx="-626.177" cy="422.808" r="50.865" fill="none" />
+    </clipPath>
+  </defs>
+  <polygon points="15.067 1.186 10.842 8.704 6.374 4.151 1.768 10.122 2.848 10.969 6.501 6.258 11.139 10.991 16.264 1.874 15.067 1.186" fill="#50e6ff" />
+  <ellipse cx="6.427" cy="5.199" rx="1.736" ry="1.747" fill="url(#uuid-c8f8fdae-d077-4cd3-974b-2c8c858bdfee)" />
+  <ellipse cx="11.139" cy="9.529" rx="1.736" ry="1.747" fill="url(#uuid-4a0192e5-9811-474e-9401-2c850ddcc824)" />
+  <ellipse cx="15.512" cy="1.747" rx="1.736" ry="1.747" fill="url(#uuid-8a513a8e-7da8-467e-a663-ace6fbda4931)" />
+  <ellipse cx="2.488" cy="10.292" rx="1.736" ry="1.747" fill="url(#uuid-cbaa87e2-45e8-4497-a5a0-847a7e0f8b41)" />
+  <rect x="5.474" y="9.974" width="2.732" height="8.026" rx=".296" ry=".296" fill="#0078d4" />
+  <rect x="9.826" y="12.748" width="2.732" height="5.252" rx=".296" ry=".296" fill="#005ba1" />
+  <rect x="14.178" y="7.285" width="2.732" height="10.715" rx=".296" ry=".296" fill="#005ba1" />
+  <rect x="1.122" y="12.748" width="2.732" height="5.252" rx=".296" ry=".296" fill="#5ea0ef" />
+</svg>

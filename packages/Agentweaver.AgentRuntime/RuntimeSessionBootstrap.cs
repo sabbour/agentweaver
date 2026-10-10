@@ -99,8 +99,9 @@ public sealed class RuntimeSessionBootstrap(
             session = await sessions.CreateAsync(
                 registration, modelReference, modelCredential.Credential, RequireSourceAuthorityAsync,
                 cancellationToken, recovery,
-                actions is null ? null : (action, input, token) =>
-                    actions.RequireAsync(registration, action, input, RequireSourceAuthorityAsync, token));
+                actions is null ? null : (action, input, toolInvocation, token) =>
+                    actions.RequireAsync(registration, action, input, RequireSourceAuthorityAsync, token,
+                        isToolInvocation: toolInvocation));
             await RequireSourceAuthorityAsync(cancellationToken);
             authorized = new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,
                 session, modelCredential, owner, broker, actor, timeProvider, actions, requireReadiness);

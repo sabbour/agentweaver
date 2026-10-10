@@ -3,6 +3,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Providers.Storage.AzureFiles;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Environment;
 
@@ -383,6 +384,94 @@ public static class EnvironmentEndpoints
                 return projection is null ? Results.NotFound() : Results.Ok(projection);
             }, cancellationToken).ConfigureAwait(false);
         });
+        sandboxes.MapGet("/build-test/binding-preparation", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            string sessionId,
+            string executionProfileReference,
+            HttpContext context,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+                Results.Ok(await manager.PrepareBindingAsync(
+                    caller!, projectId, runId, environmentId, sessionId,
+                    executionProfileReference, cancellationToken).ConfigureAwait(false)),
+                cancellationToken).ConfigureAwait(false);
+        });
+        sandboxes.MapPost("/build-test/commands", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            SandboxBuildTestApiRequest request,
+            HttpContext context,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+            {
+                var result = await manager.ExecuteAsync(
+                    caller!, projectId, runId, environmentId, request, cancellationToken)
+                    .ConfigureAwait(false);
+                return result.Operation.Status is SandboxBuildTestOperationStatus.Reserved or
+                    SandboxBuildTestOperationStatus.Running or
+                    SandboxBuildTestOperationStatus.ReconciliationRequired
+                    ? Results.Accepted(value: result)
+                    : Results.Ok(result);
+            }, cancellationToken).ConfigureAwait(false);
+        });
+        sandboxes.MapGet("/build-test/commands/{operationId:guid}", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            Guid operationId,
+            HttpContext context,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+            {
+                var result = await manager.GetAsync(
+                    caller!, projectId, runId, environmentId, operationId, cancellationToken)
+                    .ConfigureAwait(false);
+                return result is null ? Results.NotFound() : Results.Ok(result);
+            }, cancellationToken).ConfigureAwait(false);
+        });
+        sandboxes.MapPost("/build-test/commands/{operationId:guid}/reconcile", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            Guid operationId,
+            SandboxBuildTestApiRequest request,
+            HttpContext context,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+            {
+                var result = await manager.ReconcileAsync(
+                    caller!, projectId, runId, environmentId, operationId, request, cancellationToken)
+                    .ConfigureAwait(false);
+                return result.Operation.Status is SandboxBuildTestOperationStatus.Reserved or
+                    SandboxBuildTestOperationStatus.Running or
+                    SandboxBuildTestOperationStatus.ReconciliationRequired
+                    ? Results.Accepted(value: result)
+                    : Results.Ok(result);
+            }, cancellationToken).ConfigureAwait(false);
+        });
         sandboxes.MapPost("/abandon", async (
             string projectId,
             string runId,
@@ -541,6 +630,14 @@ public static class EnvironmentEndpoints
         catch (ProjectsConfigApiException exception)
         {
             return ToProjectAuthorizationResult(exception);
+        }
+        catch (RuntimeAuthorizationException exception)
+        {
+            return Results.Json(
+                new { code = exception.Code },
+                statusCode: exception.Code == "runtime_owner_denied"
+                    ? StatusCodes.Status403Forbidden
+                    : StatusCodes.Status503ServiceUnavailable);
         }
         catch (EnvironmentLifecycleException exception)
         {

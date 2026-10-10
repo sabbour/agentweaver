@@ -110,7 +110,7 @@ flowchart LR
     Cli -->|"MCP"| Mcp
     Mcp -->|"HTTP with the validated Broker bearer"| Bff
     Bff -->|"internal gRPC"| Orch
-    Bff -->|"authentication"| Identity
+    Bff -->|"Broker auth and Repo App BFF"| Identity
     Orch -->|"run-selection API"| Config
     Orch -->|"gRPC"| Knowledge
     Orch -->|"gRPC"| Source
@@ -134,14 +134,14 @@ flowchart LR
 
 | Component | Owns | Does not own |
 | --- | --- | --- |
-| Gateway/BFF | HTTP REST and server-sent events (SSE) for web and CLI; authentication entry, route dispatch, and authorized projections. | Agent execution or an application provider's viewer identity decisions. |
-| Identity | OpenIddict broker, core OAuth, purpose-bound run tokens, `SecretRef` redemption, scoped gateway credential injection, source-only owner-bound Remote MCP OAuth state with authenticated status, consent preparation, and disconnect management, and the source-only GitHub App connection, refresh, callback, and run-bound token-mint routes. This is the trust boundary. | Long-lived agent secrets or GitHub installation tokens in a run database or image. Remote MCP provider discovery, authorization/token transport, and purpose-bound credential use are not wired by the current source slice. |
+| Gateway/BFF | HTTP REST and server-sent events (SSE) for web and CLI; authentication entry, finite route dispatch, and authorized projections, including explicit Repo App and Copilot connection BFF routes. | Agent execution, arbitrary upstream proxying, or an application provider's viewer identity decisions. |
+| Identity | OpenIddict broker, core OAuth and MCP OAuth management, purpose-bound run tokens, `SecretRef` redemption, scoped gateway credential injection, owner-held Repo App and Copilot credentials, stable opaque connection references, OAuth/install callbacks, and run-bound token-mint routes. The source-only Remote MCP OAuth management slice provides authenticated status, consent preparation, disconnect, and exact Environment binding; provider discovery, authorization/token transport, and purpose-bound credential use are not wired by that slice. This is the trust boundary. | Long-lived agent secrets or provider tokens in a run database or image, or provider credentials in browser responses. |
 | Projects & Config | Project lifecycle and revisioned configuration, casting/charters, blueprint/workflow references, skill settings, model-selection references, project provider overrides, platform runtime defaults, egress narrowing, validated run limits, and its own tenant memberships, resource-role assignments, and authorization audit. | Identity issuance, provider catalog registrations, repository/workflow materialization, raw credentials, or final provisioned-resource pins. |
-| Orchestrator | Runs, Microsoft Agent Framework (MAF) workflows, session tree and coordination verbs, typed coordinator decisions, OutcomeSpec and WorkPlan, approval and question gates, immutable accepted-run Sandbox and Source Control owner bindings, source-specific merge intents and narrow action grants, checkpoints, recovery, consistency manifest, run-limit budget enforcement, and the current session/work-item/turn context and runtime-registration source. | The run journal's storage, Sandbox resource provisioning, direct cross-schema updates, complete runtime delivery, or usage accounting. |
+| Orchestrator | Runs, Microsoft Agent Framework (MAF) workflows, session tree and coordination verbs, typed coordinator decisions, OutcomeSpec and WorkPlan, approval and question gates, immutable accepted-run Sandbox and Source Control owner bindings, source-specific merge intents and narrow action grants, pending/admitted produced-output capture proofs, checkpoints, recovery, consistency manifest, run-limit budget enforcement, and the current session/work-item/turn context and runtime-registration source. | The run journal's storage, Sandbox resource provisioning, direct cross-schema updates, complete runtime delivery, or usage accounting. |
 | Environment manager | Sandbox, Snapshots, Storage, Network Policy, and Application Hosting adapters; leases and fencing; egress verification; startup phases; retention, reclaim, application deployments, and control-plane image publication. | Viewer authentication or a workflow's publish decision. |
-| Source Control & Merge | Git workspace preparation, diff and assembly, merge locks, pull requests, webhooks, backlog intake, and the Source Control provider seam. | Platform-wide project identity. |
+| Source Control & Merge | Git workspace preparation, diff and assembly, sealed produced-run output capture and authorized history reads, merge locks, pull requests, webhooks, backlog intake, and the Source Control provider seam. | Platform-wide project identity or the Events journal and object bytes. |
 | Knowledge | Memory and session-context records, decisions and proposals, prompt composition, and Memory adapters: native PostgreSQL by default, with Cosmos and Redis in P2. | Repository files as an authoritative memory database or the Sessions journal. |
-| Events & Sessions | Run journal, message contents and delivery state, SSE fan-out, Sessions adapters, durable usage ledger, and Cost adapters. | Orchestrator workflow transitions or approval policy. |
+| Events & Sessions | Run journal, message contents and delivery state, immutable produced-output package bytes in Object Store, SSE fan-out, Sessions adapters, durable usage ledger, and Cost adapters. | Orchestrator workflow transitions or approval policy. |
 | First-party MCP server | Native MCP tools sourced from the Gateway's finite OpenAPI catalog; validates Broker tokens and forwards the same bearer to Gateway. | Independent authorization, caller-supplied actor identity, or a second orchestration state machine. |
 | Web frontend / Applications | Agentweaver's own run/chat interface, surface panel, Canvas adapters and host bridge, including A2UI and GitHub Canvas compatibility work in P2, plus MCP Apps integration. | Workflow authority, agent execution, web serving capacity, or a replacement Copilot application UX. |
 
@@ -156,7 +156,12 @@ The Source Control code is also an unpublished candidate: the Orchestrator curre
 owns run-bound repository pins, pre-approval merge intents, typed approval-linked
 merge grants, and authenticated webhook-relay admission, while
 `Agentweaver.SourceControl` supplies the GitHub adapter and isolated Git workspace
-library. With GitHub App auth, Identity owns account/installation setup and current
+library. It also seals a bound workspace's produced output and exposes authorized
+capture history. For each capture, the Orchestrator first records an immutable pending
+proof; Events & Sessions verifies the package, stores its bytes in Object Store, and
+appends a typed journal event. Source Control admits the owner record only after the
+exact event ID and journal position are acknowledged, preserving journal provenance
+without a cross-service database transaction. With GitHub App auth, Identity owns account/installation setup and current
 authorization; the Orchestrator obtains a temporary token for one repository per API
 or checkout operation. Access tokens and App private-key values are not persisted,
 and permission and expiry metadata come from GitHub. The source does not deploy a

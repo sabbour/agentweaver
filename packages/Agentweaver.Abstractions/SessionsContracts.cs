@@ -24,7 +24,8 @@ public enum SessionEventKind
     EffectAccepted,
     ArtifactReference,
     CacheReference,
-    AddressedMessage
+    AddressedMessage,
+    ProducedRunCapture
 }
 
 public enum PolicyEvaluationOutcome
@@ -114,6 +115,7 @@ public sealed record StoredSessionObjectReference(
 [JsonDerivedType(typeof(ArtifactReferenceSessionPayload), "artifact_reference")]
 [JsonDerivedType(typeof(CacheReferenceSessionPayload), "cache_reference")]
 [JsonDerivedType(typeof(AddressedMessageSessionPayload), "addressed_message")]
+[JsonDerivedType(typeof(ProducedRunCaptureSessionPayload), "produced_run_capture")]
 public abstract record SessionEventPayload;
 
 public sealed record TurnSessionPayload(string Role, SessionObjectReference Content) : SessionEventPayload;
@@ -407,6 +409,7 @@ public static class SessionEventPayloadValidation
         ArtifactReferenceSessionPayload => SessionEventKind.ArtifactReference,
         CacheReferenceSessionPayload => SessionEventKind.CacheReference,
         AddressedMessageSessionPayload => SessionEventKind.AddressedMessage,
+        ProducedRunCaptureSessionPayload => SessionEventKind.ProducedRunCapture,
         _ => throw new ArgumentException("The session event kind is not supported.", nameof(payload))
     };
 
@@ -415,7 +418,8 @@ public static class SessionEventPayloadValidation
         ArgumentNullException.ThrowIfNull(payload);
         return eventVersion switch
         {
-            SessionsContractVersions.InitialEventVersion => payload is not PolicyEvaluationSessionPayload,
+            SessionsContractVersions.InitialEventVersion =>
+                payload is not (PolicyEvaluationSessionPayload or ProducedRunCaptureSessionPayload),
             SessionsContractVersions.CurrentEventVersion => true,
             _ => false
         };
@@ -456,6 +460,9 @@ public static class SessionEventPayloadValidation
                 RequireToken(cache.RuntimeVersion, nameof(cache.RuntimeVersion));
                 RequireToken(cache.BindingId, nameof(cache.BindingId));
                 return [ValidateReference(cache.Cache)];
+            case ProducedRunCaptureSessionPayload capture:
+                ProducedRunCaptureContractValidation.Validate(capture);
+                return [ValidateReference(capture.Package)];
             case AddressedMessageSessionPayload message:
                 if (message.MessageId == Guid.Empty ||
                     message.Sender.ProjectId != message.Recipient.ProjectId ||

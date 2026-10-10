@@ -25,6 +25,10 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
     [InlineData(9)]
     [InlineData(10)]
     [InlineData(11)]
+    [InlineData(12)]
+    [InlineData(13)]
+    [InlineData(14)]
+    [InlineData(15)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         string[] migrations =
@@ -41,7 +45,9 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             "runtime_registration.sql",
             "011_runtime_usage_source.sql",
             "012_source_control_owner.sql",
-            "013_source_control_github_app_pins.sql"
+            "013_source_control_github_app_pins.sql",
+            "014_source_control_output_captures.sql",
+            "015_maf_execution_evidence.sql"
         ];
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         {
@@ -69,8 +75,11 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             }
         }
         var historyBefore = await ReadMigrationHistoryAsync(version);
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        if (version < migrations.Length)
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        else
+            await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
@@ -80,7 +89,7 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
         await using var verify = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".coordination_schema_migrations
             """, verifyConnection);
-        Assert.Equal(13L, await verify.ExecuteScalarAsync());
+        Assert.Equal(15L, await verify.ExecuteScalarAsync());
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version)

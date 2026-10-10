@@ -11,10 +11,14 @@ namespace Agentweaver.Identity.Broker;
 public sealed class IdentityBrokerOptions
 {
     public const string SectionName = "IdentityBroker";
+    internal const string WebCorsPolicyName = "identity-broker-web";
 
     /// <summary>The broker's own absolute, HTTPS (or explicit loopback-for-tests) issuer URI.</summary>
     [Required]
     public required string Issuer { get; set; }
+
+    /// <summary>Exact HTTPS origin of the browser application that calls this broker.</summary>
+    public string? WebOrigin { get; set; }
 
     [Required]
     public required SigningCredentialOptions Signing { get; set; }

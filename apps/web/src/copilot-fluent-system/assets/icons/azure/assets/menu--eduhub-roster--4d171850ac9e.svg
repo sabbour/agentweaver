@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="f848caea-fa7e-4ac9-943c-f3c193023ccc" x1="7.187" y1="2.109" x2="7.187" y2="16.904" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="ece366c7-251b-4957-b314-8d6fc0f2bd4e" x1="7.187" x2="7.187" y2="3.529" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ea0ef" />
+      <stop offset="1" stop-color="#0078d4" />
+    </linearGradient>
+    <linearGradient id="bde2d200-84f4-49a2-8bca-28cd0b5da8ab" x1="13.757" y1="12.613" x2="13.757" y2="19.187" gradientUnits="userSpaceOnUse">
+      <stop offset="0.225" stop-color="#9cebff" />
+      <stop offset="1" stop-color="#50e6ff" />
+    </linearGradient>
+    <linearGradient id="a20669c7-84fc-4969-8431-2a36a2f6ec70" x1="13.57" y1="9.09" x2="14.05" y2="15.058" gradientUnits="userSpaceOnUse">
+      <stop offset="0.225" stop-color="#9cebff" />
+      <stop offset="1" stop-color="#50e6ff" />
+    </linearGradient>
+  </defs>
+  <g id="a581919e-a209-4d0f-bb92-b806b58c338b">
+    <rect x="0.284" y="2.109" width="13.805" height="14.795" rx="0.563" fill="url(#f848caea-fa7e-4ac9-943c-f3c193023ccc)" />
+    <rect x="1.127" y="3.012" width="12.12" height="12.989" rx="0.563" fill="#5ea0ef" />
+    <path d="M8.262,1.085a1.085,1.085,0,0,0-2.17,0H4.084a.564.564,0,0,0-.564.563V3.529h7.333V1.648a.564.564,0,0,0-.564-.563ZM7.028.562a.544.544,0,0,1,.691.523H7.706a.538.538,0,0,1-.538.538A.535.535,0,0,1,6.653.941.532.532,0,0,1,7.028.562Z" fill="url(#ece366c7-251b-4957-b314-8d6fc0f2bd4e)" />
+    <path d="M17.009,18a.705.705,0,0,0,.707-.7.792.792,0,0,0-.005-.085C17.434,15,16.172,13.2,13.764,13.2c-2.451,0-3.715,1.526-3.961,4.021a.707.707,0,0,0,.631.776.574.574,0,0,0,.071,0Z" fill="url(#bde2d200-84f4-49a2-8bca-28cd0b5da8ab)" />
+    <path d="M13.764,13.724a2.213,2.213,0,0,1-1.2-.353l1.19,3.108,1.181-3.088A2.206,2.206,0,0,1,13.764,13.724Z" fill="#fff" opacity="0.4" style="isolation: isolate" />
+    <circle cx="13.764" cy="11.504" r="2.22" fill="url(#a20669c7-84fc-4969-8431-2a36a2f6ec70)" />
+    <rect x="2.489" y="5.325" width="9.227" height="0.747" rx="0.291" fill="#fff" />
+    <rect x="2.489" y="6.899" width="9.227" height="0.747" rx="0.291" fill="#fff" opacity="0.8" />
+    <rect x="2.489" y="8.472" width="6.998" height="0.747" rx="0.291" fill="#fff" opacity="0.6" />
+  </g>
+</svg>

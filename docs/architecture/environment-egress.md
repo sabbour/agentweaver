@@ -133,6 +133,11 @@ it is not permission to start a model run. Any automated/model-run execution
 must separately validate its existing Orchestrator action grant. `DatapathEnforcementVerified`
 remains false because an API readback is not datapath evidence.
 
+BuildTest uses separate Cilium policies for command and output-collector Pods.
+Each policy binds the stable operation ID, role, owner, and current Sandbox/Workspace fences; neither policy permits egress.
+Environment persists the policy binding and checks its UID and specification before it releases the corresponding Pod scheduling gate.
+This is policy-object evidence, not proof that a deployed Cilium datapath enforced the policy.
+
 ```mermaid
 sequenceDiagram
     participant E as Environment manager

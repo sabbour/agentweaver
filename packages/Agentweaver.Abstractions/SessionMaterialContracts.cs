@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Agentweaver.Abstractions;
 
 public enum SessionMaterialKind { TurnContent, SdkCache }
@@ -14,7 +16,11 @@ public sealed record SessionMaterialBinding(
     string SdkVersion,
     string RuntimeVersion,
     string ModelSelectionReference,
-    string ModelId);
+    string ModelId)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxPromptTokens { get; init; }
+}
 
 public sealed record SessionMaterialWriteRequest(
     int ContractVersion,
@@ -28,6 +34,9 @@ public sealed record SessionMaterialWriteRequest(
     string? SdkVersion = null,
     string? ModelId = null)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxPromptTokens { get; init; }
+
     public override string ToString() => nameof(SessionMaterialWriteRequest) + " [REDACTED]";
 }
 
@@ -55,7 +64,8 @@ public static class SessionMaterialValidation
             request.ExecutionFence <= 0 || !Enum.IsDefined(request.Kind) ||
             request.Bytes is not { Length: > 0 and <= MaximumBytes } ||
             request.Kind == SessionMaterialKind.TurnContent && request.Role is not ("user" or "assistant") ||
-            request.Kind == SessionMaterialKind.SdkCache && request.Role is not null)
+            request.Kind == SessionMaterialKind.SdkCache && request.Role is not null ||
+            request.MaxPromptTokens is < 1 or > 200000)
             throw new ArgumentException("A bounded typed execution session material request is required.");
         RequireIdentifier(request.SdkVersion);
         RequireIdentifier(request.ModelId);
@@ -67,7 +77,7 @@ public static class SessionMaterialValidation
         if (material.ContractVersion != 1 || !Enum.IsDefined(material.Kind) ||
             material.RuntimeInstanceId == Guid.Empty || material.RegistrationRevision <= 0 ||
             material.ExecutionFence <= 0 || reference.ByteLength is not (> 0 and <= MaximumBytes) ||
-            reference.Purpose != Purpose(material.Kind))
+            reference.Purpose != Purpose(material.Kind) || material.MaxPromptTokens is < 1 or > 200000)
             throw new ArgumentException("The recorded session material binding is invalid.");
         RequireHash(material.Sha256);
         RequireHash(material.AcceptedSelectionHash);

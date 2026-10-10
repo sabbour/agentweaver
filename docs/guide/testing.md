@@ -4,7 +4,7 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 
 | Test suite | What it exercises | What it does not prove |
 | --- | --- | --- |
-| Orchestrator Core tests | Typed outcome/workflow/plan/revision validation, workflow grammar and step DAG validation, bounded WorkPlan eligibility and joins, pinned model/provider selection checks, structured scope diffs, AGT Policy provider validation and evaluation, negotiation/pinning, deny-by-default and project-policy narrowing, plus action-guard grant scope/fence checks, immutable owner receipt persistence, journal-ACK ordering, current-grant revalidation, and no-effect behavior on evidence failure. | Live model output, full child dispatch, deployed authorization, or protected-effect call-site enforcement. |
+| Orchestrator Core tests | Typed outcome/workflow/plan/revision validation, workflow grammar and step DAG validation, bounded WorkPlan eligibility and joins, project-scoped backlog graph edits and cycle checks, revision-fenced readiness for merge-complete and verified non-merge completion, MAF witness serialization and current-capture inventory regressions for late non-empty captures and multiple captures, pinned model/provider selection checks, structured scope diffs, AGT Policy provider validation and evaluation, negotiation/pinning, deny-by-default and project-policy narrowing, plus action-guard grant scope/fence checks, immutable owner receipt persistence, journal-ACK ordering, current-grant revalidation, and no-effect behavior on evidence failure. Its PostgreSQL integration tests cover persisted backlog edits, concurrent claim arbitration, idempotent replay after store restart, rollback of claim/root/decision intent, and rollback when current authority is lost immediately before commit or replay commit. | Current network authorization in backlog routes, production task-to-whole-plan evidence association/output-proof verification, live model output, full child dispatch, deployed authorization, or protected-effect call-site enforcement. |
 | Source Control tests | Real temporary-Git workspace isolation and recovery, controlled GitHub HTTP behavior including exact open-PR reuse and exact-head check evidence, raw-byte HMAC and repository binding, strict Broker redemption, immutable provider-pin restore, typed approval-linked merge-grant state, native PostgreSQL repository locking and webhook-delivery replay/conflict, plus Orchestrator audience rejection of direct GitHub POST before Projects or owner effects. | A deployed Source Control service, trusted unattended webhook relay, live GitHub/Identity calls, or automatic workflow execution from a webhook. |
 | Provider tests | Catalog validation, cardinality, overrides, capability negotiation, and run pinning. | Resource provisioning or network-policy enforcement. |
 | Azure Files provider tests | Environment-scoped generation PVC identities, pinned Kubernetes API target, requested/configured StorageClass matching, effective reclaim-policy enforcement, claim/PV ownership checks, reclaim/delete UID preconditions, exact release receipts and retry outcomes, Azure Files mount options, Kubernetes quantity normalization, and credential-free request bodies through fake Kubernetes transports. | A live Kubernetes API/CSI driver, Azure Files durability or data erasure, Sandbox attachment, or durable flush. |
@@ -13,11 +13,13 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 | Identity broker tests | OpenIddict validation, external login, consent, S256 PKCE, refresh replay, PostgreSQL grants, redemption HTTP, and real broker-issued tokens against Projects API source-owned memberships/roles, including forged-claim rejection and revocation. GitHub Repo App PostgreSQL tests cover owner-bound OAuth and installation callbacks, PKCE/state/cookie replay rejection, refresh rotation/revocation/uncertain outcomes, installation/repository discovery, hashed selection codes, same-project reuse and cross-project denial, exact one-repository permission requests and expiry/digest checks, and absence of token/key values from Identity rows. Broker-backed Orchestrator/Events integration proves fork denial without reservation, reserved fork registration/replay, revocation before journal commit with no target/lineage change, and explicit unregistered outcomes. It also proves Projects revocation during late fork-command INSERT, owner outbox UPDATE, and registered-duplicate row-lock waits; exact current-fence runtime-owner context absence; and failure/recovery decision, gate, grant, context-history, and restart behavior. Source Control integration proves typed merge approval through real Projects, Broker, and Orchestrator hosts; persisted conflicts with no merge write for revocation during repository-lock wait, redemption, readiness, and the `merge_started` check; truthful merged SHA after post-effect revocation; and replay from a fresh Orchestrator host. **COUPLED fence proof:** the real PostgreSQL advisory-lock wait precedes a Core turn-failure transition while Projects authorization remains valid; the newer decision/fence supersedes the typed approval and the current-grant lookup plus owner CAS confirms the exact grant is no longer current before persisting `source_control_run_binding_changed` with no merge PUT. The same flow rejects a changed accepted-selection PUT and checks the current GET is byte- and hash-identical, including its revision fields, both after the PUT and after the fence change. Concurrent HTTP executions wait on the repository lock, return the same merged SHA with one GitHub merge PUT, and replay from a fresh host. Authorized workspace preparation/diff uses distinct API and checkout `SecretRef` purposes and a dual API/Broker audience token against a real temporary Git origin; responses, workspace manifest, and Git config contain no checkout credential. Other coverage includes current selection authority, typed decision/gate ownership, grant and receipt persistence, Sandbox resolution and revocation, concurrent proposal idempotency, and Policy receipt admission under expired/superseded grants, current Deny, and Core-role revocation after SQL lock waits. | Deployed OAuth, Azure RBAC, Azure acceptance, production Sandbox provisioning/dispatch, an active background relay, automatic AgentHost scheduling, or gate approval/completion from message receipt. |
 | Gateway/BFF tests | Broker-signed RSA bearer validation, wrong-audience and missing-token rejection before owner calls, real Projects & Config/PostgreSQL authorization, tenant and bearer forwarding, owner `202` and stale-gate `409` passthrough, owner outage and timeout mapping, complete OpenAPI route/schema/reference checks against serialized Projects and Orchestrator DTOs, replay/reconnect cursors, pre-start SSE owner failure mapping, and stream abort after an Events body failure or current Viewer revocation. Events pages use a controlled owner HTTP transport in this boundary test. | Deployed Gateway, public DNS/TLS, production owner routing, automatic AgentHost integration, or cloud acceptance. |
 | MCP tests | Native Streamable HTTP initialize/list/call, live Gateway OpenAPI tool schemas, schema-invalid enum and array-item rejection before dispatch, fixed route/argument mapping, idempotent retries, owner denial/status/outage preservation, post-headers body-stall timeout, public RFC 9728 metadata and challenge, plus real OpenIddict issuer/audience/expiry/signing-key rejection. The Broker integration test issues a real OAuth access token and verifies it is accepted by MCP and Gateway and reaches the controlled Knowledge owner unchanged with the idempotency key. | A deployed MCP host, live Knowledge/PostgreSQL owner authorization, external MCP client interoperability, or cloud acceptance. |
+| Web client tests | Broker-token handling and exact project/run scoping; Gateway error, idempotency, and SSE parsing; cookie/CSRF Repo App Broker DTOs, native popup form posts, callback origin/source/request matching, deferred-CSRF cancellation across navigation/reopen, stale status rejection, and run-bound Gateway installation/pinning; revisioned project configuration; paginated Knowledge records; owner-snapshot refresh and stale-gate responses; exact request-ID/state-version gate actions; journal replay/live ordering; and truthful accepted-selection and usage-total rendering. Run with `npm --prefix apps/web test`; typecheck, lint, coverage, and production build use the scripts documented in the [web client guide](./web-client). | A live Gateway/Broker session, real owner acceptance, deployed UI/image, automatic AgentHost scheduling, model execution, or cloud acceptance. |
+| Web production-container check | `node --test scripts/release/tests/web-container-callback.test.mjs` builds the pinned ASP.NET Core 10 image without network access and verifies non-root execution, callback/runtime-config security headers, callback query stripping and execution, runtime configuration encoding, hashed-asset caching, missing-asset 404, SPA fallback, and callback-log redaction. CI preloads `mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4` for `linux/amd64` before Node coverage. Locally, Linux amd64 Docker must have this exact runtime image cached. | Live Broker/Gateway browser journeys, deployed DNS/TLS/ingress, or cloud acceptance. |
 | PostgreSQL tests | Outbox and inbox transactions, duplicates, concurrency, leases, relay outcomes, and recovery across restart. | A broker, relay daemon, exactly-once delivery, or cross-service transaction. |
 | Events & Sessions tests | Provider-neutral contracts and the P0 Identity Broker principal profile; explicit runtime/migration Entra configuration with no identity fallback; PostgreSQL token refresh and password rejection; project/run-scoped IDs; append, deduplication/conflicts, PolicyEvaluation redaction and provenance checks, receipt-reference admission/no-store acknowledgments/transaction rollback, legacy capability pins, fork prefix lineage and authenticated idempotent retries, owner-admission revocation, migration, and rollback. Addressed-message tests cover idempotency, ordering, leases/fencing, transactional outbox, acknowledgments, expiry, and undeliverable state. PostgreSQL coverage uses disposable containers. | Workload-identity federation, production Entra grants, live cloud migration, AgentHost integration, protected-effect call-site enforcement, or production-scale replica behavior. |
 | Environment egress tests | Purpose-aware FQDN/CIDR intersection, Projects authorization freshness, Cilium options and policy rendering, resource-version/generation fencing, object readback, and provider pinning with fake Kubernetes resources. | Sandbox claim/template labels, Kubernetes RBAC/workload identity, a deployed Cilium datapath, actual network reachability, or public HTTPS/Remote MCP L7 mediation. |
-| Environment Sandbox tests | See the [Sandbox testing guide](./environment-sandbox-testing.md) for owner-fenced lease, selected-provider, readiness, and recovery coverage. | Live AKS or RuntimeClass behavior, Cilium datapath enforcement, AgentHost configuration, Core run pins, or deployed service configuration. |
-| Knowledge tests | Knowledge-owned PostgreSQL migrations and least-privilege runtime grants; project/agent isolation; immutable revision history, CAS conflicts, idempotent retries, explicit proposal decisions and outbox persistence; context filtering/restart; TestServer checks for fresh Projects authority and original-token forwarding; Cosmos adapter option/provider tests with a fake document store, including negotiation rejection for an expiring TTL or missing search index, batch timeout/size/throttle failures, immutable run-pin checks, and no fallback when Cosmos is unavailable; deterministic identical-retry races for update, reject, and promote; current scoped receipt reads, legacy three-field N-1 delivery/replay, partial-scope rejection, and a missing-pin lookup that verifies no binding is created. Identity Broker integration tests use broker-issued minimal-profile tokens, live Core membership/role lookup, the Knowledge API, and PostgreSQL to verify the private-content `WriteProjects` boundary. PostgreSQL uses disposable containers. | A deployed Knowledge service, production workload identity, live Cosmos permissions/throughput/availability, or delivery from either Memory adapter to a deployed Events & Sessions journal. |
+| Environment Sandbox tests | See the [Sandbox testing guide](./environment-sandbox-testing.md) for owner-fenced lease, selected-provider, readiness, and recovery coverage. BuildTest source tests check complete checkpoint/profile binding, required-output failure, distinct collector terminal provenance, timeout/cancellation classification, server capability configuration, and migration/model metadata consistency without a database connection. | Live AKS or RuntimeClass behavior, Cilium datapath enforcement, deployed AgentHost configuration, durable BuildTest PostgreSQL execution, Core run pins, or deployed service configuration. |
+| Knowledge tests | Knowledge-owned PostgreSQL migrations and least-privilege runtime grants; project/agent isolation; immutable revision history, CAS conflicts, idempotent retries, explicit proposal decisions and outbox persistence; context filtering/restart; TestServer checks for fresh Projects authority and original-token forwarding; Cosmos adapter option/provider tests with a fake document store, including negotiation rejection for an expiring TTL or missing search index, batch timeout/size/throttle failures, immutable run-pin checks, and no fallback when Cosmos is unavailable; Redis adapter tests with a controlled command-client fake for TLS/options and provider selection, AOF/eviction/topology rejection, persistent-key and hash-field checks, malformed typed-payload rejection during negotiation and scans, single-write batch prevalidation, CAS, lost-response idempotency, server-time lease fencing, and backend-loss behavior; opt-in native Redis tests use the production client/store for real-Lua batch atomicity, concurrent CAS, and promotion/receipt/idempotency plus server-time lease fencing across an AOF-backed restart of one digest-pinned, test-owned instance; deterministic identical-retry races for update, reject, and promote; current scoped receipt reads, legacy three-field N-1 delivery/replay, partial-scope rejection, and a missing-pin lookup that verifies no binding is created. Identity Broker integration tests use broker-issued minimal-profile tokens, live Core membership/role lookup, the Knowledge API, and PostgreSQL to verify the private-content `WriteProjects` boundary. PostgreSQL uses disposable containers. | A deployed Knowledge service, production workload identity, live Cosmos or Redis permissions/durability/availability, or delivery from either Memory adapter to a deployed Events & Sessions journal. |
 | Key Vault tests | Azure SDK authentication and secret requests through in-memory HTTP transports. Workload identity tests use generated token files and fake OAuth and Key Vault endpoints. | Live token exchange, Key Vault RBAC, or an Azure deployment. |
 | Blob tests | Azure SDK requests, streamed data, create-only writes, and missing-object results through a fake HTTP transport. | Live credentials, permissions, durability, or cloud access. |
 | Telemetry tests | In-process OpenTelemetry setup and Azure Monitor exporter behavior through an injected transport. | Azure Monitor ingestion. |
@@ -35,7 +37,40 @@ checks that the merged SHA remains durable and can be replayed from another host
 
 ## Run tests
 
+Shared-model and run-admission source tests cover reference-versus-model-ID resolution,
+configuration revision/hash mismatch, disabled models, accepted connection binding,
+and rejection before native SDK startup.
+The compiled PostgreSQL cases cover root/admission atomic persistence, replay without repricing,
+hard-limit rejection, and root/backlog rollback after current-authority loss.
+Events cases check that real run-start quotes create no usage or native-source rows.
+Compiling these cases is not PostgreSQL execution evidence.
+
+Numeric owner cases use the existing disposable Coordination PostgreSQL fixture and actual migrations, registrations, checkpoints, source store, and action-grant store.
+They cover exact model-send reservation replay, restart without resend or refund, and concurrent child-runtime admission at the whole-run cap.
+Tool cases cover permission-only checks, exact retry, changed-event conflicts, and concurrent reservations at the whole-run cap.
+These store tests do not prove HTTP authentication, live native effects, or deployed Policy enforcement.
+Controlled TCP tests separately exercise the actual SDK permission notification, pending-permission response, and pre-tool hook without a double debit.
+Prompt tests check actual catalog/provider wire fields, missing-capacity denial, accepted narrowing, immutable source pins, and cached resume under increased or decreased capacity.
+Capability-wire tests do not prove live token enforcement or truncation.
+
+The positive Broker fixture prepares its guarded native turn through the current Orchestrator owner and persisted MAF checkpoint.
+One real Events host provides pricing, accounting, and session material; the controlled SDK supplies native completion evidence, not a paid model call.
+
+Ordinary v1 PR CI runs these PostgreSQL suites through `npm run coverage:dotnet` on its existing Linux runner.
+Each suite retains standard TRX results beside Cobertura coverage and `source.json`.
+The TRX logger can copy a collector report into its attachment directory.
+The runner counts byte-identical copies once and still rejects missing or distinct extra reports.
+Use the tested source SHA, PR head, run, and attempt to join evidence to the exact reviewed source.
+A compiled case or an older green run is not a passing receipt for changed source.
+
 Use the .NET 10 SDK selected by `global.json`, Node.js 24, and a Docker-compatible engine. PostgreSQL integration tests start their own disposable container.
+CI installs Chromium for broker browser integration tests from the Release-built
+`tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/playwright.ps1` before
+`npm run coverage:dotnet`.
+Browser callback fixtures also require the locked Web production shell in `apps/web/dist`;
+prepare it with `npm ci --prefix apps/web --no-audit --no-fund` and
+`npm --prefix apps/web run build` before running those fixtures. They configure the
+normalized Broker issuer separately from the ephemeral transport URL.
 
 Run these commands from the repository root:
 
@@ -57,6 +92,40 @@ npm run test:release
 ```
 
 Missing Docker, image-pull permission, or PostgreSQL startup fails the integration suite. Testcontainers does not clean up unrelated containers or contact production resources.
+
+### Opt-in native Redis Memory tests
+
+`RedisMemoryNativeIntegrationTests` are skipped unless
+`AGENTWEAVER_REDIS_MEMORY_NATIVE=1`. They do not create, pull, or delete a container.
+The restart case restarts only the validated dedicated test instance.
+Supply an already-running instance through these variables:
+
+| Variable | Requirement |
+| --- | --- |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_ENDPOINT` | A loopback `rediss://127.0.0.1:<published-port>/` endpoint. The certificate must be trusted by the test host and valid for the endpoint host; certificate validation is not bypassed. |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_CONTAINER_ID` | The full 64-character ID of the dedicated container. |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_OWNER_ID` | A unique 32-character run GUID. The container and AOF volume must both have labels `io.agentweaver.redis-memory.native-test=true` and `io.agentweaver.redis-memory.native-test-owner=<run-guid>`. |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_IMAGE` | The exact cached image reference, including `@sha256:<64 lowercase hex digits>`. The inspected container image must match it; tests do not pull missing images. |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_ENGINE` | `docker` or `podman`, used only to inspect the labeled instance and, in the restart case, restart its exact ID. |
+| `AGENTWEAVER_REDIS_MEMORY_NATIVE_USERNAME` and `AGENTWEAVER_REDIS_MEMORY_NATIVE_PASSWORD` | Optional existing ACL credentials. Set both or neither; the test does not create credentials or print their values. |
+
+Publish TLS port `6380/tcp` only on the loopback host port in the endpoint. Put Redis's
+active AOF directory (`dir` plus `appenddirname`, when present) on a dedicated named
+volume with the same test-owner labels. Redis must pass normal provider negotiation,
+including AOF-always, healthy AOF, standalone-primary, and `noeviction` checks. The
+helper verifies the container ID, image, loopback binding, AOF path, and volume labels
+before any write. The restart case rechecks ownership immediately before restarting
+only that container, then reconnects to the same ID and pinned image. Every test uses a
+fresh key prefix; there is no `FLUSHALL` or namespace-wide cleanup.
+
+After the controlled test-owned instance is allocated, run only the native filter:
+
+```powershell
+dotnet test tests\Agentweaver.Knowledge.Tests\Agentweaver.Knowledge.Tests.csproj --no-restore --configuration Release --filter FullyQualifiedName~RedisMemoryNativeIntegrationTests
+```
+
+Do not set the opt-in flag until all instance, image, volume, endpoint, and ownership
+values are confirmed. The native filter is not part of offline test runs.
 
 ## Meter-keyed Cost source selection
 
@@ -82,14 +151,31 @@ tests remain unchanged.
 
 The Events & Sessions tests cover weighted nano-AIU pricing, unweighted quotes,
 missing measurements, immutable rate cards, and redacted binding diagnostics.
+Hosted usage contract tests accept priced nano-AIU without optional SDK accounting metadata.
+They still reject wrong source identities, meter shapes, and unpriced entries.
+Cost snapshot contract tests distinguish valid zero-work quotes from unavailable pricing.
+They reject source, model, rate, unit, and run-scope mismatches.
+Observed snapshot tests require bounded, unique references and reject missing, changed, or foreign acknowledgments.
+Native completion tests require exactly the usage-event IDs in the durable completion range.
+Host tests reject a failed owner join without an answer or a second native send.
+They allow explicit unpriced uncapped output and account later usage without inventing range membership.
+The PostgreSQL snapshot tests cover real pricing pins without synthetic usage,
+authority rollback, and Copilot-only totals with unpriced other meters.
+They also join actual source and ledger rows, including explicit unpriced entries,
+and reject changed registration, source, platform message, event, hash, or amount.
+These tests require the disposable PostgreSQL lane; compilation is not execution evidence.
 The disposable-PostgreSQL tests cover concurrent duplicates, content conflicts,
 restart, immutable history, transaction rollback, and exact run/agent totals.
 Receipt tests read the committed hash and immutable price through a separate
 PostgreSQL connection. Duplicate retries return the identical receipt.
 Migration tests cover fresh Events version 7, admitted version-3 and version-4 upgrades,
 the legacy version-2 project-fact layout, and rejected version gaps.
-Orchestrator migration tests upgrade admitted version 8 and native intermediate versions 9 and 10 to version 11.
-Repeated migration and startup checks preserve the original migration history.
+The Orchestrator migration fixture now enumerates schema versions 8 through 15 and
+includes the packaged 015 MAF evidence resource. It asserts the final migration
+history contains exactly 15 versions. The fixture was not run locally during source
+preparation; configured GitHub Actions CI covers it in a disposable PostgreSQL schema.
+Source publication does not invoke a migration against a shared or live database.
+Repeated migration checks preserve the original migration history.
 
 The combined Broker test connects actual OAuth and bearer validation, current Core
 memberships/roles, immutable Projects selection, Environment lease/profile, Orchestrator
@@ -172,6 +258,11 @@ npm run test:docs-diagrams
 ```
 
 The build rejects broken internal links. The link checker verifies local pages, anchors, images, and editable diagram files. The diagram checks compare JSON, draw.io XML, PNG, and hash stamps.
+
+VitePress uses a compatible dependency range; `docs/package-lock.json` preserves reproducible installs.
+Reuse an existing compatible installation instead of reinstalling it for a version check.
+Diagram export accepts compatible installed draw.io Desktop versions and records the detected version in each hash stamp.
+Source, XML, PNG, and rendering-recipe integrity checks remain required.
 
 ## Azure acceptance boundary
 

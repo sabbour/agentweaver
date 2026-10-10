@@ -86,6 +86,10 @@ var identityOptions = builder.Configuration
         $"Missing required configuration section '{IdentityBrokerOptions.SectionName}'.");
 
 Validator.ValidateObject(identityOptions, new ValidationContext(identityOptions), validateAllProperties: true);
+var webOrigin = ParseWebOrigin(identityOptions.WebOrigin);
+if (identityOptions.GitHubRepoApp is not null && webOrigin is null)
+    throw new InvalidOperationException(
+        "IdentityBroker:WebOrigin is required when GitHub Repo App is configured.");
 Validator.ValidateObject(identityOptions.Signing, new ValidationContext(identityOptions.Signing), validateAllProperties: true);
 Validator.ValidateObject(identityOptions.ExternalProvider, new ValidationContext(identityOptions.ExternalProvider), validateAllProperties: true);
 Validator.ValidateObject(identityOptions.SecretRedemption, new ValidationContext(identityOptions.SecretRedemption), validateAllProperties: true);
@@ -395,6 +399,16 @@ builder.Services.AddOpenIddict()
     });
 
 builder.Services.AddAuthorization();
+builder.Services.AddCors(options => options.AddPolicy(
+    IdentityBrokerOptions.WebCorsPolicyName,
+    policy =>
+    {
+        if (webOrigin is not null)
+            policy.WithOrigins(webOrigin.GetLeftPart(UriPartial.Authority));
+        policy.WithMethods(HttpMethods.Get, HttpMethods.Post);
+        policy.WithHeaders("Content-Type", "X-CSRF-TOKEN");
+        policy.AllowCredentials();
+    }));
 
 var app = builder.Build();
 
@@ -408,6 +422,8 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<BrokerClientSeeder>().SeedAsync(CancellationToken.None);
 }
 
+app.UseRouting();
+app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -417,13 +433,37 @@ app.MapCopilotConnectionEndpoints();
 app.MapRemoteMcpOAuthManagementEndpoints();
 if (identityOptions.GitHubRepoApp is not null)
 {
-    app.MapGitHubRepoAppEndpoints();
+    app.MapGitHubRepoAppEndpoints(webOrigin!);
     app.MapGitHubRepoAppInstallationTokenEndpoints();
 }
 if (runtimeBootstrapOptions is not null)
     app.MapIdentityRuntimeCredentialEndpoints();
 
 app.Run();
+
+static Uri? ParseWebOrigin(string? value)
+{
+    if (value is null)
+        return null;
+
+    if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+        uri.Scheme != Uri.UriSchemeHttps ||
+        string.IsNullOrEmpty(uri.Host) ||
+        !string.IsNullOrEmpty(uri.UserInfo) ||
+        !string.IsNullOrEmpty(uri.Query) ||
+        !string.IsNullOrEmpty(uri.Fragment) ||
+        uri.AbsolutePath != "/")
+        throw new InvalidOperationException(
+            "IdentityBroker:WebOrigin must be an absolute HTTPS origin without credentials, path, query, or fragment.");
+
+    var normalizedOrigin = new UriBuilder(uri)
+    {
+        Path = string.Empty,
+        Query = string.Empty,
+        Fragment = string.Empty,
+    }.Uri.GetLeftPart(UriPartial.Authority);
+    return new Uri(normalizedOrigin, UriKind.Absolute);
+}
 
 /// <summary>Exposed so WebApplicationFactory-based tests can bootstrap this host.</summary>
 public partial class Program;

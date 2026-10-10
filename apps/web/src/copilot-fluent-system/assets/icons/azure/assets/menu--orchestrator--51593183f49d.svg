@@ -1,0 +1,15 @@
+<svg id="uuid-66919991-0830-445c-8051-413937c1dee3" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-df61df2e-d212-495f-a5ae-6b66b4f1eb28" x1="14.25" y1="9.148" x2="14.25" y2="1.648" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset="1" stop-color="#46a0de" />
+    </linearGradient>
+    <linearGradient id="uuid-1b96581b-b156-4209-b9f7-b433717ab9ab" x1="3.75" y1="16.352" x2="3.75" y2="8.852" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0078d4" />
+      <stop offset="1" stop-color="#46a0de" />
+    </linearGradient>
+  </defs>
+  <path d="M6.622,13.352c-.087,0-.154-.003-.196-.006l.108-1.496c.037.005.907.058,1.389-.552.214-.271.28-.576.297-.784l-.005-2.969c.022-.37.167-1.476,1.15-2.253.845-.668,1.778-.671,2.141-.641l-.123,1.495c-.183-.017-.661-.015-1.088.323-.511.403-.574,1.007-.582,1.124l.004,2.983c-.052.656-.265,1.206-.618,1.652-.796,1.008-1.974,1.125-2.479,1.125Z" fill="#9b9c9c" />
+  <circle cx="14.25" cy="5.398" r="3.75" fill="url(#uuid-df61df2e-d212-495f-a5ae-6b66b4f1eb28)" />
+  <circle cx="3.75" cy="12.602" r="3.75" fill="url(#uuid-1b96581b-b156-4209-b9f7-b433717ab9ab)" />
+</svg>

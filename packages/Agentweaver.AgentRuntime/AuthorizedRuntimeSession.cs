@@ -59,6 +59,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         string prompt, RuntimeSessionMaterialHttpClient material, CancellationToken cancellationToken,
         Guid? userEventId = null)
     {
+        if (Registration.Binding.WorkflowStepId is not null)
+            throw new RuntimeAuthorizationException("runtime_native_turn_admission_required");
         if (_actions is null)
             throw new RuntimeAuthorizationException("runtime_action_authority_unavailable");
         if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > AddressedMessageValidation.MaximumTextLength ||
@@ -82,10 +84,57 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                 .ConfigureAwait(false);
             await _actions.RequireAsync(Registration, "model.turn", System.Text.Encoding.UTF8.GetBytes(prompt),
                 RequireCurrentAsync, cancellationToken).ConfigureAwait(false);
-            var answer = await _session.SendTurnAsync(prompt, cancellationToken).ConfigureAwait(false);
+            var answer = await _session.SendTurnAsync(prompt, cancellationToken, userEventId).ConfigureAwait(false);
             await CommitTurnContentAsync(material, Guid.NewGuid(), "assistant", answer, cancellationToken).ConfigureAwait(false);
             await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
             return answer;
+        }
+        finally
+        {
+            _executionGate.Release();
+        }
+    }
+
+    internal async Task<(string Response, RuntimeNativeTurnRecordedReceipt Receipt)> SendNativeTurnAsync(
+        RuntimeA2ASendRequest request, RuntimeSessionMaterialHttpClient material,
+        RuntimeUsageSourceHttpClient source, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(material);
+        ArgumentNullException.ThrowIfNull(source);
+        if (_actions is null)
+            throw new RuntimeAuthorizationException("runtime_action_authority_unavailable");
+        var message = request.Message;
+        if (message is null || message.MessageId == Guid.Empty ||
+            message.Parts is not [{ Kind: "text", Text: { Length: > 0 } prompt }] ||
+            string.IsNullOrWhiteSpace(prompt) || prompt.Length > AddressedMessageValidation.MaximumTextLength ||
+            RuntimeCopilotSession.HasUnsupportedPromptControls(prompt))
+            throw new RuntimeAuthorizationException("runtime_a2a_message_invalid");
+        await _executionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var binding = Registration.Binding;
+            if (await material.ReadOptionalTurnAsync(
+                new(binding.ProjectId, binding.RunId, binding.SessionId), message.MessageId, cancellationToken)
+                .ConfigureAwait(false) is not null)
+                throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
+            await _actions.RequireAsync(Registration, "model.turn", System.Text.Encoding.UTF8.GetBytes(prompt),
+                RequireCurrentAsync, cancellationToken, dispatchId: message.MessageId).ConfigureAwait(false);
+            var admission = await source.BeginNativeTurnAsync(this, request, cancellationToken).ConfigureAwait(false);
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            await CommitTurnContentAsync(material, message.MessageId, "user", prompt, cancellationToken)
+                .ConfigureAwait(false);
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var turn = await _session.SendTurnWithNativeReceiptAsync(
+                prompt, cancellationToken, message.MessageId).ConfigureAwait(false);
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var recorded = await source.RecordNativeTurnAsync(this, admission, turn.Receipt, cancellationToken)
+                .ConfigureAwait(false);
+            await CommitTurnContentAsync(material, Guid.NewGuid(), "assistant", turn.Response, cancellationToken)
+                .ConfigureAwait(false);
+            await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+            return (turn.Response, recorded);
         }
         finally
         {

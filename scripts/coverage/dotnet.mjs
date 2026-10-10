@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -61,88 +62,101 @@ function run(args) {
   return result.status ?? 1;
 }
 
-function reportsIn(directory) {
+export function reportsIn(directory) {
   if (!existsSync(directory)) return [];
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+  const reports = readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const file = join(directory, entry.name);
     return entry.isDirectory() ? reportsIn(file) : entry.name === 'coverage.cobertura.xml' && statSync(file).size > 0 ? [file] : [];
   });
+  return [...new Map(reports.map(file => [
+    createHash('sha256').update(readFileSync(file)).digest('hex'), file,
+  ])).values()];
 }
 
-rmSync(output, { recursive: true, force: true });
-mkdirSync(output, { recursive: true });
+function main() {
+  rmSync(output, { recursive: true, force: true });
+  mkdirSync(output, { recursive: true });
 
-if (run(['tool', 'restore', '--tool-manifest', manifest])) process.exit(1);
+  if (run(['tool', 'restore', '--tool-manifest', manifest])) process.exit(1);
 
-let failed = false;
-const reports = [];
-for (const [name, project] of suites) {
-  const directory = join(output, name);
-  const code = run([
-    'test', join('tests', project, `${project}.csproj`),
-    '--no-build', '--no-restore', '--configuration', 'Release',
-    '--settings', 'coverage.runsettings', '--collect', 'XPlat Code Coverage',
-    '--results-directory', directory,
-  ]);
-  if (code) {
-    console.error(`${project} exited with code ${code}`);
-    failed = true;
-  }
-  const found = reportsIn(directory);
-  if (found.length !== 1) {
-    console.error(`Expected one nonempty Cobertura report for ${project}, found ${found.length}`);
-    failed = true;
-  }
-  reports.push(...found);
-}
-
-if (reports.length) {
-  const combined = join(output, 'combined');
-  if (run([
-    'tool', 'run', 'reportgenerator', '--',
-    `-reports:${reports.join(';')}`, `-targetdir:${combined}`,
-    '-reporttypes:Cobertura;JsonSummary;TextSummary;Html;MarkdownSummaryGithub',
-  ])) failed = true;
-
-  for (const name of ['Cobertura.xml', 'Summary.json', 'Summary.txt', 'index.html', 'SummaryGithub.md']) {
-    const file = join(combined, name);
-    if (!existsSync(file) || !statSync(file).size) {
-      console.error(`Missing or empty combined report: ${file}`);
+  let failed = false;
+  const reports = [];
+  for (const [name, project] of suites) {
+    const directory = join(output, name);
+    const code = run([
+      'test', join('tests', project, `${project}.csproj`),
+      '--no-build', '--no-restore', '--configuration', 'Release',
+      '--settings', 'coverage.runsettings', '--collect', 'XPlat Code Coverage',
+      '--logger', `trx;LogFileName=${name}.trx`,
+      '--results-directory', directory,
+    ]);
+    if (code) {
+      console.error(`${project} exited with code ${code}`);
       failed = true;
     }
+    const receipt = join(directory, `${name}.trx`);
+    if (!existsSync(receipt) || !statSync(receipt).size) {
+      console.error(`Missing or empty TRX case receipt for ${project}`);
+      failed = true;
+    }
+    const found = reportsIn(directory);
+    if (found.length !== 1) {
+      console.error(`Expected one nonempty Cobertura report for ${project}, found ${found.length}`);
+      failed = true;
+    }
+    reports.push(...found);
   }
-  const cobertura = join(combined, 'Cobertura.xml');
-  if (existsSync(cobertura)) {
-    const xml = readFileSync(cobertura, 'utf8');
-    const assemblies = new Set([...xml.matchAll(/<package name="([^"]+)"/g)].map((match) => match[1]));
-    for (const assembly of expectedAssemblies) {
-      if (!assemblies.has(assembly)) {
-        console.error(`Missing instrumented production library: ${assembly}`);
+
+  if (reports.length) {
+    const combined = join(output, 'combined');
+    if (run([
+      'tool', 'run', 'reportgenerator', '--',
+      `-reports:${reports.join(';')}`, `-targetdir:${combined}`,
+      '-reporttypes:Cobertura;JsonSummary;TextSummary;Html;MarkdownSummaryGithub',
+    ])) failed = true;
+
+    for (const name of ['Cobertura.xml', 'Summary.json', 'Summary.txt', 'index.html', 'SummaryGithub.md']) {
+      const file = join(combined, name);
+      if (!existsSync(file) || !statSync(file).size) {
+        console.error(`Missing or empty combined report: ${file}`);
         failed = true;
       }
     }
-    if (!/<coverage [^>]*lines-valid="[1-9]\d*"/.test(xml)) {
-      console.error('Combined report contains no measurable production lines');
-      failed = true;
-    }
-  }
-  const summary = join(combined, 'Summary.json');
-  if (existsSync(summary)) {
-    try {
-      const { summary: totals, coverage } = JSON.parse(readFileSync(summary, 'utf8'));
-      const assemblies = new Map(coverage.assemblies.map((assembly) => [assembly.name, assembly]));
-      if (totals.coverablelines <= 0 || totals.totalmethods <= 0 ||
-          totals.assemblies !== expectedAssemblies.length ||
-          expectedAssemblies.some((name) => !assemblies.get(name)?.coverablelines)) {
-        console.error('Combined summary does not contain all measurable production libraries');
+    const cobertura = join(combined, 'Cobertura.xml');
+    if (existsSync(cobertura)) {
+      const xml = readFileSync(cobertura, 'utf8');
+      const assemblies = new Set([...xml.matchAll(/<package name="([^"]+)"/g)].map((match) => match[1]));
+      for (const assembly of expectedAssemblies) {
+        if (!assemblies.has(assembly)) {
+          console.error(`Missing instrumented production library: ${assembly}`);
+          failed = true;
+        }
+      }
+      if (!/<coverage [^>]*lines-valid="[1-9]\d*"/.test(xml)) {
+        console.error('Combined report contains no measurable production lines');
         failed = true;
       }
-    } catch (error) {
-      console.error(`Invalid combined summary: ${error.message}`);
-      failed = true;
+    }
+    const summary = join(combined, 'Summary.json');
+    if (existsSync(summary)) {
+      try {
+        const { summary: totals, coverage } = JSON.parse(readFileSync(summary, 'utf8'));
+        const assemblies = new Map(coverage.assemblies.map((assembly) => [assembly.name, assembly]));
+        if (totals.coverablelines <= 0 || totals.totalmethods <= 0 ||
+            totals.assemblies !== expectedAssemblies.length ||
+            expectedAssemblies.some((name) => !assemblies.get(name)?.coverablelines)) {
+          console.error('Combined summary does not contain all measurable production libraries');
+          failed = true;
+        }
+      } catch (error) {
+        console.error(`Invalid combined summary: ${error.message}`);
+        failed = true;
+      }
     }
   }
+
+  if (failed) process.exitCode = 1;
+  else console.log(`Combined .NET coverage: ${join(output, 'combined')}`);
 }
 
-if (failed) process.exitCode = 1;
-else console.log(`Combined .NET coverage: ${join(output, 'combined')}`);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

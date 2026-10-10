@@ -1,0 +1,383 @@
+import App from '../App';
+import { apiClient } from '../api/apiClient';
+import { ApiError } from '../api/client';
+import { getSessionToken, requestSessionAuthFromPeer } from '../config';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const retrySpy = vi.fn();
+
+vi.mock('../api/apiClient', () => ({
+  apiClient: {
+    getServerInfo: vi.fn(),
+    getAuthSession: vi.fn(),
+  },
+}));
+
+vi.mock('../config', () => ({
+  captureSessionAuthFromUrl: vi.fn().mockResolvedValue(undefined),
+  clearSessionAuth: vi.fn(),
+  getSessionToken: vi.fn(),
+  requestSessionAuthFromPeer: vi.fn(),
+  SESSION_AUTH_AVAILABLE_EVENT: 'agentweaver:session-auth-available',
+  SESSION_AUTH_INVALID_EVENT: 'agentweaver:session-auth-invalid',
+}));
+
+vi.mock('../components/shell/AppShell', () => ({
+  AppShell: ({
+    children,
+    startFirstRunTour,
+    tourUserKey,
+  }: {
+    children: ReactNode;
+    startFirstRunTour?: boolean;
+    tourUserKey?: string | null;
+  }) => (
+    <div data-testid="app-shell">
+      {startFirstRunTour && <div>Product tour requested for {tourUserKey}</div>}
+      {children}
+    </div>
+  ),
+}));
+
+vi.mock('../pages/PlatformSettingsPage', () => ({
+  PlatformSettingsPage: ({
+    setupRequired,
+    onRetryAccess,
+    onProviderStateChanged,
+    onContinueSetup,
+  }: {
+    setupRequired?: boolean;
+    onRetryAccess?: () => void;
+    onProviderStateChanged?: () => void | Promise<void>;
+    onContinueSetup?: () => Promise<boolean>;
+  }) => (
+    <div>
+      <div>Platform settings</div>
+      <div>{setupRequired ? 'Setup required' : 'Setup optional'}</div>
+      <button type="button" onClick={() => { retrySpy(); onRetryAccess?.(); }}>Retry access</button>
+      <button type="button" onClick={() => { retrySpy(); void onProviderStateChanged?.(); }}>
+        Provider state changed
+      </button>
+      <button type="button" onClick={() => { retrySpy(); void onContinueSetup?.(); }}>
+        Continue to Agentweaver
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock('../pages/OverviewPage', () => ({ OverviewPage: () => <div>Overview page</div> }));
+vi.mock('../pages/SignInPage', () => ({
+  SignInPage: ({ sessionError }: { sessionError?: string | null }) => <div>{sessionError ?? 'Sign in'}</div>,
+  SignInPageLoading: () => <div>Loading</div>,
+}));
+vi.mock('../pages/CastingWizardPage', () => ({ CastingWizardPage: () => null }));
+vi.mock('../pages/ClusterPage', () => ({ ClusterPage: () => null }));
+vi.mock('../pages/DashboardPage', () => ({ DashboardPage: () => null }));
+vi.mock('../pages/DiagnosticsPage', () => ({ DiagnosticsPage: () => null }));
+vi.mock('../pages/FlowPage', () => ({ FlowPage: () => null }));
+vi.mock('../pages/AgentMemoryPage', () => ({ AgentMemoryPage: () => null }));
+vi.mock('../pages/HeartbeatPage', () => ({ HeartbeatPage: () => null }));
+vi.mock('../pages/MemoriesPage', () => ({ MemoriesPage: () => null }));
+vi.mock('../pages/observability/ObservabilityAgentsPage', () => ({ ObservabilityAgentsPage: () => null }));
+vi.mock('../pages/observability/ObservabilityOverviewPage', () => ({ ObservabilityOverviewPage: () => null }));
+vi.mock('../pages/observability/ObservabilityRedirectPage', () => ({ ObservabilityRedirectPage: () => null }));
+vi.mock('../pages/observability/ObservabilityTracesPage', () => ({ ObservabilityTracesPage: () => null }));
+vi.mock('../pages/OrchestrationsPage', () => ({ OrchestrationsPage: () => null }));
+vi.mock('../pages/ProjectGalleryPage', () => ({ ProjectGalleryPage: () => null }));
+vi.mock('../pages/ProjectPage', () => ({ ProjectPage: () => null }));
+vi.mock('../pages/ProjectSettingsPage', () => ({ ProjectSettingsPage: () => null }));
+vi.mock('../pages/SessionsPage', () => ({ SessionsPage: () => null }));
+vi.mock('../pages/SettingsPage', () => ({ SettingsPage: () => null }));
+vi.mock('../pages/SkillsPage', () => ({ SkillsPage: () => null }));
+vi.mock('../pages/TeamPage', () => ({ TeamPage: () => null }));
+vi.mock('../pages/WorkflowsPage', () => ({ WorkflowsPage: () => null }));
+vi.mock('../pages/WorkspacePage', () => ({ WorkspacePage: () => null }));
+vi.mock('../routes/CoordinatorRunRoute', () => ({ CoordinatorRunRoute: () => null }));
+vi.mock('../routes/AssistantRoute', () => ({ AssistantRoute: () => null }));
+
+describe('App auth gate', () => {
+  beforeEach(() => {
+    cleanup();
+    retrySpy.mockReset();
+    sessionStorage.clear();
+    localStorage.clear();
+    window.history.pushState({}, '', '/projects/proj-1');
+    vi.mocked(apiClient.getServerInfo).mockResolvedValue({
+      data_directory: 'C:\\data',
+    });
+    vi.mocked(getSessionToken).mockReturnValue('session-token');
+    vi.mocked(requestSessionAuthFromPeer).mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it('shows sign-in instead of the AI lockout when the session check returns 401', async () => {
+    vi.mocked(apiClient.getAuthSession).mockRejectedValue(new ApiError(401, '{"error":"unauthorized"}'));
+
+    render(<App />);
+
+    expect(await screen.findByText('Sign in')).toBeDefined();
+    expect(screen.queryByText(/Model provider setup required/)).toBeNull();
+  });
+
+  it('requests auth from an authenticated peer before checking a new tab session', async () => {
+    vi.mocked(getSessionToken)
+      .mockReturnValueOnce(null)
+      .mockReturnValue('peer-session-token');
+    vi.mocked(requestSessionAuthFromPeer).mockResolvedValue(true);
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'Member',
+      email: 'member@example.com',
+      login: 'member',
+      avatar_url: null,
+      entra_object_id: 'entra-member',
+      platform_roles: ['Contributor'],
+      ai_configured: true,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(requestSessionAuthFromPeer).toHaveBeenCalledTimes(1);
+    expect(apiClient.getAuthSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns an open shell to sign-in when API auth recovery is exhausted', async () => {
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'Member',
+      email: 'member@example.com',
+      login: 'member',
+      avatar_url: null,
+      entra_object_id: 'entra-member',
+      platform_roles: ['Contributor'],
+      ai_configured: true,
+    });
+
+    render(<App />);
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+
+    window.dispatchEvent(new Event('agentweaver:session-auth-invalid'));
+
+    expect(await screen.findByText('Sign in')).toBeDefined();
+    expect(screen.queryByTestId('app-shell')).toBeNull();
+  });
+
+  it('redirects platform admins to platform settings when AI is not configured', async () => {
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'Admin',
+      email: 'admin@example.com',
+      login: 'admin',
+      avatar_url: null,
+      entra_object_id: 'entra-admin',
+      platform_roles: ['PlatformAdmin'],
+      ai_configured: false,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Platform settings')).toBeDefined();
+    expect(screen.getByText('Setup required')).toBeDefined();
+    await waitFor(() => expect(window.location.pathname).toBe('/platform-settings'));
+  });
+
+  it('leaves the forced setup gate after provider state becomes ready', async () => {
+    vi.mocked(apiClient.getAuthSession)
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: 'admin',
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: false,
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: 'admin',
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: true,
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: 'admin',
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: true,
+      });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Provider state changed' }));
+    await waitFor(() => expect(screen.getByTestId('app-shell')).toBeDefined());
+    expect(window.location.pathname).toBe('/platform-settings');
+  });
+
+  it('does not start the tour during a normal configured sign-in', async () => {
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'Admin',
+      email: 'admin@example.com',
+      login: 'admin',
+      avatar_url: null,
+      entra_object_id: 'entra-admin',
+      platform_roles: ['PlatformAdmin'],
+      ai_configured: true,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(screen.queryByText(/Product tour requested/)).toBeNull();
+  });
+
+  it('clears the OAuth setup marker when the backend confirms configuration', async () => {
+    sessionStorage.setItem('agentweaver.requiredSetup.pending', '1');
+    window.history.pushState({}, '', '/platform-settings?copilot_app_auth=success');
+    vi.mocked(apiClient.getAuthSession)
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: null,
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: true,
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: null,
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: true,
+      });
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId('app-shell')).toBeDefined());
+    expect(sessionStorage.getItem('agentweaver.requiredSetup.pending')).toBeNull();
+  });
+
+  it('keeps a new tab on its requested route when setup is already complete', async () => {
+    window.history.pushState({}, '', '/sessions?project=proj-1');
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'Admin',
+      email: 'admin@example.com',
+      login: 'admin',
+      avatar_url: null,
+      entra_object_id: 'entra-admin',
+      platform_roles: ['PlatformAdmin'],
+      ai_configured: true,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(window.location.pathname).toBe('/sessions');
+    expect(window.location.search).toBe('?project=proj-1');
+  });
+
+  it('does not leave setup when the authoritative session still reports stale provider state', async () => {
+    vi.mocked(apiClient.getAuthSession)
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: 'admin',
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: false,
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        auth_mode: 'entra',
+        display_name: 'Admin',
+        email: 'admin@example.com',
+        login: 'admin',
+        avatar_url: null,
+        entra_object_id: 'entra-admin',
+        platform_roles: ['PlatformAdmin'],
+        ai_configured: false,
+      });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to Agentweaver' }));
+
+    await waitFor(() => expect(apiClient.getAuthSession).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('Setup required')).toBeDefined();
+    expect(screen.queryByTestId('app-shell')).toBeNull();
+    expect(window.location.pathname).toBe('/platform-settings');
+  });
+
+  it('lets a non-admin enter the app when platform AI is not configured', async () => {
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'Member',
+      email: 'member@example.com',
+      login: 'member',
+      avatar_url: null,
+      entra_object_id: 'entra-member',
+      platform_roles: ['Contributor'],
+      ai_configured: false,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId('app-shell')).toBeDefined();
+    expect(screen.queryByText('Model provider setup required')).toBeNull();
+    expect(screen.queryByText('Platform settings')).toBeNull();
+  });
+
+  it('shows access denied instead of the AI lockout when no platform role is assigned', async () => {
+    vi.mocked(apiClient.getAuthSession).mockResolvedValue({
+      authenticated: true,
+      auth_mode: 'entra',
+      display_name: 'No Role',
+      email: 'norole@example.com',
+      login: 'norole',
+      avatar_url: null,
+      entra_object_id: 'entra-norole',
+      platform_roles: [],
+      ai_configured: false,
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Access denied')).toBeDefined();
+    expect(screen.getByText(/no Agentweaver platform role is assigned/i)).toBeDefined();
+    expect(screen.queryByText(/Model provider setup required/)).toBeNull();
+  });
+});

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -39,11 +40,12 @@ public sealed class KubernetesAgentSandboxClient
         string resource,
         string kubernetesNamespace,
         string name,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? apiVersion = null)
     {
         using var response = await SendAsync(
             HttpMethod.Get,
-            NamespacedResourcePath(apiGroup, resource, kubernetesNamespace, name),
+            NamespacedResourcePath(apiGroup, resource, kubernetesNamespace, name, apiVersion),
             null,
             "read-resource",
             effectMayHaveApplied: false,
@@ -79,6 +81,80 @@ public sealed class KubernetesAgentSandboxClient
         return document.RootElement.Clone();
     }
 
+    public async Task<KubernetesApiServerVersion> ReadApiServerVersionAsync(
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await SendAsync(
+            HttpMethod.Get,
+            "/version",
+            null,
+            "read-version",
+            effectMayHaveApplied: false,
+            cancellationToken).ConfigureAwait(false);
+        await RequireSuccessAsync(response, "read-version", false).ConfigureAwait(false);
+        using var document = await ReadDocumentAsync(
+            response, effectMayHaveApplied: false, cancellationToken).ConfigureAwait(false);
+        var root = document.RootElement;
+        if (!root.TryGetProperty("major", out var majorElement) ||
+            majorElement.ValueKind != JsonValueKind.String ||
+            !int.TryParse(majorElement.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out var major) ||
+            !root.TryGetProperty("minor", out var minorElement) ||
+            minorElement.ValueKind != JsonValueKind.String ||
+            minorElement.GetString() is not { } minorText)
+            throw new SandboxProviderException(
+                "kubernetes_version_invalid",
+                "Kubernetes returned an invalid API-server version.",
+                effectMayHaveApplied: false);
+        var minorDigits = new string(minorText.TakeWhile(char.IsAsciiDigit).ToArray());
+        if (major < 1 ||
+            !int.TryParse(minorDigits, NumberStyles.None, CultureInfo.InvariantCulture, out var minor) ||
+            !root.TryGetProperty("gitVersion", out var gitVersionElement) ||
+            gitVersionElement.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(gitVersionElement.GetString()))
+            throw new SandboxProviderException(
+                "kubernetes_version_invalid",
+                "Kubernetes returned an invalid API-server version.",
+                effectMayHaveApplied: false);
+        return new KubernetesApiServerVersion(major, minor, gitVersionElement.GetString()!);
+    }
+
+    public async Task<JsonElement> DryRunCreatePodAsync(
+        string kubernetesNamespace,
+        JsonElement body,
+        string schedulingGateName,
+        CancellationToken cancellationToken = default)
+    {
+        ValidatePathSegment(kubernetesNamespace, nameof(kubernetesNamespace));
+        ArgumentNullException.ThrowIfNull(schedulingGateName);
+        var version = await ReadApiServerVersionAsync(cancellationToken).ConfigureAwait(false);
+        if (!version.SupportsPodSchedulingGates)
+            throw new SandboxProviderException(
+                "kubernetes_scheduling_gates_unsupported",
+                "The Kubernetes API server does not support Pod scheduling gates.",
+                effectMayHaveApplied: false);
+
+        using var content = JsonContent(body);
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            $"{NamespacedResourcePath(string.Empty, "pods", kubernetesNamespace, null)}?dryRun=All",
+            content,
+            "dry-run-create-pod",
+            effectMayHaveApplied: false,
+            cancellationToken).ConfigureAwait(false);
+        await RequireSuccessAsync(response, "dry-run-create-pod", false).ConfigureAwait(false);
+        using var document = await ReadDocumentAsync(
+            response, effectMayHaveApplied: false, cancellationToken).ConfigureAwait(false);
+        var admitted = document.RootElement;
+        if (!TryGetSchedulingGates(admitted, out var gates) ||
+            gates.Length != 1 ||
+            !string.Equals(gates[0], schedulingGateName, StringComparison.Ordinal))
+            throw new SandboxProviderException(
+                "kubernetes_scheduling_gate_rejected",
+                "The Kubernetes API server did not retain the requested Pod scheduling gate.",
+                effectMayHaveApplied: false);
+        return admitted.Clone();
+    }
+
     public async Task<JsonElement> CreateAsync(
         string apiGroup,
         string resource,
@@ -111,13 +187,14 @@ public sealed class KubernetesAgentSandboxClient
         string kubernetesNamespace,
         ImmutableDictionary<string, string> labelSelector,
         CancellationToken cancellationToken = default,
-        string? fieldSelector = null)
+        string? fieldSelector = null,
+        string? apiVersion = null)
     {
         ArgumentNullException.ThrowIfNull(labelSelector);
         if (fieldSelector is { Length: > 1024 } || fieldSelector?.Any(char.IsControl) == true)
             throw new ArgumentException("Kubernetes field selectors must be bounded and contain no control characters.",
                 nameof(fieldSelector));
-        var path = NamespacedResourcePath(apiGroup, resource, kubernetesNamespace, null);
+        var path = NamespacedResourcePath(apiGroup, resource, kubernetesNamespace, null, apiVersion);
         var selectors = new List<string>(2);
         if (labelSelector.Count > 0)
         {
@@ -218,6 +295,99 @@ public sealed class KubernetesAgentSandboxClient
         await RequireSuccessAsync(response, "patch-resource", true).ConfigureAwait(false);
     }
 
+    public async Task<JsonElement> RemovePodSchedulingGateAsync(
+        SandboxBuildTestPodReference pod,
+        string gateName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(pod);
+        _ = pod.Validate();
+        ValidateBoundedIdentifier(gateName, nameof(gateName), 128);
+        var patch = JsonSerializer.SerializeToElement(new object[]
+        {
+            new { op = "test", path = "/metadata/uid", value = pod.Uid },
+            new { op = "test", path = "/metadata/resourceVersion", value = pod.ResourceVersion },
+            new { op = "test", path = "/spec/schedulingGates/0/name", value = gateName },
+            new { op = "remove", path = "/spec/schedulingGates/0" }
+        });
+        using var request = new HttpRequestMessage(
+            HttpMethod.Patch,
+            NamespacedResourcePath(string.Empty, "pods", pod.KubernetesNamespace, pod.Name))
+        {
+            Content = JsonContent(patch, "application/json-patch+json")
+        };
+        using var response = await SendAsync(
+            request,
+            "release-pod-scheduling-gate",
+            effectMayHaveApplied: true,
+            cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.Conflict ||
+            response.StatusCode == HttpStatusCode.UnprocessableEntity)
+            throw new SandboxProviderException(
+                "kubernetes_pod_gate_precondition_failed",
+                "The Pod UID, resource version, or scheduling gate changed before release.",
+                effectMayHaveApplied: false);
+        await RequireSuccessAsync(response, "release-pod-scheduling-gate", true).ConfigureAwait(false);
+        using var document = await ReadDocumentAsync(
+            response, effectMayHaveApplied: true, cancellationToken).ConfigureAwait(false);
+        return document.RootElement.Clone();
+    }
+
+    public async Task<SandboxBuildTestOutputCapture> ReadPodLogsBoundedAsync(
+        SandboxBuildTestPodReference pod,
+        string containerName,
+        int maximumOutputBytes,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(pod);
+        _ = pod.Validate();
+        ValidateBoundedIdentifier(containerName, nameof(containerName), 128);
+        if (maximumOutputBytes is < 1 or > SandboxBuildTestLimits.MaximumLogOutputBytes)
+            throw new ArgumentOutOfRangeException(nameof(maximumOutputBytes));
+
+        var current = await GetAsync(
+            string.Empty, "pods", pod.KubernetesNamespace, pod.Name, cancellationToken).ConfigureAwait(false);
+        RequirePodUid(current, pod.Uid);
+        var path = $"{NamespacedResourcePath(string.Empty, "pods", pod.KubernetesNamespace, pod.Name)}/log" +
+            $"?container={Uri.EscapeDataString(containerName)}&follow=true&timestamps=false";
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        using var response = await SendStreamingAsync(
+            request, "read-pod-logs", effectMayHaveApplied: false, cancellationToken).ConfigureAwait(false);
+        await RequireSuccessAsync(response, "read-pod-logs", false).ConfigureAwait(false);
+        await using var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var captured = new MemoryStream(maximumOutputBytes);
+        var buffer = new byte[Math.Min(8192, maximumOutputBytes + 1)];
+        long observedBytes = 0;
+        while (true)
+        {
+            var remaining = maximumOutputBytes - (int)captured.Length;
+            var readLimit = Math.Min(buffer.Length, remaining + 1);
+            var read = await input.ReadAsync(buffer.AsMemory(0, readLimit), cancellationToken)
+                .ConfigureAwait(false);
+            if (read == 0)
+                break;
+            observedBytes += read;
+            var capturedRead = Math.Min(read, remaining);
+            if (capturedRead > 0)
+                captured.Write(buffer, 0, capturedRead);
+            if (read > capturedRead)
+                break;
+        }
+
+        var verified = await GetAsync(
+            string.Empty, "pods", pod.KubernetesNamespace, pod.Name, cancellationToken).ConfigureAwait(false);
+        RequirePodUid(verified, pod.Uid);
+        var bytes = captured.ToArray();
+        return new SandboxBuildTestOutputCapture(
+            pod.Uid,
+            containerName,
+            bytes.ToImmutableArray(),
+            bytes.LongLength,
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+            observedBytes > bytes.LongLength,
+            observedBytes);
+    }
+
     private async Task<HttpResponseMessage> SendAsync(
         HttpMethod method,
         string path,
@@ -228,6 +398,28 @@ public sealed class KubernetesAgentSandboxClient
     {
         using var request = new HttpRequestMessage(method, path) { Content = content };
         return await SendAsync(request, operation, effectMayHaveApplied, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<HttpResponseMessage> SendStreamingAsync(
+        HttpRequestMessage request,
+        string operation,
+        bool effectMayHaveApplied,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            throw new SandboxProviderException(
+                "kubernetes_transport_error",
+                $"Kubernetes {operation} request failed.",
+                effectMayHaveApplied);
+        }
     }
 
     private async Task<HttpResponseMessage> SendAsync(
@@ -303,13 +495,14 @@ public sealed class KubernetesAgentSandboxClient
         string apiGroup,
         string resource,
         string kubernetesNamespace,
-        string? name)
+        string? name,
+        string? apiVersion = null)
     {
         ValidatePathSegment(resource, nameof(resource));
         ValidatePathSegment(kubernetesNamespace, nameof(kubernetesNamespace));
         var prefix = string.IsNullOrEmpty(apiGroup)
-            ? "api/v1"
-            : $"apis/{ValidateApiGroup(apiGroup)}/v1beta1";
+            ? $"api/{ValidatePathSegment(apiVersion ?? "v1", nameof(apiVersion))}"
+            : $"apis/{ValidateApiGroup(apiGroup)}/{ValidatePathSegment(apiVersion ?? "v1beta1", nameof(apiVersion))}";
         var path = $"{prefix}/namespaces/{Uri.EscapeDataString(kubernetesNamespace)}/{resource}";
         return name is null
             ? path
@@ -353,4 +546,50 @@ public sealed class KubernetesAgentSandboxClient
 
     private static StringContent JsonContent(JsonElement body, string mediaType = "application/json") =>
         new(body.GetRawText(), Encoding.UTF8, mediaType);
+
+    private static bool TryGetSchedulingGates(JsonElement pod, out string[] gates)
+    {
+        gates = [];
+        if (!pod.TryGetProperty("spec", out var spec) ||
+            !spec.TryGetProperty("schedulingGates", out var gateArray) ||
+            gateArray.ValueKind != JsonValueKind.Array)
+            return false;
+        var values = new List<string>();
+        foreach (var gate in gateArray.EnumerateArray())
+        {
+            if (!gate.TryGetProperty("name", out var name) ||
+                name.ValueKind != JsonValueKind.String ||
+                name.GetString() is not { } value)
+                return false;
+            values.Add(value);
+        }
+        gates = values.ToArray();
+        return true;
+    }
+
+    private static void ValidateBoundedIdentifier(string value, string name, int maximumLength)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Length > maximumLength ||
+            value.Any(char.IsControl))
+            throw new ArgumentException("A bounded Kubernetes identifier is required.", name);
+    }
+
+    private static void RequirePodUid(JsonElement? pod, string expectedUid)
+    {
+        if (pod is not { } value ||
+            !value.TryGetProperty("metadata", out var metadata) ||
+            !metadata.TryGetProperty("uid", out var uid) ||
+            uid.ValueKind != JsonValueKind.String ||
+            !string.Equals(uid.GetString(), expectedUid, StringComparison.Ordinal))
+            throw new SandboxProviderException(
+                "kubernetes_pod_uid_mismatch",
+                "The Pod name no longer identifies the expected Pod UID.",
+                effectMayHaveApplied: false);
+    }
+}
+
+public sealed record KubernetesApiServerVersion(int Major, int Minor, string GitVersion)
+{
+    public bool SupportsPodSchedulingGates => Major > 1 || Major == 1 && Minor >= 30;
 }

@@ -1,0 +1,85 @@
+import { apiClient } from '../api/apiClient';
+import { collectPagedItems } from '../api/pagedResults';
+import { ApiError } from '../api/client';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import type { Project } from '../api/types';
+import type { ReactNode } from 'react';
+interface ProjectListState {
+  projects: Project[];
+  loading: boolean;
+  authError: boolean;
+  loadError: boolean;
+  errorMessage: string | null;
+  appendProject: (p: Project) => void;
+  refetch: () => void;
+}
+
+const ProjectListContext = createContext<ProjectListState | null>(null);
+
+export function ProjectListProvider({ children }: { children: ReactNode }) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [fetchKey, setFetchKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadProjects = async () => {
+      setLoading(true);
+      setAuthError(false);
+      setLoadError(false);
+      setErrorMessage(null);
+      try {
+        const result = await collectPagedItems((options) => apiClient.listProjects(options));
+        if (!cancelled) {
+          setProjects(result);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          if (err instanceof ApiError && err.status === 401) {
+            setAuthError(true);
+          } else {
+            setLoadError(true);
+            setErrorMessage(
+              err instanceof ApiError
+                ? `API error ${err.status}: ${err.body}`
+                : err instanceof Error
+                  ? err.message
+                  : String(err),
+            );
+          }
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+    void loadProjects();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchKey]);
+
+  const appendProject = useCallback((p: Project) => {
+    setProjects((prev) => [...prev, p]);
+  }, []);
+
+  const refetch = useCallback(() => setFetchKey((k) => k + 1), []);
+
+  return (
+    <ProjectListContext.Provider
+      value={{ projects, loading, authError, loadError, errorMessage, appendProject, refetch }}
+    >
+      {children}
+    </ProjectListContext.Provider>
+  );
+}
+
+export function useProjectList(): ProjectListState {
+  const ctx = useContext(ProjectListContext);
+  if (!ctx) throw new Error('useProjectList must be used inside ProjectListProvider');
+  return ctx;
+}

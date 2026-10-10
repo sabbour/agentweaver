@@ -1,0 +1,990 @@
+import type { RunStreamEvent } from '../api/sse';
+import {
+  formatOutcomeSpecMessage,
+  isOutcomeSpecMessagePrefix,
+  isSerializedWorkPlan,
+  parseOutcomeSpecMessage,
+} from './coordinatorPlanFilter';
+
+function extractCallId(payload: Record<string, unknown>): unknown {
+  return payload['callId'] ?? payload['call_id'];
+}
+
+export function stripPathPrefix(value: string): string {
+  return value
+    .replace(/^\/(?:home|Users)\/[^/\\]+[/\\]/, '')
+    .replace(/^[A-Za-z]:[/\\]Users[/\\][^/\\]+[/\\]/, '')
+    .replace(/^[/\\][a-zA-Z][/\\]Users[/\\][^/\\]+[/\\]/, '');
+}
+
+export function deriveHumanTitle(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === 'report_intent') {
+    const intent = args['intent'];
+    return intent == null ? 'Intent' : String(intent).slice(0, 120);
+  }
+
+  if (toolName === 'run_command') {
+    const command = args['command'] ?? args['cmd'];
+    return command == null ? 'Run command' : `Run command · ${String(command).slice(0, 80)}`;
+  }
+
+  const path = args['path'] ?? args['file'] ?? args['dir'];
+  const displayPath = path == null ? null : stripPathPrefix(String(path));
+  const knownTools: Record<string, string> = {
+    read_file: 'Read file',
+    write_file: 'Write file',
+    create_file: 'Create file',
+    create: 'Create file',
+    delete_file: 'Delete file',
+    list_directory: 'List directory',
+    search_files: 'Search files',
+    grep_search: 'Search',
+    file_search: 'Find files',
+    edit_file: 'Edit file',
+    edit: 'Edit file',
+    str_replace_editor: 'Edit file',
+    apply_patch: 'Apply patch',
+    move_file: 'Move file',
+  };
+  const label = knownTools[toolName] ?? toolName.replace(/_/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+
+  if (displayPath) return `${label} · ${displayPath}`;
+  const command = args['command'] ?? args['cmd'];
+  if (command != null) return `${label} · ${String(command).slice(0, 80)}`;
+  const pattern = args['pattern'] ?? args['query'];
+  if (pattern != null) return `${label} · ${String(pattern).slice(0, 60)}`;
+  return label;
+}
+
+/**
+ * Count the subtask drafts inside the decompose agent's serialized work-plan JSON array, so the
+ * illegible raw dump can be replaced with a short friendly line ("Decomposed the work into N
+ * subtasks."). Returns null when the count can't be recovered.
+ */
+function serializedWorkPlanSubtaskCount(content: string): number | null {
+  const start = content.indexOf('[');
+  const end = content.lastIndexOf(']');
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(content.slice(start, end + 1));
+    return Array.isArray(parsed) ? parsed.length : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Intent-driven timeline model.
+ *
+ * The run timeline groups the stream by the agent's reported intents: every `agent.intent`
+ * event opens a step, and every tool call / agent message emitted afterwards (until
+ * the next intent or the turn ends) is nested UNDER that intent. This mirrors the
+ * Copilot "chain of thought" reading order: intent → the things that ran for it.
+ *
+ * Tool-call correlation accepts both live and persisted call-id shapes.
+ */
+
+export type RunTimelineStepStatus = 'pending' | 'running' | 'complete' | 'warning';
+
+/**
+ * Coarse category derived from a tool name, driving the row icon + how the result
+ * meta is summarised (lines vs results vs diff). Mirrors the GitHub Copilot CLI
+ * activity-log grouping: terminal / file-read / search / edit / web / generic.
+ */
+export type RunTimelineToolCategory = 'command' | 'read' | 'search' | 'edit' | 'web' | 'other';
+
+export interface RunTimelineTool {
+  callId: string;
+  toolName: string;
+  category: RunTimelineToolCategory;
+  /** Primary, human title: verb + target (e.g. "View app.ts:1-30", "Searched foo", "Edit app.ts", "Run command"). */
+  title: string;
+  /** Muted secondary argument shown after the title (e.g. the shell command for a run). */
+  titleSecondary?: string;
+  status: 'running' | 'complete' | 'error';
+  /** Right-aligned result meta derived from the result (e.g. "7 lines", "4 results", "+3 -1"). */
+  resultMeta?: string;
+  /** Full (capped) result content, kept for expandable rows. */
+  resultContent?: string;
+  /** Pretty-printed (capped) JSON of the raw arguments sent with the tool call, for the
+   *  expandable row detail (#item-3). Omitted when the call had no arguments. */
+  argumentsJson?: string;
+  /** Unified diff text for edit rows — powers the expandable diff card. May be capped (see truncated). */
+  diff?: string;
+  /** True when the stored `diff` was capped by the line/char budget (see DIFF_MAX_*). */
+  truncated?: boolean;
+  /** Number of diff lines hidden by the cap, for the "… N more lines" note. */
+  diffHiddenLines?: number;
+  /** True when the row can be expanded to reveal a diff / detail card. */
+  expandable?: boolean;
+  resultSummary?: string;
+  errorMessage?: string;
+  isSandboxViolation?: boolean;
+}
+
+export interface RunTimelineMessage {
+  messageId: string;
+  text: string;
+  streaming: boolean;
+  /**
+   * Message role from the server event payload. "user" messages are the operator's echoed
+   * input turns; "assistant" (or missing) are the agent's replies. Used by renderers to
+   * apply different visual styling (e.g. user bubble vs assistant bubble).
+   * When absent, the renderer treats the message as an assistant message.
+   */
+  role?: 'user' | 'assistant';
+  /**
+   * Best-known message time in epoch-ms for relative-time rendering in the production
+   * RunTimeline surface. Prefer a server/event payload timestamp when available;
+   * otherwise fall back to the client-side receipt time captured while folding.
+   */
+  timestamp: number;
+}
+
+/**
+ * One ordered item inside a step's `children` array. Messages and tool rows are kept
+ * in the SEQUENCE they occurred so the Timeline can interleave assistant narration
+ * BETWEEN tool groups (message → tools → message → tools), matching reading order.
+ */
+export type RunTimelineChild =
+  | { kind: 'message'; message: RunTimelineMessage }
+  | { kind: 'tool'; tool: RunTimelineTool };
+
+export interface RunTimelineStep {
+  id: string;
+  /** The reported intent text — the step title. */
+  intent: string;
+  status: RunTimelineStepStatus;
+  /** True while this intent's turn is still streaming. */
+  active: boolean;
+  /**
+   * True when the step was NOT opened by an explicit agent.intent — i.e. a tool call
+   * or message arrived with no reported intent, so we synthesised a "Working" step.
+   * Message-only synthetic steps render as plain narration (no chain-of-thought chrome).
+   */
+  synthetic: boolean;
+  tools: RunTimelineTool[];
+  messages: RunTimelineMessage[];
+  /**
+   * Ordered children (messages + tools) in the sequence they occurred. Render uses this
+   * to interleave narration between tool groups; `tools`/`messages` remain for status
+   * derivation and back-compat.
+   */
+  children: RunTimelineChild[];
+  /** Sequence of the opening agent.intent event (ordering key). */
+  sequence: number;
+}
+
+export interface RunTimelineModel {
+  steps: RunTimelineStep[];
+  /** Total number of raw events folded into the timeline (for the "{N} steps" subline we use steps.length). */
+  eventCount: number;
+  /** True while any step is still actively streaming. */
+  running: boolean;
+}
+
+const READ_RESULT_MAX = 160;
+
+function summariseResult(content: string): string {
+  const trimmed = content.trim().replace(/\s+/g, ' ');
+  if (trimmed.length <= READ_RESULT_MAX) return trimmed;
+  return `${trimmed.slice(0, READ_RESULT_MAX)}\u2026`;
+}
+
+/** Cap the full result content kept for expandable rows so replays stay bounded. */
+const EXPAND_CONTENT_MAX = 8000;
+
+const asStrOpt = (v: unknown): string | undefined => (v == null ? undefined : String(v));
+
+function readToolArguments(payload: Record<string, unknown>): Record<string, unknown> {
+  const raw = payload['arguments'];
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    } catch {
+      // Ignore malformed string arguments and fall back to an empty object.
+    }
+  }
+  return {};
+}
+
+function readReportedIntent(payload: Record<string, unknown>): string | undefined {
+  const args = readToolArguments(payload);
+  return asStrOpt(args['intent'] ?? args['message'] ?? payload['intent'] ?? payload['message'])?.trim() || undefined;
+}
+
+function splitToolNameSegments(toolName: string): string[] {
+  return toolName
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function hasToolSegment(segments: ReadonlySet<string>, ...candidates: string[]): boolean {
+  return candidates.some((candidate) => segments.has(candidate));
+}
+
+function hasToolPhrase(parts: readonly string[], phrase: readonly string[]): boolean {
+  if (phrase.length === 0 || parts.length < phrase.length) return false;
+  for (let i = 0; i <= parts.length - phrase.length; i += 1) {
+    let matches = true;
+    for (let j = 0; j < phrase.length; j += 1) {
+      if (parts[i + j] !== phrase[j]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
+}
+
+/** Map a raw tool name to a coarse activity category (icon + result-meta behaviour). */
+export function categorizeTool(toolName: string): RunTimelineToolCategory {
+  const n = toolName.toLowerCase();
+  const parts = splitToolNameSegments(toolName);
+  const segments = new Set(parts);
+  if (
+    n === 'run_command' || n === 'run' || hasToolPhrase(parts, ['run', 'command']) ||
+    hasToolPhrase(parts, ['preview', 'process']) ||
+    hasToolSegment(segments, 'powershell', 'bash', 'shell', 'terminal', 'console', 'exec')
+  ) {
+    return 'command';
+  }
+  if (
+    hasToolPhrase(parts, ['str', 'replace'])
+    || hasToolPhrase(parts, ['apply', 'patch'])
+    || hasToolSegment(segments, 'edit', 'replace', 'write', 'create', 'patch', 'delete', 'move', 'insert')
+  ) {
+    return 'edit';
+  }
+  if (
+    hasToolSegment(segments, 'search', 'grep', 'glob', 'find', 'list') || segments.has('ripgrep')
+  ) {
+    return 'search';
+  }
+  if (
+    hasToolPhrase(parts, ['file', 'contents']) || hasToolSegment(segments, 'read', 'view', 'cat', 'open')
+  ) {
+    return 'read';
+  }
+  if (
+    hasToolSegment(segments, 'http', 'web', 'fetch', 'url', 'workiq', 'email', 'cloud', 'api')
+  ) {
+    return 'web';
+  }
+  return 'other';
+}
+
+/** Derive a "start-end" (or "start") line-range suffix from common range argument shapes. */
+function deriveLineRange(args: Record<string, unknown>): string | undefined {
+  const vr = args['view_range'] ?? args['range'] ?? args['lineRange'] ?? args['lines'];
+  if (Array.isArray(vr) && vr.length >= 1 && vr[0] != null) {
+    const start = vr[0];
+    const end = vr.length >= 2 ? vr[1] : undefined;
+    if (end == null || end === -1) return `${start}`;
+    return `${start}-${end}`;
+  }
+  const start = args['start_line'] ?? args['startLine'] ?? args['start'];
+  const end = args['end_line'] ?? args['endLine'] ?? args['end'];
+  if (start != null) return end != null ? `${start}-${end}` : `${start}`;
+  return undefined;
+}
+
+/**
+ * Split a tool call into a primary title (verb + target) and an optional muted secondary
+ * argument. Uses the shared path and tool-title helpers.
+ */
+export function deriveToolTitle(
+  category: RunTimelineToolCategory,
+  toolName: string,
+  args: Record<string, unknown>,
+): { title: string; secondary?: string } {
+  const pathArg = asStrOpt(args['path'] ?? args['file'] ?? args['filename'] ?? args['file_path']);
+  const display = pathArg ? stripPathPrefix(pathArg) : undefined;
+  switch (category) {
+    case 'command': {
+      const cmd = asStrOpt(args['command'] ?? args['cmd'] ?? args['script']);
+      const isGeneric = toolName === 'run_command' || toolName === 'run';
+      if (isGeneric) return { title: 'Run command', secondary: cmd };
+      return { title: deriveHumanTitle(toolName, args) };
+    }
+    case 'read': {
+      const range = deriveLineRange(args);
+      if (display) return { title: `View ${display}${range ? `:${range}` : ''}` };
+      return { title: deriveHumanTitle(toolName, args) };
+    }
+    case 'search': {
+      const pattern = asStrOpt(args['pattern'] ?? args['query'] ?? args['glob'] ?? args['q']);
+      if (pattern) return { title: `Searched ${pattern}` };
+      if (display) return { title: `List ${display}` };
+      return { title: 'Search' };
+    }
+    case 'edit': {
+      const parts = splitToolNameSegments(toolName);
+      const segments = new Set(parts);
+      const verb = hasToolSegment(segments, 'create')
+        ? 'Create'
+        : hasToolSegment(segments, 'delete')
+          ? 'Delete'
+          : hasToolSegment(segments, 'move')
+            ? 'Move'
+            : hasToolSegment(segments, 'write')
+              ? 'Write'
+              : hasToolPhrase(parts, ['apply', 'patch']) || hasToolSegment(segments, 'patch')
+                ? 'Apply patch'
+                : 'Edit';
+      return { title: display ? `${verb} ${display}` : verb };
+    }
+    case 'web': {
+      const url = asStrOpt(args['url'] ?? args['href']);
+      if (url) return { title: `Fetch ${stripPathPrefix(url)}` };
+      return { title: deriveHumanTitle(toolName, args) };
+    }
+    default:
+      return { title: deriveHumanTitle(toolName, args) };
+  }
+}
+
+/** Count added/removed lines in a unified-diff-ish string. */
+function diffCounts(diff: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) added += 1;
+    else if (line.startsWith('-') && !line.startsWith('---')) removed += 1;
+  }
+  return { added, removed };
+}
+
+/** Format a "+N -M" diff delta, or undefined when there is nothing to show. */
+function diffMeta(diff: string): string | undefined {
+  const { added, removed } = diffCounts(diff);
+  const parts: string[] = [];
+  if (added > 0) parts.push(`+${added}`);
+  if (removed > 0) parts.push(`-${removed}`);
+  return parts.length > 0 ? parts.join(' ') : undefined;
+}
+
+function looksLikeDiff(s: string): boolean {
+  return /^(@@|diff |Index: |--- |\+\+\+ )/m.test(s) || /^[+-][^+-]/m.test(s);
+}
+
+/**
+ * Derive a diff for an edit row: prefer a diff embedded in the result content, else
+ * synthesise one from old/new string arguments (str_replace-style edits).
+ */
+function deriveEditDiff(args: Record<string, unknown>, resultContent?: string): string | undefined {
+  if (resultContent && looksLikeDiff(resultContent)) return resultContent;
+  const oldStr = asStrOpt(args['old_str'] ?? args['oldStr'] ?? args['old_string'] ?? args['old']);
+  const newStr = asStrOpt(args['new_str'] ?? args['newStr'] ?? args['new_string'] ?? args['new']);
+  if (oldStr == null && newStr == null) return undefined;
+  const oldLines = oldStr != null && oldStr.length > 0 ? oldStr.split('\n') : [];
+  const newLines = newStr != null && newStr.length > 0 ? newStr.split('\n') : [];
+  const body = [...oldLines.map((l) => `-${l}`), ...newLines.map((l) => `+${l}`)].join('\n');
+  return body.length > 0 ? body : undefined;
+}
+
+/**
+ * Cap a diff so a pathological edit (huge old_str/new_str, or a giant result blob) can
+ * never render thousands of lines and freeze the UI. Caps by BOTH line count and total
+ * chars; `hiddenLines` counts the lines dropped relative to the original.
+ */
+const DIFF_MAX_LINES = 200;
+const DIFF_MAX_CHARS = 20_000;
+
+function capDiff(diff: string): { diff: string; truncated: boolean; hiddenLines: number } {
+  const originalLines = diff.split('\n');
+  let capped = diff;
+  let truncated = false;
+  if (originalLines.length > DIFF_MAX_LINES) {
+    capped = originalLines.slice(0, DIFF_MAX_LINES).join('\n');
+    truncated = true;
+  }
+  if (capped.length > DIFF_MAX_CHARS) {
+    capped = capped.slice(0, DIFF_MAX_CHARS);
+    truncated = true;
+  }
+  const shownLines = truncated ? capped.split('\n').length : originalLines.length;
+  return { diff: capped, truncated, hiddenLines: Math.max(0, originalLines.length - shownLines) };
+}
+
+/**
+ * Apply a derived edit diff to a tool row: the +A −R delta is counted from the FULL diff
+ * (accuracy), while the stored diff text is capped so the expandable card stays bounded.
+ */
+function applyEditDiff(tool: RunTimelineTool, rawDiff: string): void {
+  tool.resultMeta = diffMeta(rawDiff);
+  const { diff, truncated, hiddenLines } = capDiff(rawDiff);
+  tool.diff = diff;
+  tool.expandable = true;
+  tool.truncated = truncated;
+  tool.diffHiddenLines = truncated ? hiddenLines : undefined;
+}
+
+/** Right-aligned result meta from the settled result content, keyed off the tool category. */
+function deriveResultMeta(category: RunTimelineToolCategory, content: string): string | undefined {
+  const trimmed = content.replace(/\n+$/, '');
+  if (trimmed.length === 0) return undefined;
+  const lineCount = trimmed.split('\n').length;
+  switch (category) {
+    case 'read':
+    case 'command':
+      return `${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`;
+    case 'search':
+      return `${lineCount} ${lineCount === 1 ? 'result' : 'results'}`;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Run-level terminal events. When one of these arrives every still-active step is
+ * closed, so a durable replay of a finished run never shows perpetual running/pending
+ * circles. These singleton events often carry sequence 0, so we also sort them LAST
+ * (see buildRunTimeline) to guarantee closure happens after all intents/tools/messages.
+ */
+const RUN_TERMINAL_TYPES = new Set<string>(['run.completed', 'run.failed', 'run.error']);
+
+function readEventTimestamp(evt: RunStreamEvent): number | undefined {
+  const raw = evt.payload?.['timestamp_utc'] ?? evt.payload?.['timestampUtc'] ?? evt.payload?.['timestamp'];
+  if (raw == null) return undefined;
+  const ms = new Date(String(raw)).getTime();
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
+function captureMessageTimestamp(evt: RunStreamEvent): number {
+  return readEventTimestamp(evt) ?? Date.now();
+}
+
+/**
+ * Close a step: mark it inactive and settle any still-running tool calls to `complete`
+ * (unless they errored) — mirroring the reducer's settlePendingCallsInTurn so a missing
+ * or mismatched tool.result never leaves a perpetual spinner on a finished step.
+ */
+function closeStep(step: RunTimelineStep): void {
+  step.active = false;
+  for (const tool of step.tools) {
+    if (tool.status === 'running') tool.status = 'complete';
+  }
+}
+
+const CONTINUATION_INTENT_RE = /^(?:now|next|then|after that|from here|meanwhile|finally|lastly|at this point)\b/i;
+const CONVERSATIONAL_INTENT_PREFIX_RE = /^(?:(?:now|next|then|after that|from here|meanwhile|finally|lastly|at this point)[,:]?\s*)?(?:(?:let['’]?s|we['’]ll|i['’]ll)\s+)?/i;
+const MAX_COLLAPSIBLE_STEP_TOOLS = 4;
+const MAX_COLLAPSIBLE_STEP_MESSAGES = 2;
+const MAX_COLLAPSIBLE_STEP_MESSAGE_CHARS = 240;
+const MAX_COLLAPSIBLE_STEP_CHILDREN = 6;
+
+function isContinuationIntent(intent: string): boolean {
+  return CONTINUATION_INTENT_RE.test(intent.trim());
+}
+
+function normalizeContinuationIntent(intent: string): string {
+  const normalized = intent.replace(CONVERSATIONAL_INTENT_PREFIX_RE, '').trim() || intent.trim();
+  return normalized.length > 0
+    ? `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
+    : intent.trim();
+}
+
+function messageCharCount(step: RunTimelineStep): number {
+  return step.messages.reduce((total, message) => total + message.text.trim().length, 0);
+}
+
+/**
+ * Decide whether merging `next` onto `base` would keep the RESULTING step within the
+ * collapsible-narration bounds. This checks the size the merged step would actually end
+ * up at (base + next combined), not just each side's size before the merge — checking
+ * only the pre-merge sizes let every cap be overshot by one merge each time (e.g. two
+ * steps at the 4-tool/2-message cap could still merge into a 8-tool/4-message step), and
+ * — because the accumulated step then keeps re-qualifying as "previous" on the next loop
+ * iteration — a long run of small continuation-narrated steps (very common LLM habit:
+ * "Now let's...", "Next, I'll...", "Then...") could collapse the ENTIRE run into a
+ * single step instead of stopping once the step reached a reasonable size, appearing to
+ * the user as if every step of the run were "Step 1".
+ */
+function wouldExceedCollapseLimits(base: RunTimelineStep, next: RunTimelineStep): boolean {
+  if (base.synthetic || next.synthetic) return true;
+  if (base.tools.length + next.tools.length > MAX_COLLAPSIBLE_STEP_TOOLS) return true;
+  if (base.messages.length + next.messages.length > MAX_COLLAPSIBLE_STEP_MESSAGES) return true;
+  if (base.children.length + next.children.length > MAX_COLLAPSIBLE_STEP_CHILDREN) return true;
+  if (messageCharCount(base) + messageCharCount(next) > MAX_COLLAPSIBLE_STEP_MESSAGE_CHARS) return true;
+  const combinedTools = [...base.tools, ...next.tools];
+  if (combinedTools.some((tool) => tool.status === 'error')) return true;
+  return combinedTools.some((tool) => tool.category === 'command' || tool.category === 'web');
+}
+
+function mergeTimelineSteps(base: RunTimelineStep, next: RunTimelineStep): void {
+  base.intent = normalizeContinuationIntent(base.intent);
+  base.tools.push(...next.tools);
+  base.messages.push(...next.messages);
+  base.children.push(...next.children);
+  base.active = base.active || next.active;
+}
+
+function collapseContinuationNarrationSteps(steps: RunTimelineStep[]): RunTimelineStep[] {
+  const collapsed: RunTimelineStep[] = [];
+  for (const step of steps) {
+    const previous = collapsed[collapsed.length - 1];
+    if (
+      previous
+      && isContinuationIntent(step.intent)
+      && !wouldExceedCollapseLimits(previous, step)
+    ) {
+      mergeTimelineSteps(previous, step);
+      continue;
+    }
+    collapsed.push(step);
+  }
+  return collapsed;
+}
+
+/**
+ * Fold a scope's event stream into intent-grouped Timeline steps.
+ * `events` may arrive out of order across reconnects — we sort by `sequence`
+ * before grouping. Message timestamps prefer any wire timestamp that does exist on the
+ * payload, else fall back to the client-side receipt time captured during folding.
+ */
+export function buildRunTimeline(
+  events: readonly RunStreamEvent[],
+  options?: {
+    stripSerializedWorkPlan?: boolean;
+    /**
+     * When true, close every still-open step (settling any 'running' tool to 'complete')
+     * even though no agent.turn.end / run.completed|failed|error was ever observed (#299).
+     * The run can leave a turn open without one of those events — e.g. a coordinator
+     * stall/redispatch, a review gate, or a block — so a tool call started just before
+     * that transition would otherwise show a perpetual spinner. Callers should pass the
+     * CURRENT run status here (true whenever the run is no longer actively streaming),
+     * not just derive it from the events already folded into this call.
+     */
+    forceCloseIfInactive?: boolean;
+  },
+): RunTimelineModel {
+  // The serialized work-plan replacement is only meaningful on the coordinator run stream, where the
+  // decompose agent's raw JSON array actually originates. Defaults on so existing callers/tests keep
+  // the summary; child agent scopes pass false so a child's legit JSON output is never rewritten.
+  const stripSerializedWorkPlan = options?.stripSerializedWorkPlan ?? true;
+  // Sort by sequence, but force run-terminal singletons (often sequence 0) to sort LAST
+  // so they close steps only after every intent/tool/message has been placed.
+  const sortKey = (e: RunStreamEvent): number =>
+    RUN_TERMINAL_TYPES.has(e.type) ? Number.MAX_SAFE_INTEGER : e.sequence;
+  const sorted = [...events].sort((a, b) => sortKey(a) - sortKey(b));
+
+  const steps: RunTimelineStep[] = [];
+  let current: RunTimelineStep | null = null;
+
+  // Global correlation maps so a tool.result/error settles the right tool even if
+  // intents interleave (same approach as the reducer's pendingToolCalls map).
+  const toolByCallId = new Map<string, RunTimelineTool>();
+  // Fallback correlation for sources that never send a callId/call_id at all (e.g. the
+  // operator assistant run's RunEventSink, which streams tool.call/tool.result pairs
+  // without any correlation id since each MCP tool call there is awaited sequentially
+  // before the next one starts). Queued FIFO per tool name so an unresolved call is
+  // matched to the next result/error for the same tool rather than staying "running"
+  // forever.
+  const pendingByToolName = new Map<string, RunTimelineTool[]>();
+  const messageByStep = new Map<string, Map<string, RunTimelineMessage>>();
+  // Uncapped arg-derived diff per callId, so the tool.result fallback recounts +A −R from
+  // the FULL diff rather than an already-capped copy stored on the tool.
+  const rawDiffByCallId = new Map<string, string>();
+  // When a message arrives with no messageId, correlate deltas to a single streaming
+  // message per step (and let the final agent.message settle it) instead of spawning a
+  // new message per delta.
+  const streamingNoIdByStep = new Map<string, RunTimelineMessage>();
+
+  const ensureStep = (seq: number): RunTimelineStep => {
+    if (current) return current;
+    const synthetic: RunTimelineStep = {
+      id: `intent-auto-${seq}`,
+      intent: 'Working',
+      status: 'running',
+      active: true,
+      synthetic: true,
+      tools: [],
+      messages: [],
+      children: [],
+      sequence: seq,
+    };
+    steps.push(synthetic);
+    current = synthetic;
+    messageByStep.set(synthetic.id, new Map());
+    return synthetic;
+  };
+
+  const asStr = (v: unknown): string => (v == null ? '' : String(v));
+
+  /** Pop the oldest still-unresolved tool queued under `toolName` (FIFO) — used when a
+   * tool.result/tool.error carries no correlation id of its own. Returns undefined if
+   * nothing is queued (unknown tool name, or already resolved). */
+  const dequeuePendingTool = (
+    queueByName: Map<string, RunTimelineTool[]>,
+    toolName: string,
+  ): RunTimelineTool | undefined => {
+    if (!toolName) return undefined;
+    const queue = queueByName.get(toolName);
+    if (!queue || queue.length === 0) return undefined;
+    return queue.shift();
+  };
+
+  for (const evt of sorted) {
+    const payload = evt.payload ?? {};
+    if (current?.intent === 'Waiting for sandbox capacity' && evt.type !== 'sandbox.provisioning_pending') {
+      closeStep(current);
+      current = null;
+    }
+    switch (evt.type) {
+      case 'sandbox.provisioning_pending': {
+        if (current?.intent === 'Waiting for sandbox capacity') break;
+        if (current) closeStep(current);
+        const step: RunTimelineStep = {
+          id: `sandbox-provisioning-${evt.sequence}`,
+          intent: 'Waiting for sandbox capacity',
+          status: 'running',
+          active: true,
+          synthetic: true,
+          tools: [],
+          messages: [],
+          children: [],
+          sequence: evt.sequence,
+        };
+        steps.push(step);
+        current = step;
+        messageByStep.set(step.id, new Map());
+        break;
+      }
+
+      case 'agent.intent': {
+        const intent = asStr(payload['intent']).trim() || 'Working';
+        // Close the previous intent step before opening a new one, otherwise every
+        // earlier step stays active=true and derives to running/pending forever.
+        if (current) closeStep(current);
+        const step: RunTimelineStep = {
+          id: `intent-${evt.sequence}`,
+          intent,
+          status: 'running',
+          active: true,
+          synthetic: false,
+          tools: [],
+          messages: [],
+          children: [],
+          sequence: evt.sequence,
+        };
+        steps.push(step);
+        current = step;
+        messageByStep.set(step.id, new Map());
+        break;
+      }
+
+      case 'tool.call': {
+        // Accept both `toolName` (reducer/coordinator wire format) and `name` (the operator
+        // assistant run's RunEventSink, which appends { name, arguments } instead) so a real
+        // tool name always resolves instead of falling back to the generic "tool" placeholder.
+        const toolName = asStr(payload['toolName']) || asStr(payload['name']) || 'tool';
+        // Some streams still surface report_intent as a raw tool.call without the translated
+        // agent.intent event. Treat that as a step boundary so child/subtask runs do not
+        // collapse their entire transcript under a single synthetic "Step 1".
+        if (toolName === 'report_intent') {
+          const intent = readReportedIntent(payload);
+          if (intent) {
+            if (!(current && !current.synthetic && current.intent.trim() === intent)) {
+              if (current) closeStep(current);
+              const step: RunTimelineStep = {
+                id: `intent-${evt.sequence}`,
+                intent,
+                status: 'running',
+                active: true,
+                synthetic: false,
+                tools: [],
+                messages: [],
+                children: [],
+                sequence: evt.sequence,
+              };
+              steps.push(step);
+              current = step;
+              messageByStep.set(step.id, new Map());
+            }
+          }
+          break;
+        }
+        const step = ensureStep(evt.sequence);
+        const rawCallId = extractCallId(payload);
+        const callId = rawCallId == null ? `call-${evt.sequence}` : String(rawCallId);
+        const args = readToolArguments(payload);
+        const category = categorizeTool(toolName);
+        const { title, secondary } = deriveToolTitle(category, toolName, args);
+        const tool: RunTimelineTool = {
+          callId,
+          toolName,
+          category,
+          title,
+          titleSecondary: secondary,
+          status: 'running',
+        };
+        // Capture the raw call arguments (pretty-printed, capped) so an expanded row can
+        // show exactly what was sent, regardless of category (#item-3).
+        if (args && Object.keys(args).length > 0) {
+          try {
+            const serialized = JSON.stringify(args, null, 2);
+            tool.argumentsJson = serialized.length > EXPAND_CONTENT_MAX
+              ? `${serialized.slice(0, EXPAND_CONTENT_MAX)}\u2026`
+              : serialized;
+            tool.expandable = true;
+          } catch {
+            // Non-serializable arguments (rare) — leave argumentsJson unset.
+          }
+        }
+        // Edits often carry the change in their arguments (old_str/new_str) — surface the
+        // diff + delta immediately, before the result arrives.
+        if (category === 'edit') {
+          const diff = deriveEditDiff(args);
+          if (diff) {
+            rawDiffByCallId.set(callId, diff);
+            applyEditDiff(tool, diff);
+          }
+        }
+        step.tools.push(tool);
+        step.children.push({ kind: 'tool', tool });
+        toolByCallId.set(callId, tool);
+        // No real correlation id was on the wire — queue it so the matching
+        // tool.result/tool.error (which also has no id) can still find it by name.
+        if (rawCallId == null) {
+          const queue = pendingByToolName.get(toolName) ?? [];
+          queue.push(tool);
+          pendingByToolName.set(toolName, queue);
+        }
+        break;
+      }
+
+      case 'tool.result': {
+        const rawCallId = extractCallId(payload);
+        const toolName = asStr(payload['toolName']) || asStr(payload['name']);
+        const tool = rawCallId != null
+          ? toolByCallId.get(String(rawCallId))
+          : dequeuePendingTool(pendingByToolName, toolName);
+        if (!tool) break;
+        tool.status = 'complete';
+        const content = asStr(payload['content']);
+        tool.resultSummary = summariseResult(content);
+        tool.resultContent = content.length > EXPAND_CONTENT_MAX
+          ? `${content.slice(0, EXPAND_CONTENT_MAX)}\u2026`
+          : content;
+        if (tool.category === 'edit') {
+          // Prefer a diff embedded in the result; keep the uncapped arg-derived diff otherwise.
+          const diff = deriveEditDiff({}, content) ?? rawDiffByCallId.get(tool.callId);
+          if (diff) applyEditDiff(tool, diff);
+        } else {
+          tool.resultMeta = deriveResultMeta(tool.category, content);
+          // Non-edit tool calls carried a result but had no way to be expanded to view
+          // it — only edit rows with a diff were clickable. Any tool with real output
+          // is now expandable so its output can be inspected inline (#299).
+          if (content.trim().length > 0) tool.expandable = true;
+        }
+        break;
+      }
+
+      case 'tool.error': {
+        const rawCallId = extractCallId(payload);
+        const toolName = asStr(payload['toolName']) || asStr(payload['name']);
+        const tool = rawCallId != null
+          ? toolByCallId.get(String(rawCallId))
+          : dequeuePendingTool(pendingByToolName, toolName);
+        if (!tool) break;
+        const errorMessage = asStr(payload['errorMessage']);
+        const lower = errorMessage.toLowerCase();
+        tool.status = 'error';
+        tool.errorMessage = errorMessage;
+        tool.isSandboxViolation =
+          lower.includes('sandbox') ||
+          lower.includes('outside the sandbox boundary') ||
+          lower.includes('denied');
+        break;
+      }
+
+      case 'agent.message.delta': {
+        const step = ensureStep(evt.sequence);
+        const rawId = asStr(payload['messageId']);
+        const delta = asStr(payload['delta']);
+        const role = (asStr(payload['role']) === 'user' ? 'user' : 'assistant') as 'user' | 'assistant';
+        const byId = messageByStep.get(step.id)!;
+        if (rawId) {
+          const existing = byId.get(rawId);
+          if (existing) {
+            existing.text += delta;
+          } else {
+            const msg: RunTimelineMessage = {
+              messageId: rawId,
+              text: delta,
+              streaming: true,
+              role,
+              timestamp: captureMessageTimestamp(evt),
+            };
+            byId.set(rawId, msg);
+            step.messages.push(msg);
+            step.children.push({ kind: 'message', message: msg });
+          }
+        } else {
+          // No messageId — append to the step's current streaming message so a stream of
+          // id-less deltas folds into one message instead of one-per-delta.
+          const current = streamingNoIdByStep.get(step.id);
+          if (current && current.streaming) {
+            current.text += delta;
+          } else {
+            const msg: RunTimelineMessage = {
+              messageId: `msg-${evt.sequence}`,
+              text: delta,
+              streaming: true,
+              role,
+              timestamp: captureMessageTimestamp(evt),
+            };
+            streamingNoIdByStep.set(step.id, msg);
+            step.messages.push(msg);
+            step.children.push({ kind: 'message', message: msg });
+          }
+        }
+        break;
+      }
+
+      case 'agent.message': {
+        const step = ensureStep(evt.sequence);
+        const rawId = asStr(payload['messageId']);
+        const content = asStr(payload['content']);
+        const role = (asStr(payload['role']) === 'user' ? 'user' : 'assistant') as 'user' | 'assistant';
+        const byId = messageByStep.get(step.id)!;
+        if (rawId) {
+          const existing = byId.get(rawId);
+          if (existing) {
+            existing.text = content;
+            existing.streaming = false;
+          } else {
+            const msg: RunTimelineMessage = {
+              messageId: rawId,
+              text: content,
+              streaming: false,
+              role,
+              timestamp: captureMessageTimestamp(evt),
+            };
+            byId.set(rawId, msg);
+            step.messages.push(msg);
+            step.children.push({ kind: 'message', message: msg });
+          }
+        } else {
+          // No messageId — settle the step's current streaming message rather than adding a
+          // duplicate. Keep accumulated deltas when the final content is empty.
+          const current = streamingNoIdByStep.get(step.id);
+          if (current) {
+            if (content) current.text = content;
+            current.streaming = false;
+            streamingNoIdByStep.delete(step.id);
+          } else {
+            const msg: RunTimelineMessage = {
+              messageId: `msg-${evt.sequence}`,
+              text: content,
+              streaming: false,
+              role,
+              timestamp: captureMessageTimestamp(evt),
+            };
+            step.messages.push(msg);
+            step.children.push({ kind: 'message', message: msg });
+          }
+        }
+        break;
+      }
+
+      case 'agent.turn.end': {
+        if (current) closeStep(current);
+        current = null;
+        break;
+      }
+
+      case 'run.completed':
+      case 'run.failed':
+      case 'run.error': {
+        // A durable replay of a finished run may never carry agent.turn.end — close the
+        // current step AND every still-active step so nothing spins/pends forever.
+        for (const step of steps) {
+          if (step.active) closeStep(step);
+        }
+        current = null;
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+
+  // The run is no longer actively streaming (parked/blocked/awaiting review/terminal) but
+  // no in-stream event closed the last open step — settle it now instead of leaving a
+  // perpetual "running" spinner on its tool calls (#299).
+  if (options?.forceCloseIfInactive) {
+    for (const step of steps) {
+      if (step.active) closeStep(step);
+    }
+  }
+
+  const collapsedSteps = collapseContinuationNarrationSteps(steps);
+
+  // Replace the coordinator decompose agent's serialized work-plan JSON (a giant illegible array)
+  // with a short friendly line. The structured work-plan chip + subagents overlay stay the source of
+  // truth. Children reference the same message objects, so mutating text covers both surfaces.
+  // Only applied on the coordinator scope (stripSerializedWorkPlan) — a child agent may legitimately
+  // emit a title/scope JSON array in its own output, which must be left intact.
+  if (stripSerializedWorkPlan) {
+    for (const step of collapsedSteps) {
+      for (const msg of step.messages) {
+        if (isSerializedWorkPlan(msg.text)) {
+          const n = serializedWorkPlanSubtaskCount(msg.text);
+          msg.text = n != null
+            ? `Decomposed the work into ${n} subtask${n === 1 ? '' : 's'}.`
+            : 'Decomposed the work into subtasks.';
+        }
+      }
+    }
+  }
+
+  // Reformat the outcome-spec drafting agent's interim raw JSON (e.g.
+  // {"desired_outcome":...,"scope":...}) into the same friendly "### Outcome plan" Markdown
+  // used once the spec is confirmed (see AgentSessionPanel's buildTurns). Unlike the
+  // serialized-work-plan strip above this always applies — the raw JSON is illegible on
+  // ANY scope (coordinator or child/subtask) that streams it (#UI-bug-2).
+  for (const step of collapsedSteps) {
+    for (const msg of step.messages) {
+      const outcomeSpec = parseOutcomeSpecMessage(msg.text);
+      if (outcomeSpec) {
+        msg.text = formatOutcomeSpecMessage(outcomeSpec);
+      } else if (msg.streaming && isOutcomeSpecMessagePrefix(msg.text)) {
+        msg.text = 'Drafting outcome plan…';
+      }
+    }
+  }
+
+  // Derive each step's status from its settled work.
+  for (const step of collapsedSteps) {
+    for (const msg of step.messages) {
+      if (!step.active) msg.streaming = false;
+    }
+    if (step.active) {
+      step.status = 'running';
+      continue;
+    }
+    if (step.tools.some((t) => t.status === 'error')) {
+      step.status = 'warning';
+    } else if (step.intent === 'Waiting for sandbox capacity') {
+      step.status = 'complete';
+    } else if (step.tools.length === 0 && step.messages.length === 0) {
+      step.status = 'pending';
+    } else {
+      step.status = 'complete';
+    }
+  }
+
+  return {
+    steps: collapsedSteps,
+    eventCount: sorted.length,
+    running: collapsedSteps.some((s) => s.active),
+  };
+}

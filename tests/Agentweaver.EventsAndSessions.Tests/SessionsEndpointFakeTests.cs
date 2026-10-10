@@ -95,6 +95,14 @@ public sealed class SessionsEndpointFakeTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
+            HttpContext context,
+            SessionIdentity identity,
+            string captureId,
+            CancellationToken cancellationToken = default,
+            bool notFoundIsMissing = false) =>
+            throw new NotSupportedException();
+
         public Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
             HttpContext context,
             SessionIdentity source,

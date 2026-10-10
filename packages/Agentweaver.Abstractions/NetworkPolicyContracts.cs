@@ -286,7 +286,8 @@ public enum ProjectAuthorizationPermission
     ReadRunSelection,
     AcceptRunSelection,
     ReadPlatformRuntimeDefaults,
-    WritePlatformRuntimeDefaults
+    WritePlatformRuntimeDefaults,
+    AccessPrivateKnowledge
 }
 
 public sealed record ProjectAuthorizationPermissionGrant(

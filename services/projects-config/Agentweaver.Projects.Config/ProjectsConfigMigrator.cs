@@ -62,11 +62,15 @@ public static class ProjectsConfigMigrator
                AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'DELETE')
                AND NOT has_table_privilege(current_user, 'projects_config.authority_audit', 'TRUNCATE')
+               AND has_function_privilege(
+                   current_user,
+                   'projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
+                   'EXECUTE')
             """,
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
-                "The Projects & Config runtime database principal must have SELECT-only access to authority tables and no schema CREATE privilege.");
+                "The Projects & Config runtime database principal must have SELECT-only access to authority tables, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), and no schema CREATE privilege.");
     }
 
     public static async Task MigrateAsync(

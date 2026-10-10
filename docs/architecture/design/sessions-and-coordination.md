@@ -34,6 +34,18 @@ Config authority and accepted run selection; Events validates message admission
 against the exact owner outbox record and rechecks owner bindings for claim,
 presentation, and acknowledgment.
 
+For configured hosted credit limits, root acceptance and backlog claim use one
+run-admission transaction boundary.
+Before either writes a root, Events reads the trusted Projects selection and resolves
+the same versioned model map as AgentHost.
+Its real Cost quote and observed Copilot totals must be priced.
+The owner commits the accepted model, connection, selection hash, and Cost receipt
+through its existing outbox with the root.
+Authority is rechecked after waits and before root or claim commit.
+Identical accepted-root replay retains the original receipt without repricing.
+Missing pricing or a changed model pin cannot authorize capped work.
+This source path does not claim live PostgreSQL or native model availability.
+
 Mapped child spawn checks the latest root decision envelope under the root-session
 owner lock and rejects a pending gate or a changed actor, accepted-selection hash,
 fence, dispatch state, or confirmed WorkPlan item. Registration and spawn recheck live
