@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["environment", "projects"],
-      "label": "Placement retains its lease during authority and bootstrap reads.\nReadiness validates the stored recovery record for network generation and mount path."
+      "label": "Workspace reads retain both lease and exact attached volume.\nMetadata only: no Storage flush or content checkpoint."
     },
     {
       "type": "message",

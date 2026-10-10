@@ -531,6 +531,17 @@ public sealed class EnvironmentLifecycleStore(
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await AcquireOwnerLockAsync(connection, transaction, environmentFence.Owner, cancellationToken)
             .ConfigureAwait(false);
+        var snapshot = await ReadWorkspaceVolumeInTransactionAsync(
+            connection, transaction, environmentFence, volumeId, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return snapshot;
+    }
+
+    internal static async Task<EnvironmentWorkspaceVolumeSnapshot?> ReadWorkspaceVolumeInTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction,
+        EnvironmentGenerationFence environmentFence, string volumeId, CancellationToken cancellationToken)
+    {
+        ValidateVolumeId(volumeId);
         var owner = await ReadOwnerAsync(
             connection,
             transaction,
@@ -600,8 +611,6 @@ public sealed class EnvironmentLifecycleStore(
                 ReadProviderResource(reader, 6, 7, 8, reader.GetInt64(2), "snapshot target"),
                 ReadProviderBinding(reader, 9, ReadProviderResource(reader, 6, 7, 8, reader.GetInt64(2), "snapshot target")))
             : null;
-        await reader.DisposeAsync().ConfigureAwait(false);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return snapshot;
     }
 

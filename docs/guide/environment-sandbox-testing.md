@@ -123,6 +123,14 @@ The readiness module test retains the actual PostgreSQL advisory lock during Cil
 It observes a competing retirement through `pg_locks` and releases it only after readiness completes.
 It persists the versioned recovery record through the lease store, then reads it from a new store.
 It checks the nested provision request's exact network generation and valid Workspace mount path.
+
+The Workspace metadata module test creates the actual attached volume and active Sandbox through their production stores.
+It runs the production placement reader against a controlled Core context HTTP response.
+It checks the exact mount, Storage resource, volume generation, data generation zero, transition revision, and registered profile.
+Changed volume, data, Storage resource, and attachment state all fail.
+The test observes a competing detach through `pg_locks` while the combined owner read remains active.
+The response contains no provider descriptor, tree hash, or content checkpoint.
+These checks do not prove Storage flush, a completed suspend, or deployment.
 The retained snapshot supplies selection data without a recursive Projects selection request.
 The combined source scenarios then exercise actual Broker delivery, SDK callbacks,
 immutable Orchestrator receipts, and reference-only Events accounting.

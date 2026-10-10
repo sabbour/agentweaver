@@ -157,6 +157,17 @@ It validates the stored recovery record and reads its nested provision request.
 That request supplies the exact network generation and Workspace mount path.
 Object readback does not prove Cilium datapath enforcement.
 
+The internal bootstrap profile route also exposes a read-only `/workspace` suffix.
+It returns `EnvironmentRuntimeWorkspaceContext` under current run-read authority and the exact registered runtime profile.
+One owner transaction retains both the current Sandbox lease and the Workspace record during the Core context read.
+The record must remain Attached at the exact saved transition revision, volume generation, data generation, Storage resource, and provider attachment.
+The response includes the validated mount negotiation and transition revision, not provider options, credentials, or the PVC release descriptor.
+Data generation zero is valid metadata.
+
+This read does not flush Storage or produce a content checkpoint.
+It supplies no tree hash and does not prove that a session suspended.
+Core still requires genuine native completion, cache, checkpoint, and Workspace content evidence before a successful suspend manifest.
+
 ## Agent Sandbox resources and recovery
 
 The adapter uses the `extensions.agents.x-k8s.io/v1beta1` API. For each owner

@@ -13,6 +13,12 @@ public sealed record EnvironmentRuntimeReadinessContext(
     SandboxStartupTimeBudgets StartupBudgets,
     string WorkspaceMountPath);
 
+public sealed record EnvironmentRuntimeWorkspaceContext(
+    int ContractVersion,
+    EnvironmentRuntimeBootstrapContext Placement,
+    WorkspaceVolumeAttachmentNegotiation Workspace,
+    long TransitionRevision);
+
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostConfigureRequest(
     int ContractVersion,
