@@ -44,6 +44,27 @@ public sealed class EnvironmentRuntimePlacementReader(
             }, cancellationToken, includeRuntimeReadiness: true);
     }
 
+    public Task<EnvironmentRuntimeWorkspaceContext?> GetWorkspaceContextAsync(
+        RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
+        string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
+        CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.ValidateIdentifier(sessionId);
+        return placements.GetCurrentPlacementCoreAsync<EnvironmentRuntimeWorkspaceContext?>(
+            new(actor.Bearer.GetValue(), actor.TenantSelector), projectId, runId, environmentId,
+            runBoundRead: true, async (placement, token) =>
+            {
+                if (placement is null)
+                    return null;
+                var workspace = placement.RuntimeWorkspace
+                    ?? throw new RuntimeAuthorizationException("runtime_workspace_unavailable");
+                var bootstrap = await ProjectBootstrapAsync(
+                    actor, placement, sessionId, profileId, profiles, token).ConfigureAwait(false)
+                    ?? throw new RuntimeAuthorizationException("runtime_placement_unavailable");
+                return new(1, bootstrap, workspace.Workspace, workspace.TransitionRevision);
+            }, cancellationToken, includeRuntimeWorkspace: true);
+    }
+
     private async Task<EnvironmentRuntimeBootstrapContext?> ProjectBootstrapAsync(
         RuntimeActorAuthorization actor, EnvironmentSandboxPlacementProjectionV1 placement,
         string sessionId, string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
