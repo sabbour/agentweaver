@@ -257,6 +257,22 @@ if (copilotConnectionOptions is not null)
         provider.GetRequiredService<ISecretRedemption>(), provider.GetRequiredService<ISecretVersionWriter>(),
         provider.GetRequiredService<IDataProtectionProvider>(), provider.GetRequiredService<TimeProvider>()));
 }
+if (identityOptions.RemoteMcpOAuth is { } remoteMcpOAuthOptions)
+{
+    Validator.ValidateObject(
+        remoteMcpOAuthOptions, new ValidationContext(remoteMcpOAuthOptions), validateAllProperties: true);
+    if (!Uri.TryCreate(remoteMcpOAuthOptions.ProjectsOwnerAddress, UriKind.Absolute, out var projectsOwnerAddress))
+        throw new InvalidOperationException("Remote MCP management requires an absolute Projects owner address.");
+    RuntimeOwnerHttpTransport.RequireOwnerAddress(projectsOwnerAddress);
+    builder.Services.AddSingleton(remoteMcpOAuthOptions);
+    builder.Services.AddHttpClient("RemoteMcpOAuthProjects")
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    builder.Services.AddScoped(provider => new RemoteMcpOAuthManagementService(
+        provider.GetRequiredService<IdentityBrokerDbContext>(),
+        remoteMcpOAuthOptions,
+        provider.GetRequiredService<IHttpClientFactory>().CreateClient("RemoteMcpOAuthProjects"),
+        provider.GetRequiredService<TimeProvider>()));
+}
 
 // The broker's own signing/encryption credential. Production composition mounts a real
 // PFX; there is no "development certificate" escape hatch in this host.
@@ -397,6 +413,7 @@ app.UseAuthorization();
 app.MapIdentityBrokerEndpoints();
 app.MapIdentitySecretRedemptionEndpoints();
 app.MapCopilotConnectionEndpoints();
+app.MapRemoteMcpOAuthManagementEndpoints();
 if (identityOptions.GitHubRepoApp is not null)
 {
     app.MapGitHubRepoAppEndpoints();

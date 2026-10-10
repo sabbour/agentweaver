@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Identity.Broker;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Identity.Broker.Migrations
 {
     [DbContext(typeof(IdentityBrokerDbContext))]
-    partial class IdentityBrokerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261009060628_AddRemoteMcpConnections")]
+    partial class AddRemoteMcpConnections
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -63,12 +66,12 @@ namespace Agentweaver.Identity.Broker.Migrations
 
             modelBuilder.Entity("Agentweaver.Identity.Broker.CopilotConnectionRecord", b =>
                 {
-                    b.Property<int>("CredentialKind")
-                        .HasColumnType("integer");
-
                     b.Property<Guid>("ConnectionId")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<int>("CredentialKind")
+                        .HasColumnType("integer");
 
                     b.Property<DateTimeOffset>("FreshUntil")
                         .HasColumnType("timestamp with time zone");

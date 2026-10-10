@@ -47,6 +47,68 @@ The adapter requests the exact Key Vault version. A returned credential expires 
 
 No secret-redemption grant-management HTTP endpoint exists. Read [contracts and endpoints](../reference/contracts) for the implemented route list and [configuration](../reference/contracts#identity-host-configuration) for host keys.
 
+## Remote MCP OAuth source boundary
+
+The Broker source candidate defines an Identity-owned connection binding for the
+authenticated human, tenant, project, stable connection ID, Environment
+configuration revision and digest, opaque Identity binding reference, canonical
+HTTPS endpoint and resource, issuer, redirect URI, installed MCP transport
+profile, and canonical scopes. Consent state binds that snapshot and its
+connection revision to a short-lived correlation ID. It stores only a hash of
+the random state, the S256 challenge, and a protected verifier `SecretRef`
+identifier/version; it does not persist the raw state, verifier, access token,
+or refresh token. Connection credentials are represented only by protected
+secret references and provider expiry metadata.
+
+The lifecycle state transitions cover single-use callback claiming and
+completion, binding and expiry checks, refresh-attempt and credential-revision
+compare-and-swap outcomes, and disconnect/revocation state. These are source
+contracts and transition helpers, not a wired provider protocol. The Broker
+currently exposes only bearer-authenticated, no-store status and disconnect
+management routes. They recheck the owner's current Projects authorization and
+the current Environment configuration. Status redacts credential references
+and always reports credential use unavailable. Disconnect requires the
+expected connection, credential, and configuration revisions; it clears the
+stored references through a revision-guarded update, but does not delete secret
+versions or revoke tokens at the provider.
+
+The Identity package also validates supplied protected-resource and
+authorization-server metadata against the bound resource, issuer, requested
+scopes, S256/code profile, and an explicit endpoint list. It can construct the
+corresponding authorization URI from the bound redirect/resource/scopes and
+short-lived PKCE material. These helpers perform no discovery HTTP, do not
+grant authority to the endpoint list, and are not called by a browser redirect
+route.
+
+Provider discovery, authorization redirect and callback exchange, token and
+refresh HTTP calls, interrupted-refresh recovery, provider revocation, and
+purpose-bound credential delivery to MCP requests are not wired in this
+source slice. No deployed OAuth consent or remote MCP credential use is
+established. The following flow describes only the implemented management
+boundary:
+
+```mermaid
+sequenceDiagram
+    actor Human
+    participant Broker as Identity Broker
+    participant Projects as Projects authorization owner
+    participant Environment as Environment configuration owner
+    Human->>Broker: GET status or POST disconnect
+    Broker->>Broker: Resolve connection owned by authenticated subject
+    Broker->>Projects: Recheck current ReadProjects authorization
+    Projects-->>Broker: Current project authority
+    Broker->>Environment: Read current connection snapshot and immutable configuration
+    Environment-->>Broker: Current configuration revision and pins
+    Broker->>Broker: Compare owner, project, connection, and configuration bindings
+    alt Disconnect with expected revisions
+        Broker->>Broker: CAS connection and credential revisions; clear SecretRefs
+        Broker-->>Human: Disconnected status; no credential-use authority
+    else Status
+        Broker-->>Human: Redacted status; credential use unavailable
+    end
+    Note over Broker,Environment: No provider OAuth exchange or MCP credential delivery occurs here
+```
+
 ## GitHub connections are separate integrations
 
 Core sign-in, GitHub Copilot credentials, and GitHub App repository credentials have
