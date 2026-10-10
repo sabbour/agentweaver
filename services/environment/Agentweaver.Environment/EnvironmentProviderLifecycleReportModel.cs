@@ -7,6 +7,27 @@ internal static class EnvironmentProviderLifecycleReportModel
 {
     public static void Configure(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<EnvironmentSandboxLeasePrincipalRow>(entity =>
+        {
+            entity.ToTable(
+                "sandbox_leases",
+                EnvironmentDbContext.Schema,
+                table => table.ExcludeFromMigrations());
+            entity.HasKey(row => new
+            {
+                row.TenantId,
+                row.ProjectId,
+                row.RunId,
+                row.EnvironmentId,
+                row.ResourceGeneration
+            }).HasName("pk_environment_sandbox_leases");
+            entity.Property(row => row.TenantId).HasColumnName("tenant_id").HasMaxLength(256);
+            entity.Property(row => row.ProjectId).HasColumnName("project_id").HasMaxLength(256);
+            entity.Property(row => row.RunId).HasColumnName("run_id").HasMaxLength(256);
+            entity.Property(row => row.EnvironmentId).HasColumnName("environment_id").HasMaxLength(256);
+            entity.Property(row => row.ResourceGeneration).HasColumnName("resource_generation");
+        });
+
         modelBuilder.Entity<EnvironmentProviderLifecycleReportRow>(entity =>
         {
             entity.ToTable("provider_lifecycle_reports", table =>
@@ -36,7 +57,7 @@ internal static class EnvironmentProviderLifecycleReportModel
                 row.RunId,
                 row.EnvironmentId,
                 row.ProviderEventId
-            });
+            }).HasName("pk_environment_provider_lifecycle_reports");
             entity.Property(row => row.TenantId).HasColumnName("tenant_id").HasMaxLength(256);
             entity.Property(row => row.ProjectId).HasColumnName("project_id").HasMaxLength(256);
             entity.Property(row => row.RunId).HasColumnName("run_id").HasMaxLength(256);
@@ -71,7 +92,8 @@ internal static class EnvironmentProviderLifecycleReportModel
                 row.RunId,
                 row.EnvironmentId,
                 row.CoreOperationKey
-            }).IsUnique();
+            }).IsUnique()
+                .HasDatabaseName("ix_environment_provider_lifecycle_reports_core_operation");
             entity.HasIndex(row => new
             {
                 row.TenantId,
@@ -79,13 +101,44 @@ internal static class EnvironmentProviderLifecycleReportModel
                 row.RunId,
                 row.EnvironmentId,
                 row.CreatedAt
-            }).HasFilter("\"reconciliation_state\" = 'Pending'");
+            }).HasFilter("\"reconciliation_state\" = 'Pending'")
+                .HasDatabaseName("ix_environment_provider_lifecycle_reports_pending");
             entity.HasOne<EnvironmentOwnerRow>()
                 .WithMany()
                 .HasForeignKey(row => new { row.TenantId, row.ProjectId, row.RunId, row.EnvironmentId })
-                .OnDelete(DeleteBehavior.Restrict);
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("fk_environment_provider_lifecycle_reports_owners");
+            entity.HasOne<EnvironmentSandboxLeasePrincipalRow>()
+                .WithMany()
+                .HasForeignKey(row => new
+                {
+                    row.TenantId,
+                    row.ProjectId,
+                    row.RunId,
+                    row.EnvironmentId,
+                    row.ResourceGeneration
+                })
+                .HasPrincipalKey(row => new
+                {
+                    row.TenantId,
+                    row.ProjectId,
+                    row.RunId,
+                    row.EnvironmentId,
+                    row.ResourceGeneration
+                })
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("fk_environment_provider_lifecycle_reports_sandbox_leases");
         });
     }
+}
+
+internal sealed class EnvironmentSandboxLeasePrincipalRow
+{
+    public string TenantId { get; set; } = string.Empty;
+    public string ProjectId { get; set; } = string.Empty;
+    public string RunId { get; set; } = string.Empty;
+    public string EnvironmentId { get; set; } = string.Empty;
+    public long ResourceGeneration { get; set; }
 }
 
 internal sealed class EnvironmentProviderLifecycleReportRow

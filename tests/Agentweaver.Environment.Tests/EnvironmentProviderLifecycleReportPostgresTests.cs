@@ -18,7 +18,8 @@ public sealed class EnvironmentProviderLifecycleReportPostgresTests(EnvironmentP
     public async Task ProviderReportIsDurableAndIdenticalRetryKeepsTheSamePendingOperation()
     {
         var setup = await CreateActiveLeaseAsync();
-        var reportedAt = new DateTimeOffset(2020, 3, 1, 2, 15, 0, TimeSpan.FromMinutes(330));
+        var reportedAt = new DateTimeOffset(2020, 3, 1, 2, 15, 0, TimeSpan.FromMinutes(330)).AddTicks(17);
+        var equivalentReportedAt = reportedAt.ToOffset(TimeSpan.FromHours(-4));
         var request = Report(
             setup.Fence,
             setup.Resource,
@@ -28,8 +29,19 @@ public sealed class EnvironmentProviderLifecycleReportPostgresTests(EnvironmentP
 
         var first = await store.ReserveAsync(request, "agent-sandbox", CancellationToken.None);
         var restarted = new EnvironmentProviderLifecycleReportStore(fixture.DataSource, TimeProvider.System);
-        var replay = await restarted.ReserveAsync(request, "agent-sandbox", CancellationToken.None);
+        var replay = await restarted.ReserveAsync(
+            Report(
+                setup.Fence,
+                setup.Resource,
+                setup.Lease.ProviderFencingGeneration,
+                providerEventId: request.ProviderEventId,
+                reportedAt: equivalentReportedAt),
+            "agent-sandbox",
+            CancellationToken.None);
 
+        var expectedReportedAt = new DateTimeOffset(
+            reportedAt.UtcTicks - reportedAt.UtcTicks % 10,
+            TimeSpan.Zero);
         Assert.False(first.Replayed);
         Assert.True(replay.Replayed);
         Assert.Equal(first.ProviderEventId, replay.ProviderEventId);
@@ -38,10 +50,12 @@ public sealed class EnvironmentProviderLifecycleReportPostgresTests(EnvironmentP
         Assert.Equal(first.LeaseRevision, replay.LeaseRevision);
         Assert.Equal(first.CoreOperationKey, replay.CoreOperationKey);
         Assert.Equal(first.RequestFingerprint, replay.RequestFingerprint);
-        Assert.Equal(reportedAt, first.ReportedAt);
+        Assert.Equal(expectedReportedAt, first.ReportedAt);
         Assert.Equal(TimeSpan.Zero, first.ReportedAt.Offset);
         Assert.NotEqual(first.CreatedAt, first.ReportedAt);
         Assert.Equal(first.ReportedAt, replay.ReportedAt);
+        Assert.Equal(first.CreatedAt, replay.CreatedAt);
+        Assert.Equal(first.UpdatedAt, replay.UpdatedAt);
         Assert.Equal(EnvironmentProviderLifecycleReportState.Pending, replay.State);
         Assert.Null(replay.CoreExecutionFence);
         Assert.Null(replay.LastErrorCode);

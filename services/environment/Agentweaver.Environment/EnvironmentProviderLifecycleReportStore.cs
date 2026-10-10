@@ -46,7 +46,8 @@ public sealed class EnvironmentProviderLifecycleReportStore(
                 "environment_provider_identity_mismatch",
                 "The authenticated provider does not match the report's provider identity.");
 
-        var fingerprint = RequestFingerprint(request, authenticatedProviderId);
+        var reportedAt = NormalizeTimestamp(request.ReportedAt);
+        var fingerprint = RequestFingerprint(request, authenticatedProviderId, reportedAt);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
@@ -87,8 +88,7 @@ public sealed class EnvironmentProviderLifecycleReportStore(
             return existing with { Replayed = true };
         }
 
-        var now = timeProvider.GetUtcNow();
-        var reportedAt = request.ReportedAt.ToUniversalTime();
+        var now = NormalizeTimestamp(timeProvider.GetUtcNow());
         var coreOperationKey = CreateCoreOperationKey(
             request.Fence.Owner,
             lease.OperationId,
@@ -345,7 +345,8 @@ public sealed class EnvironmentProviderLifecycleReportStore(
 
     private static string RequestFingerprint(
         EnvironmentProviderLifecycleReportRequest request,
-        string authenticatedProviderId) =>
+        string authenticatedProviderId,
+        DateTimeOffset reportedAt) =>
         Fingerprint(string.Join('\0',
             "environment-provider-lifecycle-report-v1",
             request.Fence.Owner.TenantId,
@@ -363,7 +364,13 @@ public sealed class EnvironmentProviderLifecycleReportStore(
             request.Resource.ResourceId,
             request.Resource.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture),
             request.ProviderFencingGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            request.ReportedAt.UtcDateTime.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            reportedAt.UtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+    private static DateTimeOffset NormalizeTimestamp(DateTimeOffset value)
+    {
+        var utcTicks = value.UtcTicks;
+        return new DateTimeOffset(utcTicks - utcTicks % 10, TimeSpan.Zero);
+    }
 
     private static string CreateCoreOperationKey(
         EnvironmentOwnerIdentity owner,
