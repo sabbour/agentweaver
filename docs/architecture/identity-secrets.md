@@ -70,6 +70,8 @@ authorization and the current Environment configuration. Consent preparation
 links Identity's opaque reference to the exact Environment revision and digest,
 re-reads that pin, then stores only a protected verifier reference and
 correlation state. It does not discover provider metadata or redirect a browser.
+Projects authorization and Environment configuration use separate configured
+owner addresses; Environment requests are not routed through Projects.
 Status redacts credential references and always reports credential use
 unavailable. Disconnect requires the expected connection, credential, and
 configuration revisions; it clears the stored references through a
