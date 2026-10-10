@@ -2,7 +2,10 @@ extern alias AzureIdentity;
 
 using Agentweaver.Providers;
 using Agentweaver.Projects.Config;
+using Agentweaver.Abstractions;
+using Agentweaver.ObjectStore.AzureBlob;
 using Azure.Core;
+using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -49,6 +52,32 @@ builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options
             "__ef_migrations_history", ProjectsConfigDbContext.Schema));
 });
 builder.Services.AddScoped<ProjectsConfigService>();
+var skillContentContainer = builder.Configuration["ProjectsConfig:SkillContent:ContainerUri"];
+if (skillContentContainer is not null)
+{
+    if (!Uri.TryCreate(skillContentContainer, UriKind.Absolute, out var skillContentContainerUri) ||
+        skillContentContainerUri.Scheme != Uri.UriSchemeHttps ||
+        !string.IsNullOrEmpty(skillContentContainerUri.UserInfo) ||
+        !string.IsNullOrEmpty(skillContentContainerUri.Query) ||
+        !string.IsNullOrEmpty(skillContentContainerUri.Fragment) ||
+        skillContentContainerUri.AbsolutePath.Trim('/').Contains('/') ||
+        string.IsNullOrWhiteSpace(skillContentContainerUri.AbsolutePath.Trim('/')))
+        throw new InvalidOperationException(
+            "Skill content requires an explicitly configured HTTPS Blob container.");
+
+    builder.Services.AddSingleton<IObjectStore>(services => new AzureBlobObjectStore(
+        new BlobContainerClient(
+            skillContentContainerUri,
+            services.GetRequiredService<TokenCredential>())));
+    builder.Services.AddScoped<SkillContentObjectStore>();
+}
+builder.Services.AddScoped<SkillContentService>(services => new SkillContentService(
+    services.GetRequiredService<ProjectsConfigDbContext>(),
+    services.GetService<SkillContentObjectStore>(),
+    services.GetRequiredService<ProjectsConfigService>(),
+    services.GetRequiredService<TimeProvider>()));
+builder.Services.AddScoped<ISkillContentService>(services => services.GetRequiredService<SkillContentService>());
+builder.Services.AddScoped<ISkillAssignmentService>(services => services.GetRequiredService<SkillContentService>());
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(provider =>
     ProviderCatalogConfiguration.Load(provider.GetRequiredService<IConfiguration>()));
@@ -94,6 +123,7 @@ app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapProjectConfigEndpoints();
+app.MapSkillContentEndpoints();
 app.Run();
 
 public partial class Program;

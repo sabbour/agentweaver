@@ -274,6 +274,49 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void CatalogOnlySkillsMustBeDisabledUntilImportedAndAssigned()
+    {
+        var disabled = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            Skills = [new SkillCatalogSetting("legacy-skill", false, 0)],
+        });
+        Assert.False(Assert.Single(disabled.Skills).Enabled);
+
+        var error = Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.Validate(new ProjectConfiguration
+            {
+                Skills = [new SkillCatalogSetting("legacy-skill", true, 0)],
+            }));
+        Assert.Equal(StatusCodes.Status400BadRequest, error.StatusCode);
+    }
+
+    [Fact]
+    public void ConfigurationTransitionsPreserveOnlyExactlyUnchangedLegacyEnabledSkills()
+    {
+        var legacy = new SkillCatalogSetting("legacy-skill", true, 0);
+        var previous = new ProjectConfiguration { Skills = [legacy] };
+        var unchanged = ProjectConfigurationValidator.ValidateTransition(
+            previous,
+            previous with { DefaultWorkflowId = "workflow.next" });
+        Assert.Equal(new[] { legacy }, unchanged.Skills);
+
+        var added = Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.ValidateTransition(
+                previous,
+                previous with
+                {
+                    Skills = [legacy, new SkillCatalogSetting("new-legacy-skill", true, 1)],
+                }));
+        Assert.Equal(StatusCodes.Status400BadRequest, added.StatusCode);
+
+        var modified = Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.ValidateTransition(
+                previous,
+                previous with { Skills = [legacy with { Order = 1 }] }));
+        Assert.Equal(StatusCodes.Status400BadRequest, modified.StatusCode);
+    }
+
+    [Fact]
     public void SourceControlSettingsAreOptionalAndPersistOnlyExactSecretReferences()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);

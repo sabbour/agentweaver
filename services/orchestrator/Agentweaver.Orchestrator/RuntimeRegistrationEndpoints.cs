@@ -19,6 +19,7 @@ public static class RuntimeRegistrationEndpoints
         services.AddHttpClient<RuntimeEnvironmentContextClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
             .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
         services.AddScoped<RuntimeRegistrationOwner>();
+        services.AddScoped<RuntimeSkillContentOwner>();
         services.AddScoped<RuntimeActionOwner>();
         return true;
     }
@@ -40,11 +41,18 @@ public static class RuntimeRegistrationEndpoints
                 await ExecuteAsync(context, () => owner.ReadCurrentAsync(
                     context, runtimeInstanceId, cancellationToken)).ConfigureAwait(false))
             .RequireAuthorization();
+        endpoints.MapGet("/internal/runtime/registrations/{runtimeInstanceId:guid}/skills",
+            async (Guid runtimeInstanceId, HttpContext context,
+                [Microsoft.AspNetCore.Mvc.FromServices] RuntimeSkillContentOwner owner,
+                CancellationToken cancellationToken) =>
+                await ExecuteAsync(context, () => owner.ReadCurrentAsync(
+                    context, runtimeInstanceId, cancellationToken)).ConfigureAwait(false))
+            .RequireAuthorization();
         endpoints.MapRuntimeActionEndpoints();
         return endpoints;
     }
 
-    private static async Task<IResult> ExecuteAsync(HttpContext context, Func<Task<RuntimeRegistration>> action)
+    private static async Task<IResult> ExecuteAsync<T>(HttpContext context, Func<Task<T>> action)
     {
         context.Response.Headers.CacheControl = "no-store";
         try
