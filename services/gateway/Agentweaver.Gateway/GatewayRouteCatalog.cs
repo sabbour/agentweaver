@@ -86,6 +86,39 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/configuration",
             "updateProjectConfiguration", "Update project configuration", body: true,
             forwardTenantSelector: true);
+        const long skillContentMaximumRequestBytes = 3 * 1024 * 1024;
+        var marketplaceSources = "/projects/{projectId}/skill-marketplaces/sources";
+        Add("GET", GatewayOwner.Projects, marketplaceSources, "/api" + marketplaceSources,
+            "listMarketplaceSources", "List project marketplace sources",
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, marketplaceSources, "/api" + marketplaceSources,
+            "createMarketplaceSource", "Create a project marketplace source",
+            body: true, forwardTenantSelector: true);
+        Add("PUT", GatewayOwner.Projects, marketplaceSources + "/{sourceId}",
+            "/api" + marketplaceSources + "/{sourceId}",
+            "updateMarketplaceSource", "Update a project marketplace source",
+            body: true, forwardTenantSelector: true);
+        Add("DELETE", GatewayOwner.Projects, marketplaceSources + "/{sourceId}",
+            "/api" + marketplaceSources + "/{sourceId}",
+            "removeMarketplaceSource", "Tombstone a project marketplace source",
+            ["expectedRevision"], forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, marketplaceSources + "/{sourceId}/browse",
+            "/api" + marketplaceSources + "/{sourceId}/browse",
+            "browseMarketplaceSource", "Browse one revision of a project marketplace source",
+            ["expectedSourceRevision", "query", "page", "pageSize"], forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, "/skills/preview", "/api/skills/preview",
+            "previewSkillContent", "Validate skill content without importing it",
+            body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, "/projects/{projectId}/skills/import",
+            "/api/projects/{projectId}/skills/import",
+            "importProjectSkill", "Import validated skill content to a project",
+            body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
+            forwardTenantSelector: true);
+        Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/skills/{skillId}/assignment",
+            "/api/projects/{projectId}/skills/{skillId}/assignment",
+            "updateProjectSkillAssignment", "Update a project skill assignment",
+            body: true, forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);
