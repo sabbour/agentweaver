@@ -241,12 +241,6 @@ public sealed partial class ProjectsConfigService
         caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
         var project = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
             .ConfigureAwait(false);
-        if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
-            reviewedSnapshots.Any(snapshot => snapshot.ProjectId != project.ProjectId))
-            throw new ProjectConfigException(
-                "invalid_configuration",
-                "Reviewed remote tool snapshot references must belong to this project.",
-                (int)HttpStatusCode.BadRequest);
         if (project.State != ProjectLifecycleState.Active)
             throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
         if (project.ConfigurationRevision != expectedRevision)
@@ -261,6 +255,12 @@ public sealed partial class ProjectsConfigService
         var previous = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
         var normalized = await SkillContentService.ValidateConfigurationAsync(
             db, project.ProjectId, previous, configuration, cancellationToken).ConfigureAwait(false);
+        if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
+            reviewedSnapshots.Any(snapshot => snapshot.ProjectId != project.ProjectId))
+            throw new ProjectConfigException(
+                "invalid_configuration",
+                "Reviewed remote tool snapshot references must belong to this project.",
+                (int)HttpStatusCode.BadRequest);
 
         await EnsureProjectNarrowingAsync(normalized, cancellationToken).ConfigureAwait(false);
         var now = timeProvider.GetUtcNow();
