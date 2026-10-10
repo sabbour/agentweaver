@@ -204,7 +204,7 @@ export interface ProjectConfiguration {
   casting: Array<{ agentId: string; role: string; order: number }>;
   blueprintWorkflowReferences: Array<{ blueprintId: string; workflowId: string }>;
   defaultWorkflowId?: string | null;
-  skills: Array<{ skillId: string; enabled: boolean; order: number }>;
+  skills: ProjectSkillAssignment[];
   egressNarrowing?: Array<unknown> | null;
   runLimits: {
     maxModelTurns?: number | null;
@@ -215,6 +215,113 @@ export interface ProjectConfiguration {
     maxPromptTokens?: number | null;
   };
   sourceControl?: SourceControlProjectSettings | null;
+}
+
+export interface ProjectSkillAssignment {
+  skillId: string;
+  enabled: boolean;
+  order: number;
+  revision?: number | null;
+  contentDigest?: string | null;
+  agentIds?: string[] | null;
+}
+
+export interface MarketplaceSource {
+  sourceId: string;
+  name: string;
+  repository: string;
+  requestedRef: string;
+  subpath: string | null;
+  revision: number;
+  state: 'active' | 'removed';
+}
+
+export interface MarketplaceSourceInput {
+  name?: string;
+  repository: string;
+  requestedRef?: string;
+  subpath?: string;
+}
+
+export interface MarketplaceSourceUpdateInput extends MarketplaceSourceInput {
+  expectedRevision: number;
+}
+
+export interface MarketplaceBrowseRequest {
+  expectedSourceRevision: number;
+  query?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface MarketplaceSkillCandidate {
+  location: string;
+  name: string;
+  description: string | null;
+}
+
+export interface MarketplaceBrowsePage {
+  sourceId: string;
+  sourceRevision: number;
+  requestedRef: string;
+  resolvedCommitSha: string;
+  candidates: MarketplaceSkillCandidate[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
+export interface SkillContentResourceRequest {
+  relativePath: string;
+  content: string;
+}
+
+export interface SkillContentCandidateRequest {
+  skillMarkdown: string;
+  resources: SkillContentResourceRequest[];
+}
+
+export interface SkillContentPreview {
+  name: string;
+  description: string;
+  contentDigest: string;
+  resourceCount: number;
+  totalBytes: number;
+}
+
+export interface SkillContentImportRequest {
+  idempotencyKey: string;
+  expectedContentDigest: string;
+  skillId?: string;
+  expectedRevision?: number;
+  source?: {
+    sourceId: string;
+    sourceRevision: string;
+    requestedRef: string;
+    resolvedCommitSha: string;
+    selectedPath: string;
+  };
+  candidate: SkillContentCandidateRequest;
+}
+
+export interface SkillContentImportReceipt {
+  skillId: string;
+  revision: number;
+  name: string;
+  description: string;
+  contentDigest: string;
+  resourceCount: number;
+  totalBytes: number;
+}
+
+export interface SkillAssignmentRequest {
+  expectedProjectConfigurationRevision: number;
+  revision: number;
+  contentDigest: string;
+  enabled: boolean;
+  order: number;
+  agentIds: string[];
 }
 
 export type SourceControlAuthMode = 'secret' | 'githubApp';

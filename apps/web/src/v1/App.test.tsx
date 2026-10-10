@@ -10,6 +10,14 @@ const mocks = vi.hoisted(() => ({
   getProject: vi.fn(),
   getProjectConfiguration: vi.fn(),
   updateProjectConfiguration: vi.fn(),
+  listMarketplaceSources: vi.fn(),
+  createMarketplaceSource: vi.fn(),
+  updateMarketplaceSource: vi.fn(),
+  removeMarketplaceSource: vi.fn(),
+  browseMarketplaceSource: vi.fn(),
+  previewSkillContent: vi.fn(),
+  importSkillContent: vi.fn(),
+  updateSkillAssignment: vi.fn(),
   getRunStatus: vi.fn(),
   getRunSelection: vi.fn(),
   getRunUsage: vi.fn(),
@@ -45,6 +53,14 @@ vi.mock('./api', () => ({
     getProject: mocks.getProject,
     getProjectConfiguration: mocks.getProjectConfiguration,
     updateProjectConfiguration: mocks.updateProjectConfiguration,
+    listMarketplaceSources: mocks.listMarketplaceSources,
+    createMarketplaceSource: mocks.createMarketplaceSource,
+    updateMarketplaceSource: mocks.updateMarketplaceSource,
+    removeMarketplaceSource: mocks.removeMarketplaceSource,
+    browseMarketplaceSource: mocks.browseMarketplaceSource,
+    previewSkillContent: mocks.previewSkillContent,
+    importSkillContent: mocks.importSkillContent,
+    updateSkillAssignment: mocks.updateSkillAssignment,
     getRunStatus: mocks.getRunStatus,
     getRunSelection: mocks.getRunSelection,
     getRunUsage: mocks.getRunUsage,
@@ -342,6 +358,14 @@ describe('v1 web project scoping', () => {
     mocks.getProject.mockReset();
     mocks.getProjectConfiguration.mockReset();
     mocks.updateProjectConfiguration.mockReset();
+    mocks.listMarketplaceSources.mockReset().mockResolvedValue([]);
+    mocks.createMarketplaceSource.mockReset();
+    mocks.updateMarketplaceSource.mockReset();
+    mocks.removeMarketplaceSource.mockReset();
+    mocks.browseMarketplaceSource.mockReset();
+    mocks.previewSkillContent.mockReset();
+    mocks.importSkillContent.mockReset();
+    mocks.updateSkillAssignment.mockReset();
     mocks.getRunStatus.mockReset();
     mocks.getRunSelection.mockReset();
     mocks.getRunUsage.mockReset();
@@ -1082,7 +1106,7 @@ describe('v1 web project scoping', () => {
     });
 
     await screen.findByRole('heading', { name: 'Revision 2' });
-    const editor = screen.getByRole('textbox') as HTMLTextAreaElement;
+    const editor = screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement;
     expect(editor.value).toContain('"projectMarker": "p2"');
 
     await act(async () => {
@@ -1090,7 +1114,8 @@ describe('v1 web project scoping', () => {
       await oldProjectLoad.promise;
     });
 
-    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toContain('"projectMarker": "p2"');
+    expect((screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement).value)
+      .toContain('"projectMarker": "p2"');
     fireEvent.click(screen.getByRole('button', { name: 'Append configuration revision' }));
     await waitFor(() => expect(mocks.updateProjectConfiguration).toHaveBeenCalledOnce());
     expect(mocks.updateProjectConfiguration).toHaveBeenCalledWith(
@@ -1100,6 +1125,21 @@ describe('v1 web project scoping', () => {
       expect.objectContaining({ projectMarker: 'p2' }),
       'tenant-1',
     );
+  });
+
+  it('loads marketplace sources through the selected project with the current tenant', async () => {
+    mocks.getProjectConfiguration.mockResolvedValue(projectConfiguration('p1', 4));
+    mocks.listMarketplaceSources.mockResolvedValue([]);
+
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Skills and marketplace' });
+    await waitFor(() => expect(mocks.listMarketplaceSources).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      'tenant-1',
+    ));
+    expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
   });
 
   it('clears an accepted selection and usage after a later snapshot read fails', async () => {

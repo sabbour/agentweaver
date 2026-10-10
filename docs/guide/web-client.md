@@ -51,7 +51,7 @@ endpoint allowlist; the Gateway origin setting does not configure Broker CORS.
 | --- | --- |
 | `/projects` | List projects visible to the signed-in identity and create a project. Creation does not assign an Owner. |
 | `/projects/:projectId` | Read project state and open an existing run by its exact ID. |
-| `/projects/:projectId/settings` | Read and append a revisioned project-configuration document, connect or disconnect the GitHub Repo App account, browse its repository metadata, connect user-level GitHub Copilot, and view stable owner connection IDs. Owners validate the submitted configuration. |
+| `/projects/:projectId/settings` | Read and append a revisioned project-configuration document; manage public marketplace sources; browse pinned source revisions; validate and import local skill files; assign imported skills to current cast agents; connect the GitHub Repo App and user-level GitHub Copilot accounts. Owners validate each operation. |
 | `/projects/:projectId/knowledge` | Search paginated Knowledge records for an exact project, run, and agent; correct or archive supported Memory and SessionContext records, inspect and restore revisions, approve eligible Decisions, and import or export exact-scope transfer bundles. The owner remains authoritative for record state and trust. |
 | `/projects/:projectId/runs/:runId` | Read run/session snapshots and journal events; view topology, chat, outcomes and approvals, activity, accepted selection, and usage; manage run-bound GitHub App repository setup/pinning; send addressed messages or request supported tree actions. The `view` query selects a run tab (for example, `?view=chat`); unsupported values open Topology. |
 
@@ -136,6 +136,21 @@ loading any assets. Configure the public ingress to redact callback query
 strings from its own access logs as well, since the Web server cannot control
 ingress logging. The owner response, not the popup, determines the connection
 status.
+
+The Skills and marketplace section uses the same Gateway client and explicit
+tenant selector as project configuration. It manages source settings and browses
+only the selected, owner-reported source revision and commit. Marketplace import
+stays disabled because browse does not return the selected manifest and its
+resources for Skills validation. Local upload is separate: the browser submits
+the selected `SKILL.md` and text resources to Skills preview, then imports only
+after the owner returns a matching digest. The import request keeps one
+idempotency key for retries. Assignment uses the imported revision, digest,
+current project configuration revision, and selected agents from the project's
+current cast. A returned configuration revision is checked before it replaces
+the editor's current revision; assignment is disabled while the editor has
+unsaved changes. The UI reports the saved assignment but does not claim that a
+runtime loaded it. Runtime-loaded status is unavailable from the current
+public API.
 
 When the accepted run configuration selects GitHub App mode, and its owner
 routes have been admitted and configured, the run Selection view reads safe

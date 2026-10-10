@@ -16,9 +16,19 @@ import type {
   KnowledgeRecordTransferBundle,
   KnowledgeRecordUpdateInput,
   KnowledgeRecordWriteResult,
+  MarketplaceBrowsePage,
+  MarketplaceBrowseRequest,
+  MarketplaceSource,
+  MarketplaceSourceInput,
+  MarketplaceSourceUpdateInput,
   OwnerRunStatus,
   ProjectAuthorizationContextResponse,
   ProjectConfiguration,
+  SkillAssignmentRequest,
+  SkillContentCandidateRequest,
+  SkillContentImportReceipt,
+  SkillContentImportRequest,
+  SkillContentPreview,
   ProjectSummary,
   RepoAppAuthorizationStart,
   RepoAppAuthorizationStatus,
@@ -186,6 +196,135 @@ export class AgentweaverGatewayClient {
       method: 'PUT',
       body: JSON.stringify({ expectedRevision, configuration }),
     }, this.baseUrl, tenantSelector);
+  }
+
+  listMarketplaceSources(
+    token: string,
+    projectId: string,
+    tenantSelector?: string | null,
+  ): Promise<MarketplaceSource[]> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'sources')}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  createMarketplaceSource(
+    token: string,
+    projectId: string,
+    request: MarketplaceSourceInput,
+    tenantSelector?: string | null,
+  ): Promise<MarketplaceSource> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'sources')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  updateMarketplaceSource(
+    token: string,
+    projectId: string,
+    sourceId: string,
+    request: MarketplaceSourceUpdateInput,
+    tenantSelector?: string | null,
+  ): Promise<MarketplaceSource> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'sources', sourceId)}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  removeMarketplaceSource(
+    token: string,
+    projectId: string,
+    sourceId: string,
+    expectedRevision: number,
+    tenantSelector?: string | null,
+  ): Promise<MarketplaceSource> {
+    const query = new URLSearchParams({ expectedRevision: String(expectedRevision) });
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'sources', sourceId)}?${query}`,
+      { method: 'DELETE' },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  browseMarketplaceSource(
+    token: string,
+    projectId: string,
+    sourceId: string,
+    options: MarketplaceBrowseRequest,
+    tenantSelector?: string | null,
+  ): Promise<MarketplaceBrowsePage> {
+    const query = new URLSearchParams({
+      expectedSourceRevision: String(options.expectedSourceRevision),
+    });
+    if (options.query) query.set('query', options.query);
+    if (options.page !== undefined) query.set('page', String(options.page));
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'sources', sourceId, 'browse')}?${query}`,
+      {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  previewSkillContent(
+    token: string,
+    candidate: SkillContentCandidateRequest,
+    tenantSelector?: string | null,
+  ): Promise<SkillContentPreview> {
+    return this.request(
+      token,
+      '/skills/preview',
+      { method: 'POST', body: JSON.stringify({ candidate }) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  importSkillContent(
+    token: string,
+    projectId: string,
+    request: SkillContentImportRequest,
+    tenantSelector?: string | null,
+  ): Promise<SkillContentImportReceipt> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skills', 'import')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  updateSkillAssignment(
+    token: string,
+    projectId: string,
+    skillId: string,
+    request: SkillAssignmentRequest,
+    tenantSelector?: string | null,
+  ): Promise<VersionedProjectConfiguration> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skills', skillId, 'assignment')}`,
+      { method: 'PUT', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
   }
 
   beginCopilotConnection(
