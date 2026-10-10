@@ -1,5 +1,7 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
 
 namespace Agentweaver.Identity;
 
@@ -10,6 +12,9 @@ public sealed record RuntimeAcceptedModelSelection(
     Guid? ConnectionId,
     ProjectAuthorityResourceType? ConnectionScope)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeModelBindingPin? ModelBindingPin { get; init; }
+
     public static RuntimeAcceptedModelSelection Read(JsonElement snapshot)
     {
         if (snapshot.ValueKind != JsonValueKind.Object ||
@@ -66,7 +71,32 @@ public sealed record RuntimeAcceptedModelSelection(
                 throw Invalid();
             }
         }
-        return new(reference.GetString()!, sourceMode, credential, connectionId, connectionScope);
+        RuntimeModelBindingPin? pin = null;
+        if (model.TryGetProperty("modelBindingPin", out var suppliedPin) &&
+            suppliedPin.ValueKind != JsonValueKind.Null)
+        {
+            try
+            {
+                pin = suppliedPin.Deserialize<RuntimeModelBindingPin>(
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)
+                    {
+                        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+                        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+                    }) ?? throw Invalid();
+                RuntimeModelBindingsResolver.ValidatePin(pin);
+                if (sourceMode != ModelSourceMode.Byok || pin.SourceMode != sourceMode ||
+                    pin.ModelSelectionReference != reference.GetString())
+                    throw Invalid();
+            }
+            catch (JsonException)
+            {
+                throw Invalid();
+            }
+        }
+        return new(reference.GetString()!, sourceMode, credential, connectionId, connectionScope)
+        {
+            ModelBindingPin = pin
+        };
     }
 
     private static RuntimeAuthorizationException Invalid() =>

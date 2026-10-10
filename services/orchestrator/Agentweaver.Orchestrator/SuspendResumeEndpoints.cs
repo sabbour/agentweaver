@@ -20,6 +20,11 @@ public static partial class CoordinationEndpoints
         coordination.MapPost(
             "/sessions/{sessionId}/resume",
             ResumeUnavailableAsync);
+        return app;
+    }
+
+    public static IEndpointRouteBuilder MapRuntimeSuspendResumeEndpoints(this IEndpointRouteBuilder app)
+    {
         app.MapPost(
             "/internal/runtime/suspend/require-current",
             RequireCurrentSuspendAsync).RequireAuthorization();
@@ -31,7 +36,7 @@ public static partial class CoordinationEndpoints
         HttpContext context,
         OrchestratorOptions options,
         ProjectsRunSelectionClient projects,
-        RuntimeRegistrationOwner registrations,
+        [Microsoft.AspNetCore.Mvc.FromServices] RuntimeRegistrationOwner registrations,
         SessionSuspendResumeCoordinator coordinator,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>

@@ -53,6 +53,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public string? LateAbortAssistantContent { get; set; }
     public bool PersistNativeSessionState { get; set; }
     public bool EmitNativeCompletionReceipt { get; set; }
+    public bool EmitUsageWithTurn { get; set; }
+    public Guid NativeUsageEventId { get; private set; }
     public Guid NativeMessageId { get; private set; }
     public Guid NativeTurnEndEventId { get; private set; }
     public Guid NativeCompletionReceiptEventId { get; private set; }
@@ -399,6 +401,11 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                 Assert.Equal(JsonValueKind.Null, result.ValueKind);
             }
             cancellationToken.ThrowIfCancellationRequested();
+            if (EmitUsageWithTurn)
+            {
+                NativeUsageEventId = Guid.NewGuid();
+                await EmitNativeEventAsync("assistant.usage", NativeUsageEventId, UsageData());
+            }
             await EmitAssistantAsync(answer);
             if (EmitNativeCompletionReceipt)
             {

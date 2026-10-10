@@ -65,7 +65,6 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         {
             Username = runtimeRole,
             Password = runtimePassword,
-            Pooling = false,
         }.ConnectionString;
         var dataSource = NpgsqlDataSource.Create(runtimeConnectionString);
         var dbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()

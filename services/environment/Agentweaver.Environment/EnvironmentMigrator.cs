@@ -24,6 +24,10 @@ public static class EnvironmentMigrator
                AND pg_catalog.to_regclass('"environment"."lifecycle_operations"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."owner_effects"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."sandbox_leases"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."remote_mcp_connections"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."remote_mcp_connection_configurations"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."remote_mcp_catalog_snapshots"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."remote_mcp_connection_idempotency"') IS NOT NULL
             """,
             connection);
         if (await schemaCheck.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
@@ -74,11 +78,31 @@ public static class EnvironmentMigrator
                AND has_table_privilege(current_user, 'environment.sandbox_leases', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'environment.sandbox_leases', 'DELETE')
                AND NOT has_table_privilege(current_user, 'environment.sandbox_leases', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.remote_mcp_connections', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.remote_mcp_connections', 'INSERT')
+               AND has_table_privilege(current_user, 'environment.remote_mcp_connections', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connections', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connections', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.remote_mcp_connection_configurations', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.remote_mcp_connection_configurations', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connection_configurations', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connection_configurations', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connection_configurations', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.remote_mcp_catalog_snapshots', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.remote_mcp_catalog_snapshots', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_catalog_snapshots', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_catalog_snapshots', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_catalog_snapshots', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.remote_mcp_connection_idempotency', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.remote_mcp_connection_idempotency', 'INSERT')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connection_idempotency', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connection_idempotency', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.remote_mcp_connection_idempotency', 'TRUNCATE')
             """,
             connection);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
-                "The Environment runtime principal must have owner-scoped lifecycle/effect DML, no schema CREATE, and no physical DELETE/TRUNCATE authority.");
+                "The Environment runtime principal must have required owner-scoped lifecycle and connection DML, append-only history/catalog/idempotency access, no schema CREATE, and no physical DELETE/TRUNCATE authority.");
     }
 
     public static async Task MigrateAsync(
