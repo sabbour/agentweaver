@@ -408,4 +408,7 @@ Project skill content has pure tests for manifest/resource validation, normalize
 path collisions, digest stability, immutable object writes, and missing or corrupt
 objects. The Projects Config PostgreSQL test verifies idempotent imports, revision
 conflicts, assignment to active agents, and reads of the exact accepted revision
-and resources. It requires the repository's Testcontainers PostgreSQL fixture.
+and resources. The inventory PostgreSQL tests verify unassigned and revoked
+revision metadata, exact current assignments and configuration revisions,
+stable bounded pages, and current project-admin and cross-project denial. They
+require the repository's Testcontainers PostgreSQL fixture.

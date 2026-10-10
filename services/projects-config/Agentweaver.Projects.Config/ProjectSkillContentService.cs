@@ -36,6 +36,9 @@ public sealed class SkillContentService(
     ProjectsConfigService configurations,
     TimeProvider timeProvider) : ISkillContentService, ISkillAssignmentService
 {
+    public const int DefaultInventoryPageSize = SkillMarketplaceBrowseService.DefaultPageSize;
+    public const int MaxInventoryPageSize = SkillMarketplaceBrowseService.MaxPageSize;
+
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     public SkillContentPreview Preview(SkillContentCandidate candidate)
@@ -48,6 +51,97 @@ public sealed class SkillContentService(
             content.ContentDigest,
             content.Resources.Length,
             SemanticByteCount(content));
+    }
+
+    public async Task<SkillContentInventoryPage> ListInventoryAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        RequireProjectId(projectId);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        if (page < 1 || pageSize is < 1 or > MaxInventoryPageSize)
+            throw SkillContentServiceException.Invalid(
+                $"Skill inventory page must be positive and page size must be between 1 and {MaxInventoryPageSize}.");
+
+        var offset = (long)(page - 1) * pageSize;
+        if (offset > int.MaxValue)
+            throw SkillContentServiceException.Invalid("The requested skill inventory page is too large.");
+
+        await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
+
+        VersionedProjectConfiguration current;
+        (ProjectSkillContentRevisionRecord Revision, ProjectSkillContentRevocationRecord? Revocation)[] rows;
+        await using (var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            current = await configurations.GetProjectConfigurationAsync(
+                caller, projectId, revision: null, cancellationToken).ConfigureAwait(false);
+
+            rows = await (
+                from revision in db.SkillContentRevisions.AsNoTracking()
+                where revision.ProjectId == projectId
+                join revocation in db.SkillContentRevocations.AsNoTracking()
+                    on new { revision.ProjectId, revision.SkillId, revision.Revision }
+                    equals new { revocation.ProjectId, revocation.SkillId, revocation.Revision }
+                    into revocations
+                from revocation in revocations.DefaultIfEmpty()
+                orderby EF.Functions.Collate(revision.SkillId, "C"), revision.Revision descending
+                select new { Revision = revision, Revocation = revocation })
+                .Skip((int)offset)
+                .Take(pageSize + 1)
+                .Select(row => new ValueTuple<ProjectSkillContentRevisionRecord, ProjectSkillContentRevocationRecord?>(
+                    row.Revision, row.Revocation))
+                .ToArrayAsync(cancellationToken).ConfigureAwait(false);
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
+
+        var settings = current.Configuration.Skills.IsDefault
+            ? ImmutableArray<SkillCatalogSetting>.Empty
+            : current.Configuration.Skills;
+        var assignments = settings.Select(setting => new SkillContentAssignmentSummary(
+            setting.SkillId,
+            setting.Enabled,
+            setting.Order,
+            setting.Revision,
+            setting.ContentDigest,
+            setting.AgentIds)).ToImmutableArray();
+        var revisions = rows.Take(pageSize)
+            .Select(row => new SkillContentRevisionSummary(
+                row.Revision.SkillId,
+                row.Revision.Revision,
+                row.Revision.Name,
+                row.Revision.Description,
+                row.Revision.ContentDigest,
+                row.Revision.ResourceCount,
+                row.Revision.TotalBytes,
+                row.Revision.CreatedByActorId,
+                row.Revision.CreatedAt,
+                row.Revision.SourceId,
+                row.Revision.SourceRevision,
+                row.Revision.RequestedRef,
+                row.Revision.ResolvedCommitSha,
+                row.Revision.SelectedPath,
+                row.Revocation is not null,
+                row.Revocation?.RevokedByActorId,
+                row.Revocation?.RevokedAt))
+            .ToImmutableArray();
+
+        return new SkillContentInventoryPage(
+            current.Revision,
+            assignments,
+            revisions,
+            page,
+            pageSize,
+            rows.Length > pageSize);
     }
 
     public async Task<SkillContentImportReceipt> ImportAsync(

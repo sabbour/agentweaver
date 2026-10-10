@@ -963,6 +963,14 @@ and returns its receipt. The request supplies the expected digest, an idempotenc
 key, and optional expected revision and source provenance. A repeated key with
 different request data or a stale revision returns a conflict.
 
+`GET /api/projects/{projectId}/skills?page={n}&pageSize={n}` lists stored skill
+revision metadata and exact current assignments. It includes unassigned and
+revoked revisions, source provenance, and the current project configuration
+revision. Pages are stable and bounded: the default size is 25 and the maximum
+is 50. The endpoint requires current project-admin authority. It returns no
+skill instructions, resource bytes, or storage object keys. Revoked metadata
+does not permit runtime use.
+
 `PUT /api/projects/{projectId}/skills/{skillId}/assignment` appends a project
 configuration revision. An enabled `SkillCatalogSetting` includes the exact
 `revision`, lowercase SHA-256 `contentDigest`, and non-empty `agentIds` assigned

@@ -112,6 +112,43 @@ public static class SkillContentEndpoints
         .WithName("PreviewSkillContent");
 
         var projects = app.MapGroup("/api/projects/{projectId}/skills").RequireAuthorization();
+        projects.MapGet("/", async (
+            string projectId,
+            int? page,
+            int? pageSize,
+            HttpContext context,
+            ProjectAuthorizationOwner authorizationOwner,
+            ISkillContentService service,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                if (context.Request.Query.Keys.Any(key => key is not ("page" or "pageSize")) ||
+                    context.Request.Query.Any(item => item.Value.Count > 1))
+                    throw SkillContentServiceException.Invalid(
+                        "The skill inventory query contains an unsupported or repeated parameter.");
+
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                return Results.Ok(await service.ListInventoryAsync(
+                    caller,
+                    projectId,
+                    page ?? 1,
+                    pageSize ?? SkillContentService.DefaultInventoryPageSize,
+                    cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (SkillContentServiceException exception)
+            {
+                return ToProblem(exception);
+            }
+        })
+        .WithName("ListProjectSkillInventory");
+
         projects.MapPost("/import", async (
             string projectId,
             ImportSkillContentRequest request,

@@ -17,7 +17,7 @@ using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
 
-public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fixture)
+public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fixture)
     : IClassFixture<ProjectsConfigPostgresFixture>
 {
     [Fact]
