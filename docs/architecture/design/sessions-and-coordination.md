@@ -382,6 +382,11 @@ Workspace `DataGeneration` may be zero for a new volume; the Storage references 
 still match, and a suspended manifest still needs an exact tree hash or provider
 checkpoint.
 
+The internal runtime suspend check is registered only when
+`Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress` configures the runtime owner.
+Without that optional owner, the host still starts and public suspend/resume routes retain their unavailable behavior.
+The internal runtime check is not mapped; no replacement registration authority is installed.
+
 ## Session tree and status
 
 Every run, coordinator, workflow child work item, Scribe pass, and operator chat is a

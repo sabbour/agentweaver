@@ -207,7 +207,10 @@ app.MapBacklogEndpoints();
 app.MapSuspendResumeEndpoints();
 app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)
+{
     app.MapRuntimeRegistrationEndpoints();
+    app.MapRuntimeSuspendResumeEndpoints();
+}
 if (runtimeUsageEnabled)
     app.MapRuntimeUsageSourceEndpoints();
 app.Run();

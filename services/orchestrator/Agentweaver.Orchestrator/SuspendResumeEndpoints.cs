@@ -20,6 +20,11 @@ public static partial class CoordinationEndpoints
         coordination.MapPost(
             "/sessions/{sessionId}/resume",
             ResumeUnavailableAsync);
+        return app;
+    }
+
+    public static IEndpointRouteBuilder MapRuntimeSuspendResumeEndpoints(this IEndpointRouteBuilder app)
+    {
         app.MapPost(
             "/internal/runtime/suspend/require-current",
             RequireCurrentSuspendAsync).RequireAuthorization();
