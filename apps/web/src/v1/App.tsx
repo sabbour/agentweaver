@@ -3001,9 +3001,7 @@ function RemoteMcpOAuthCallbackRelay() {
           gatewayClient.completeRemoteMcpOAuthCallback(token, callback, tenantSelector),
         null,
       ).then(() => {
-        setNotice(callback.error === 'access_denied'
-          ? 'The Remote MCP authorization was canceled.'
-          : 'The Remote MCP authorization was received by Identity.');
+        setNotice('The Remote MCP authorization was received by Identity.');
       }).catch((reason: unknown) => {
         setNotice(callback.error === 'access_denied' &&
           errorCode(reason) === 'remote_mcp_oauth_consent_denied'

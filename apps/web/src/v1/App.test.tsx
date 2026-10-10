@@ -555,6 +555,36 @@ describe('v1 web project scoping', () => {
     )).toBeDefined();
   });
 
+  it('does not report cancellation when Identity returns success', async () => {
+    const popup = { closed: false } as unknown as Window;
+    const state = 'E'.repeat(43);
+    render(<App />);
+
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: window.location.origin,
+      source: popup,
+      data: {
+        type: 'agentweaver.remote-mcp.oauth.callback',
+        state,
+        error: 'access_denied',
+      },
+    }));
+
+    await waitFor(() => expect(mocks.completeRemoteMcpOAuthCallback).toHaveBeenCalledWith(
+      'broker-token',
+      {
+        type: 'agentweaver.remote-mcp.oauth.callback',
+        state,
+        error: 'access_denied',
+      },
+      'tenant-1',
+    ));
+    expect(await screen.findByText(
+      'The Remote MCP authorization was received by Identity.',
+    )).toBeDefined();
+    expect(screen.queryByText('The Remote MCP authorization was canceled.')).toBeNull();
+  });
+
   it('relays only identity callbacks from the configured Broker issuer', async () => {
     const previousOpener = Object.getOwnPropertyDescriptor(window, 'opener');
     const opener = { postMessage: vi.fn() } as unknown as Window;
