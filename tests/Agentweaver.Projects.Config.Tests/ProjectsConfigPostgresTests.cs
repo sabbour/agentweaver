@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -408,6 +409,250 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             contentService.ReadAcceptedRunSkillsAsync(
                 runCaller, project.ProjectId, runId, "agent-one", CancellationToken.None));
         Assert.Equal(StatusCodes.Status409Conflict, revoked.StatusCode);
+    }
+
+    [Fact]
+    public async Task MarketplaceImportPinsSelectedBytesAndRejectsStaleOrUnauthorizedRequests()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var configurations = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "marketplace-import-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, "marketplace-import-owner-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var project = await configurations.CreateProjectAsync(owner, "Marketplace import", CancellationToken.None);
+        var sources = new ProjectMarketplaceSourceService(
+            new MarketplaceSourceStore(db), configurations, TimeProvider.System);
+        var source = await sources.CreateAsync(
+            owner,
+            project.ProjectId,
+            new CreateMarketplaceSourceRequest
+            {
+                Name = "Controlled skills",
+                Repository = "contoso/skills",
+                RequestedRef = "release/1.0",
+                Subpath = "skills",
+            },
+            CancellationToken.None);
+
+        const string commitSha = "0123456789abcdef0123456789abcdef01234567";
+        const string rootCommitSha = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+        var markdown = Encoding.UTF8.GetBytes(
+            "---\nname: pinned-skill\ndescription: A controlled marketplace test skill.\n---\nFollow the approved instructions.");
+        var resource = Encoding.UTF8.GetBytes("Pinned reference bytes.");
+        var rootMarkdown = Encoding.UTF8.GetBytes(
+            "---\nname: root-pinned-skill\ndescription: A controlled root skill.\n---\nFollow the root instructions.");
+        var rootResource = Encoding.UTF8.GetBytes("Root pinned reference bytes.");
+        var requests = new ConcurrentQueue<string>();
+        using var httpClient = new HttpClient(new MarketplaceTestHandler(request =>
+        {
+            var uri = request.RequestUri!;
+            requests.Enqueue(uri.ToString());
+            if (uri.Host == "api.github.com" && uri.AbsolutePath.Contains("/git/trees/", StringComparison.Ordinal))
+            {
+                var tree = uri.AbsolutePath.EndsWith($"/{rootCommitSha}", StringComparison.Ordinal)
+                    ? $$"""{"truncated":false,"tree":[{"path":"SKILL.md","type":"blob","mode":"100644","size":{{rootMarkdown.Length}}},{"path":"docs/reference.md","type":"blob","mode":"100644","size":{{rootResource.Length}}}]}"""
+                    : $$"""{"truncated":false,"tree":[{"path":"skills/pinned/SKILL.md","type":"blob","mode":"100644","size":{{markdown.Length}}},{"path":"skills/pinned/docs/reference.md","type":"blob","mode":"100644","size":{{resource.Length}}}]}""";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(tree, Encoding.UTF8, "application/json"),
+                };
+            }
+            if (uri.Host == "raw.githubusercontent.com" &&
+                uri.AbsolutePath.EndsWith($"/{rootCommitSha}/SKILL.md", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(rootMarkdown) };
+            if (uri.Host == "raw.githubusercontent.com" &&
+                uri.AbsolutePath.EndsWith($"/{rootCommitSha}/docs/reference.md", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(rootResource) };
+            if (uri.Host == "raw.githubusercontent.com" &&
+                uri.AbsolutePath.EndsWith($"/{commitSha}/skills/pinned/SKILL.md", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(markdown) };
+            if (uri.Host == "raw.githubusercontent.com" &&
+                uri.AbsolutePath.EndsWith($"/{commitSha}/skills/pinned/docs/reference.md", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(resource) };
+            throw new InvalidOperationException($"Unexpected marketplace request: {uri}");
+        }));
+        var browse = new SkillMarketplaceBrowseService(httpClient, new MarketplaceSourceStore(db));
+        var objectStore = new SkillContentObjectStore(new SkillTestObjectStore());
+        var content = new SkillContentService(
+            db,
+            objectStore,
+            configurations,
+            TimeProvider.System);
+        var marketplace = new ProjectMarketplaceSkillContentService(sources, browse, content);
+        async Task VerifyReadAsync(CancellationToken cancellationToken) =>
+            _ = await sources.GetForBrowseAsync(
+                owner, project.ProjectId, source.SourceId, source.Revision, cancellationToken);
+        async Task VerifyWriteAsync(CancellationToken cancellationToken) =>
+            _ = await sources.GetForImportAsync(
+                owner, project.ProjectId, source.SourceId, source.Revision, cancellationToken);
+
+        var preview = await marketplace.PreviewAsync(
+            owner,
+            project.ProjectId,
+            source.SourceId,
+            new MarketplaceSkillPreviewRequest
+            {
+                ExpectedSourceRevision = source.Revision,
+                ResolvedCommitSha = commitSha,
+                SelectedPath = "skills/pinned",
+            },
+            VerifyReadAsync,
+            CancellationToken.None);
+        var import = new MarketplaceSkillImportRequest
+        {
+            ExpectedSourceRevision = source.Revision,
+            ResolvedCommitSha = commitSha,
+            SelectedPath = "skills/pinned",
+            IdempotencyKey = "marketplace-import-" + suffix,
+            ExpectedContentDigest = preview.ContentDigest,
+        };
+        var receipt = await marketplace.ImportAsync(
+            owner, project.ProjectId, source.SourceId, import, VerifyWriteAsync, CancellationToken.None);
+        Assert.Equal(preview.ContentDigest, receipt.ContentDigest);
+        Assert.Equal(receipt, await marketplace.ImportAsync(
+            owner, project.ProjectId, source.SourceId, import, VerifyWriteAsync, CancellationToken.None));
+
+        var stored = await db.SkillContentRevisions.AsNoTracking()
+            .SingleAsync(item => item.ProjectId == project.ProjectId && item.SkillId == receipt.SkillId);
+        Assert.Equal(source.SourceId.ToString("D"), stored.SourceId);
+        Assert.Equal(source.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture), stored.SourceRevision);
+        Assert.Equal(source.RequestedRef, stored.RequestedRef);
+        Assert.Equal(commitSha, stored.ResolvedCommitSha);
+        Assert.Equal("skills/pinned", stored.SelectedPath);
+        Assert.Contains(requests, request => request.Contains($"/{commitSha}/", StringComparison.Ordinal));
+        Assert.DoesNotContain(requests, request => request.Contains("/commits/", StringComparison.Ordinal));
+
+        var wrongDigest = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            marketplace.ImportAsync(
+                owner,
+                project.ProjectId,
+                source.SourceId,
+                import with
+                {
+                    IdempotencyKey = "marketplace-import-wrong-digest-" + suffix,
+                    ExpectedContentDigest = new string('0', 64),
+                },
+                VerifyWriteAsync,
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, wrongDigest.StatusCode);
+        Assert.Equal(1, await db.SkillContentRevisions.CountAsync(item => item.ProjectId == project.ProjectId));
+        Assert.False(await db.SkillImportIdempotency.AnyAsync(item =>
+            item.ProjectId == project.ProjectId &&
+            item.IdempotencyKey == "marketplace-import-wrong-digest-" + suffix));
+
+        var orchestratorMembership = await SeedMembershipAsync(
+            authorityStore, "marketplace-import-orchestrator-" + suffix, tenantId);
+        await authorityStore.AssignRoleAsync(
+            orchestratorMembership,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator,
+            "fixture");
+        var orchestrator = await ResolveCallerAsync(
+            db, "marketplace-import-orchestrator-" + suffix, tenantId,
+            ["api.read", "projects.orchestrator"]);
+        var unauthorized = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            marketplace.ImportAsync(
+                orchestrator,
+                project.ProjectId,
+                source.SourceId,
+                import with { IdempotencyKey = "marketplace-import-denied-" + suffix },
+                async cancellationToken =>
+                    _ = await sources.GetForImportAsync(
+                        orchestrator, project.ProjectId, source.SourceId, source.Revision, cancellationToken),
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, unauthorized.StatusCode);
+
+        var updatedSource = await sources.UpdateAsync(
+            owner,
+            project.ProjectId,
+            source.SourceId,
+            new UpdateMarketplaceSourceRequest
+            {
+                ExpectedRevision = source.Revision,
+                Name = source.Name,
+                Repository = source.Repository,
+                RequestedRef = "main",
+                Subpath = source.Subpath,
+            },
+            CancellationToken.None);
+        Assert.Equal(source.Revision + 1, updatedSource.Revision);
+        var staleSource = await Assert.ThrowsAsync<MarketplaceSourceException>(() =>
+            marketplace.ImportAsync(
+                owner, project.ProjectId, source.SourceId, import, VerifyWriteAsync, CancellationToken.None));
+        Assert.Equal("marketplace_source_revision_conflict", staleSource.Code);
+
+        var rootSource = await sources.CreateAsync(
+            owner,
+            project.ProjectId,
+            new CreateMarketplaceSourceRequest
+            {
+                Name = "Repository root",
+                Repository = source.Repository,
+                RequestedRef = "main",
+                Subpath = null,
+            },
+            CancellationToken.None);
+        Assert.NotEqual(source.SourceId, rootSource.SourceId);
+        Assert.Null(rootSource.Subpath);
+
+        async Task VerifyRootReadAsync(CancellationToken cancellationToken) =>
+            _ = await sources.GetForBrowseAsync(
+                owner, project.ProjectId, rootSource.SourceId, rootSource.Revision, cancellationToken);
+        async Task VerifyRootWriteAsync(CancellationToken cancellationToken) =>
+            _ = await sources.GetForImportAsync(
+                owner, project.ProjectId, rootSource.SourceId, rootSource.Revision, cancellationToken);
+
+        var rootPreview = await marketplace.PreviewAsync(
+            owner,
+            project.ProjectId,
+            rootSource.SourceId,
+            new MarketplaceSkillPreviewRequest
+            {
+                ExpectedSourceRevision = rootSource.Revision,
+                ResolvedCommitSha = rootCommitSha,
+                SelectedPath = string.Empty,
+            },
+            VerifyRootReadAsync,
+            CancellationToken.None);
+        var rootImport = new MarketplaceSkillImportRequest
+        {
+            ExpectedSourceRevision = rootSource.Revision,
+            ResolvedCommitSha = rootCommitSha,
+            SelectedPath = string.Empty,
+            IdempotencyKey = "marketplace-import-root-" + suffix,
+            ExpectedContentDigest = rootPreview.ContentDigest,
+        };
+        var rootReceipt = await marketplace.ImportAsync(
+            owner, project.ProjectId, rootSource.SourceId, rootImport, VerifyRootWriteAsync, CancellationToken.None);
+        Assert.Equal(rootPreview.ContentDigest, rootReceipt.ContentDigest);
+
+        var rootStored = await db.SkillContentRevisions.AsNoTracking()
+            .SingleAsync(item => item.ProjectId == project.ProjectId && item.SkillId == rootReceipt.SkillId);
+        var rootStoredContent = await objectStore.ReadVerifiedAsync(
+            new ObjectKey(rootStored.ObjectKey), rootStored.ContentDigest, CancellationToken.None);
+        Assert.Equal("root-pinned-skill", rootStored.Name);
+        Assert.Equal("A controlled root skill.", rootStored.Description);
+        Assert.Equal(rootPreview.ContentDigest, rootStored.ContentDigest);
+        Assert.Equal(1, rootStored.ResourceCount);
+        Assert.Equal(rootSource.SourceId.ToString("D"), rootStored.SourceId);
+        Assert.Equal(rootSource.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture), rootStored.SourceRevision);
+        Assert.Equal(rootSource.RequestedRef, rootStored.RequestedRef);
+        Assert.Equal(rootCommitSha, rootStored.ResolvedCommitSha);
+        Assert.Equal(string.Empty, rootStored.SelectedPath);
+        Assert.Equal(rootPreview.ContentDigest, rootStoredContent.ContentDigest);
+        Assert.Equal("Follow the root instructions.", rootStoredContent.Instructions);
+        var storedResource = Assert.Single(rootStoredContent.Resources);
+        Assert.Equal("docs/reference.md", storedResource.RelativePath);
+        Assert.Equal(rootResource, storedResource.Content.ToArray());
+        Assert.Contains(requests, request => request.EndsWith(
+            $"/{rootCommitSha}/SKILL.md", StringComparison.Ordinal));
+        Assert.Contains(requests, request => request.EndsWith(
+            $"/{rootCommitSha}/docs/reference.md", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1927,6 +2172,18 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_objects.TryRemove(key.Value, out _));
+        }
+    }
+
+    private sealed class MarketplaceTestHandler(
+        Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(respond(request));
         }
     }
 
