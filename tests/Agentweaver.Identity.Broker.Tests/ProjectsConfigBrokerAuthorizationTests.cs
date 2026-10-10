@@ -141,6 +141,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
     }
 
     [Fact]
+    public async Task ProjectsFixtureReusesRuntimeConnectionsAndPreservesReadOnlyAuthority()
+    {
+        using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath, _signingCertificate.Password);
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            _connectionString, new X509SecurityKey(certificate));
+        var backendIds = new HashSet<int>();
+        for (var index = 0; index < 16; index++)
+        {
+            await using var connection = await projects.RuntimeDataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand("SELECT pg_backend_pid()", connection);
+            backendIds.Add((int)(await command.ExecuteScalarAsync())!);
+        }
+
+        Assert.Single(backendIds);
+        await AssertRuntimeCannotWriteAuthorityAsync(projects.RuntimeDataSource);
+    }
+
+    [Fact]
     public async Task ProjectsApiUsesOnlyLiveSourceAuthorityAndIntersectsBrokerTokenConstraints()
     {
         using var certificate = X509CertificateLoader.LoadPkcs12FromFile(

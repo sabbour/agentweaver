@@ -224,6 +224,9 @@ and cleanup when a test aborts before Xunit reports a result.
 Broker hosts own their registered PostgreSQL pools.
 Native fixture SQL connections use a fixture-owned data source that closes during cleanup.
 Repeated-host and full-suite checks verify that owned connections return to zero after disposal.
+The Projects fixture also owns a separate pool for its restricted runtime role.
+Its regression opens 16 sequential connections, requires one database backend, and verifies that authority writes remain forbidden.
+The fixture closes that pool before it removes the role.
 Broker coverage includes the Agent Runtime library through the existing test project and collector.
 
 The canonical Sandbox integration also covers public write versus internal run-read
