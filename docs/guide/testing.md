@@ -55,6 +55,8 @@ Capability-wire tests do not prove live token enforcement or truncation.
 
 Ordinary v1 PR CI runs these PostgreSQL suites through `npm run coverage:dotnet` on its existing Linux runner.
 Each suite retains standard TRX results beside Cobertura coverage and `source.json`.
+The TRX logger can copy a collector report into its attachment directory.
+The runner counts byte-identical copies once and still rejects missing or distinct extra reports.
 Use the tested source SHA, PR head, run, and attempt to join evidence to the exact reviewed source.
 A compiled case or an older green run is not a passing receipt for changed source.
 
