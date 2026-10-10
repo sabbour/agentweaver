@@ -1,6 +1,7 @@
 extern alias ProjectsConfig;
 
 using System.Security.Cryptography;
+using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Providers;
 using ProjectsConfig::Agentweaver.Projects.Config;
@@ -49,7 +50,9 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         SecurityKey signingKey,
         string audience = "https://api.test",
         ProviderCatalog? providerCatalog = null,
-        IReadOnlyList<string>? additionalAudiences = null)
+        IReadOnlyList<string>? additionalAudiences = null,
+        IObjectStore? skillContentObjects = null,
+        bool usePublicWriterFixture = false)
     {
         var privilegedDataSource = NpgsqlDataSource.Create(connectionString);
         var privilegedDbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
@@ -73,6 +76,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             .Options;
         await ProjectsConfigMigrator.VerifyMigrationsAppliedAsync(dataSource, dbOptions);
         await ProjectsConfigMigrator.VerifyRuntimeAuthorityReadOnlyAsync(dataSource);
+        var serviceDataSource = usePublicWriterFixture ? privilegedDataSource : dataSource;
 
         var catalog = providerCatalog ?? ProviderCatalogConfiguration.Load(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -104,16 +108,18 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                         new System.Text.Json.Serialization.JsonStringEnumConverter(
                             System.Text.Json.JsonNamingPolicy.CamelCase));
                 });
-                services.AddSingleton(dataSource);
+                services.AddSingleton(serviceDataSource);
                 services.AddDbContext<ProjectsConfigDbContext>((_, options) =>
-                    options.UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
+                    options.UseNpgsql(serviceDataSource, npgsql => npgsql.MigrationsHistoryTable(
                         "__ef_migrations_history", ProjectsConfigDbContext.Schema)));
                 services.AddSingleton(catalog);
                 services.AddSingleton(TimeProvider.System);
                 services.AddScoped<ProjectsConfigService>();
+                if (skillContentObjects is not null)
+                    services.AddScoped(_ => new SkillContentObjectStore(skillContentObjects));
                 services.AddScoped<SkillContentService>(provider => new SkillContentService(
                     provider.GetRequiredService<ProjectsConfigDbContext>(),
-                    null,
+                    provider.GetService<SkillContentObjectStore>(),
                     provider.GetRequiredService<ProjectsConfigService>(),
                     provider.GetRequiredService<TimeProvider>()));
                 services.AddScoped<ISkillContentService>(provider =>
@@ -200,6 +206,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT SELECT, INSERT ON projects_config.project_configuration_revisions TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.platform_runtime_revisions TO \"{runtimeRole}\"",
             $"GRANT SELECT, INSERT ON projects_config.project_run_selections TO \"{runtimeRole}\"",
+            $"GRANT SELECT ON projects_config.project_skill_content_revisions TO \"{runtimeRole}\"",
+            $"GRANT SELECT ON projects_config.project_skill_content_revocations TO \"{runtimeRole}\"",
             $"GRANT USAGE, SELECT ON SEQUENCE projects_config.platform_runtime_revisions_revision_seq TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.tenant_memberships TO \"{runtimeRole}\"",
             $"GRANT SELECT ON projects_config.project_role_assignments TO \"{runtimeRole}\"",
