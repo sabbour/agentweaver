@@ -754,7 +754,9 @@ export function SkillsMarketplacePanel({
             type="file"
             multiple
             aria-label="Skill folder or files"
+            disabled={!actions || skillBusy !== null}
             onChange={(event) => {
+              if (skillBusy !== null) return;
               setSelectedFiles(Array.from(event.currentTarget.files ?? []));
               setCandidate(null);
               setPreview(null);

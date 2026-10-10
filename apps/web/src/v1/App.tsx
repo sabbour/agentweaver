@@ -899,7 +899,10 @@ function ProjectConfigurationPage() {
                 <Textarea
                   className="v1-json-editor"
                   value={editor}
-                  onChange={(_, data) => setEditor(data.value)}
+                  onChange={(_, data) => {
+                    if (!skillAssignmentPending) setEditor(data.value);
+                  }}
+                  readOnly={skillAssignmentPending}
                   resize="vertical"
                   rows={24}
                   spellCheck={false}

@@ -1142,6 +1142,82 @@ describe('v1 web project scoping', () => {
     expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
   });
 
+  it('prevents configuration edits while a skill assignment is pending', async () => {
+    const base = projectConfiguration('p1', 4);
+    const configured = {
+      ...base,
+      configuration: {
+        ...base.configuration,
+        agentCharters: [{ agentId: 'agent-1', name: 'Agent One' }],
+        casting: [{ agentId: 'agent-1' }],
+      },
+    };
+    const assignment = {
+      skillId: 'skill-1',
+      enabled: true,
+      order: 0,
+      revision: 1,
+      contentDigest: 'sha256:sample',
+      agentIds: ['agent-1'],
+    };
+    const saved = {
+      ...configured,
+      revision: 5,
+      configuration: {
+        ...configured.configuration,
+        skills: [assignment],
+      },
+    };
+    const pendingAssignment = deferred<typeof saved>();
+    mocks.getProjectConfiguration.mockResolvedValue(configured);
+    mocks.previewSkillContent.mockResolvedValue({
+      name: 'Sample skill',
+      description: 'A sample skill',
+      contentDigest: 'sha256:sample',
+      resourceCount: 0,
+      totalBytes: 14,
+    });
+    mocks.importSkillContent.mockResolvedValue({
+      ...assignment,
+      skillId: 'skill-1',
+      name: 'Sample skill',
+      description: 'A sample skill',
+      resourceCount: 0,
+      totalBytes: 14,
+    });
+    mocks.updateSkillAssignment.mockReturnValue(pendingAssignment.promise);
+    render(<App />);
+
+    await screen.findByRole('heading', { name: 'Revision 4' });
+    await screen.findByRole('heading', { name: 'Skills and marketplace' });
+    const editor = screen.getByLabelText('Typed ProjectConfiguration JSON') as HTMLTextAreaElement;
+    const originalEditor = editor.value;
+    fireEvent.change(screen.getByLabelText('Skill folder or files'), {
+      target: { files: [new File(['# Sample skill'], 'SKILL.md', { type: 'text/markdown' })] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate skill files' }));
+    await screen.findByText('sha256:sample');
+    fireEvent.click(screen.getByRole('button', { name: 'Import skill to project' }));
+    await screen.findByText(/The Skills owner imported Sample skill at revision 1/);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Agent One' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Assign to selected agents' }));
+    await waitFor(() => expect(mocks.updateSkillAssignment).toHaveBeenCalledOnce());
+
+    expect(editor.readOnly).toBe(true);
+    fireEvent.change(editor, { target: { value: '{"projectMarker":"unsaved edit"}' } });
+    expect(editor.value).toBe(originalEditor);
+
+    await act(async () => {
+      pendingAssignment.resolve(saved);
+      await pendingAssignment.promise;
+    });
+
+    await screen.findByText(/saved this assignment in configuration revision 5/);
+    expect(editor.value).toBe(JSON.stringify(saved.configuration, null, 2));
+    expect(editor.value).not.toContain('unsaved edit');
+    expect(editor.readOnly).toBe(false);
+  });
+
   it('clears an accepted selection and usage after a later snapshot read fails', async () => {
     mocks.binding = { projectId: 'p1', runId: 'r1' };
     mocks.getRunStatus.mockResolvedValue(runStatusSnapshot('p1', 'r1'));

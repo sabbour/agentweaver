@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   SkillsMarketplacePanel,
@@ -133,6 +133,49 @@ describe('Skills and marketplace panel', () => {
     });
     expect(screen.getByRole('button', { name: 'Import source skill' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByText(/selected-content preview.*pinned manifest and resources/i)).toBeTruthy();
+  });
+
+  it('keeps the selected files stable while their preview is pending', async () => {
+    let resolvePreview!: (value: SkillContentPreview) => void;
+    const pendingPreview = new Promise<SkillContentPreview>((resolve) => {
+      resolvePreview = resolve;
+    });
+    const actions = createActions({
+      previewSkillContent: vi.fn().mockReturnValue(pendingPreview),
+    });
+    renderPanel(actions);
+
+    const fileInput = screen.getByLabelText('Skill folder or files') as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: {
+        files: [
+          new File(['# Skill A'], 'SKILL.md', { type: 'text/markdown' }),
+          new File(['Resource A'], 'README.md', { type: 'text/markdown' }),
+        ],
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate skill files' }));
+
+    await waitFor(() => expect(actions.previewSkillContent).toHaveBeenCalledOnce());
+    expect(fileInput.disabled).toBe(true);
+    fireEvent.change(fileInput, {
+      target: { files: [new File(['# Skill B'], 'SKILL.md', { type: 'text/markdown' })] },
+    });
+    expect(screen.getByText('2 file(s) selected.')).toBeTruthy();
+
+    await act(async () => {
+      resolvePreview({ ...preview, name: 'Skill A' });
+      await pendingPreview;
+    });
+
+    expect(await screen.findByText('Skill A')).toBeTruthy();
+    expect(screen.getByText('2 file(s) selected.')).toBeTruthy();
+    expect(actions.previewSkillContent).toHaveBeenCalledWith({
+      skillMarkdown: btoa('# Skill A'),
+      resources: [{ relativePath: 'README.md', content: btoa('Resource A') }],
+    });
+    expect((screen.getByRole('button', { name: 'Import skill to project' }) as HTMLButtonElement).disabled)
+      .toBe(false);
   });
 
   it('validates local files, imports with the validated digest, and assigns to selected project agents', async () => {
