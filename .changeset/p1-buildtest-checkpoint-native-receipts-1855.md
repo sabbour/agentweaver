@@ -1,10 +1,14 @@
 ---
 "Agentweaver.Abstractions": minor
 "Agentweaver.AgentRuntime": minor
+"Agentweaver.AgentHost": minor
 "Agentweaver.Identity": minor
 "Agentweaver.EventsAndSessions": minor
+"Agentweaver.Environment": minor
 "Agentweaver.Orchestrator.Core": minor
 "Agentweaver.Orchestrator": minor
+"Agentweaver.Projects.Config": minor
+"Agentweaver.Providers.Sandbox.AgentSandbox": minor
 ---
 
 Bind actual native SDK turn message IDs to durable event-log completion ranges.
@@ -44,5 +48,7 @@ Join required command outputs to final SourceControl captures by digest and byte
 The Environment command producer now resolves immutable Core acceptance, reserves the existing owner-effects record, and reconciles gated command and separate collector Pods.
 Server configuration loads the optional accepted BuildTest profile before advertising capability.
 AgentHost routes the trusted Linux collector mode before web or native runtime startup.
+The AgentSandbox provider exposes typed command preparation, execution, and collector receipts through the existing Environment owner.
+Projects configuration validates accepted command specifications and bounded model, tool, and prompt limits.
 Missing required files fail; a successful command cannot hide an interrupted required-output collector.
 These source and contract checks are not live PostgreSQL, Kubernetes, Cilium, native accounting, or whole-producer acceptance.
