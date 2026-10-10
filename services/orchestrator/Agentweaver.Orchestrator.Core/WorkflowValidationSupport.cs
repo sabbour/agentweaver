@@ -4,6 +4,12 @@ namespace Agentweaver.Orchestrator.Core;
 
 internal static class WorkflowValidationSupport
 {
+    public static IEnumerable<string> PrescribedOutputs(WorkflowStepDefinition step) =>
+        step.FixedWork?.DeclaredOutputs ??
+        (step.BuildTestCommand is { } command
+            ? command.Outputs.Select(output => output.RelativePath)
+            : []);
+
     public static bool IsStableId(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= WorkflowDomainLimits.MaximumIdentifierLength &&

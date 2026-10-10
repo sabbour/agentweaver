@@ -49,6 +49,20 @@ internal static class MafExecutionOutputWitness
         foreach (var item in plan.Plan.Items)
             AddOutputs(item.Id, item.DeclaredOutputs);
 
+        foreach (var step in plan.Workflow.Definition.Steps.Where(step => step.BuildTestCommand is not null))
+        {
+            var associationId = MafExecutionIds.CreateBuildTestAssociationId(root, planId, step.Id);
+            if (plan.Plan.Items.Any(item => item.Id == associationId) || associations.ContainsKey(associationId))
+                throw InvalidOutputSet();
+            if (state is null || !state.BuildTestIntents.ContainsKey(step.Id))
+                missing.Add(associationId);
+            var receipt = state?.BuildTestReceipts.GetValueOrDefault(step.Id);
+            AddOutputs(associationId, step.BuildTestCommand!.Outputs
+                .Where(output => output.Required ||
+                    receipt?.Outputs.Any(evidence => evidence.Name == output.Name && evidence.Exists) == true)
+                .Select(output => output.RelativePath).ToImmutableArray());
+        }
+
         foreach (var association in associations.Values)
         {
             if (!string.Equals(association.WorkPlanId, planId, StringComparison.Ordinal) ||

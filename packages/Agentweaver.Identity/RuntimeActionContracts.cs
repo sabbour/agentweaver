@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Collections.Frozen;
 using Agentweaver.Abstractions;
 
@@ -11,7 +12,14 @@ public sealed record RuntimeActionRequest(
     long ExecutionFence,
     Guid EventId,
     string ActionId,
-    string InputHash);
+    string InputHash)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsToolInvocation { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? DispatchId { get; init; }
+}
 
 public sealed record RuntimeActionAdmission(
     int ContractVersion,
@@ -36,9 +44,20 @@ public static class RuntimeActionContract
         ArgumentNullException.ThrowIfNull(request);
         if (request.ContractVersion != 1 || request.RuntimeInstanceId == Guid.Empty ||
             request.RegistrationRevision <= 0 || request.ExecutionFence <= 0 ||
-            request.EventId == Guid.Empty || !ActionIds.Contains(request.ActionId))
+            request.EventId == Guid.Empty || !ActionIds.Contains(request.ActionId) ||
+            request.IsToolInvocation && request.ActionId == "model.turn" ||
+            request.DispatchId is { } dispatchId &&
+                (dispatchId == Guid.Empty || request.ActionId != "model.turn"))
             throw new RuntimeAuthorizationException("runtime_action_invalid");
         RuntimeContractValidation.ValidateHash(request.InputHash);
+    }
+
+    public static void RequireInvocationCapacity(int? limit, long reserved, string exhaustedCode)
+    {
+        if (reserved < 0 || limit is < 1)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_invalid");
+        if (limit is { } maximum && reserved >= maximum)
+            throw new RuntimeAuthorizationException(exhaustedCode);
     }
 
     public static string Hash(RuntimeActionRequest request)

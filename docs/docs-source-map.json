@@ -231,7 +231,8 @@
         "docs/architecture/environment-sandbox.md",
         "docs/architecture/design/provider-seams.md",
         "docs/guide/environment-sandbox-testing.md",
-        "docs/diagrams/src/flagship/v1-environment-sandbox-lifecycle.json"
+        "docs/diagrams/src/flagship/v1-environment-sandbox-lifecycle.json",
+        "docs/diagrams/src/flagship/v1-environment-buildtest-command.json"
       ]
     },
     {

@@ -13,7 +13,8 @@ internal sealed record RuntimeSessionRecovery(
     SessionMaterialReadResult? Cache,
     IReadOnlyList<(string Role, string Content)> Turns)
 {
-    internal bool CacheMatches(RuntimeRegistration registration, string sdkVersion, string runtimeVersion, string modelId)
+    internal bool CacheMatches(RuntimeRegistration registration, string sdkVersion, string runtimeVersion,
+        string modelId, int? maxPromptTokens = null)
     {
         var binding = registration.Binding;
         if (Identity != new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId) ||
@@ -24,7 +25,7 @@ internal sealed record RuntimeSessionRecovery(
             cached.AcceptedSelectionHash == binding.AcceptedSelectionHash &&
             cached.ModelSelectionReference == binding.ModelSelectionReference &&
             cached.SdkVersion == sdkVersion && cached.RuntimeVersion == runtimeVersion &&
-            cached.ModelId == modelId;
+            cached.ModelId == modelId && cached.MaxPromptTokens == maxPromptTokens;
     }
 
     internal string? RebuiltContext()

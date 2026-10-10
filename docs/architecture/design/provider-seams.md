@@ -372,6 +372,13 @@ adapter version, schema, options revision, and capabilities must match the confi
 mismatched selection is denied without fallback.
 
 The adapter does not implement suspend/resume, provider lifecycle events, or automatic model dispatch.
+Its optional accepted BuildTest profile enables a separate immutable command operation.
+Environment resolves the full Core checkpoint, reserves the original operation ID, and rechecks owner and placement before provider effects.
+The command and trusted file collector use separate gated Pods and offline, role-scoped policies.
+Only command exit zero permits the collector; command logs are not required-file evidence.
+The collector uses the exact Workspace PVC read-only and validates bounded no-follow file receipts.
+Missing or invalid required output fails; bound collector interruption cannot become successful command completion.
+Core retains MAF checkpoints, run status, and interruption acknowledgement.
 The separate [AgentHost candidate](../agenthost.md) implements authenticated configuration and A2A source routes.
 Environment owns registered endpoint/profile and placement evidence; Orchestrator owns runtime registration and accepted run bindings.
 No provider can weaken VM isolation when the selection requires it.
@@ -671,8 +678,10 @@ consistency manifest.
 The unpublished `Agentweaver.Environment` candidate compiles typed purpose-grouped rules from the
 platform/project/run intersection, rechecks Projects & Config authorization on each operation, and uses
 Kubernetes resource-version and intent-generation fences before pinning the verified L3/L4 binding. Its
-readback proves the exact Cilium policy object only, not enforcement in the datapath. It does not yet wire
-selector labels into Sandbox claims/templates or include deployed Kubernetes identity/RBAC. See
+readback proves the exact Cilium policy object only, not enforcement in the datapath.
+Environment propagates verified selectors into Sandbox templates and validates them on the actual Pod.
+BuildTest adds separate operation- and role-scoped deny-all policies for command and collector Pods.
+These source paths do not include deployed Kubernetes identity/RBAC or prove datapath enforcement. See
 [Environment egress](../environment-egress.md) for the source and test boundary.
 
 The platform's own **Tool & MCP gateway** fills the default L7 data-plane slot at cutover. It handles

@@ -41,6 +41,12 @@ public sealed record CopilotRunLimitOverrides
     public int? MaxConcurrentChildren { get; init; }
     public int? MaxWallTimeSeconds { get; init; }
     public int? MaxPromptTokens { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxRevisionAttempts { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? CopilotSoftCreditLimit { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? CopilotHardCreditLimit { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -52,6 +58,12 @@ public sealed record CopilotRunLimits
     public int MaxConcurrentChildren { get; init; }
     public int MaxWallTimeSeconds { get; init; }
     public int MaxPromptTokens { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxRevisionAttempts { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? CopilotSoftCreditLimit { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? CopilotHardCreditLimit { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -326,6 +338,14 @@ public static class ProjectConfigurationValidator
             MaxConcurrentChildren = ResolveLimit(project.MaxConcurrentChildren, platform.RunLimits.MaxConcurrentChildren, nameof(project.MaxConcurrentChildren)),
             MaxWallTimeSeconds = ResolveLimit(project.MaxWallTimeSeconds, platform.RunLimits.MaxWallTimeSeconds, nameof(project.MaxWallTimeSeconds)),
             MaxPromptTokens = ResolveLimit(project.MaxPromptTokens, platform.RunLimits.MaxPromptTokens, nameof(project.MaxPromptTokens)),
+            MaxRevisionAttempts = ResolveOptionalLimit(
+                project.MaxRevisionAttempts, platform.RunLimits.MaxRevisionAttempts, nameof(project.MaxRevisionAttempts)),
+            CopilotSoftCreditLimit = ResolveOptionalCreditLimit(
+                project.CopilotSoftCreditLimit, platform.RunLimits.CopilotSoftCreditLimit,
+                nameof(project.CopilotSoftCreditLimit)),
+            CopilotHardCreditLimit = ResolveOptionalCreditLimit(
+                project.CopilotHardCreditLimit, platform.RunLimits.CopilotHardCreditLimit,
+                nameof(project.CopilotHardCreditLimit)),
         };
         ValidateLimits(resolved);
         return resolved;
@@ -384,6 +404,10 @@ public static class ProjectConfigurationValidator
         ValidateRange(limits.MaxConcurrentChildren, 1, 32, "runLimits.maxConcurrentChildren");
         ValidateRange(limits.MaxWallTimeSeconds, 60, 86400, "runLimits.maxWallTimeSeconds");
         ValidateRange(limits.MaxPromptTokens, 1024, 200000, "runLimits.maxPromptTokens");
+        ValidateOptionalRange(limits.MaxRevisionAttempts, 0, int.MaxValue, "runLimits.maxRevisionAttempts");
+        ValidateCreditLimit(limits.CopilotSoftCreditLimit, "runLimits.copilotSoftCreditLimit");
+        ValidateCreditLimit(limits.CopilotHardCreditLimit, "runLimits.copilotHardCreditLimit");
+        ValidateCreditLimitOrder(limits.CopilotSoftCreditLimit, limits.CopilotHardCreditLimit);
     }
 
     private static void ValidateLimitOverrides(CopilotRunLimitOverrides limits)
@@ -394,6 +418,42 @@ public static class ProjectConfigurationValidator
         ValidateOptionalRange(limits.MaxConcurrentChildren, 1, 32, "runLimits.maxConcurrentChildren");
         ValidateOptionalRange(limits.MaxWallTimeSeconds, 60, 86400, "runLimits.maxWallTimeSeconds");
         ValidateOptionalRange(limits.MaxPromptTokens, 1024, 200000, "runLimits.maxPromptTokens");
+        ValidateOptionalRange(limits.MaxRevisionAttempts, 0, int.MaxValue, "runLimits.maxRevisionAttempts");
+        ValidateCreditLimit(limits.CopilotSoftCreditLimit, "runLimits.copilotSoftCreditLimit");
+        ValidateCreditLimit(limits.CopilotHardCreditLimit, "runLimits.copilotHardCreditLimit");
+        ValidateCreditLimitOrder(limits.CopilotSoftCreditLimit, limits.CopilotHardCreditLimit);
+    }
+
+    private static int? ResolveOptionalLimit(int? value, int? platformValue, string name)
+    {
+        if (value is null)
+            return platformValue;
+        ValidateOptionalRange(value, 0, int.MaxValue, name);
+        if (platformValue is { } platformLimit && value > platformLimit)
+            throw Invalid($"Project run limit '{name}' cannot exceed the platform limit.");
+        return value;
+    }
+
+    private static decimal? ResolveOptionalCreditLimit(decimal? value, decimal? platformValue, string name)
+    {
+        if (value is null)
+            return platformValue;
+        ValidateCreditLimit(value, name);
+        if (platformValue is { } platformLimit && value > platformLimit)
+            throw Invalid($"Project run limit '{name}' cannot exceed the platform limit.");
+        return value;
+    }
+
+    private static void ValidateCreditLimit(decimal? value, string name)
+    {
+        if (value is < 0)
+            throw Invalid($"Run limit '{name}' must be greater than or equal to zero.");
+    }
+
+    private static void ValidateCreditLimitOrder(decimal? soft, decimal? hard)
+    {
+        if (soft is { } softLimit && hard is { } hardLimit && softLimit > hardLimit)
+            throw Invalid("The Copilot soft credit limit cannot exceed the hard credit limit.");
     }
 
     private static void ValidateOptionalRange(int? value, int minimum, int maximum, string name)

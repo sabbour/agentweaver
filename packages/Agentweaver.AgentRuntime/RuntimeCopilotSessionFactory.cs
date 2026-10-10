@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -13,7 +12,7 @@ public sealed class RuntimeCopilotSessionFactory
 {
     private readonly RuntimeConnection _connection;
     private readonly string _baseDirectory;
-    private readonly ImmutableDictionary<string, RuntimeModelBinding> _modelBindings;
+    private readonly RuntimeModelBindingsResolver _modelBindings;
     private readonly TimeSpan _abortDrainTimeout;
     private readonly string _workingDirectory;
     private readonly string? _expectedRuntimeVersion;
@@ -24,6 +23,19 @@ public sealed class RuntimeCopilotSessionFactory
         RuntimeConnection approvedConnection,
         string baseDirectory,
         IReadOnlyDictionary<string, RuntimeModelBinding> approvedModelBindings,
+        TimeSpan? abortDrainTimeout = null,
+        string? workingDirectory = null,
+        string? expectedRuntimeVersion = null)
+        : this(approvedConnection, baseDirectory,
+            new RuntimeModelBindingsResolver("legacy-unversioned", approvedModelBindings),
+            abortDrainTimeout, workingDirectory, expectedRuntimeVersion)
+    {
+    }
+
+    public RuntimeCopilotSessionFactory(
+        RuntimeConnection approvedConnection,
+        string baseDirectory,
+        RuntimeModelBindingsResolver approvedModelBindings,
         TimeSpan? abortDrainTimeout = null,
         string? workingDirectory = null,
         string? expectedRuntimeVersion = null)
@@ -44,19 +56,13 @@ public sealed class RuntimeCopilotSessionFactory
                     key is not ("PATH" or "HOME" or "LANG" or "TMPDIR" or "SSL_CERT_FILE" or "SSL_CERT_DIR" or
                         "COPILOT_CLI_DIST_DIR"))))
             throw new ArgumentException("The image-owned stdio runtime requires an absolute executable and credential-free environment.");
-        foreach (var (reference, model) in approvedModelBindings)
-        {
-            RuntimeContractValidation.ValidateIdentifier(reference);
-            ArgumentNullException.ThrowIfNull(model);
-            model.Validate();
-        }
         _connection = approvedConnection;
         _baseDirectory = baseDirectory;
         _workingDirectory = workingDirectory ?? baseDirectory;
         if (expectedRuntimeVersion is not null)
             RuntimeContractValidation.ValidateIdentifier(expectedRuntimeVersion);
         _expectedRuntimeVersion = expectedRuntimeVersion;
-        _modelBindings = approvedModelBindings.ToImmutableDictionary(StringComparer.Ordinal);
+        _modelBindings = approvedModelBindings;
         _abortDrainTimeout = abortDrainTimeout ?? TimeSpan.FromSeconds(30);
         if (_abortDrainTimeout <= TimeSpan.Zero || _abortDrainTimeout > TimeSpan.FromMinutes(5))
             throw new ArgumentOutOfRangeException(nameof(abortDrainTimeout));
@@ -69,15 +75,14 @@ public sealed class RuntimeCopilotSessionFactory
         Func<CancellationToken, Task> requireCreationAuthority,
         CancellationToken cancellationToken,
         RuntimeSessionRecovery? recovery = null,
-        Func<string, ReadOnlyMemory<byte>, CancellationToken, Task>? requireActionAuthority = null)
+        Func<string, ReadOnlyMemory<byte>, bool, CancellationToken, Task>? requireActionAuthority = null)
     {
         ArgumentNullException.ThrowIfNull(requireCreationAuthority);
         RuntimeContractValidation.Validate(registration);
-        if (acceptedModelSelectionReference != registration.Binding.ModelSelectionReference ||
-            !_modelBindings.TryGetValue(acceptedModelSelectionReference, out var model))
+        if (acceptedModelSelectionReference != registration.Binding.ModelSelectionReference)
             throw new RuntimeAuthorizationException("runtime_model_reference_unavailable");
-        if (registration.Binding.ModelSourceMode != model.SourceMode)
-            throw new RuntimeAuthorizationException("runtime_model_source_mode_mismatch");
+        var model = _modelBindings.Resolve(acceptedModelSelectionReference,
+            registration.Binding.ModelSourceMode, registration.Binding.ModelBindingPin);
         if (!sdkCredential.IsUsable())
             throw new RuntimeAuthorizationException("runtime_sdk_credential_unavailable");
         var token = sdkCredential.GetValue();
@@ -122,6 +127,7 @@ public sealed class RuntimeCopilotSessionFactory
                 throw new RuntimeAuthorizationException("runtime_native_version_mismatch");
             string catalogHash;
             decimal? multiplier = null;
+            long? supportedPromptTokens = model.PromptCapacityTokens;
 #pragma warning disable GHCP001 // The pinned SDK marks its RPC policy and permission types as experimental.
             if (model.SourceMode == ModelSourceMode.HostedCopilot)
             {
@@ -132,6 +138,10 @@ public sealed class RuntimeCopilotSessionFactory
                     throw new RuntimeAuthorizationException("runtime_sdk_model_unavailable");
                 catalogHash = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(catalog));
                 multiplier = RuntimeCopilotSession.NullableDecimal(matches[0].Billing?.Multiplier);
+                var limits = matches[0].Capabilities?.Limits;
+                supportedPromptTokens = limits?.MaxPromptTokens ?? limits?.MaxContextWindowTokens;
+                if (model.PromptCapacityTokens is { } configuredCapacity && supportedPromptTokens is { } nativeCapacity)
+                    supportedPromptTokens = Math.Min(configuredCapacity, nativeCapacity);
             }
             else
             {
@@ -141,10 +151,19 @@ public sealed class RuntimeCopilotSessionFactory
                 ?.InformationalVersion
                 ?? throw new InvalidOperationException("The Copilot SDK assembly has no version metadata.");
             var binding = registration.Binding;
+            var maxPromptTokens = ResolvePromptCapacity(binding.MaxPromptTokens, supportedPromptTokens);
             var sdkSessionId = RuntimeContractValidation.NativeSessionId(binding);
             if (recovery is not null)
             {
-                if (recovery.CacheMatches(registration, sdkVersion, status.Version, model.ModelId))
+                var recordedLimit = recovery.Cache?.Material.Reference.Material?.MaxPromptTokens;
+                if (recovery.CacheMatches(registration, sdkVersion, status.Version, model.ModelId, recordedLimit) &&
+                    recordedLimit is { } previousLimit)
+                {
+                    if (maxPromptTokens is null || maxPromptTokens < previousLimit)
+                        throw new RuntimeAuthorizationException("runtime_prompt_capacity_changed");
+                    maxPromptTokens = previousLimit;
+                }
+                if (recovery.CacheMatches(registration, sdkVersion, status.Version, model.ModelId, maxPromptTokens))
                 {
                     try
                     {
@@ -173,6 +192,17 @@ public sealed class RuntimeCopilotSessionFactory
                 options.Model = model.ModelId;
                 options.GitHubToken = model.SourceMode == ModelSourceMode.HostedCopilot ? token : null;
                 options.Provider = model.Provider?.ToSdkProvider(model.ModelId, token);
+                if (options.Provider is { } provider)
+                    provider.MaxPromptTokens = maxPromptTokens;
+                options.ModelCapabilities = maxPromptTokens is { } promptCapacity
+                    ? new GitHub.Copilot.Rpc.ModelCapabilitiesOverride
+                    {
+                        Limits = new GitHub.Copilot.Rpc.ModelCapabilitiesOverrideLimits
+                        {
+                            MaxPromptTokens = promptCapacity
+                        }
+                    }
+                    : null;
                 options.EnableConfigDiscovery = false;
                 options.EnableSessionStore = false;
                 options.AvailableTools = requireActionAuthority is null
@@ -194,7 +224,7 @@ public sealed class RuntimeCopilotSessionFactory
                         return GitHub.Copilot.Rpc.PermissionDecision.Reject("runtime_permission_not_registered");
                     try
                     {
-                        await requireActionAuthority(actionId, JsonSerializer.SerializeToUtf8Bytes(request),
+                        await requireActionAuthority(actionId, JsonSerializer.SerializeToUtf8Bytes(request), false,
                             turns.RequireActiveToken()).ConfigureAwait(false);
                         return GitHub.Copilot.Rpc.PermissionDecision.ApproveOnce();
                     }
@@ -225,7 +255,7 @@ public sealed class RuntimeCopilotSessionFactory
                                 };
                             try
                             {
-                                await requireActionAuthority(actionId, JsonSerializer.SerializeToUtf8Bytes(input),
+                                await requireActionAuthority(actionId, JsonSerializer.SerializeToUtf8Bytes(input), true,
                                     turns.RequireActiveToken()).ConfigureAwait(false);
                                 return new PreToolUseHookOutput { PermissionDecision = "ask" };
                             }
@@ -241,7 +271,7 @@ public sealed class RuntimeCopilotSessionFactory
                 options.OnEvent = sessionEvent =>
                 {
                     if (sessionEvent is AssistantUsageEvent nativeUsage &&
-                        !usage.Writer.TryWrite(new(nativeUsage, null)))
+                        !usage.Writer.TryWrite(new(nativeUsage, null, turns.ActiveA2AMessageId)))
                         usage.Writer.TryComplete(new RuntimeAuthorizationException(
                             "runtime_usage_pending_capacity_exceeded"));
                     turns.Observe(sessionEvent);
@@ -286,7 +316,10 @@ public sealed class RuntimeCopilotSessionFactory
                 model.SourceMode == ModelSourceMode.HostedCopilot
                     ? SdkMeterSources.CopilotNanoAiu : SdkMeterSources.ByokTokens,
                 registration.Binding.AcceptedSelectionHash,
-                registration.Revision);
+                registration.Revision)
+            {
+                MaxPromptTokens = maxPromptTokens
+            };
             return new RuntimeCopilotSession(client, session, facts, usage, turns,
                 nativeFiles, recoveryMode, recoveryReason, _abortDrainTimeout);
         }
@@ -297,6 +330,17 @@ public sealed class RuntimeCopilotSessionFactory
             await client.DisposeAsync();
             throw;
         }
+    }
+
+    internal static int? ResolvePromptCapacity(int? acceptedLimit, long? supportedCapacity)
+    {
+        if (acceptedLimit is null)
+            return null;
+        if (acceptedLimit is < 1024 or > 200000)
+            throw new RuntimeAuthorizationException("runtime_numeric_limit_invalid");
+        if (supportedCapacity is null or < 1)
+            throw new RuntimeAuthorizationException("runtime_model_prompt_capacity_unavailable");
+        return checked((int)Math.Min(acceptedLimit.Value, supportedCapacity.Value));
     }
 
 }

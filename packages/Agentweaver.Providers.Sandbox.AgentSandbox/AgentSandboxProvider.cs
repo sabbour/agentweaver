@@ -43,7 +43,7 @@ public sealed record AgentSandboxPersistentVolumeClaimAttachment(
                 character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-'));
 }
 
-public sealed class AgentSandboxProvider : ISandboxProvider
+public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBuildTestCommandProvider
 {
     private const string ExtensionsApiGroup = "extensions.agents.x-k8s.io";
     private const string SandboxesApiGroup = "agents.x-k8s.io";

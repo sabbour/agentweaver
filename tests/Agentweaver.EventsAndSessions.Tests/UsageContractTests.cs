@@ -1,12 +1,138 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
 using Agentweaver.EventsAndSessions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace Agentweaver.EventsAndSessions.Tests;
 
 public sealed class UsageContractTests
 {
+    [Fact]
+    public void EnabledNativeConsumerRequiresAndResolvesTheSharedVersionedAgentHostMap()
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["EventsAndSessions:RuntimeUsage:Enabled"] = "true",
+            ["AgentHost:ModelBindingsRevision"] = "model-bindings-v1",
+            ["AgentHost:ModelBindings:accepted-reference:ModelId"] = "concrete-model",
+            ["AgentHost:ModelBindings:accepted-reference:SourceMode"] = "HostedCopilot"
+        };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+        var services = new ServiceCollection();
+        Assert.True(services.AddNativeUsageConsumer(configuration));
+        using var provider = services.BuildServiceProvider();
+        var resolver = provider.GetRequiredService<RuntimeModelBindingsResolver>();
+        Assert.Equal("concrete-model", resolver.Pin("accepted-reference", ModelSourceMode.HostedCopilot).ModelId);
+        values.Remove("AgentHost:ModelBindingsRevision");
+        Assert.Throws<InvalidOperationException>(() => new ServiceCollection().AddNativeUsageConsumer(
+            new ConfigurationBuilder().AddInMemoryCollection(values).Build()));
+    }
+
+    [Fact]
+    public void OptionalNativeMetadataPreservesTheHistoricalCanonicalHash()
+    {
+        var legacy = Submission(eventId: Guid.Parse("11111111-1111-1111-1111-111111111111"));
+        var canonical = UsageLedgerCanonicalizer.Serialize(legacy, Binding(), Price());
+        Assert.Equal("dc76e2895c672c0321542b8b1a1c9cce9f4a219f02458042f4ce789419b3b048",
+            Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))));
+        Assert.DoesNotContain("sdkAccounting", canonical);
+        Assert.DoesNotContain("a2AMessageId", canonical);
+        var accounting = new SdkUsageAccountingObservation(
+            new("native-session", 4, "usage-4"), SdkAiCreditsStatus.Complete, true);
+        var complete = legacy with { SdkAccounting = accounting };
+        var completePayload = UsageLedgerCanonicalizer.Serialize(complete, Binding(), Price());
+        Assert.NotEqual(canonical, completePayload);
+        Assert.NotEqual(completePayload, UsageLedgerCanonicalizer.Serialize(
+            complete with { SdkAccounting = accounting with { AiCreditsStatus = SdkAiCreditsStatus.Partial } },
+            Binding(), Price()));
+        Assert.NotEqual(completePayload, UsageLedgerCanonicalizer.Serialize(
+            complete with { SdkAccounting = accounting with { Identity = accounting.Identity! with { Sequence = 5 } } },
+            Binding(), Price()));
+        var messageId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var addressed = UsageLedgerCanonicalizer.Serialize(legacy with { A2AMessageId = messageId }, Binding(), Price());
+        Assert.Contains($"\"a2AMessageId\":\"{messageId:D}\"", addressed);
+        Assert.NotEqual(canonical, addressed);
+    }
+
+    [Fact]
+    public void PricedHostedNanoAiuDoesNotRequireOptionalAccountingIdentityOrStatus()
+    {
+        var source = new SdkSessionFacts(Guid.NewGuid(), "native-session", "1.0.18", "1.0.79",
+            "model/ref", "model-1", new string('a', 64), 1m, "hosted-copilot",
+            SdkMeterSources.CopilotNanoAiu, new string('b', 64), 1);
+        var complete = Submission() with
+        {
+            SdkSource = source,
+            ModelBinding = Submission().ModelBinding with { MeterSource = source.MeterSource },
+            Measurement = Submission().Measurement with { ProviderUnit = "nano_aiu" },
+            SdkAccounting = new(new(source.SdkSessionId, 4, "usage-4"), SdkAiCreditsStatus.Complete, true)
+        };
+        Assert.True(UsageLedgerValidation.IsFinanciallyComplete(complete, CostDisposition.Estimate));
+        Assert.False(UsageLedgerValidation.IsFinanciallyComplete(complete, CostDisposition.Unpriced));
+        foreach (var accounting in new SdkUsageAccountingObservation?[]
+        {
+            null,
+            complete.SdkAccounting! with { AiCreditsStatus = SdkAiCreditsStatus.Partial },
+            complete.SdkAccounting! with { AiCreditsStatus = SdkAiCreditsStatus.Unavailable },
+            complete.SdkAccounting! with { AiCreditsStatusReported = false },
+            complete.SdkAccounting! with { Identity = null }
+        })
+            Assert.True(UsageLedgerValidation.IsFinanciallyComplete(
+                complete with { SdkAccounting = accounting }, CostDisposition.Estimate));
+        foreach (var accounting in new[]
+        {
+            complete.SdkAccounting! with { Identity = new("another-source", 4, "usage-4") },
+            complete.SdkAccounting! with { Identity = new(source.SdkSessionId, 0, "usage-4") },
+            complete.SdkAccounting! with { Identity = new(source.SdkSessionId, 4, " ") },
+            complete.SdkAccounting! with { Identity = new(source.SdkSessionId, 4, "usage\t4") },
+            complete.SdkAccounting! with { Identity = new(source.SdkSessionId, 4, new string('x', 513)) }
+        })
+            Assert.False(UsageLedgerValidation.IsFinanciallyComplete(
+                complete with { SdkAccounting = accounting }, CostDisposition.Estimate));
+        foreach (var altered in new[]
+        {
+            complete with { SdkSource = source with { SourceMode = "unknown" } },
+            complete with { ModelBinding = complete.ModelBinding with { MeterSource = SdkMeterSources.ByokTokens } },
+            complete with { Measurement = complete.Measurement with { ProviderUnits = null } },
+            complete with { Measurement = complete.Measurement with { ProviderUnit = "tokens" } }
+        })
+            Assert.False(UsageLedgerValidation.IsFinanciallyComplete(altered, CostDisposition.Estimate));
+        Assert.True(UsageLedgerValidation.IsFinanciallyComplete(complete with
+        {
+            SdkAccounting = complete.SdkAccounting! with
+            {
+                Identity = new(source.SdkSessionId, 4, new string('x', 512))
+            }
+        }, CostDisposition.Estimate));
+    }
+
+    [Fact]
+    public void ByokTokenPricingUsesTheRuntimeMeasurementShapeNotHostedCreditStatus()
+    {
+        var source = new SdkSessionFacts(Guid.NewGuid(), "native-session", "1.0.18", "1.0.79",
+            "model/ref", "model-1", new string('a', 64), null, "byok",
+            SdkMeterSources.ByokTokens, new string('b', 64), 1);
+        var byok = Submission() with
+        {
+            SdkSource = source,
+            ModelBinding = Submission().ModelBinding with { MeterSource = source.MeterSource },
+            Measurement = Submission().Measurement with { ProviderUnits = null, ProviderUnit = "tokens", CacheWriteTokens = 4 },
+            SdkAccounting = new(new(source.SdkSessionId, 4, "usage-4"), SdkAiCreditsStatus.Partial, true)
+        };
+        Assert.True(UsageLedgerValidation.IsFinanciallyComplete(byok, CostDisposition.Estimate));
+        Assert.True(UsageLedgerValidation.IsFinanciallyComplete(byok with { SdkAccounting = null }, CostDisposition.Estimate));
+        Assert.False(UsageLedgerValidation.IsFinanciallyComplete(byok, CostDisposition.Unpriced));
+        Assert.False(UsageLedgerValidation.IsFinanciallyComplete(
+            byok with { Measurement = byok.Measurement with { ProviderUnit = null } }, CostDisposition.Estimate));
+        Assert.False(UsageLedgerValidation.IsFinanciallyComplete(
+            byok with { Measurement = byok.Measurement with { InputTokens = null } }, CostDisposition.Estimate));
+    }
+
     [Fact]
     public void UnknownSourceAndMissingSdkFieldsCanBeRecordedOnlyAsUnpriced()
     {

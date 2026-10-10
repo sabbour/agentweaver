@@ -58,6 +58,12 @@ unpublished [AgentHost candidate](docs/architecture/agenthost.md) adds authentic
 runtime execution, not automatic scheduling or a deployed platform. The source does
 not provision Azure resources or include the AgentHost scheduler or product MCP server.
 
+The separate [Environment BuildTest path](docs/architecture/environment-sandbox.md#buildtest-command-and-output-collection)
+resolves Core's immutable accepted checkpoint and persists its stable operation in existing owner-effects state.
+It uses gated offline command Pods and a separate pinned, read-only collector for required files.
+Core retains MAF checkpoint and run-state ownership.
+Configuration, contract, and collector-entry checks are not live provider or complete native accounting evidence.
+
 See the [Events & Sessions journal](docs/architecture/events-sessions.md) for its
 implemented contract, PostgreSQL ownership, provider pin, and current limits.
 

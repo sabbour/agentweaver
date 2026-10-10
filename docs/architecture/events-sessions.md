@@ -84,6 +84,10 @@ receipts and run-scoped Cost bindings. Ordinary startup requires version 7.
 An entry records tenant, project, run, session, agent, model metadata, measurements,
 the Cost binding, and the price.
 Native submissions also retain the turn, SDK event ID, and complete SDK source snapshot.
+Optional `A2AMessageId` and `SdkAccounting` metadata participate in the canonical hash.
+Absent metadata preserves the historical canonical payload and hash.
+Accounting metadata retains the native source session, positive sequence, usage ID,
+reported credit status, and whether the SDK actually supplied that status.
 Cache-read and cache-write measurements remain separate. Native request counts stay
 null because the SDK callback does not report them. Nullable measurements remain
 unknown rather than zero.
@@ -93,6 +97,24 @@ Hosted Copilot retains weighted nano-AIU under `copilot.nano_aiu`.
 BYOK retains native token measurements under `byok.tokens`, without Copilot units or a hosted multiplier.
 Without an admitted Cost provider, BYOK accounting remains `Unpriced`.
 Unknown cost cannot satisfy a hard cost bound.
+
+When `EventsAndSessions:RuntimeUsage:Enabled` is true, Events requires the same
+server-owned `AgentHost:ModelBindings` map and `AgentHost:ModelBindingsRevision` as AgentHost.
+It uses the SDK-independent shared resolver, not a separate Events model catalog.
+The concrete model ID and canonical map identity can therefore match an accepted runtime pin.
+This configuration does not by itself prove live model availability.
+The optional `copilot-run-admission` route accepts only the accepted-selection hash.
+Events reads the actual selection from its fixed Projects owner with the original bearer.
+It requires current `ReadRunSelection` and `AcceptRunSelection` for the exact signed project/run.
+The shared resolver supplies the concrete enabled hosted model; caller model IDs are not accepted.
+The existing Cost lock and transaction bind the real zero-work quote and Copilot-only totals.
+Events rereads Projects selection and authority before committing that Cost pin.
+Unknown or unpriced pricing rejects; no SDK session, usage event, source receipt, or ledger row is invented.
+Orchestrator persists the typed admission receipt with root acceptance through its existing outbox.
+Backlog claim uses the same acceptance transaction.
+An identical accepted-root replay uses that immutable receipt without repricing earlier admission.
+Configured Copilot credit limits cannot use BYOK token pricing or an unbound hosted connection.
+These are source paths; live PostgreSQL, native availability, and deployment still require separate acceptance.
 
 A transaction commits the rate card and usage entry before returning.
 The accounting receipt binds the canonical SHA-256 hash, attribution, immutable
@@ -106,6 +128,13 @@ Totals retain separate meter-source and unit groups. A missing measurement makes
 that measurement total unknown. An unpriced entry makes the run or agent pricing
 incomplete. Rate changes never reprice earlier entries. Exact totals that exceed
 the numeric range fail rather than round or wrap.
+
+Hosted native entries with valid `copilot.nano_aiu` source and measured units count as priced.
+Optional SDK accounting identity and status do not control pricing completeness.
+Supplied identity text, source session, and positive sequence remain validated.
+BYOK pricing uses the actual `tokens` measurement shape and the existing price disposition.
+Hosted credit status does not determine BYOK token-pricing completeness.
+Neither a fully priced subtotal nor a native usage watermark proves complete dispatch membership.
 
 `CopilotCostProvider` prices SDK-reported `nano_aiu` values in AI credits (`AIC`).
 One AIC contains `1_000_000_000` nano-AIU. Those reported units already include
@@ -141,8 +170,23 @@ It remains separate from the source receipt.
 Committed source receipts support explicit retries after restart.
 Unavailable providers and missing measurements produce `Unpriced`, not zero cost.
 `GET /internal/projects/{projectId}/runs/{runId}/usage` returns exact run and agent totals.
+`POST /internal/projects/{projectId}/runs/{runId}/usage/copilot-cost-snapshot` returns
+the existing run-pinned binding, a zero-work quote for the actual SDK model, and Copilot-only totals.
+It uses the same Cost lock and transaction as native receipt ingestion.
+This quote does not create a usage event or accounting receipt.
+An empty observed set is zero only when the pinned provider can price that model.
+Unpriced Copilot entries remain incomplete. Other meters do not affect Copilot credit limits.
+The snapshot endpoint rechecks current signed run authority before it commits.
+An optional dispatch ID and at most 512 required references request an observed accounting join.
+Events reads each immutable source receipt, accounting receipt, and ledger row in the same transaction.
+Each registration, SDK source, platform message, event, accounting hash, and stored price must match.
+The response returns only those verified references as `RepresentedReceipts`.
+Missing rows reject the join; altered references cannot substitute another receipt.
+Observed validation permits an explicit `Unpriced` receipt.
+The separate capped-admission validator still requires a valid quote and fully priced Copilot totals.
+This path neither fetches a Source GET manifest nor writes synthetic usage.
 These routes are enabled only with `EventsAndSessions:RuntimeUsage:Enabled`.
-The [AgentHost candidate](agenthost.md) waits for this committed accounting acknowledgment before turn completion.
+The [AgentHost candidate](agenthost.md) waits for the observed join and durable owner completion before it returns workflow output.
 This source has no background usage relay or cloud acceptance.
 
 ## Addressed-message owner integration

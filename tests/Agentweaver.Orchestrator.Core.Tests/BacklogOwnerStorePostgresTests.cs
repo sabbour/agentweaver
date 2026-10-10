@@ -51,6 +51,39 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CappedClaimRevalidationFailureRollsBackTheSameRootAdmissionAndTask()
+    {
+        var task = TaskRef("capped-feature");
+        var graph = await AddTaskAsync(task);
+        var selection = Selection("run-capped") with
+        {
+            Selection = Selection("run-capped").Selection with
+            {
+                Snapshot = CoordinatorRunAdmissionTests.Selection(task.ProjectId, "run-capped")
+            }
+        };
+        var admission = CoordinatorRunAdmissionTests.Receipt(selection);
+        var checks = 0;
+        var prices = 0;
+        await Assert.ThrowsAsync<CoordinationException>(() => _backlog.ClaimTaskAsync(
+            _actor, selection, task, graph.Revision, 0, "capped-claim", _evidence,
+            _coordination, _decisions,
+            _ => ++checks == 3
+                ? Task.FromException(new CoordinationException("run_selection_permission_denied", 403))
+                : Task.CompletedTask,
+            CancellationToken.None,
+            _ => { prices++; return Task.FromResult(admission); }));
+        Assert.Equal(1, prices);
+        Assert.Equal(3, checks);
+        Assert.Equal(0, await ReadCountAsync("accepted_runs", "project_id = 'backlog-project'"));
+        Assert.Equal(0, await ReadCountAsync("coordination_sessions", "project_id = 'backlog-project'"));
+        Assert.Equal(0, await ReadCountAsync("coordinator_decisions", "project_id = 'backlog-project'"));
+        Assert.Equal(0, await ReadCountAsync("backlog_tasks", "claim_id IS NOT NULL"));
+        Assert.Equal(0, await ReadCountAsync("outbox_events",
+            "event_type = 'orchestrator.run.copilot_admission'"));
+    }
+
+    [Fact]
     public async Task ConcurrentClaimsCreateOneTaskClaimRootAndInitialDecision()
     {
         var task = TaskRef("feature");

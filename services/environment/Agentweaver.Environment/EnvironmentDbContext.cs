@@ -90,7 +90,7 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
                     "lifecycle_generation > 0");
                 table.HasCheckConstraint(
                     "ck_environment_owner_effects_kind",
-                    "effect_kind IN ('NetworkPolicy', 'WorkspaceVolume')");
+                    "effect_kind IN ('NetworkPolicy', 'WorkspaceVolume', 'BuildTestCommand')");
                 table.HasCheckConstraint(
                     "ck_environment_owner_effects_state",
                     "effect_state IN ('Reserved', 'Completed', 'ReconciliationRequired', 'Reconciled', 'Failed', 'Stale')");
@@ -121,6 +121,32 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
                                  AND target_provider_resource_id IS NOT DISTINCT FROM expected_provider_resource_id))
                         AND (effect_state <> 'Completed' OR target_resource_generation = 0
                              OR target_volume_state = 'Released' OR target_provider_seam = 'Storage')
+                    )
+                    """);
+                table.HasCheckConstraint(
+                    "ck_environment_owner_effects_buildtest_command",
+                    """
+                    effect_kind <> 'BuildTestCommand' OR (
+                        operation = 'Execute'
+                        AND resource_id IS NOT NULL
+                        AND expected_provider_seam = 'Sandbox'
+                        AND expected_provider_id IS NOT NULL
+                        AND expected_provider_resource_id IS NOT NULL
+                        AND target_provider_seam IS NULL
+                        AND target_provider_id IS NULL
+                        AND target_provider_resource_id IS NULL
+                        AND policy_generation IS NULL
+                        AND expected_previous_policy_generation IS NULL
+                        AND expected_transition_revision IS NULL
+                        AND expected_resource_generation IS NULL
+                        AND expected_data_generation IS NULL
+                        AND target_transition_revision IS NULL
+                        AND target_resource_generation IS NULL
+                        AND target_data_generation IS NULL
+                        AND target_volume_state IS NULL
+                        AND specification_json IS NOT NULL
+                        AND expected_provider_binding_json IS NOT NULL
+                        AND target_provider_binding_json IS NOT NULL
                     )
                     """);
             });

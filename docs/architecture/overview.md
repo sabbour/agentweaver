@@ -36,6 +36,12 @@ The separate read-only path uses current `ReadRunSelection` without new roles or
 The local combined harness exercises SDK source persistence and reference-only accounting.
 It does not prove deployed AgentHost scheduling or paid model execution.
 
+Environment's [BuildTest path](environment-sandbox#buildtest-command-and-output-collection) resolves Core's immutable accepted checkpoint and persists one stable operation in existing owner-effects state.
+It uses gated offline command Pods and a separate read-only output-collector Pod.
+The optional server profile pins capability, images, executable allowlist, resource limits, and collector mode.
+Core retains MAF checkpoint and run-state ownership.
+Source checks do not prove live provider effects or complete native accounting.
+
 ## Canonical component overview
 
 <figure class="aw-diagram" tabindex="0">

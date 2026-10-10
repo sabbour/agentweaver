@@ -158,6 +158,63 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void OptionalCreditAndRevisionLimitsInheritAndCanOnlyNarrowIncludingZero()
+    {
+        var platform = PlatformDefaults() with
+        {
+            RunLimits = PlatformDefaults().RunLimits with
+            {
+                MaxRevisionAttempts = 3,
+                CopilotSoftCreditLimit = 4m,
+                CopilotHardCreditLimit = 8m
+            }
+        };
+        var inherited = ProjectConfigurationValidator.ResolveLimits(platform, new());
+        Assert.Equal(3, inherited.MaxRevisionAttempts);
+        Assert.Equal(4m, inherited.CopilotSoftCreditLimit);
+        Assert.Equal(8m, inherited.CopilotHardCreditLimit);
+        var zero = ProjectConfigurationValidator.ResolveLimits(platform, new()
+        {
+            MaxRevisionAttempts = 0,
+            CopilotSoftCreditLimit = 0,
+            CopilotHardCreditLimit = 0
+        });
+        Assert.Equal(0, zero.MaxRevisionAttempts);
+        Assert.Equal(0m, zero.CopilotSoftCreditLimit);
+        Assert.Equal(0m, zero.CopilotHardCreditLimit);
+        foreach (var widening in new[]
+        {
+            new CopilotRunLimitOverrides { MaxRevisionAttempts = 4 },
+            new CopilotRunLimitOverrides { CopilotSoftCreditLimit = 5 },
+            new CopilotRunLimitOverrides { CopilotHardCreditLimit = 9 },
+            new CopilotRunLimitOverrides { CopilotHardCreditLimit = 3 },
+            new CopilotRunLimitOverrides { MaxRevisionAttempts = -1 },
+            new CopilotRunLimitOverrides { CopilotSoftCreditLimit = -1 },
+            new CopilotRunLimitOverrides { CopilotHardCreditLimit = -1 }
+        })
+            Assert.Throws<ProjectConfigException>(() =>
+                ProjectConfigurationValidator.ResolveLimits(platform, widening));
+    }
+
+    [Fact]
+    public void OptionalLimitsDoNotChangeHistoricalNullSerializationOrAcceptedSnapshotShape()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var limits = ProjectConfigurationValidator.ResolveLimits(PlatformDefaults(), new());
+        Assert.Equal(
+            """{"maxModelTurns":12,"maxToolCalls":100,"maxChildren":4,"maxConcurrentChildren":2,"maxWallTimeSeconds":3600,"maxPromptTokens":20000}""",
+            JsonSerializer.Serialize(limits, options));
+        Assert.Equal(
+            """{"maxModelTurns":null,"maxToolCalls":null,"maxChildren":null,"maxConcurrentChildren":null,"maxWallTimeSeconds":null,"maxPromptTokens":null}""",
+            JsonSerializer.Serialize(new CopilotRunLimitOverrides(), options));
+        var configured = ProjectConfigurationValidator.ResolveLimits(
+            PlatformDefaults(), new() { MaxRevisionAttempts = 0, CopilotHardCreditLimit = 0 });
+        Assert.Contains("\"maxRevisionAttempts\":0", JsonSerializer.Serialize(configured, options));
+        Assert.Contains("\"copilotHardCreditLimit\":0", JsonSerializer.Serialize(configured, options));
+        Assert.DoesNotContain("copilotSoftCreditLimit", JsonSerializer.Serialize(configured, options));
+    }
+
+    [Fact]
     public void RejectsProviderOverridesForNonOverridableCardinalities()
     {
         var error = Assert.Throws<ProjectConfigException>(() =>

@@ -59,6 +59,8 @@ public static partial class CoordinationEndpoints
             if (request.ExpectedStateVersion < 1 || string.IsNullOrWhiteSpace(request.WorkPlanId))
                 throw new CoordinationException(
                     "maf_execution_dispatch_invalid", StatusCodes.Status400BadRequest);
+            if (request.BuildTestEnvironmentId is { } requestedEnvironment)
+                RuntimeContractValidation.ValidateIdentifier(requestedEnvironment);
 
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
             var identity = new SessionIdentity(projectId, runId, sessionId);
@@ -111,6 +113,14 @@ public static partial class CoordinationEndpoints
                     association.DecisionStateVersion != decision.StateVersion))
                 throw new CoordinationException(
                     "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+            if (checkpoint is not null &&
+                checkpoint.State.BuildTestIntents.Values.Any(intent =>
+                    intent.Identity != identity || intent.ExecutionFence != decision.State.Fence ||
+                    intent.AcceptedSelectionHash != decision.SelectionHash ||
+                    checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
+                        MafExecutionTaskStatus.Running && intent.DecisionStateVersion != decision.StateVersion))
+                throw new CoordinationException(
+                    "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
 
             var progress = checkpoint?.State.Progress ?? MafExecutionProgress.Empty;
             var fixedAssociations = checkpoint?.State.FixedWorkAssociations ??
@@ -130,15 +140,12 @@ public static partial class CoordinationEndpoints
             if (checkpoint is null || reconciled != progress ||
                 checkpoint.State.DecisionStateVersion != decision.StateVersion)
             {
-                var next = new MafExecutionCheckpoint(
-                    checkpoint is null ? 1 : checked(checkpoint.State.Revision + 1),
-                    plan.Plan.Id,
-                    decision.StateVersion,
-                    reconciled)
+                var next = (checkpoint?.State ??
+                    new MafExecutionCheckpoint(0, plan.Plan.Id, decision.StateVersion, reconciled)) with
                 {
-                    FixedWorkAssociations = fixedAssociations,
-                    PendingDispatches = pendingDispatches,
-                    Results = results
+                    Revision = checkpoint is null ? 1 : checked(checkpoint.State.Revision + 1),
+                    DecisionStateVersion = decision.StateVersion,
+                    Progress = reconciled
                 };
                 checkpoint = await execution.AppendAsync(
                     Guid.NewGuid().ToString("N"), checkpoint?.Info, next, cancellationToken)
@@ -150,6 +157,8 @@ public static partial class CoordinationEndpoints
                 CoordinatorWorkflowCatalog.ReadMaxConcurrentChildren(selection.Selection.Snapshot);
             var maxWallTimeSeconds =
                 CoordinatorWorkflowCatalog.ReadMaxWallTimeSeconds(selection.Selection.Snapshot);
+            _ =
+                CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(selection.Selection.Snapshot);
             var sessions = await store.ReadSessionTreeAsync(actor, identity, cancellationToken)
                 .ConfigureAwait(false);
             var rootSession = sessions.Nodes.SingleOrDefault(
@@ -165,6 +174,13 @@ public static partial class CoordinationEndpoints
                     runStartedAt, maxWallTimeSeconds, timeProvider.GetUtcNow());
 
             var registrationOwner = context.RequestServices.GetService<RuntimeRegistrationOwner>();
+            var runtimeSourceOwner = context.RequestServices.GetService<RuntimeUsageSourceOwner>();
+            var dataSource = context.RequestServices.GetRequiredService<NpgsqlDataSource>();
+            var buildTestClient = context.RequestServices.GetService<MafBuildTestEnvironmentClient>();
+            bool HasBuildTestExecutor(WorkflowStepDefinition step) =>
+                buildTestClient is not null && MafBuildTestCommandContract.IsExecutable(step) &&
+                (request.BuildTestEnvironmentId is not null ||
+                 checkpoint.State.BuildTestIntents.ContainsKey(step.Id));
             var hostClient = context.RequestServices.GetRequiredService<IHttpClientFactory>()
                 .CreateClient("maf-execution-host");
             var dispatched = ImmutableArray.CreateBuilder<string>();
@@ -182,6 +198,30 @@ public static partial class CoordinationEndpoints
                     current.State.ConfirmedWorkPlan?.Plan.Id != plan.Plan.Id)
                     throw new CoordinationException(
                         "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+            }
+
+            async Task<(MafExecutionCheckpointSnapshot Snapshot, bool ShouldSend)> ReadCurrentDispatchIntentAsync(
+                MafExecutionDispatchIntent intent, CancellationToken token)
+            {
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+                await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+                await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                    connection, transaction, actor, identity, selection, selectionContext,
+                    decision.StateVersion, decision.State.Fence, plan.Plan.Id, token).ConfigureAwait(false);
+                await execution.AcquireExecutionLockInTransactionAsync(connection, transaction, token)
+                    .ConfigureAwait(false);
+                var latest = await execution.ReadLatestInTransactionAsync(connection, transaction, token)
+                    .ConfigureAwait(false) ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (latest.State.WorkPlanId != plan.Plan.Id ||
+                    latest.State.DecisionStateVersion != decision.StateVersion)
+                    throw new CoordinationException(
+                        "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
+                var expectedIntent = RebuildExpectedDispatchIntent(latest.State, intent);
+                var shouldSend = ShouldSendDispatchIntent(latest.State, intent, expectedIntent);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return (latest, shouldSend);
             }
 
             async Task<RuntimeActorAuthorization> CreateRuntimeActorAsync(CancellationToken token)
@@ -237,6 +277,9 @@ public static partial class CoordinationEndpoints
                 if (RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)) != intent.PromptHash)
                     throw new CoordinationException(
                         "maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
+                var pending = await ReadCurrentDispatchIntentAsync(intent, token).ConfigureAwait(false);
+                if (!pending.ShouldSend)
+                    return pending.Snapshot.State.Results[intent.AssociationId];
                 var registration = await ReadDispatchRegistrationAsync(intent, token).ConfigureAwait(false);
                 if (registration is null)
                     return null;
@@ -293,6 +336,19 @@ public static partial class CoordinationEndpoints
                 {
                     if (IsWallTimeLimitReached())
                         return null;
+                    var currentIntent = await ReadCurrentDispatchIntentAsync(intent, token).ConfigureAwait(false);
+                    if (!currentIntent.ShouldSend)
+                        return currentIntent.Snapshot.State.Results[intent.AssociationId];
+                    if (runtimeSourceOwner is null)
+                        throw new CoordinationException(
+                            "maf_execution_native_source_unavailable", StatusCodes.Status503ServiceUnavailable);
+                    await runtimeSourceOwner.PrepareNativeTurnAsync(
+                        context, registration, identity, currentIntent.Snapshot, intent, message,
+                        (connection, transaction, currentToken) =>
+                            decisions.RequireCurrentDispatchStateInTransactionAsync(
+                                connection, transaction, actor, identity, selection, selectionContext,
+                                decision.StateVersion, decision.State.Fence, plan.Plan.Id, currentToken), token)
+                        .ConfigureAwait(false);
                     response = await SendRuntimeHostMessageAsync(
                         hostClient,
                         registration,
@@ -316,6 +372,13 @@ public static partial class CoordinationEndpoints
                         character is not ('\r' or '\n' or '\t')))
                     throw new CoordinationException(
                         "maf_execution_host_response_invalid", StatusCodes.Status503ServiceUnavailable);
+                await runtimeSourceOwner!.RequireNativeTurnAccountedAsync(
+                    context, registration, message, answer,
+                    (connection, transaction, currentToken) =>
+                        decisions.RequireCurrentDispatchStateInTransactionAsync(
+                            connection, transaction, actor, identity, selection, selectionContext,
+                            decision.StateVersion, decision.State.Fence, plan.Plan.Id, currentToken), token)
+                    .ConfigureAwait(false);
                 return answer;
             }
 
@@ -358,8 +421,15 @@ public static partial class CoordinationEndpoints
                 foreach (var fixedAssociation in state.FixedWorkAssociations.Values)
                     if (dependencySteps.Contains(fixedAssociation.StepId))
                         requiredResults.Add(fixedAssociation.AssociationId);
+                var platformResults = plan.Workflow.Definition.Steps
+                    .Where(step => dependencySteps.Contains(step.Id) && step.BuildTestCommand is not null)
+                    .Select(step => state.BuildTestReceipts.TryGetValue(step.Id, out var receipt)
+                        ? (step.Id, Receipt: receipt)
+                        : throw new CoordinationException(
+                            "maf_execution_dependency_result_unavailable", StatusCodes.Status409Conflict))
+                    .ToArray();
 
-                if (requiredResults.Count == 0)
+                if (requiredResults.Count == 0 && platformResults.Length == 0)
                 {
                     if (workItem is not null)
                         return workItem.Task;
@@ -384,6 +454,9 @@ public static partial class CoordinationEndpoints
                 foreach (var completedAssociationId in completed)
                     prompt.Append("\n\n[").Append(completedAssociationId).Append("]\n")
                         .Append(state.Results[completedAssociationId]);
+                foreach (var (stepId, receipt) in platformResults)
+                    prompt.Append("\n\n[").Append(stepId).Append("]\n")
+                        .Append(BuildTestResultSummary(receipt));
                 var value = prompt.ToString();
                 if (value.Length > AddressedMessageValidation.MaximumTextLength ||
                     value.Any(character => char.IsControl(character) &&
@@ -498,13 +571,11 @@ public static partial class CoordinationEndpoints
                                 throw new CoordinationException(
                                     "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
 
-                            var next = new MafExecutionCheckpoint(
-                                checked(latest.State.Revision + 1),
-                                plan.Plan.Id,
-                                decision.StateVersion,
-                                nextProgress)
+                            var next = latest.State with
                             {
-                                FixedWorkAssociations = latest.State.FixedWorkAssociations,
+                                Revision = checked(latest.State.Revision + 1),
+                                DecisionStateVersion = decision.StateVersion,
+                                Progress = nextProgress,
                                 PendingDispatches = latest.State.PendingDispatches.Remove(intent.AssociationId),
                                 Results = latest.State.Results.Add(intent.AssociationId, response)
                             };
@@ -640,6 +711,118 @@ public static partial class CoordinationEndpoints
             }
 
             var wallTimeLimitReached = false;
+            async Task<bool> ExecuteBuildTestAsync(
+                MafExecutionBuildTestIntent intent, CancellationToken token)
+            {
+                if (buildTestClient is null)
+                    throw new CoordinationException(
+                        "maf_execution_executor_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (IsWallTimeLimitReached())
+                {
+                    wallTimeLimitReached = true;
+                    return false;
+                }
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                var runtimeActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
+                SandboxBuildTestOperationSnapshot operation;
+                try
+                {
+                    operation = await buildTestClient.ExecuteOrReconcileAsync(
+                        runtimeActor, intent, token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    runtimeActor.Bearer.Invalidate();
+                }
+                if (MafBuildTestCommandContract.Classify(intent, operation) == MafExecutionTaskStatus.Running)
+                    return false;
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                var dataSource = context.RequestServices.GetRequiredService<NpgsqlDataSource>();
+                await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+                await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+                await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                    connection, transaction, actor, identity, selection, selectionContext,
+                    decision.StateVersion, decision.State.Fence, plan.Plan.Id, token).ConfigureAwait(false);
+                await execution.AcquireExecutionLockInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false);
+                var latest = await execution.ReadLatestInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                var next = PrepareBuildTestCompletionCheckpoint(latest, intent, operation);
+                checkpoint = next is null
+                    ? latest
+                    : await execution.AppendInTransactionAsync(
+                        connection, transaction, Guid.NewGuid().ToString("N"), latest.Info, next, token)
+                        .ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return true;
+            }
+
+            async Task<MafExecutionBuildTestIntent> PrepareBuildTestAsync(
+                WorkflowStepDefinition step, CancellationToken token)
+            {
+                var environmentId = request.BuildTestEnvironmentId
+                    ?? throw new CoordinationException(
+                        "maf_execution_build_test_environment_unavailable", StatusCodes.Status409Conflict);
+                if (buildTestClient is null || step.BuildTestCommand is null)
+                    throw new CoordinationException(
+                        "maf_execution_executor_unavailable", StatusCodes.Status503ServiceUnavailable);
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                var runtimeActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
+                SandboxBuildTestBindingPreparation preparation;
+                try
+                {
+                    preparation = await buildTestClient.PrepareAsync(
+                        runtimeActor, identity, environmentId, step.BuildTestCommand.ExecutionProfileReference, token)
+                        .ConfigureAwait(false);
+                }
+                finally
+                {
+                    runtimeActor.Bearer.Invalidate();
+                }
+                MafBuildTestCommandContract.ValidatePreparation(
+                    preparation, identity, selection.Authorization.TenantId, environmentId, step,
+                    plan.IsolationProviderBinding);
+                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                var dataSource = context.RequestServices.GetRequiredService<NpgsqlDataSource>();
+                await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
+                await using var transaction = await connection.BeginTransactionAsync(token).ConfigureAwait(false);
+                await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                    connection, transaction, actor, identity, selection, selectionContext,
+                    decision.StateVersion, decision.State.Fence, plan.Plan.Id, token).ConfigureAwait(false);
+                await execution.AcquireExecutionLockInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false);
+                var latest = await execution.ReadLatestInTransactionAsync(
+                    connection, transaction, token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (latest.State.BuildTestIntents.TryGetValue(step.Id, out var retained))
+                {
+                    checkpoint = latest;
+                    await transaction.CommitAsync(token).ConfigureAwait(false);
+                    return retained;
+                }
+                var checkpointId = Guid.NewGuid().ToString("N");
+                var intent = new MafExecutionBuildTestIntent(
+                    Guid.NewGuid(), identity, checkpointId, checked(latest.State.Revision + 1),
+                    plan.Plan.Id, step.Id, decision.StateVersion, decision.State.Fence, decision.SelectionHash,
+                    step.BuildTestCommand, preparation.ExecutionOptions, preparation.ExpectedBinding);
+                var next = PrepareBuildTestCheckpoint(latest, intent)
+                    ?? throw new CoordinationException(
+                        "maf_execution_build_test_intent_conflict", StatusCodes.Status409Conflict);
+                checkpoint = await execution.AppendInTransactionAsync(
+                    connection, transaction, checkpointId, latest.Info, next, token).ConfigureAwait(false);
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                return intent;
+            }
+
+            foreach (var intent in checkpoint.State.BuildTestIntents.Values
+                         .Where(intent => checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
+                             MafExecutionTaskStatus.Running)
+                         .OrderBy(intent => intent.StepId, StringComparer.Ordinal).ToArray())
+                _ = await ExecuteBuildTestAsync(intent, cancellationToken).ConfigureAwait(false);
+
             var pendingDeliveries = checkpoint.State.PendingDispatches.Values
                 .OrderBy(intent => intent.AssociationId, StringComparer.Ordinal)
                 .Select(intent =>
@@ -684,19 +867,28 @@ public static partial class CoordinationEndpoints
                     capacity.ActiveChildren,
                     maxChildren,
                     maxConcurrentChildren,
-                    hasNonModelExecutor: _ => false,
+                    hasNonModelExecutor: HasBuildTestExecutor,
                     checkpoint.State.FixedWorkAssociations);
                 if (frontier.ReadyActions.IsDefaultOrEmpty)
                     break;
 
                 var readyDispatches = new List<(
                     MafExecutionAction Action, MafExecutionDispatchIntent Intent, string Prompt)>();
+                var platformAdvanced = false;
                 foreach (var action in frontier.ReadyActions)
                 {
                     if (IsWallTimeLimitReached())
                     {
                         wallTimeLimitReached = true;
                         break;
+                    }
+                    if (MafBuildTestCommandContract.IsExecutable(action.Step))
+                    {
+                        var commandIntent = await PrepareBuildTestAsync(action.Step, cancellationToken)
+                            .ConfigureAwait(false);
+                        platformAdvanced |= await ExecuteBuildTestAsync(commandIntent, cancellationToken)
+                            .ConfigureAwait(false);
+                        continue;
                     }
                     MafExecutionFixedWorkAssociation? fixedAssociation = null;
                     ConfirmedWorkPlanItemAssociation? workPlanAssociation = null;
@@ -758,6 +950,7 @@ public static partial class CoordinationEndpoints
                     var checkedActor = await CreateRuntimeActorAsync(cancellationToken).ConfigureAwait(false);
                     checkedActor.Bearer.Invalidate();
                     await events.EnsureSessionAsync(context, childIdentity, cancellationToken).ConfigureAwait(false);
+                    await RevalidateDispatchAsync(cancellationToken).ConfigureAwait(false);
                     await store.SpawnSessionAsync(
                         actor,
                         identity,
@@ -766,14 +959,26 @@ public static partial class CoordinationEndpoints
                         maxConcurrentChildren,
                         cancellationToken,
                         workPlanAssociation,
-                        RevalidateDispatchAsync,
-                        async (connection, transaction, spawned, token) =>
+                        persistSpawnedInTransaction: async (connection, transaction, spawned, token) =>
                         {
-                            if (spawned.Node.Identity != childIdentity)
+                            if (spawned.Node.Identity != childIdentity ||
+                                spawned.Node.ParentSessionId != identity.SessionId ||
+                                spawned.Node.RootSessionId != identity.SessionId ||
+                                spawned.Node.Kind != CoordinationSessionKind.ChildWork ||
+                                spawned.Node.ExecutionFence != decision.State.Fence)
                                 throw new CoordinationException(
                                     "maf_execution_child_identity_conflict", StatusCodes.Status409Conflict);
+                            await decisions.RequireCurrentDispatchStateInTransactionAsync(
+                                connection, transaction, actor, identity, selection, selectionContext,
+                                decision.StateVersion, decision.State.Fence, plan.Plan.Id, token)
+                                .ConfigureAwait(false);
                             var latest = await execution.ReadLatestInTransactionAsync(
                                 connection, transaction, token).ConfigureAwait(false);
+                            if (latest is not null &&
+                                (latest.State.WorkPlanId != plan.Plan.Id ||
+                                 latest.State.DecisionStateVersion > decision.StateVersion))
+                                throw new CoordinationException(
+                                    "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
                             var next = PrepareRunningCheckpoint(
                                 latest, plan.Plan.Id, decision.StateVersion, associationId, fixedAssociation, intent);
                             if (next is null)
@@ -794,7 +999,11 @@ public static partial class CoordinationEndpoints
                 }
 
                 if (readyDispatches.Count == 0)
+                {
+                    if (platformAdvanced)
+                        continue;
                     break;
+                }
                 if (IsWallTimeLimitReached())
                 {
                     wallTimeLimitReached = true;
@@ -829,7 +1038,7 @@ public static partial class CoordinationEndpoints
                 finalCapacity.ActiveChildren,
                 maxChildren,
                 maxConcurrentChildren,
-                hasNonModelExecutor: _ => false,
+                hasNonModelExecutor: HasBuildTestExecutor,
                 checkpoint.State.FixedWorkAssociations);
             unavailable.UnionWith(finalFrontier.UnavailableExecutorStepIds);
             if (finalFrontier.IsComplete)
@@ -937,17 +1146,108 @@ public static partial class CoordinationEndpoints
 
         if (intent is not null)
             pendingDispatches = pendingDispatches.SetItem(associationId, intent);
-        return new MafExecutionCheckpoint(
-            latest is null ? 1 : checked(state.Revision + 1),
-            workPlanId,
-            decisionStateVersion,
-            progress)
+        return state with
         {
+            Revision = latest is null ? 1 : checked(state.Revision + 1),
+            DecisionStateVersion = decisionStateVersion,
+            Progress = progress,
             FixedWorkAssociations = fixedAssociations,
-            PendingDispatches = pendingDispatches,
-            Results = state.Results
+            PendingDispatches = pendingDispatches
         };
     }
+
+    internal static MafExecutionCheckpoint? PrepareBuildTestCheckpoint(
+        MafExecutionCheckpointSnapshot latest,
+        MafExecutionBuildTestIntent intent)
+    {
+        ArgumentNullException.ThrowIfNull(latest);
+        ArgumentNullException.ThrowIfNull(intent);
+        var state = latest.State;
+        if (state.BuildTestIntents.TryGetValue(intent.StepId, out var existing))
+        {
+            if (!MafExecutionCheckpointContract.BuildTestIntentsMatch(existing, intent))
+                throw new CoordinationException(
+                    "maf_execution_build_test_intent_conflict", StatusCodes.Status409Conflict);
+            return null;
+        }
+        if (intent.CheckpointRevision != checked(state.Revision + 1) ||
+            intent.WorkPlanId != state.WorkPlanId ||
+            intent.Identity.SessionId != latest.Info.SessionId ||
+            intent.DecisionStateVersion != state.DecisionStateVersion ||
+            state.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) != MafExecutionTaskStatus.Pending ||
+            state.Progress.NonModelSteps.Values.Any(status => status == MafExecutionTaskStatus.Running))
+            throw new CoordinationException(
+                "maf_execution_build_test_checkpoint_stale", StatusCodes.Status409Conflict);
+
+        var next = state with
+        {
+            Revision = intent.CheckpointRevision,
+            BuildTestIntents = state.BuildTestIntents.Add(intent.StepId, intent),
+            Progress = state.Progress with
+            {
+                NonModelSteps = state.Progress.NonModelSteps.SetItem(intent.StepId, MafExecutionTaskStatus.Running)
+            }
+        };
+        MafExecutionCheckpointContract.ValidateTransition(state, next);
+        return next;
+    }
+
+    internal static MafExecutionCheckpoint? PrepareBuildTestCompletionCheckpoint(
+        MafExecutionCheckpointSnapshot latest,
+        MafExecutionBuildTestIntent intent,
+        SandboxBuildTestOperationSnapshot operation)
+    {
+        var status = MafBuildTestCommandContract.Classify(intent, operation);
+        if (status == MafExecutionTaskStatus.Running)
+            return null;
+        if (!latest.State.BuildTestIntents.TryGetValue(intent.StepId, out var retained) ||
+            !MafExecutionCheckpointContract.BuildTestIntentsMatch(intent, retained))
+            throw new CoordinationException(
+                "maf_execution_build_test_intent_conflict", StatusCodes.Status409Conflict);
+        var receipt = MafBuildTestTerminalReceipt.Create(intent, operation);
+        _ = receipt.ValidateFor(intent);
+        if (latest.State.BuildTestReceipts.TryGetValue(intent.StepId, out var previous))
+        {
+            var normalized = receipt with
+            {
+                UpdatedAt = previous.UpdatedAt,
+                OperationEvidenceSha256 = previous.OperationEvidenceSha256
+            };
+            if (status != latest.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ||
+                !JsonElement.DeepEquals(
+                    JsonSerializer.SerializeToElement(previous), JsonSerializer.SerializeToElement(normalized)))
+                throw new CoordinationException(
+                    "maf_execution_build_test_terminal_conflict", StatusCodes.Status409Conflict);
+            return null;
+        }
+        var next = latest.State with
+        {
+            Revision = checked(latest.State.Revision + 1),
+            BuildTestReceipts = latest.State.BuildTestReceipts.Add(intent.StepId, receipt),
+            Progress = latest.State.Progress with
+            {
+                NonModelSteps = latest.State.Progress.NonModelSteps.SetItem(intent.StepId, status)
+            }
+        };
+        MafExecutionCheckpointContract.ValidateTransition(latest.State, next);
+        return next;
+    }
+
+    internal static string BuildTestResultSummary(MafBuildTestTerminalReceipt receipt) =>
+        JsonSerializer.Serialize(new
+        {
+            kind = "build-test",
+            receipt.OperationId,
+            receipt.Status,
+            receipt.ImmutableHash,
+            receipt.RequestFingerprint,
+            exitCode = receipt.Terminal?.ExitCode,
+            receipt.OutputSha256,
+            receipt.OutputBytes,
+            receipt.CollectorManifestSha256,
+            outputCount = receipt.Outputs.Length,
+            receipt.FailureCode
+        });
 
     internal static bool IsCompletedDispatchReplay(
         MafExecutionCheckpoint state,
@@ -978,6 +1278,31 @@ public static partial class CoordinationEndpoints
             throw new CoordinationException(
                 "maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
         return true;
+    }
+
+    internal static bool ShouldSendDispatchIntent(
+        MafExecutionCheckpoint state, MafExecutionDispatchIntent intent, MafExecutionDispatchIntent expectedIntent)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(intent);
+        ArgumentNullException.ThrowIfNull(expectedIntent);
+        if (intent != expectedIntent)
+            throw new CoordinationException("maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
+        var hasPending = state.PendingDispatches.TryGetValue(intent.AssociationId, out var pending);
+        var hasResult = state.Results.ContainsKey(intent.AssociationId);
+        var status = state.Progress.WorkItems.TryGetValue(intent.AssociationId, out var workStatus)
+            ? workStatus : state.Progress.FixedWorkItems.GetValueOrDefault(intent.AssociationId);
+        if (hasPending && hasResult)
+            throw new CoordinationException("maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
+        if (hasPending)
+        {
+            if (pending != intent || status != MafExecutionTaskStatus.Running)
+                throw new CoordinationException("maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
+            return true;
+        }
+        if (hasResult && status == MafExecutionTaskStatus.Succeeded)
+            return false;
+        throw new CoordinationException("maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
     }
 
     private static bool FixedAssociationsMatch(

@@ -174,14 +174,57 @@ amounts. Unknown measurements stay null. Incomplete pricing remains explicit.
 Native submissions retain `TurnId`, `SdkEventId`, and the complete `SdkSource`
 snapshot. Cache-read and cache-write measurements remain separate. Native callbacks
 do not supply a request count, so `RequestCount` stays null.
+Optional `A2AMessageId` and `SdkAccounting` bind native provenance to the canonical payload.
+Null metadata does not change historical canonical hashes.
+Hosted `nano_aiu` pricing does not require optional accounting identity or credit status.
+A supplied identity must have valid text, a positive sequence, and the same SDK session.
+The exact hosted source, meter, and measured units remain required.
+An unpriced entry keeps run and agent pricing incomplete.
+BYOK token pricing remains separate from hosted credit status.
+
+`RuntimeUsageCostSnapshotRequest` carries the admitted registration and actual SDK source.
+`POST /internal/projects/{projectId}/runs/{runId}/usage/copilot-cost-snapshot` returns
+the source hash, existing run-pinned Cost binding, zero-work quote, and Copilot-only totals.
+Events checks the current signed run authority before committing the pin.
+The quote uses the actual model and `ProviderWeightedNanoAiu` basis.
+It writes no synthetic usage entry, source receipt, or accounting acknowledgment.
+The same Cost lock protects pricing resolution and the observed totals read.
+Missing pricing remains `Unpriced`; an empty ledger is zero only with a valid priced quote.
+Snapshot validation rejects other meters, non-AIC units, and unpriced Copilot entries.
+These observed totals do not prove future accounting-source finality.
+An optional `DispatchId` and up to 512 `RequiredReceipts` request an observed accounting join.
+References must have unique source and event IDs with exact runtime attribution.
+`RepresentedReceipts` contains the matching immutable source and ledger receipts.
+Events checks actual registration, source, platform message, accounting hash, and price under the same transaction.
+`ValidateObservedReceipt` allows explicit unpriced accounting.
+The separate priced validator still rejects unavailable pricing for configured hosted credit admission.
 
 `RuntimeUsageSourceReceipt` contains the immutable runtime registration, native
 usage submission, source hash, receipt ID, version, and recorded timestamp.
 `RuntimeUsageSourceReceiptContract` validates exact owner, SDK, model, catalog,
-event, turn, and accepted-selection pins. It rejects BYOK and changed hashes.
+event, turn, and accepted-selection pins. It rejects changed hashes and Copilot units on BYOK sources.
 This receipt proves a source observation, not a price or accounting acknowledgment.
 A stored source receipt remains readable after its original lease expires.
 That historical read does not authorize another observation.
+
+`RuntimeNativeTurnAdmissionReceipt` binds a stable platform message to its current
+registration, SDK source, request hash, prompt hash, and committed owner revision.
+It contains no predicted native message or turn ID.
+`MaxModelTurns` reserves whole-run send capacity when that existing MAF dispatch is prepared.
+Exact replay consumes no new slot; sending or uncertain work cannot be resent or refunded.
+This is not a count of internal SDK model API calls.
+`RuntimeNativeTurnObservation` carries actual native IDs, the durable completion range,
+output hash, observed root usage-event IDs, and an optional accounting checkpoint.
+`RuntimeNativeTurnRecordedReceipt` binds that observation hash to the admitted intent.
+The source writer records it as partial, not source-complete.
+`RuntimeNativeTurnAccountingRequest` carries the recorded native proof and exactly its observed usage references.
+`POST /internal/runtime/turns/accounting` verifies the existing Events join before completing that dispatch.
+`RuntimeNativeTurnAccountingReceipt` binds the observation, represented references, and newer owner revision.
+The source report stays partial; no source-finality or strict retirement proof is written.
+The Host returns the actual answer after this durable observed completion.
+MAF verifies real pricing before preparing capped hosted work and repeats it at native begin.
+After the response, MAF rereads the completed dispatch and exact output hash before retaining a result.
+Uncapped unpriced output remains available; later usage affects the next capped boundary.
 
 `PostgresUsageLedger.AppendWithinTransactionAsync` uses the caller's owned
 PostgreSQL transaction without a separate commit. The trusted Events consumer
@@ -343,6 +386,7 @@ role claims are not required.
 | `POST /internal/sessions/{sessionId}/material` | Optional typed `SessionMaterialWriteRequest` route. Accepts actual `TurnContent` or `SdkCache` bytes, at most 1 MiB, with event ID, runtime ID, registration revision, and execution fence. Requires the original bearer, current Projects authority, recorded SDK source, and exact current runtime binding. Stores bytes before the journal reference. Rechecks authority after waits and on retries. Returns the original no-store acknowledgment for identical material, `409` for changed event reuse, or an explicit authority/storage error. |
 | `GET /internal/sessions/{sessionId}/material/{eventId}/{kind}` | Reads only committed material by session, event, and kind. `TurnContent` requires current `ReadRunSelection` or actually supplied `ReadProjects` entitlement, exact signed project/run binding, and recorded session membership. Project-summary access alone does not authorize opaque bytes. `SdkCache` retains Core `ReadRunSelection` authority. The route verifies the recorded Sessions provider, digest, length, kind, and version, then rechecks read authority after retrieval. Historical content does not require dispatchability, a live lease, or model credentials. Returns a no-store `SessionMaterialReadResult`. Arbitrary object keys, paths, and URLs are not accepted. |
 | `GET /internal/projects/{projectId}/runs/{runId}/usage` | Optional native usage totals route. Requires current `ReadRunSelection` for the exact signed project/run and returns exact run and agent totals. |
+| `POST /internal/projects/{projectId}/runs/{runId}/usage/copilot-run-admission` | Optional run-start pricing route. Accepts contract version 1 and only the accepted-selection hash. Requires current `ReadRunSelection` and `AcceptRunSelection`, rereads the trusted Projects selection, and resolves the shared versioned AgentHost model map. Returns a no-store receipt with the concrete model/connection, real Cost pin, zero-work quote, and Copilot-only totals. Missing or unpriced pricing rejects before capped root acceptance; no SDK or usage evidence is invented. |
 | `GET /internal/sessions/{sessionId}/events?cursor={cursor}&limit={limit}` | Read an ordered page for one session after an optional opaque cursor. Positions are run-wide and may have gaps in a session-only page. |
 | `GET /internal/sessions/{sessionId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll durable journal state and stream NDJSON `SessionEventDelivery` records, each containing the event and a reconnectable `nextCursor`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events?cursor={cursor}&limit={limit}` | Read a bounded, run-ordered page across all sessions in the authorized project/run. |
@@ -651,6 +695,24 @@ The combined harness also commits source receipts and prices them through Events
 Only a source receipt ID crosses the accounting admission route.
 No caller supplies a price or multiplies weighted nano-AIU again.
 The ledger preserves explicit `Estimate`, `Reconciled`, and `Unpriced` dispositions.
+
+`RuntimeActionRequest` optionally carries `DispatchId` for `model.turn` and `IsToolInvocation` for registered pre-tool hooks.
+A configured model-turn cap requires the exact prepared dispatch, runtime binding, and prompt hash.
+The default false invocation flag and null dispatch ID stay omitted from historical payloads and hashes.
+After current Policy allows a tool invocation, Orchestrator reserves its event ID and request hash in the existing outbox.
+`MaxToolCalls` counts those reservations across the whole run, including after store restart.
+Exact HTTP retry reuses the event ID; a new invocation cannot reuse an arguments hash as identity.
+Permission callbacks do not debit another slot.
+Verify requires the retained exact reservation before dispatch.
+
+Optional `SdkSessionFacts.MaxPromptTokens` records the effective per-prompt/context capacity, not aggregate token usage.
+Configured capacity must be positive and no greater than the accepted limit.
+The session-material owner derives this pin from the actual source receipt and rejects a changed value.
+AgentHost sets actual SDK capability overrides; BYOK also uses the provider's prompt-capacity field.
+Hosted catalog capacity and optional server-owned `PromptCapacityTokens` can only narrow the accepted limit.
+Unknown capacity denies configured startup, and smaller capacity denies cached resume.
+Absent optional pins preserve historical payloads; they do not authorize configured-capacity resume.
+These source contracts do not claim a live token-count or truncation guarantee.
 
 `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context`
 requires the authenticated current run owner and returns `Cache-Control: no-store`.

@@ -308,6 +308,74 @@ public sealed class MafExecutionOutputWitnessTests
         Assert.Equal("maf_execution_output_witness_evidence_invalid", failure.Code);
     }
 
+    [Fact]
+    public void RequiredBuildTestOutputsCannotBeSealedAsNoOutput()
+    {
+        var root = CreateBuildTestOutputFixture();
+
+        var failure = Assert.Throws<CoordinationException>(() =>
+            MafExecutionOwnerEvidenceContract.Serialize(root, "tenant-1", [], []));
+
+        Assert.Equal("maf_execution_output_witness_evidence_invalid", failure.Code);
+        Assert.Equal("artifacts/results.xml", Assert.Single(root.OutputSet.Obligations).OutputPath);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BuildTestCaptureMustMatchTheExactCollectorDigestAndBytes(bool mismatch)
+    {
+        var root = CreateBuildTestOutputFixture(mismatch);
+        var capture = CreateCapture(root, ["artifacts/results.xml"]);
+        if (mismatch)
+        {
+            var failure = Assert.Throws<CoordinationException>(() =>
+                MafExecutionOwnerEvidenceContract.Serialize(root, "tenant-1", [capture], []));
+            Assert.Equal("maf_execution_output_witness_evidence_invalid", failure.Code);
+            return;
+        }
+
+        var evidence = MafExecutionOwnerEvidenceContract.Serialize(root, "tenant-1", [capture], []);
+
+        Assert.Equal("capture", evidence[0].GetProperty("kind").GetString());
+        Assert.Equal(MafExecutionIds.CreateBuildTestAssociationId(root.Identity, root.WorkPlan.Plan.Id, "build-test"),
+            evidence[0].GetProperty("outputs")[0].GetProperty("workItemId").GetString());
+    }
+
+    private static MafExecutionOwnerEvidenceBinding CreateBuildTestOutputFixture(bool mismatch = false)
+    {
+        var intent = MafBuildTestCheckpointTests.Intent() with
+        {
+            ExecutionFence = 2, AcceptedSelectionHash = new string('a', 64)
+        };
+        var definition = WorkflowTestData.Snapshot(WorkflowTestData.Definition(
+            WorkflowDefinitionOrigin.BuiltIn,
+            WorkflowTestData.Platform("build-test", 0, [], WorkflowPlatformGate.BuildTest) with
+            {
+                BuildTestCommand = intent.Command
+            }));
+        var plan = WorkPlanValidator.ValidateAndSnapshot(
+            definition, WorkflowTestData.Plan(),
+            new([], WorkflowTestData.PinnedSandboxBinding("sandbox-1", SandboxCapabilities.BuildTestCommandPod))).Value!;
+        var initial = new MafExecutionCheckpointSnapshot(new("root", "initial"),
+            new(1, "plan-1", 3, MafExecutionProgress.Empty));
+        var running = CoordinationEndpoints.PrepareBuildTestCheckpoint(initial, intent)!;
+        var operation = MafBuildTestExecutionTests.Operation(intent);
+        var bytes = Encoding.UTF8.GetBytes(mismatch ? "different-content" : "content:artifacts/results.xml");
+        operation = operation with
+        {
+            OutputEvidence = [operation.OutputEvidence[0] with
+            {
+                CapturedBytes = bytes.Length, CapturedSha256 = GitWorkspaceCapturePackage.Hash(bytes)
+            }]
+        };
+        var completed = CoordinationEndpoints.PrepareBuildTestCompletionCheckpoint(
+            new(new("root", intent.CheckpointId), running), intent, operation)!;
+        var checkpoint = new MafExecutionCheckpointSnapshot(new("root", "completed"), completed);
+        var outputSet = MafExecutionOutputWitness.CreateCompletePlanOutputSet(plan, checkpoint, intent.Identity).OutputSet;
+        return CreateRoot(intent.Identity, plan, checkpoint, outputSet);
+    }
+
     private static (
         WorkPlanSnapshot Plan,
         MafExecutionCheckpointSnapshot Checkpoint,

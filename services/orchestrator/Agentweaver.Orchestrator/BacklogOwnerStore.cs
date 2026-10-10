@@ -184,7 +184,8 @@ internal sealed class BacklogOwnerStore
         CoordinationOwnerStore coordination,
         CoordinatorDecisionOwnerStore decisions,
         Func<CancellationToken, Task> revalidateCurrentAuthority,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task<Agentweaver.Identity.RuntimeRunAdmissionReceipt>>? readRunAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(selection);
@@ -262,7 +263,8 @@ internal sealed class BacklogOwnerStore
                 transaction, graph.Issues).ConfigureAwait(false);
 
         var acceptedRoot = await coordination.AcceptRootInTransactionAsync(
-            connection, transaction, actor, selection, rootSessionId, cancellationToken)
+            connection, transaction, actor, selection, rootSessionId, cancellationToken,
+            readRunAdmission, revalidateCurrentAuthority)
             .ConfigureAwait(false);
         var initializedRoot = await decisions.InitializeRootInTransactionAsync(
             connection,

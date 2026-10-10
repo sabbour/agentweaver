@@ -146,6 +146,17 @@ there are no output obligations, or typed capture rows and, when selected, a typ
 Merge intent for non-empty output sets. The bounded C3/MAF source composition is
 admitted. Whole-producer runtime acceptance remains pending. Positive evidence is
 accepted only after current owner rereads and exact serializer reconstruction.
+Workflow-bound native sends now prepare through the current source owner.
+Configured hosted credit limits also require real Events pricing before root acceptance or backlog claim.
+Events resolves the concrete model through the same versioned server-owned map as AgentHost.
+The acceptance transaction retains the model, connection, selection hash, and Cost receipt in the existing outbox.
+It rechecks current Projects authority after remote waits and before root or claim commit.
+The Host registration carries that immutable model pin and rejects a different local binding before SDK startup.
+Configured hosted credit limits require actual Events pricing before dispatch start and again at native begin.
+The Host completes an observed source-to-ledger receipt join before returning output.
+MAF rereads that completed dispatch and verifies the output hash before retaining the result.
+Explicit unpriced accounting permits uncapped output, not free capped admission.
+The partial native report does not assert accounting-source finality.
 For each claim, the current owner lock covers enumeration of all admitted captures
 for the accepted root and selection, then each typed proof and pin is reread in the
 same transaction. A non-empty witness must name the sole admitted capture; a second
@@ -313,6 +324,61 @@ flowchart TD
 ```
 
 The accepted definition is snapshotted for the run, then bound to real MAF executors.
+An executable BuildTest platform step can include a typed `buildTestCommand`.
+It specifies the immutable execution-profile reference, absolute executable,
+ordered arguments, workspace-root working directory (`.`), and bounded output obligations.
+The coordinator cannot submit image options, credentials, shell text, or a success verdict.
+The trusted executor must resolve the profile and current Sandbox binding separately.
+Command, argument-order, profile, path, or output-bound changes require scope confirmation.
+The validated WorkPlan requires a pinned Sandbox with the BuildTest command capability,
+even when it contains no model work.
+A legacy BuildTest step without a typed command remains valid but cannot execute.
+
+Before dispatch, the checkpoint stores the operation ID, exact command, accepted
+execution and collector options, and expected Environment binding.
+Later checkpoints retain that intent without changes.
+Recovery reuses the same operation and original checkpoint reference.
+The owner-authorized Core getter returns only the persisted command after it
+rechecks the current decision, selection hash, execution fence, and provider pin.
+Its route is
+`/api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}`.
+The query also carries the exact WorkPlan, checkpoint revision, decision version,
+execution fence, and accepted selection hash.
+The getter does not reserve or execute a command.
+
+The optional dispatch field `buildTestEnvironmentId` selects the Environment
+owner scope, not a different provider or execution profile.
+Preparation must match the WorkPlan's existing Sandbox pin.
+The Environment owner address uses the existing
+`Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress` configuration.
+Without that configuration or an Environment scope, the executor remains unavailable.
+The preparation GET ends in `/sandbox/build-test/binding-preparation`.
+It binds `sessionId` and `executionProfileReference` to current owner state.
+The command POST sends only the checkpoint reference and unchanged expected binding.
+Environment resolves the command through Core and rejects changed bindings or options.
+
+Normal dispatch and recovery use the same executor check.
+Recovery reads the original operation before it starts or reconciles that operation.
+Only a validated terminal result and required collector outputs can advance the step.
+Checkpoints retain compact terminal receipts and output digests, not raw command logs.
+Dependent model work receives a bounded typed result summary.
+Final output witnesses must match the collector's file digests and byte counts.
+Required command outputs cannot use a no-output seal.
+
+```mermaid
+flowchart LR
+    P["Confirmed typed command and provider pin"] --> E["Owner-authorized Environment preparation"]
+    E --> C["Immutable MAF checkpoint intent"]
+    C --> G["Owner-authorized Core getter"]
+    G --> V["Recheck current decision, selection, fence, and pin"]
+    V --> A["Return exact accepted command"]
+    A --> O["Environment rechecks binding and executes the same operation"]
+    O --> T["Terminal and required output join"]
+    T --> D["Checkpoint receipt and dependent model frontier"]
+    C --> R["Recover original operation and checkpoint reference"]
+    R --> G
+```
+
 Child work within an open step fans out only within validated limits and joins at
 that step's boundary. Checkpoints preserve the current step, pending children, and
 gates. The journal preserves what was proposed, accepted, dispatched, and observed.

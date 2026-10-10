@@ -1,7 +1,7 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
-using GitHub.Copilot;
 
 namespace Agentweaver.AgentRuntime;
 
@@ -13,33 +13,20 @@ public sealed record RuntimeByokProvider(
 {
     public ImmutableDictionary<string, string> Headers { get; init; } =
         ImmutableDictionary<string, string>.Empty;
-
-    internal ProviderConfig ToSdkProvider(string modelId, string apiKey)
-    {
-        var baseUrl = BaseUrl.AbsoluteUri.TrimEnd('/');
-        if (Type == "azure" && !baseUrl.EndsWith("/openai", StringComparison.OrdinalIgnoreCase))
-            baseUrl += "/openai";
-        return new ProviderConfig
-        {
-            Type = Type,
-            BaseUrl = baseUrl,
-            ApiKey = apiKey,
-            WireApi = WireApi,
-            Headers = Headers.Count == 0 ? null : new Dictionary<string, string>(Headers),
-            Azure = AzureApiVersion is null ? null : new AzureOptions { ApiVersion = AzureApiVersion },
-            ModelId = modelId,
-            WireModel = modelId
-        };
-    }
 }
 
 public sealed record RuntimeModelBinding(
     string ModelId, ModelSourceMode SourceMode, RuntimeByokProvider? Provider = null)
 {
+    public bool Enabled { get; init; } = true;
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PromptCapacityTokens { get; init; }
+
     internal void Validate()
     {
         RuntimeContractValidation.ValidateIdentifier(ModelId);
-        if (!Enum.IsDefined(SourceMode) ||
+        if (!Enum.IsDefined(SourceMode) || PromptCapacityTokens is < 1 ||
             SourceMode == ModelSourceMode.HostedCopilot && Provider is not null ||
             SourceMode == ModelSourceMode.Byok && Provider is null)
             throw new ArgumentException("An explicit, mode-compatible model binding is required.");

@@ -3,6 +3,7 @@ extern alias AzureIdentity;
 using System.Collections.Immutable;
 using Agentweaver.Orchestrator;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
 using Agentweaver.SourceControl;
@@ -131,6 +132,8 @@ builder.Services.AddHttpClient<ProjectsRunSelectionClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient<EventsAddressedMessageClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient<RuntimeRunAdmissionClient>(client => client.Timeout = TimeSpan.FromSeconds(20))
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
 builder.Services.AddSingleton(secretRedemptionOptions);
 builder.Services.AddHttpClient<SourceControlSecretRedemptionClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
@@ -154,6 +157,9 @@ builder.Services.AddScoped(services => new ExecutableActionGuard(
     services.GetService<IExecutableActionSourceReceiptWriter>(),
     services.GetService<IExecutableActionPolicyEvaluationReceiptWriter>()));
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
+if (runtimeRegistrationEnabled)
+    builder.Services.AddHttpClient<MafBuildTestEnvironmentClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
 var runtimeUsageEnabled = builder.Services.AddRuntimeUsageSource(builder.Configuration);
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>

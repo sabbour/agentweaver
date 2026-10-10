@@ -67,11 +67,26 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
     internal static bool HasUnsupportedPromptControls(string prompt) =>
         prompt.Any(character => char.IsControl(character) && character is not ('\r' or '\n' or '\t'));
 
-    internal async Task<string> SendTurnAsync(string prompt, CancellationToken cancellationToken)
+    internal async Task<string> SendTurnAsync(
+        string prompt, CancellationToken cancellationToken, Guid? a2aMessageId = null) =>
+        (await SendTurnCoreAsync(prompt, captureNativeReceipt: false, cancellationToken, a2aMessageId)
+            .ConfigureAwait(false)).Response;
+
+    internal async Task<RuntimeCopilotNativeTurnResult> SendTurnWithNativeReceiptAsync(
+        string prompt, CancellationToken cancellationToken, Guid? a2aMessageId = null)
+    {
+        var result = await SendTurnCoreAsync(prompt, captureNativeReceipt: true, cancellationToken, a2aMessageId)
+            .ConfigureAwait(false);
+        return new(result.Response, result.Receipt ??
+            throw new RuntimeAuthorizationException("runtime_native_turn_receipt_unavailable"));
+    }
+
+    private async Task<(string Response, RuntimeNativeTurnObservation? Receipt)> SendTurnCoreAsync(
+        string prompt, bool captureNativeReceipt, CancellationToken cancellationToken, Guid? a2aMessageId)
     {
         if (string.IsNullOrWhiteSpace(prompt) ||
             prompt.Length > AddressedMessageValidation.MaximumTextLength ||
-            HasUnsupportedPromptControls(prompt))
+            HasUnsupportedPromptControls(prompt) || a2aMessageId == Guid.Empty)
             throw new ArgumentException("A bounded text prompt is required.", nameof(prompt));
 
         RequireUsable();
@@ -80,12 +95,26 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         try
         {
             RequireUsable();
-            var completion = _turns.Begin(active.Token);
+            string? startCursor = null;
+            if (captureNativeReceipt)
+            {
+#pragma warning disable GHCP001 // Capture the native durable cursor before this SDK send.
+                startCursor = (await _session.Rpc.EventLog.TailAsync(active.Token)
+                    .ConfigureAwait(false)).Cursor;
+#pragma warning restore GHCP001
+            }
+            var completion = _turns.Begin(active.Token, a2aMessageId);
             try
             {
-                await _session.SendAsync(new MessageOptions { Prompt = prompt }, active.Token)
+                var nativeMessageId = await _session.SendAsync(new MessageOptions { Prompt = prompt }, active.Token)
                     .ConfigureAwait(false);
-                return await completion.WaitAsync(active.Token).ConfigureAwait(false);
+                var response = await completion.WaitAsync(active.Token).ConfigureAwait(false);
+                var receipt = captureNativeReceipt
+                    ? await RuntimeCopilotNativeTurnJournal.ReadAsync(
+                        _session, Facts, startCursor!, nativeMessageId, response, active.Token)
+                        .ConfigureAwait(false)
+                    : null;
+                return (response, receipt);
             }
             catch (Exception turnFailure) when (turnFailure is not OutOfMemoryException)
             {
@@ -127,7 +156,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         await foreach (var item in _usage.Reader.ReadAllAsync(cancellationToken))
         {
             if (item.Observation is { } usage)
-                yield return Extract(usage);
+                yield return Extract(usage, item.A2AMessageId);
             else
                 item.Barrier!.TrySetResult();
         }
@@ -141,7 +170,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         await barrier.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private SdkUsageObservation Extract(AssistantUsageEvent usage)
+    private SdkUsageObservation Extract(AssistantUsageEvent usage, Guid? a2aMessageId)
     {
         try
         {
@@ -163,13 +192,38 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
                 Integral(usage.Data.CacheWriteTokens),
                 Integral(usage.Data.ReasoningTokens),
                 NullableDecimal(usage.Data.CopilotUsage?.TotalNanoAiu),
-                Milliseconds(usage.Data.Duration));
+                Milliseconds(usage.Data.Duration))
+            {
+                A2AMessageId = a2aMessageId,
+                Accounting = ExtractAccounting(Facts, usage)
+            };
         }
         catch (Exception exception) when (exception is RuntimeAuthorizationException or OverflowException)
         {
             _usage.Writer.TryComplete(exception);
             throw;
         }
+    }
+
+    internal static SdkUsageAccountingObservation ExtractAccounting(
+        SdkSessionFacts source, AssistantUsageEvent usage)
+    {
+        var status = usage.Data.AiCreditsStatus;
+        var accounting = new SdkUsageAccountingObservation(
+            usage.Data.Accounting is { } identity
+                ? new(identity.SourceSessionId, identity.Sequence, identity.UsageId) : null,
+            status switch
+            {
+                null => SdkAiCreditsStatus.Unavailable,
+                { } value when value == AiCreditsStatus.Complete => SdkAiCreditsStatus.Complete,
+                { } value when value == AiCreditsStatus.Partial => SdkAiCreditsStatus.Partial,
+                { } value when value == AiCreditsStatus.Unavailable => SdkAiCreditsStatus.Unavailable,
+                _ => throw new RuntimeAuthorizationException("runtime_usage_accounting_invalid")
+            },
+            status is not null);
+        RuntimeUsageSourceReceiptContract.ValidateAccounting(
+            source, accounting, NullableDecimal(usage.Data.CopilotUsage?.TotalNanoAiu));
+        return accounting;
     }
 
     private static long? Integral(double? value)
@@ -238,7 +292,8 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
     }
 }
 
-internal sealed record RuntimeCopilotUsageItem(AssistantUsageEvent? Observation, TaskCompletionSource? Barrier);
+internal sealed record RuntimeCopilotUsageItem(
+    AssistantUsageEvent? Observation, TaskCompletionSource? Barrier, Guid? A2AMessageId = null);
 
 internal sealed class RuntimeCopilotTurnObserver
 {
@@ -247,8 +302,9 @@ internal sealed class RuntimeCopilotTurnObserver
     private StringBuilder? _content;
     private CancellationToken _cancellationToken;
     private TaskCompletionSource? _idle;
+    private Guid? _a2aMessageId;
 
-    public Task<string> Begin(CancellationToken cancellationToken)
+    public Task<string> Begin(CancellationToken cancellationToken, Guid? a2aMessageId = null)
     {
         lock (_gate)
         {
@@ -256,9 +312,19 @@ internal sealed class RuntimeCopilotTurnObserver
                 throw new InvalidOperationException("A Copilot SDK turn is already active.");
             _content = new StringBuilder();
             _cancellationToken = cancellationToken;
+            _a2aMessageId = a2aMessageId;
             _idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             _completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             return _completion.Task;
+        }
+    }
+
+    public Guid? ActiveA2AMessageId
+    {
+        get
+        {
+            lock (_gate)
+                return _completion is { Task.IsCompleted: false } ? _a2aMessageId : null;
         }
     }
 
@@ -327,6 +393,7 @@ internal sealed class RuntimeCopilotTurnObserver
             _content = null;
             _cancellationToken = default;
             _idle = null;
+            _a2aMessageId = null;
         }
     }
 }

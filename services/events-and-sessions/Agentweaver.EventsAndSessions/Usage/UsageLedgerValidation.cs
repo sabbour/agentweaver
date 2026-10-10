@@ -94,6 +94,43 @@ internal static class UsageLedgerValidation
         _ = new SessionIdentity(projectId, runId, "_");
     }
 
+    internal static bool IsFinanciallyComplete(
+        UsageSubmission submission, CostDisposition disposition) =>
+        disposition != CostDisposition.Unpriced && HasCompleteSdkAccounting(submission);
+
+    internal static bool HasCompleteSdkAccounting(UsageSubmission submission)
+    {
+        ArgumentNullException.ThrowIfNull(submission);
+        if (submission.SdkSource is null)
+            return submission.SdkAccounting is null;
+        if (submission.ModelBinding.MeterSource != submission.SdkSource.MeterSource)
+            return false;
+        var identity = submission.SdkAccounting?.Identity;
+        return submission.SdkSource.SourceMode switch
+        {
+            "byok" =>
+                submission.SdkSource.MeterSource == SdkMeterSources.ByokTokens &&
+                submission.Measurement.ProviderUnits is null &&
+                submission.Measurement.ProviderUnit == "tokens" &&
+                submission.Measurement.InputTokens is not null &&
+                submission.Measurement.OutputTokens is not null,
+            "hosted-copilot" =>
+                submission.SdkSource.MeterSource == SdkMeterSources.CopilotNanoAiu &&
+                submission.Measurement.ProviderUnits is not null &&
+                submission.Measurement.ProviderUnit == "nano_aiu" &&
+                (identity is null ||
+                 identity.Sequence > 0 &&
+                 identity.SourceSessionId == submission.SdkSource.SdkSessionId &&
+                 IsAccountingIdentityText(identity.SourceSessionId) &&
+                 IsAccountingIdentityText(identity.UsageId)),
+            _ => false
+        };
+    }
+
+    private static bool IsAccountingIdentityText(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 512 &&
+        !value.Any(character => char.IsControl(character) || char.IsWhiteSpace(character));
+
     private static void ValidateBinding(CostBinding binding)
     {
         ValidateIdentifier(binding.MeterSource, nameof(binding.MeterSource), 256);
@@ -204,6 +241,13 @@ internal static class UsageLedgerCanonicalizer
             }
             if (submission.SdkEventId is not null)
                 writer.WriteString("sdkEventId", submission.SdkEventId);
+            if (submission.A2AMessageId is not null)
+                writer.WriteString("a2AMessageId", submission.A2AMessageId.Value);
+            if (submission.SdkAccounting is not null)
+            {
+                writer.WritePropertyName("sdkAccounting");
+                JsonSerializer.Serialize(writer, submission.SdkAccounting);
+            }
 
             writer.WritePropertyName("costBinding");
             if (binding is null)

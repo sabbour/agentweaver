@@ -74,7 +74,10 @@ public sealed record ReviseCoordinatorWorkPlanRequest(
     string RequestId,
     WorkPlan RevisedPlan);
 
-public sealed record MafExecutionDispatchRequest(long ExpectedStateVersion, string WorkPlanId);
+public sealed record MafExecutionDispatchRequest(long ExpectedStateVersion, string WorkPlanId)
+{
+    public string? BuildTestEnvironmentId { get; init; }
+}
 
 public sealed record MafExecutionDispatchResponse(
     string WorkPlanId,
