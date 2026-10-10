@@ -210,6 +210,43 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
     }
 
     [Fact]
+    public async Task ProviderCancellationClosesTheConsentWithoutRedeemingSecretsOrExchangingCode()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
+            var providerHandler = new MetadataProviderHandler();
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            var service = CreateService(db, projects, environment, provider, secrets, secrets);
+
+            var preparation = await service.PrepareConsentAsync(
+                Actor(), Issuer, ActorId, ConnectionId, Request(), CancellationToken.None);
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.CompleteCallbackAsync(
+                    Actor(), Issuer, ActorId,
+                    new RemoteMcpOAuthCallbackRequest(preparation.State, null, "access_denied"),
+                    CancellationToken.None));
+
+            var savedConnection = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            var savedConsent = await db.RemoteMcpOAuthConsents.AsNoTracking()
+                .SingleAsync(item => item.ConnectionRecordId == row.Id);
+            Assert.Equal("remote_mcp_oauth_consent_denied", error.Code);
+            Assert.Equal(RemoteMcpOAuthConnectionState.NotConnected, savedConnection.State);
+            Assert.Equal(RemoteMcpOAuthConsentState.Denied, savedConsent.State);
+            Assert.Empty(providerHandler.TokenGrantTypes);
+            Assert.Empty(secrets.RedeemedReferences);
+        }
+    }
+
+    [Fact]
     public async Task UncertainTokenExchangeTimeoutConsumesClaimAndClosesPendingConnection()
     {
         var (db, dataSource) = await CreateDatabaseAsync();

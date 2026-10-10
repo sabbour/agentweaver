@@ -1,5 +1,35 @@
 # Errors
 
+## [ERR-20261010-004] oauth-drift-regression-fixture
+
+**Logged**: 2026-10-10T09:35:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The new callback provider-drift test fixture omitted the secret redemption fake.
+
+### Error
+```text
+Expected remote_mcp_oauth_provider_unapproved; received remote_mcp_secret_store_unavailable.
+```
+
+### Context
+- The callback path requires both the secret writer and redemption interfaces before provider validation.
+- The test was intended to prove provider configuration drift fails before metadata requests or secret redemption.
+
+### Suggested Fix
+Pass the controlled secret fake as both writer and redeemer when constructing the callback service.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/Agentweaver.Identity.Broker.Tests/RemoteMcpOAuthConsentPreparationTests.cs
+
+### Resolution
+- **Resolved**: 2026-10-10T09:36:00-07:00
+- **Notes**: The callback fixture now supplies the existing fake for redemption; all nine drift regressions pass.
+
 ## [ERR-20261010-003] remote-mcp-secret-failure-test-expectations
 
 **Logged**: 2026-10-10T09:05:00-07:00

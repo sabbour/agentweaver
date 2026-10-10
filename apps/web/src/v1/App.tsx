@@ -3005,7 +3005,10 @@ function RemoteMcpOAuthCallbackRelay() {
           ? 'The Remote MCP authorization was canceled.'
           : 'The Remote MCP authorization was received by Identity.');
       }).catch((reason: unknown) => {
-        setNotice(`The Remote MCP authorization could not be completed: ${errorMessage(reason)}`);
+        setNotice(callback.error === 'access_denied' &&
+          errorCode(reason) === 'remote_mcp_oauth_consent_denied'
+          ? 'The Remote MCP authorization was canceled.'
+          : `The Remote MCP authorization could not be completed: ${errorMessage(reason)}`);
       });
     };
     window.addEventListener('message', onMessage);

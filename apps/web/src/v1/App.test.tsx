@@ -68,8 +68,14 @@ vi.mock('./api', () => ({
     streamEvents: mocks.streamEvents,
   },
   GatewayError: class GatewayError extends Error {
-    status = 0;
+    status: number;
     code?: string;
+
+    constructor(status: number, problem: Record<string, unknown>, message: string) {
+      super(message);
+      this.status = status;
+      this.code = typeof problem.code === 'string' ? problem.code : undefined;
+    }
   },
 }));
 
@@ -139,6 +145,7 @@ vi.mock('./config', async (importOriginal) => {
 });
 
 import App from './App';
+import { GatewayError } from './api';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -519,6 +526,9 @@ describe('v1 web project scoping', () => {
   it('submits provider cancellation to Identity using the current bearer session', async () => {
     const popup = { closed: false } as unknown as Window;
     const state = 'D'.repeat(43);
+    mocks.completeRemoteMcpOAuthCallback.mockRejectedValueOnce(
+      new GatewayError(400, { code: 'remote_mcp_oauth_consent_denied' }, 'Consent was denied.'),
+    );
     render(<App />);
 
     window.dispatchEvent(new MessageEvent('message', {
