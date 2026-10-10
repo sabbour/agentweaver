@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Projects.Config;
 using Microsoft.AspNetCore.Http;
@@ -240,6 +241,41 @@ public sealed partial class ProjectsConfigPostgresTests
                 revokedAdmin, setup.Project.ProjectId, null, 10, CancellationToken.None));
         Assert.Equal(StatusCodes.Status403Forbidden, revokedAdminForbidden.StatusCode);
 
+        var projectOwner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "inventory-project-owner-" + setup.Suffix,
+            setup.TenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Project,
+            setup.Project.ProjectId,
+            ProjectAuthorityRole.Owner);
+        var ownerInventory = await service.ListInventoryAsync(
+            projectOwner, setup.Project.ProjectId, null, 10, CancellationToken.None);
+        Assert.Equal(setup.Project.ConfigurationRevision, ownerInventory.ConfigurationRevision);
+
+        var revokedProjectOwner = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "inventory-revoked-project-owner-" + setup.Suffix,
+            setup.TenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Project,
+            setup.Project.ProjectId,
+            ProjectAuthorityRole.Owner);
+        var ownerAssignment = await db.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == revokedProjectOwner.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Project &&
+            item.ResourceId == setup.Project.ProjectId &&
+            item.Role == ProjectAuthorityRole.Owner &&
+            item.State == ProjectAuthorityRecordState.Active);
+        await authorityStore.RevokeRoleAssignmentAsync(
+            ownerAssignment.AssignmentId, ownerAssignment.Revision, "inventory-test");
+        var revokedOwnerForbidden = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.ListInventoryAsync(
+                revokedProjectOwner, setup.Project.ProjectId, null, 10, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, revokedOwnerForbidden.StatusCode);
+
         var foreignTenant = "inventory-foreign-tenant-" + setup.Suffix;
         var foreignAdmin = await SeedCallerAsync(
             db,
@@ -256,6 +292,51 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(StatusCodes.Status404NotFound, hiddenProject.StatusCode);
 
         var configurations = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var configured = await configurations.UpdateProjectConfigurationAsync(
+            setup.Owner,
+            setup.Project.ProjectId,
+            setup.Project.ConfigurationRevision,
+            ProjectSettings() with
+            {
+                AgentCharters =
+                [
+                    new ProjectAgentCharter("agent-one", "Agent One", "assistant", "Archived inventory test agent."),
+                ],
+                Casting = [new ProjectAgentCast("agent-one", "assistant", 0)],
+            },
+            CancellationToken.None);
+        var contentService = new SkillContentService(
+            db,
+            new SkillContentObjectStore(new SkillTestObjectStore()),
+            configurations,
+            TimeProvider.System);
+        var archivedCandidate = SkillCandidate(
+            "Archived project-only instructions.",
+            "# Archived secret resource\n");
+        var archivedPreview = contentService.Preview(archivedCandidate);
+        var archivedContent = await contentService.ImportAsync(
+            setup.Owner,
+            setup.Project.ProjectId,
+            new SkillContentImportRequest(
+                "inventory-archived-" + setup.Suffix,
+                archivedPreview.ContentDigest,
+                "skill-archived",
+                null,
+                null,
+                archivedCandidate),
+            CancellationToken.None);
+        var assignedConfiguration = await contentService.UpdateAsync(
+            setup.Owner,
+            setup.Project.ProjectId,
+            new SkillAssignmentUpdateRequest(
+                configured.Revision,
+                archivedContent.SkillId,
+                archivedContent.Revision,
+                archivedContent.ContentDigest,
+                Enabled: true,
+                Order: 2,
+                ["agent-one"]),
+            CancellationToken.None);
         _ = await configurations.UpdateProjectAsync(
             setup.Owner,
             setup.Project.ProjectId,
@@ -263,9 +344,24 @@ public sealed partial class ProjectsConfigPostgresTests
             setup.Project.Name,
             ProjectLifecycleState.Archived,
             CancellationToken.None);
-        var archivedInventory = await service.ListInventoryAsync(
+        var archivedInventory = await contentService.ListInventoryAsync(
             setup.Owner, setup.Project.ProjectId, null, 10, CancellationToken.None);
-        Assert.Equal(setup.Project.ConfigurationRevision, archivedInventory.ConfigurationRevision);
+        Assert.Equal(assignedConfiguration.Revision, archivedInventory.ConfigurationRevision);
+        var archivedRevision = Assert.Single(archivedInventory.Revisions);
+        Assert.Equal(archivedContent.SkillId, archivedRevision.SkillId);
+        Assert.Equal(archivedContent.Revision, archivedRevision.Revision);
+        Assert.Equal(archivedContent.ContentDigest, archivedRevision.ContentDigest);
+        var archivedAssignment = Assert.Single(archivedInventory.Assignments);
+        Assert.Equal(archivedContent.SkillId, archivedAssignment.SkillId);
+        Assert.True(archivedAssignment.Enabled);
+        Assert.Equal(archivedContent.Revision, archivedAssignment.Revision);
+        Assert.Equal(archivedContent.ContentDigest, archivedAssignment.ContentDigest);
+        Assert.Null(archivedInventory.NextCursor);
+        var archivedInventoryJson = JsonSerializer.Serialize(archivedInventory).ToLowerInvariant();
+        Assert.DoesNotContain("archived project-only instructions", archivedInventoryJson);
+        Assert.DoesNotContain("archived secret resource", archivedInventoryJson);
+        Assert.DoesNotContain("objectkey", archivedInventoryJson);
+        Assert.DoesNotContain($"projects/{setup.Project.ProjectId}/skills/".ToLowerInvariant(), archivedInventoryJson);
     }
 
     [Fact]
