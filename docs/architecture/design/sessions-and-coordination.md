@@ -288,6 +288,7 @@ stateDiagram-v2
     state "Interrupted" as Interrupted
     [*] --> Running
     Running --> Fenced: suspend requested
+    Running --> Interrupted: required owner transport unavailable (503; no fence claim)
     Running --> Reconciling: provider suspend or relocation event
     Reconciling --> Fenced: reconcile and fence
     Reconciling --> Interrupted: consistency not established
@@ -300,6 +301,7 @@ stateDiagram-v2
     Committed --> Suspended: placement released
     Suspended --> Validating: resume requested
     Interrupted --> Validating: recovery requested
+    Interrupted --> Validating: new operation after required transport becomes available
     Validating --> EnvironmentReady: manifest references agree
     Validating --> Interrupted: generation or reference mismatch
     EnvironmentReady --> NetworkReady: restore or reprovision and verify egress
@@ -357,6 +359,33 @@ pod state or treat a message acknowledgment as a completed command.
 A guest-snapshot adapter is enabled only after a public-preview Azure Blob capture and
 restore, warm-pool claim restore, and startup-budget checks. It is not a 1.0 cutover
 prerequisite ([R3](../decisions/0001-platform-architecture.md#risk-register)).
+
+With the 019 schema extension active, authorized Core routes fail closed while a real
+AgentHost drain/checkpoint/restore transport and current egress proof are unavailable.
+They persist the attempt in the existing execution-operation ledger and an immutable
+`Interrupted` manifest, then return `503`; they do not claim that the session was
+suspended, advance the Core execution fence, or dispatch a resumed turn. The manifest
+records the actual positive owner fence separately from its nullable `coreExecutionFence`,
+and lists missing evidence rather than substituting a zero fence. An exact retry replays
+the same operation and manifest. If the schema extension or an integrity-checked source
+manifest is unavailable, the route returns an explicit `503` without claiming a durable
+operation.
+
+Each suspend/resume operation reserves its own non-empty `reserved_manifest_id` in the
+operation row when the owner records the intent. The reservation is immutable and the
+terminal manifest must use that exact ID. Before a host freezes its queue, the internal
+require-current check compares its registration binding, current Projects authority,
+accepted-selection hash, owner fence, operation, and phase version with the stored
+`fenced` operation. This check needs the reservation, not a terminal manifest or
+manifest hash; the terminal manifest is checked only after the required evidence exists.
+Workspace `DataGeneration` may be zero for a new volume; the Storage references must
+still match, and a suspended manifest still needs an exact tree hash or provider
+checkpoint.
+
+The internal runtime suspend check is registered only when
+`Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress` configures the runtime owner.
+Without that optional owner, the host still starts and public suspend/resume routes retain their unavailable behavior.
+The internal runtime check is not mapped; no replacement registration authority is installed.
 
 ## Session tree and status
 

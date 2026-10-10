@@ -75,21 +75,68 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             }
         }
         var historyBefore = await ReadMigrationHistoryAsync(version);
-        if (version < migrations.Length)
-            await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
-        else
-            await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await AssertMigration19SchemaAsync();
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await AssertMigration19SchemaAsync();
         Assert.Equal(historyBefore, await ReadMigrationHistoryAsync(version));
         await using var verifyConnection = await fixture.DataSource.OpenConnectionAsync();
         await using var verify = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".coordination_schema_migrations
             """, verifyConnection);
-        Assert.Equal(15L, await verify.ExecuteScalarAsync());
+        Assert.Equal(16L, await verify.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task RejectsUnregisteredSchemaVersion()
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (999)
+            """, connection))
+            await command.ExecuteNonQueryAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
+    private async Task AssertMigration19SchemaAsync()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 19),
+                to_regclass(@manifests) IS NOT NULL,
+                (SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = @schema AND table_name = 'coordination_execution_operations'
+                  AND column_name IN (
+                      'owner_execution_fence', 'reserved_manifest_id', 'operation_phase',
+                      'phase_version', 'progress')),
+                (SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid = to_regclass(@operations) AND tgname = 'coordination_execution_operations_suspend_resume_phase'
+                   AND NOT tgisinternal),
+                (SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid = to_regclass(@manifests) AND tgname IN (
+                    'session_consistency_manifests_immutable', 'session_consistency_manifests_no_truncate')
+                   AND NOT tgisinternal)
+            """, connection);
+        command.Parameters.AddWithValue("schema", _schema);
+        command.Parameters.AddWithValue("manifests", $"{_schema}.session_consistency_manifests");
+        command.Parameters.AddWithValue("operations", $"{_schema}.coordination_execution_operations");
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1L, reader.GetInt64(0));
+        Assert.True(reader.GetBoolean(1));
+        Assert.Equal(5L, reader.GetInt64(2));
+        Assert.Equal(1L, reader.GetInt64(3));
+        Assert.Equal(2L, reader.GetInt64(4));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version)
