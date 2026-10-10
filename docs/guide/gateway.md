@@ -19,15 +19,28 @@ configured audience before forwarding the original bearer token to the owning AP
 validation; it is not an identity or role claim. The owner remains authoritative for
 current project membership, role, binding, and operation-specific checks.
 
-The Skills and marketplace routes use that same Projects & Config forwarder:
-source list/create/update/tombstone, pinned source browse, Skills preview and
-project import, and project skill assignment. The Gateway preserves the owner's
-status and JSON body and forwards the bearer and optional tenant selector. Preview
-and import bodies are each limited to 3 MiB. Marketplace browse requires the
-`expectedSourceRevision` query value; source tombstone requires `expectedRevision`.
+The Skills and marketplace routes use the Projects & Config forwarder. They
+manage sources, browse pinned sources, preview and import Skills, and update
+project assignments. They also read project skill inventory as metadata. The
+Gateway preserves the owner's status and JSON body. It forwards the bearer and
+optional tenant selector. Preview and import bodies are each limited to 3 MiB.
+Marketplace browse requires the `expectedSourceRevision` query value. Source
+tombstone requires `expectedRevision`.
 These are the only required query values added by these routes. The current public
 contract does not provide runtime-loaded status or a Marketplace selected-content
 preview that returns the pinned manifest and resources.
+
+`GET /api/v1/projects/{projectId}/skills` forwards optional `cursor` and
+`pageSize` values to the Projects owner. The owner defaults page size to 25 and
+accepts values from 1 through 50. Its opaque cursor uses stable keyset order by
+skill ID in C collation, ascending, then revision descending. This order does not
+create a snapshot across pages. Repeated or unknown query keys, invalid cursors,
+and page sizes outside 1 through 50 return the owner's `400` response. The owner
+requires current `api.read`, `projects.admin`, active tenant membership, and
+TenantAdmin or project Owner authority. The owner rechecks authority after the
+read and permits archived projects. Gateway responses use `Cache-Control: no-store`.
+The Gateway does not infer this access.
+The returned metadata does not prove that a runtime loaded a skill.
 
 ### Browser CORS
 

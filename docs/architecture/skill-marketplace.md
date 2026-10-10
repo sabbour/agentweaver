@@ -73,6 +73,26 @@ sequenceDiagram
 | `GET /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/browse?expectedSourceRevision={n}&query={text}&page={n}&pageSize={n}` | Browse a pinned source revision. `query`, `page`, and `pageSize` are optional. |
 | `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview` | Preview selected bytes from `expectedSourceRevision`, `resolvedCommitSha`, and `selectedPath`. |
 | `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import` | Import selected bytes with the previewed `expectedContentDigest`, an `idempotencyKey`, and optional `skillId` plus `expectedRevision`. |
+| `GET /api/projects/{projectId}/skills?cursor={cursor}&pageSize={n}` | Read the current project skill inventory and retained revision metadata. Both query values are optional. |
+
+The skill inventory is a separate current-admin read. It requires `api.read`,
+`projects.admin`, active membership in the current tenant, and current
+TenantAdmin or project Owner authority. The owner rechecks authority after the
+read and permits archived projects. Invalid cursors, page sizes outside 1–50,
+repeated keys, and unknown query keys return `400`. Invalid authentication
+returns `401`. A viewer or an administrator with lost or revoked access receives
+`403`. The owner returns `404` for a foreign project or inactive or stale
+membership.
+
+Gateway responses use `Cache-Control: no-store`.
+
+The default page size is 25. The cursor is opaque and uses unpadded Base64URL.
+It binds the project and page size. The cursor sorts skill IDs in C collation,
+ascending. It sorts revisions in descending order within each skill. This order
+does not create a snapshot across pages. The page contains the current
+configuration revision, assignments, retained revision metadata, page size, and
+next cursor. It does not contain skill bytes, object keys, or a revocation
+reason. It does not prove that a runtime loaded an assigned skill.
 
 Create accepts `{ "name": "Team skills", "repository": "owner/repository",
 "requestedRef": "main", "subpath": "skills" }`; `name`, `requestedRef`, and
@@ -159,10 +179,13 @@ Errors use Problem Details with a stable `code`:
 | `504` | Request timed out. |
 
 The checked-in v1 Gateway catalog maps source list/create/update/tombstone,
-pinned browse, Skills preview/import, and project assignment to these Projects
-owner paths. Its OpenAPI contract includes the owner DTOs, exact required source
-revision query values, and 3 MiB limits for preview/import. The first-party MCP
-catalog is built from that same OpenAPI document.
+pinned browse, Skills preview/import, project assignment, and metadata-only
+inventory reads to these Projects owner paths. Its OpenAPI contract includes the
+owner DTOs, exact required source revision query values, optional inventory
+cursor/page-size parameters with their bounds, and 3 MiB limits for
+preview/import. The first-party MCP catalog is built from that same OpenAPI
+document. The Gateway remains a forwarder; these contracts do not prove a joined
+or deployed owner implementation.
 
 The retained Web project settings page uses those routes for source management
 and pinned browse. It supports local file preview/import and assignment to agents
