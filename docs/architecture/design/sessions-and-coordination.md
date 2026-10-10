@@ -356,6 +356,22 @@ recovery path passes manifest validation. The status snapshot exposes which reco
 are preserved and which in-flight action might repeat. It does not infer safety from
 pod state or treat a message acknowledgment as a completed command.
 
+Environment's provider-lifecycle report store is a separate, owner-locked source
+candidate. It binds report reservations to the exact active Sandbox lease, provider,
+resource, Environment lifecycle generation, lease revision, provider/current fence,
+and provider-reported timestamp; identical event retries retain the same pending
+operation key and report time, while conflicting or stale bindings fail. The Core
+execution fence remains null unless supplied by an admitted Core owner response. No
+provider identity producer or Core interruption command is currently admitted, so the
+protected HTTP route returns unavailable without calling the store or Core. These
+records do not establish a flushed workspace, mutate workspace or network generations,
+release placement, or make a run resume-ready.
+
+The current Environment report source is only the durable reservation portion of this
+protocol. It stores exact lease-bound reports as `Pending`; without a verified Core
+command/actor/fence, it cannot mark them `Interrupted` or `Reconciled`, release a
+placement, or authorize recovery. The public source route currently fails closed.
+
 A guest-snapshot adapter is enabled only after a public-preview Azure Blob capture and
 restore, warm-pool claim restore, and startup-budget checks. It is not a 1.0 cutover
 prerequisite ([R3](../decisions/0001-platform-architecture.md#risk-register)).

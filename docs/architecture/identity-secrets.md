@@ -47,6 +47,129 @@ The adapter requests the exact Key Vault version. A returned credential expires 
 
 No secret-redemption grant-management HTTP endpoint exists. Read [contracts and endpoints](../reference/contracts) for the implemented route list and [configuration](../reference/contracts#identity-host-configuration) for host keys.
 
+## Remote MCP OAuth source boundary
+
+The Broker source candidate defines an Identity-owned connection binding for the
+authenticated human, tenant, project, stable connection ID, Environment
+configuration revision and digest, opaque Identity binding reference, canonical
+HTTPS endpoint and resource, issuer, client ID, redirect URI, installed MCP
+transport profile, and canonical scopes. Each provider configuration also names
+the exact approved resource URIs, OAuth endpoints, and scopes. Consent state binds that snapshot and its
+connection revision to a short-lived correlation ID. It stores only a hash of
+the random state, the S256 challenge, and a protected verifier `SecretRef`
+identifier/version; it does not persist the raw state, verifier, access token,
+or refresh token. Connection credentials are represented only by protected
+secret references and provider expiry metadata.
+
+The lifecycle state transitions cover single-use callback claiming and
+completion, binding and expiry checks, refresh-attempt and credential-revision
+compare-and-swap outcomes, and disconnect/revocation state. The Broker source
+implements these transitions through its bearer-authenticated, no-store
+status, consent-preparation, callback, refresh, and disconnect paths; this does
+not establish deployment or a project-settings consent-start flow. These paths
+recheck the owner's current Projects authorization and the current Environment
+configuration. Consent preparation
+links Identity's opaque reference to the exact Environment revision and digest,
+re-reads that pin, then fetches metadata only for the exact configured resource
+and issuer. It rejects redirects, bounds metadata responses, and validates the
+resource, issuer, scopes, S256/code profile, and exact operator-approved OAuth
+endpoints. It returns a constructed authorization URI and stores only a
+protected verifier reference and correlation state; the web application uses a
+same-origin popup callback page to relay either the code or the bounded
+`access_denied` result to its opener. The Gateway forwards only that callback
+shape with the current user's bearer to Identity. Identity rechecks the current
+provider client, redirect, resource, and scope approvals, Projects authority,
+and Environment configuration, then claims the callback once and redeems the
+protected verifier. Identity exchanges only a code at the metadata-approved
+token endpoint and closes a provider-cancelled consent without treating it as
+authorization. It stores
+returned access and refresh tokens only as protected `SecretRef` versions and
+publishes them with connection and credential revision checks. A timeout or
+secret-store failure after a possible provider request resolves the callback
+claim as uncertain rather than making the code reusable. Projects authorization
+and Environment configuration use separate configured owner addresses;
+Environment requests are not routed through Projects.
+Status redacts credential references and always reports credential use
+unavailable. Disconnect requires the expected connection, credential, and
+configuration revisions; it clears the stored references through a
+revision-guarded update, but does not delete secret versions or revoke tokens at
+the provider.
+
+Refresh requires expected connection, credential, and configuration revisions.
+Identity claims a durable refresh lease before redeeming the exact refresh-token
+version. It rechecks Projects authority and the Environment binding after each
+provider or secret-store wait, then commits new SecretRefs with a revision
+compare-and-swap. Provider rejection clears local credentials and marks the
+connection revoked. A timeout, store failure after provider exchange, or stale
+lease after restart marks the connection indeterminate; Identity does not retry
+a refresh token that the provider may have consumed.
+
+The Identity package also validates supplied protected-resource and
+authorization-server metadata against the bound resource, issuer, requested
+scopes, S256/code profile, and an explicit endpoint list. It can construct the
+corresponding authorization URI from the bound redirect/resource/scopes and
+short-lived PKCE material. These helpers perform no discovery HTTP, do not
+grant authority to the endpoint list, and are not called by a browser redirect
+route.
+
+The web client has a typed management API and a callback relay, but no project
+settings flow yet starts consent or owns the pending connection state. Provider
+revocation and purpose-bound credential delivery to MCP requests are not wired
+in this source slice.
+No deployed OAuth consent or remote MCP credential use is established. The
+following flow describes the implemented management and callback boundary:
+
+```mermaid
+sequenceDiagram
+    actor Human
+    participant Broker as Identity Broker
+    participant Projects as Projects authorization owner
+    participant Environment as Environment configuration owner
+    participant MCP as Remote MCP server
+    participant IdP as Configured OAuth issuer
+    Human->>Broker: GET status or POST consent/refresh/disconnect
+    Broker->>Broker: Resolve connection owned by authenticated subject
+    Broker->>Projects: Recheck current ReadProjects or WriteProjects authority
+    Projects-->>Broker: Current project authority
+    Broker->>Environment: Read current connection snapshot and immutable configuration
+    Environment-->>Broker: Current configuration revision and pins
+    alt Consent preparation
+        Broker->>Environment: Link opaque Identity reference with revision and digest CAS
+        Environment-->>Broker: Final immutable revision, digest, and receipt
+        Broker->>Environment: Re-read final revision and current head
+        Environment-->>Broker: Confirmed binding pins
+        Broker->>MCP: Fetch protected-resource metadata without redirects
+        MCP-->>Broker: Resource and approved authorization-server issuer
+        Broker->>IdP: Fetch issuer metadata without redirects
+        IdP-->>Broker: Exact approved endpoints and S256/code profile
+        Broker->>Broker: Build authorization URI; persist state hash and protected verifier reference
+        Broker-->>Human: Authorization URI; caller controls browser navigation
+    else Callback with code and state
+        Web-->>Web: Same-origin popup relay; clear callback query
+        Web->>Gateway: Send only code and state with current bearer
+        Gateway->>Broker: Forward exact callback body and bearer
+        Broker->>Broker: Claim correlation; recheck authority and configuration
+        Broker->>IdP: Exchange code with PKCE verifier and exact resource/redirect
+        IdP-->>Broker: Access and optional refresh token response
+        Broker->>Broker: Write protected secret versions; commit only current binding by CAS
+        Broker-->>Web: Redacted owner status
+    else Disconnect with expected revisions
+        Broker->>Broker: CAS connection and credential revisions; clear SecretRefs
+        Broker-->>Human: Disconnected status; no credential-use authority
+    else Refresh with expected revisions
+        Broker->>Broker: CAS durable refresh lease
+        Broker->>Projects: Recheck current WriteProjects authority
+        Broker->>Environment: Recheck exact configuration revision and resource
+        Broker->>IdP: Exchange refresh token at the approved token endpoint
+        IdP-->>Broker: New access and optional rotated refresh token
+        Broker->>Broker: Store protected SecretRefs and CAS current claim
+        Broker-->>Human: Authorized status or explicit indeterminate result
+    else Status
+        Broker-->>Human: Redacted status; credential use unavailable
+    end
+    Note over Broker,Environment: Provider revocation, MCP credential use, and deployed behavior remain unavailable
+```
+
 ## GitHub connections are separate integrations
 
 Core sign-in, GitHub Copilot credentials, and GitHub App repository credentials have

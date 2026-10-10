@@ -1,5 +1,98 @@
 # Errors
 
+## [ERR-20261010-004] oauth-drift-regression-fixture
+
+**Logged**: 2026-10-10T09:35:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The new callback provider-drift test fixture omitted the secret redemption fake.
+
+### Error
+```text
+Expected remote_mcp_oauth_provider_unapproved; received remote_mcp_secret_store_unavailable.
+```
+
+### Context
+- The callback path requires both the secret writer and redemption interfaces before provider validation.
+- The test was intended to prove provider configuration drift fails before metadata requests or secret redemption.
+
+### Suggested Fix
+Pass the controlled secret fake as both writer and redeemer when constructing the callback service.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/Agentweaver.Identity.Broker.Tests/RemoteMcpOAuthConsentPreparationTests.cs
+
+### Resolution
+- **Resolved**: 2026-10-10T09:36:00-07:00
+- **Notes**: The callback fixture now supplies the existing fake for redemption; all nine drift regressions pass.
+
+## [ERR-20261010-003] remote-mcp-secret-failure-test-expectations
+
+**Logged**: 2026-10-10T09:05:00-07:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+OAuth failure/CAS tests exposed stale expectations and an unmapped provider timeout.
+
+### Error
+```text
+Secret-write failure expected credential revision +1 but persisted +2.
+Refresh authority-loss expected RuntimeAuthorizationException but received remote_mcp_owner_denied.
+Read-only stale-refresh recovery was denied by a fixture that granted only one permission at a time.
+Refresh response loss expected a 503 management error but received TaskCanceledException.
+```
+
+### Context
+- Ran the focused secret-write tests, durable refresh CAS/authority tests, then the full OAuth Broker DB test class.
+- Consent start and terminal failure each advance the credential revision.
+- The management service maps owner-denied responses to RemoteMcpOAuthManagementException (403).
+- Provider-only cancellation persisted the indeterminate state but was rethrown without the expected management error.
+
+### Suggested Fix
+Keep the persisted CAS outcomes, correct the fixture and public error expectations, and map provider timeout to an explicit unavailable response while preserving caller cancellation.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/Agentweaver.Identity.Broker.Tests/RemoteMcpOAuthConsentPreparationTests.cs
+
+### Resolution
+- **Resolved**: 2026-10-10T09:11:00-07:00
+- **Notes**: Added callback and refresh secret-write persistence coverage, corrected permission/error expectations, and mapped provider-only refresh timeout. The full OAuth Broker DB test class passed 20/20.
+
+## [ERR-20261010-002] guessed-source-file-path
+
+**Logged**: 2026-10-10T08:51:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+A file read used an assumed Broker filename that does not exist.
+
+### Error
+```text
+Path services/identity/Agentweaver.Identity.Broker/RuntimeModelCredentialEndpoints.cs does not exist.
+```
+
+### Context
+- The feature is implemented in the existing `RuntimeCredentialEndpoints.cs`.
+- A targeted file search found the actual endpoint file.
+
+### Suggested Fix
+Locate source files by symbol search or glob before reading an assumed path.
+
+### Metadata
+- Reproducible: no
+- Related Files: services/identity/Agentweaver.Identity.Broker/RuntimeCredentialEndpoints.cs
+
+---
+
 ## [ERR-20261009-001] podman-smoke-powershell-helper
 
 **Logged**: 2026-10-09T00:36:00-07:00
@@ -695,5 +788,35 @@ Avoid a duplicate consent-driven token flow; reuse the run-bound token from the 
 ### Resolution
 - **Resolved**: 2026-10-08T17:24:00-07:00
 - **Notes**: Removed the duplicate consent token issuance and verified Broker consent/redemption through the integrated browser flow.
+
+---
+
+## [ERR-20261010-001] web-test-dependency-restore
+
+**Logged**: 2026-10-10T15:23:00Z
+**Priority**: low
+**Status**: pending
+**Area**: tests
+
+### Summary
+The focused Web test command could not load Vitest because `apps/web` dependencies were not installed.
+
+### Error
+```
+Could not resolve 'vitest/config' or '@vitejs/plugin-react'; package 'vitest' was not found.
+```
+
+### Context
+- Ran focused Vitest tests from `apps/web`.
+- Then ran `npm ci` from the repository root instead of `apps/web`; it failed because the lockfile is in `apps/web/package-lock.json`.
+- No package manifest or lockfile was changed.
+
+### Suggested Fix
+Run `npm ci` from `apps/web`, then rerun the focused Web tests and typecheck.
+
+### Metadata
+- Reproducible: yes
+- Related Files: apps/web/package.json, apps/web/package-lock.json
+- Tags: web, vitest, dependency-restore
 
 ---
