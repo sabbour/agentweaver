@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Identity.Broker;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Identity.Broker.Migrations
 {
     [DbContext(typeof(IdentityBrokerDbContext))]
-    partial class IdentityBrokerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261010145233_AddRemoteMcpOAuthClientId")]
+    partial class AddRemoteMcpOAuthClientId
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -435,12 +438,6 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
-                    b.Property<string>("AuthorizationEndpointUri")
-                        .IsRequired()
-                        .HasMaxLength(2048)
-                        .HasColumnType("character varying(2048)")
-                        .HasColumnName("authorization_endpoint_uri");
-
                     b.Property<string>("BindingHash")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -497,12 +494,6 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .HasColumnType("character(64)")
                         .HasColumnName("state_hash")
                         .IsFixedLength();
-
-                    b.Property<string>("TokenEndpointUri")
-                        .IsRequired()
-                        .HasMaxLength(2048)
-                        .HasColumnType("character varying(2048)")
-                        .HasColumnName("token_endpoint_uri");
 
                     b.Property<string>("VerifierSecretId")
                         .IsRequired()

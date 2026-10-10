@@ -78,6 +78,12 @@ continues to enforce the configured Environment audience for both routes.
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands` | Resolve the accepted Core checkpoint, reserve its immutable command intent, and execute the stable BuildTest operation. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}` | Read the exact persisted operation under the current owner and Sandbox binding. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}/reconcile` | Reconcile the same operation and immutable intent; do not create a replacement operation. |
+| `POST /internal/provider-lifecycle/reports` | Provider report route. It fails closed until provider identity authentication and Core interruption acknowledgement are admitted. |
+
+Provider lifecycle reports have a durable idempotent contract and lease/fence
+reconciliation, but the mapped report route currently returns unavailable until
+provider identity authentication and the Core interruption command are admitted. This
+source does not claim end-to-end suspend, relocation, or resume.
 
 Both v1 placement routes use the owner-scoped `ISandboxLeaseStore.GetCurrentAsync`
 callback overload under the exact active Environment owner fence. The public

@@ -171,6 +171,74 @@ public static class GatewayEndpoints
                     forwardLinkCookie: false,
                     cancellationToken: cancellationToken));
 
+        var remoteMcpConnections = endpoints.MapGroup("/api/connections/remote-mcp/v1")
+            .RequireAuthorization()
+            .RequireCors(GatewayWebCors.CopilotConnectionsPolicyName);
+        remoteMcpConnections.MapPost(
+            "/register",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "POST", "/internal/connections/remote-mcp/register",
+                    hasJsonBody: true,
+                    forwardTenantSelector: true,
+                    forwardCookieName: null,
+                    cookieErrorCode: "remote_mcp_callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        remoteMcpConnections.MapGet(
+            "/{connectionId:guid}",
+            (Guid connectionId, HttpContext context, GatewayOwnerClient owner,
+                CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "GET", $"/internal/connections/remote-mcp/{connectionId:D}",
+                    hasJsonBody: false,
+                    forwardTenantSelector: true,
+                    forwardCookieName: null,
+                    cookieErrorCode: "remote_mcp_callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        remoteMcpConnections.MapPost(
+            "/{connectionId:guid}/consent",
+            (Guid connectionId, HttpContext context, GatewayOwnerClient owner,
+                CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "POST", $"/internal/connections/remote-mcp/{connectionId:D}/consent",
+                    hasJsonBody: true,
+                    forwardTenantSelector: true,
+                    forwardCookieName: null,
+                    cookieErrorCode: "remote_mcp_callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        remoteMcpConnections.MapPost(
+            "/{connectionId:guid}/refresh",
+            (Guid connectionId, HttpContext context, GatewayOwnerClient owner,
+                CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "POST", $"/internal/connections/remote-mcp/{connectionId:D}/refresh",
+                    hasJsonBody: true,
+                    forwardTenantSelector: true,
+                    forwardCookieName: null,
+                    cookieErrorCode: "remote_mcp_callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        remoteMcpConnections.MapPost(
+            "/callback",
+            (HttpContext context, GatewayOwnerClient owner, CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "POST", "/internal/connections/remote-mcp/callback",
+                    hasJsonBody: true,
+                    forwardTenantSelector: true,
+                    forwardCookieName: null,
+                    cookieErrorCode: "remote_mcp_callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+        remoteMcpConnections.MapPost(
+            "/{connectionId:guid}/disconnect",
+            (Guid connectionId, HttpContext context, GatewayOwnerClient owner,
+                CancellationToken cancellationToken) =>
+                owner.ProxyIdentityBrokerApiAsync(
+                    context, "POST", $"/internal/connections/remote-mcp/{connectionId:D}/disconnect",
+                    hasJsonBody: true,
+                    forwardTenantSelector: true,
+                    forwardCookieName: null,
+                    cookieErrorCode: "remote_mcp_callback_cookie_invalid",
+                    cancellationToken: cancellationToken));
+
         foreach (var route in GatewayRouteCatalog.Routes)
         {
             RouteHandlerBuilder endpoint;
