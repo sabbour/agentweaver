@@ -374,6 +374,11 @@
       ]
     },
     {
+      "consumer": "Agentweaver.Projects.Config",
+      "dependency": "Agentweaver.ObjectStore.AzureBlob",
+      "versions": ["0.0.0"]
+    },
+    {
       "consumer": "Agentweaver.Environment",
       "dependency": "Agentweaver.Abstractions",
       "versions": [

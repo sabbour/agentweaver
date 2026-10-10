@@ -710,6 +710,7 @@ Identity verifies the separate purpose-bound nonce for those operations.
 | --- | --- |
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations` | Accepts only `EnvironmentId` and `ProfileId`. Derives model, optional exact model `SecretRef`, agent, turn, selection, fence, lease, provider, and endpoint pins from current owners. |
 | `GET /internal/runtime/registrations/{runtimeInstanceId}` | Revalidates the active session/work item, accepted selection, current lease/profile, and registration revision. A raw storage read is not authorization. |
+| `GET /internal/runtime/registrations/{runtimeInstanceId}/skills` | Revalidates the current registration and accepted run selection, then returns only the enabled skill revisions assigned to its active agent, with exact instructions, resources, digests, and registration binding. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Public Environment control read. Requires current `WriteProjects`; returns the exact active, unexpired, owner-fenced lease projection. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Internal run-bound placement read. Uses existing current `ReadRunSelection` for the exact signed run. Its additive `providerPin` records the actual successful consumer's provider, adapter/options revisions, resource generation, and negotiated capabilities, without option values or recovery metadata. Does not grant public write permission. |
 | `GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}` | Uses the canonical manager's retained lease callback to read current Orchestrator context and match a registered profile to the exact placement. Requires current run-bound `ReadRunSelection`. |
@@ -949,3 +950,28 @@ Run a non-mutating summary with `node scripts/azure/deploy.mjs` and reviewed tar
 The Foundation Probe Job reports its resource-operation results, but it does not attest to its own pod identity, pulled image, or exit status. The separate read-only consumer observes the completed Job and pod, checks their ownership and workload-identity projection, and verifies that both the Job image and observed pulled image match the expected registry manifest.
 
 The consumer validates the native probe receipt against the admitted source SHA, Git tree, deployment, identity, and target. It then queries Azure Monitor only after Job completion and requires fresh `AppDependencies` or `AppRequests` evidence correlated by source SHA, Git tree, nonce, trace, and span. Configuration checks do not substitute for this runtime proof; incomplete or mismatched evidence remains blocked. Local fixtures validate the consumer contract but do not prove a live deployment.
+
+## Project skill content
+
+Projects & Config validates skill markdown and text resources before storage.
+`POST /api/skills/preview` returns a content digest without storing the upload.
+`POST /api/projects/{projectId}/skills/import` stores a new immutable revision
+and returns its receipt. The request supplies the expected digest, an idempotency
+key, and optional expected revision and source provenance. A repeated key with
+different request data or a stale revision returns a conflict.
+
+`PUT /api/projects/{projectId}/skills/{skillId}/assignment` appends a project
+configuration revision. An enabled `SkillCatalogSetting` includes the exact
+`revision`, lowercase SHA-256 `contentDigest`, and non-empty `agentIds` assigned
+to current project cast agents. `POST
+/api/projects/{projectId}/skills/{skillId}/revisions/{revision}/revoke` permanently
+revokes that immutable revision. `GET
+/api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` returns the
+accepted content only after current Orchestrator authority and run binding checks.
+It does not grant tool or runtime permission.
+
+The uploaded `SKILL.md` and bundled resources are stored as one immutable object.
+Configure `ProjectsConfig:SkillContent:ContainerUri` with an explicit HTTPS
+container URI and grant the Projects Config workload identity Blob Data Contributor
+on that container only. Missing storage configuration or missing/corrupt objects
+fail closed.

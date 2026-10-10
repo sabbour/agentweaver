@@ -58,6 +58,7 @@ const projectReferences = new Map([
   ['Agentweaver.Projects.Config', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
     '..\\..\\..\\packages\\Agentweaver.Providers\\Agentweaver.Providers.csproj',
+    '..\\..\\..\\packages\\Agentweaver.ObjectStore.AzureBlob\\Agentweaver.ObjectStore.AzureBlob.csproj',
   ]],
   ['Agentweaver.Environment', [
     '..\\..\\..\\packages\\Agentweaver.Abstractions\\Agentweaver.Abstractions.csproj',
