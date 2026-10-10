@@ -1,7 +1,11 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Agentweaver.Providers;
+using Agentweaver.Providers.Sandbox.AgentSandbox;
 using Npgsql;
 using static Agentweaver.Environment.Tests.SandboxBuildTestCommandContractTests;
 
@@ -10,6 +14,200 @@ namespace Agentweaver.Environment.Tests;
 public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentPostgresFixture database)
     : IClassFixture<EnvironmentPostgresFixture>
 {
+    [Fact]
+    public async Task PublicManagerExecutionAndRestartReconciliationPersistProgressWithoutRepeatingEffects()
+    {
+        var fixture = await CreateManagerFixtureAsync();
+        var result = await fixture.ExecuteAsync();
+
+        Assert.False(result.Replayed);
+        Assert.Equal(SandboxBuildTestOperationStatus.Running, result.Operation.Status);
+        Assert.NotNull(result.Operation.Pod);
+        Assert.NotEqual("pending", result.Operation.ExpectedCommandPolicy.PolicyUid);
+        Assert.Equal(1, fixture.Provider.Creates);
+        Assert.Equal(1, fixture.Provider.GateReleases);
+        Assert.True(fixture.Projects.AuthorizationReads > 1);
+        Assert.True(fixture.Projects.SelectionReads > 1);
+        var reserved = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+        Assert.NotNull(reserved);
+        Assert.Contains("command-policy:create", reserved.AttemptedEffects);
+        Assert.Contains("command-pod:create", reserved.AttemptedEffects);
+        Assert.Contains("command-pod:gate-released", reserved.AttemptedEffects);
+
+        var replay = await fixture.ExecuteAsync();
+        Assert.True(replay.Replayed);
+        Assert.True(JsonElement.DeepEquals(
+            JsonSerializer.SerializeToElement(result.Operation),
+            JsonSerializer.SerializeToElement(replay.Operation)));
+        Assert.Equal(1, fixture.Provider.Creates);
+        Assert.Equal(1, fixture.Provider.GateReleases);
+
+        fixture.Provider.Complete = true;
+        await using var restartedDataSource = database.CreateDataSource("buildtest-manager-restarted");
+        var restarted = fixture.CreateManager(new EnvironmentSandboxBuildTestCommandStore(
+            restartedDataSource, TimeProvider.System));
+        var completed = await restarted.ReconcileAsync(
+            fixture.Caller, fixture.Owner.ProjectId, fixture.Owner.RunId, fixture.Owner.EnvironmentId,
+            fixture.Command.OperationId, fixture.Request, CancellationToken.None);
+        Assert.True(completed.Replayed);
+        Assert.Equal(SandboxBuildTestOperationStatus.Completed, completed.Operation.Status);
+        Assert.Equal(0, completed.Operation.Terminal!.ExitCode);
+        Assert.Equal(result.Operation.Pod!.Uid, completed.Operation.Terminal.SourcePodUid);
+        Assert.Equal(1, fixture.Provider.Creates);
+        Assert.Equal(1, fixture.Provider.GateReleases);
+        var observations = fixture.Provider.Observations;
+        var terminalReplay = await restarted.ReconcileAsync(
+            fixture.Caller, fixture.Owner.ProjectId, fixture.Owner.RunId, fixture.Owner.EnvironmentId,
+            fixture.Command.OperationId, fixture.Request, CancellationToken.None);
+        Assert.True(JsonElement.DeepEquals(
+            JsonSerializer.SerializeToElement(completed.Operation),
+            JsonSerializer.SerializeToElement(terminalReplay.Operation)));
+        Assert.Equal(observations, fixture.Provider.Observations);
+        var persisted = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+        Assert.NotNull(persisted);
+        Assert.Equal(SandboxBuildTestOperationStatus.Completed, persisted.Operation.Status);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PublicManagerRejectsDeniedAuthorityAndStaleBindingBeforeAnyCommandEffect(bool staleBinding)
+    {
+        var fixture = await CreateManagerFixtureAsync();
+        if (staleBinding)
+        {
+            var request = fixture.Request with
+            {
+                ExpectedBinding = fixture.Request.ExpectedBinding with
+                {
+                    SandboxResource = fixture.Request.ExpectedBinding.SandboxResource with
+                    {
+                        Generation = fixture.Request.ExpectedBinding.SandboxResource.Generation + 1
+                    }
+                }
+            };
+            var failure = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+                fixture.ExecuteAsync(request));
+            Assert.Equal("sandbox_binding_stale", failure.Code);
+        }
+        else
+        {
+            fixture.Projects.CanWrite = false;
+            var failure = await Assert.ThrowsAsync<ProjectsConfigApiException>(() => fixture.ExecuteAsync());
+            Assert.Equal("project_write_not_authorized", failure.Code);
+            Assert.Equal(0, fixture.Projects.SelectionReads);
+        }
+
+        Assert.Equal(0, fixture.Provider.Creates);
+        Assert.Equal(0, fixture.Provider.GateReleases);
+        Assert.Equal(1, fixture.Policies.Creates);
+        Assert.Null(await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task PublicManagerRechecksAuthorityAfterPolicyCreationBeforeCreatingAPod()
+    {
+        var fixture = await CreateManagerFixtureAsync();
+        fixture.Policies.AfterCreate = () => fixture.Projects.CanWrite = false;
+
+        var failure = await Assert.ThrowsAsync<ProjectsConfigApiException>(() => fixture.ExecuteAsync());
+
+        Assert.Equal("project_write_not_authorized", failure.Code);
+        Assert.Equal(0, fixture.Provider.Creates);
+        Assert.Equal(0, fixture.Provider.GateReleases);
+        var persisted = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+        Assert.NotNull(persisted);
+        Assert.Contains("command-policy:create", persisted.AttemptedEffects);
+        Assert.DoesNotContain("command-pod:create", persisted.AttemptedEffects);
+        Assert.NotEqual("pending", persisted.Operation.ExpectedCommandPolicy.PolicyUid);
+    }
+
+    [Fact]
+    public async Task PublicManagerPersistsCheckpointStalenessBeforeTheNextProviderEffect()
+    {
+        var fixture = await CreateManagerFixtureAsync();
+        fixture.Policies.AfterCreate = () =>
+        {
+            var changed = fixture.Command with { Arguments = ["changed"] };
+            fixture.Verifier.Command = changed with { ImmutableHash = changed.ComputeImmutableHash() };
+        };
+
+        var result = await fixture.ExecuteAsync();
+
+        Assert.Equal(SandboxBuildTestOperationStatus.Stale, result.Operation.Status);
+        Assert.Equal("buildtest_checkpoint_stale", result.Operation.FailureCode);
+        Assert.Equal(0, fixture.Provider.Creates);
+        var persisted = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+        Assert.NotNull(persisted);
+        Assert.Equal(SandboxBuildTestOperationStatus.Stale, persisted.Operation.Status);
+        Assert.DoesNotContain("command-pod:create", persisted.AttemptedEffects);
+    }
+
+    [Fact]
+    public async Task PublicManagerKeepsAnUncertainPolicyAttemptForReconciliationWithoutCreatingAgain()
+    {
+        var fixture = await CreateManagerFixtureAsync();
+        fixture.Policies.FailNextCreate = true;
+        var failed = await fixture.ExecuteAsync();
+
+        Assert.Equal(SandboxBuildTestOperationStatus.ReconciliationRequired, failed.Operation.Status);
+        Assert.Equal("buildtest_policy_effect_unknown", failed.Operation.FailureCode);
+        Assert.Equal(0, fixture.Provider.Creates);
+        var persisted = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+        Assert.NotNull(persisted);
+        Assert.Contains("command-policy:create", persisted.AttemptedEffects);
+        var creates = fixture.Policies.Creates;
+
+        var unresolved = await fixture.CreateManager(Store()).ReconcileAsync(
+            fixture.Caller, fixture.Owner.ProjectId, fixture.Owner.RunId, fixture.Owner.EnvironmentId,
+            fixture.Command.OperationId, fixture.Request, CancellationToken.None);
+
+        Assert.True(unresolved.Replayed);
+        Assert.Equal(SandboxBuildTestOperationStatus.ReconciliationRequired, unresolved.Operation.Status);
+        Assert.Equal(creates, fixture.Policies.Creates);
+        Assert.Equal(0, fixture.Provider.Creates);
+        fixture.Policies.MakeLastAttemptVisible();
+        var recovered = await fixture.CreateManager(Store()).ReconcileAsync(
+            fixture.Caller, fixture.Owner.ProjectId, fixture.Owner.RunId, fixture.Owner.EnvironmentId,
+            fixture.Command.OperationId, fixture.Request, CancellationToken.None);
+        Assert.Equal(SandboxBuildTestOperationStatus.Running, recovered.Operation.Status);
+        Assert.Null(recovered.Operation.FailureCode);
+        Assert.Equal(creates, fixture.Policies.Creates);
+        Assert.Equal(1, fixture.Provider.Creates);
+        Assert.Equal(1, fixture.Provider.GateReleases);
+    }
+
+    [Fact]
+    public async Task PublicManagerReconciliationRetainsUncertainCommandCreationWithoutCreatingAgain()
+    {
+        var fixture = await CreateManagerFixtureAsync();
+        var running = await fixture.ExecuteAsync();
+        Assert.Equal(1, fixture.Provider.Creates);
+        var uncertain = fixture with { Provider = new ManagerCommandProvider() };
+        var manager = uncertain.CreateManager(Store());
+
+        var result = await manager.ReconcileAsync(
+            fixture.Caller, fixture.Owner.ProjectId, fixture.Owner.RunId, fixture.Owner.EnvironmentId,
+            fixture.Command.OperationId, fixture.Request, CancellationToken.None);
+
+        Assert.True(result.Replayed);
+        Assert.Equal(SandboxBuildTestOperationStatus.ReconciliationRequired, result.Operation.Status);
+        Assert.Equal("buildtest_command_pod_effect_unknown", result.Operation.FailureCode);
+        Assert.Equal(running.Operation.Pod!.Uid, result.Operation.Pod!.Uid);
+        Assert.Equal(0, uncertain.Provider.Creates);
+        Assert.Equal(0, uncertain.Provider.GateReleases);
+        var persisted = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+        Assert.NotNull(persisted);
+        Assert.Contains("command-pod:create", persisted.AttemptedEffects);
+        Assert.Equal(running.Operation.Pod.Uid, persisted.Operation.Pod!.Uid);
+        var unresolved = await manager.ReconcileAsync(
+            fixture.Caller, fixture.Owner.ProjectId, fixture.Owner.RunId, fixture.Owner.EnvironmentId,
+            fixture.Command.OperationId, fixture.Request, CancellationToken.None);
+        Assert.Equal("buildtest_command_pod_effect_unknown", unresolved.Operation.FailureCode);
+        Assert.Equal(0, uncertain.Provider.Creates);
+        Assert.Equal(0, uncertain.Provider.GateReleases);
+    }
+
     [Fact]
     public async Task ReservationTimestampMatchesPostgresPrecisionAndCanBeReadBack()
     {
@@ -348,6 +546,341 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
             Pod = null,
             Output = null
         };
+    }
+
+    // Projects responses and Kubernetes effects are controlled; owner bindings use real PostgreSQL.
+    private async Task<ManagerFixture> CreateManagerFixtureAsync()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var owner = new EnvironmentOwnerIdentity(
+            "tenant-" + suffix, "project-" + suffix, "run-" + suffix, "environment-" + suffix);
+        var lifecycle = database.CreateStore();
+        var fence = (await lifecycle.TransitionAsync(
+            new(owner, 0, EnvironmentLifecycleState.Active, "manager-register"), CancellationToken.None)).Snapshot.Fence;
+        const string volumeId = "workspace";
+        var specification = JsonSerializer.SerializeToElement(new WorkspaceVolumeSpec(
+            volumeId, owner.ProjectId, new(WorkspaceVolumeOwnerKind.Run, owner.RunId), owner.EnvironmentId,
+            WorkspaceVolumeBindingMode.Environment, WorkspaceVolumeAccessMode.ReadWriteMany, 8, "azure-files",
+            WorkspaceVolumeConsistency.Strict, WorkspaceVolumeReclaimPolicy.Delete,
+            WorkspaceVolumeOwnerDeletionPolicy.Retain, []));
+        await lifecycle.CreateWorkspaceVolumeAsync(fence, volumeId, specification, "create", CancellationToken.None);
+        var provision = await lifecycle.ReserveWorkspaceVolumeProvisionAsync(
+            fence, volumeId, 1, 0, 0, "workspace-provision", CancellationToken.None);
+        var storage = new ProviderResourceRef(
+            ProviderSeam.Storage, "azure-files", "pvc-" + suffix, provision.TargetResourceGeneration);
+        var storageBinding = new WorkspaceVolumeProviderBindingSnapshot(
+            storage.ProviderId, "1.0.0", 1, "storage-options",
+            JsonSerializer.SerializeToElement(new { endpoint = "test" }),
+            JsonSerializer.SerializeToElement(new { resourceId = storage.ResourceId }));
+        var provisioned = await lifecycle.CompleteWorkspaceVolumeProvisionAsync(
+            provision.OperationId, fence, true, storage, storageBinding, true, CancellationToken.None);
+        var bind = await lifecycle.ReserveWorkspaceVolumeBindAsync(
+            fence, volumeId, provisioned.TargetTransitionRevision, storage.Generation, 0, "bind", CancellationToken.None);
+        var bound = await lifecycle.CompleteWorkspaceVolumeBindAsync(
+            bind.OperationId, fence, true, storage, true, CancellationToken.None);
+        var attach = await lifecycle.ReserveWorkspaceVolumeAttachAsync(
+            fence, volumeId, bound.TargetTransitionRevision, storage.Generation, 0, "attach", CancellationToken.None);
+        var attached = await lifecycle.CompleteWorkspaceVolumeAttachAsync(
+            attach.OperationId, fence, true, storage, true, CancellationToken.None);
+
+        var capabilities = ImmutableArray.Create(
+            CiliumEgressCapabilities.L3L4, CiliumEgressCapabilities.Fqdn,
+            CiliumEgressCapabilities.Cidr, CiliumEgressCapabilities.Dns);
+        var networkOptions = new CiliumEgressProviderOptions(
+            "sandbox", new Version(1, 0, 0), 1, "network-options",
+            ImmutableDictionary<string, ImmutableDictionary<string, string>>.Empty.Add(
+                "kube-system/kube-dns",
+                ImmutableDictionary<string, string>.Empty
+                    .Add("k8s:io.kubernetes.pod.namespace", "kube-system")
+                    .Add("k8s:k8s-app", "kube-dns")));
+        var rules = ImmutableArray.Create(
+            new NetworkEgressRule(NetworkEgressPurpose.SourceControl, NetworkEgressDestinationKind.Cidr,
+                "203.0.113.0/24", 443, EgressProtocol.Tcp),
+            new NetworkEgressRule(NetworkEgressPurpose.SourceControl, NetworkEgressDestinationKind.Fqdn,
+                "api.github.com", 443, EgressProtocol.Tcp),
+            new NetworkEgressRule(NetworkEgressPurpose.DnsResolver, NetworkEgressDestinationKind.KubernetesService,
+                "kube-system/kube-dns", 53, EgressProtocol.Tcp),
+            new NetworkEgressRule(NetworkEgressPurpose.DnsResolver, NetworkEgressDestinationKind.KubernetesService,
+                "kube-system/kube-dns", 53, EgressProtocol.Udp));
+        var selection = new EffectiveNetworkPolicySelection(
+            owner.ProjectId, owner.RunId, 1, 1, 1, "context-" + suffix,
+            [new(ProviderCardinality.Layered, ProviderSeam.NetworkPolicy,
+                [new(ProviderSeam.NetworkPolicy, CiliumEgressPolicyAdapter.ProviderId,
+                    "1.0.0", 1, networkOptions.OptionsRevision,
+                    ProviderHostingPattern.KubernetesController, capabilities, capabilities, NetworkPolicyLayer.L3L4)])],
+            rules, null, rules, rules);
+        var projects = new ManagerProjectsResponses(owner, selection);
+        var policies = new ManagerPolicyStore();
+        var adapter = new CiliumEgressPolicyAdapter(policies, networkOptions);
+        var egress = new EnvironmentEgressManager(projects, adapter, networkOptions, lifecycle);
+        var caller = new CurrentCallerRequest("controlled-projects-protocol-token", owner.TenantId);
+        var network = await egress.ApplyAndVerifyAsync(
+            caller, new(fence, 1, 0, "manager-network"), CancellationToken.None);
+        Assert.True(network.ReadyForDispatch, network.FailureMessage);
+        projects.ResetReads();
+
+        var template = CreateFixture();
+        var command = template.Command with { OperationId = Guid.NewGuid(), Outputs = [] };
+        var options = new AgentSandboxOptions(
+            AgentSandboxOptions.CurrentOptionsSchemaVersion, "sandbox-options", networkOptions.Namespace,
+            storage.ProviderId, "runtime-test@sha256:" + new string('a', 64),
+            "linux/amd64", 1, "kata-test", "kata-test", "100m", "128Mi", 20, 100,
+            new(30, 30, 30, 30, 30, 120))
+        {
+            AcceptedBuildTestProfile = command.ExecutionOptions
+        };
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        json.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        var providerBinding = new SandboxProviderBindingSnapshot(
+            "agent-sandbox", "1.0.0", options.OptionsSchemaVersion, options.OptionsRevision,
+            JsonSerializer.SerializeToElement(options, json),
+            JsonSerializer.SerializeToElement(new { claimName = "claim-" + suffix }));
+        var provisionRequest = new SandboxProvisionApiRequest(
+            volumeId, storage.Generation, 0, "/workspace/agentweaver/project", false, 1, "manager-sandbox");
+        var leases = new EnvironmentSandboxLeaseStore(database.DataSource, TimeProvider.System);
+        var reservation = await leases.ReserveProvisionAsync(
+            fence, "manager-sandbox",
+            new(providerBinding.ProviderId, providerBinding.AdapterVersion, providerBinding.OptionsSchemaVersion,
+                providerBinding.OptionsRevision, providerBinding.OptionsSnapshot,
+                JsonSerializer.SerializeToElement(selection, json),
+                JsonSerializer.SerializeToElement(provisionRequest, json)), CancellationToken.None);
+        var sandbox = new SandboxProvisionedResource(
+            new(ProviderSeam.Sandbox, providerBinding.ProviderId, "claim-" + suffix, reservation.Lease.ResourceGeneration),
+            new(Guid.NewGuid()), new("controlled-cluster"),
+            ImmutableHashSet.Create(StringComparer.Ordinal,
+                SandboxCapabilities.WorkspacePersistentVolumeClaim, SandboxCapabilities.BuildTestCommandPod),
+            [new(SandboxStartupPhase.Started, 1, DateTimeOffset.UtcNow)], providerBinding);
+        var workspace = new SandboxWorkspaceAttachment(
+            new(owner.ProjectId, owner.EnvironmentId, owner.RunId,
+                new(owner.ProjectId, volumeId, storage.Generation), sandbox.Resource, storage, fence, 0,
+                provisionRequest.MountPath, false, WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim),
+            JsonSerializer.SerializeToElement(new AgentSandboxPersistentVolumeClaimAttachment(
+                1, storage.ProviderId, networkOptions.Namespace, storage.ResourceId, "pvc-uid-" + suffix), json));
+        var selector = EnvironmentEgressSelector.Create(
+            owner.EnvironmentId, owner.TenantId, owner.ProjectId, owner.RunId, networkOptions.Namespace);
+        await leases.SaveProviderRequestAsync(
+            reservation.Lease.OperationId, fence,
+            JsonSerializer.SerializeToElement(new
+            {
+                contractVersion = 1,
+                request = provisionRequest,
+                workspace,
+                egressSelectorLabels = selector.MatchLabels,
+                workspaceAttachmentTransitionRevision = attached.TargetTransitionRevision
+            }, json), CancellationToken.None);
+        var active = await leases.CompleteProvisionAsync(
+            reservation.Lease.OperationId, fence, sandbox, true, CancellationToken.None);
+        var expected = new SandboxBuildTestExpectedBinding(
+            fence, active.OperationId, sandbox.Resource, active.ProviderFencingGeneration,
+            new(owner.ProjectId, volumeId, storage.Generation), 0, 1)
+        {
+            SandboxProviderBinding = providerBinding
+        };
+        command = command with
+        {
+            Checkpoint = command.Checkpoint with { ProjectId = owner.ProjectId, RunId = owner.RunId }
+        };
+        command = command with { ImmutableHash = command.ComputeImmutableHash() };
+        return new(owner, caller, command, new(command.Checkpoint, expected),
+            projects, policies, new ManagerCommandProvider(), new ManagerCommandVerifier(command),
+            lifecycle, leases, egress, networkOptions, Store());
+    }
+
+    private sealed record ManagerFixture(
+        EnvironmentOwnerIdentity Owner,
+        CurrentCallerRequest Caller,
+        SandboxBuildTestAcceptedCommand Command,
+        SandboxBuildTestApiRequest Request,
+        ManagerProjectsResponses Projects,
+        ManagerPolicyStore Policies,
+        ManagerCommandProvider Provider,
+        ManagerCommandVerifier Verifier,
+        IEnvironmentLifecycleStore Lifecycle,
+        ISandboxLeaseStore Leases,
+        EnvironmentEgressManager Egress,
+        CiliumEgressProviderOptions NetworkOptions,
+        IEnvironmentSandboxBuildTestCommandStore Commands)
+    {
+        public EnvironmentSandboxBuildTestCommandManager CreateManager(
+            IEnvironmentSandboxBuildTestCommandStore store) =>
+            new(Egress, Lifecycle, Leases, store, Verifier, Provider,
+                Policies, TimeProvider.System, NetworkOptions);
+
+        public Task<SandboxBuildTestOperationResult> ExecuteAsync(SandboxBuildTestApiRequest? request = null) =>
+            CreateManager(Commands).ExecuteAsync(
+                Caller, Owner.ProjectId, Owner.RunId, Owner.EnvironmentId, request ?? Request, CancellationToken.None);
+    }
+
+    private sealed class ManagerProjectsResponses(
+        EnvironmentOwnerIdentity owner, EffectiveNetworkPolicySelection selection) : IProjectsConfigClient
+    {
+        public bool CanWrite { get; set; } = true;
+        public int AuthorizationReads { get; private set; }
+        public int SelectionReads { get; private set; }
+
+        public void ResetReads()
+        {
+            AuthorizationReads = 0;
+            SelectionReads = 0;
+        }
+
+        public Task<ProjectAuthorizationContextResponse> GetAuthorizationContextAsync(
+            CurrentCallerRequest caller, CancellationToken cancellationToken)
+        {
+            Assert.Equal(owner.TenantId, caller.TenantSelector);
+            AuthorizationReads++;
+            var grants = ImmutableArray.CreateBuilder<ProjectAuthorizationPermissionGrant>();
+            grants.Add(new(ProjectAuthorizationPermission.ReadRunSelection, 1));
+            if (CanWrite)
+                grants.Add(new(ProjectAuthorizationPermission.WriteProjects, 1));
+            return Task.FromResult(new ProjectAuthorizationContextResponse(
+                1, "https://controlled-identity.test", "controlled-actor", owner.TenantId, 1,
+                owner.ProjectId, owner.RunId,
+                [new(ProjectAuthorityResourceType.Project, owner.ProjectId, grants.ToImmutable())]));
+        }
+
+        public Task<EffectiveNetworkPolicySelection> GetRunSelectionAsync(
+            CurrentCallerRequest caller, string projectId, string runId, CancellationToken cancellationToken)
+        {
+            Assert.Equal(owner.ProjectId, projectId);
+            Assert.Equal(owner.RunId, runId);
+            SelectionReads++;
+            return Task.FromResult(selection);
+        }
+    }
+
+    private sealed class ManagerCommandVerifier(SandboxBuildTestAcceptedCommand command)
+        : ISandboxBuildTestAcceptedCommandVerifier
+    {
+        public SandboxBuildTestAcceptedCommand Command { get; set; } = command;
+
+        public Task<SandboxBuildTestAcceptedCommand> ResolveAsync(
+            SandboxBuildTestCheckpointReference checkpoint, CancellationToken cancellationToken)
+        {
+            Assert.Equal(Command.Checkpoint, checkpoint);
+            return Task.FromResult(Command);
+        }
+    }
+
+    private sealed class ManagerPolicyStore : ICiliumPolicyResourceStore
+    {
+        private readonly Dictionary<(string Namespace, string Name), CiliumNetworkPolicyDocument> _policies = [];
+        private CiliumNetworkPolicyDocument? _lastAttempt;
+        public bool FailNextCreate { get; set; }
+        public Action? AfterCreate { get; set; }
+        public int Creates { get; private set; }
+
+        public void MakeLastAttemptVisible()
+        {
+            var policy = _lastAttempt ?? throw new InvalidOperationException("There is no uncertain policy attempt.");
+            _policies.Add((policy.Metadata.Namespace, policy.Metadata.Name), policy);
+        }
+
+        public Task<CiliumNetworkPolicyDocument?> GetAsync(
+            string @namespace, string name, CancellationToken cancellationToken)
+        {
+            _policies.TryGetValue((@namespace, name), out var policy);
+            return Task.FromResult(policy);
+        }
+
+        public Task<CiliumNetworkPolicyDocument> CreateAsync(
+            CiliumNetworkPolicyDocument policy, CancellationToken cancellationToken)
+        {
+            Creates++;
+            var persisted = policy with
+            {
+                Metadata = policy.Metadata with
+                {
+                    Uid = Guid.NewGuid().ToString("N"), ResourceVersion = "1", Generation = 1
+                }
+            };
+            _lastAttempt = persisted;
+            if (FailNextCreate)
+            {
+                FailNextCreate = false;
+                throw new HttpRequestException("Controlled uncertain policy create.");
+            }
+            _policies.Add((policy.Metadata.Namespace, policy.Metadata.Name), persisted);
+            AfterCreate?.Invoke();
+            return Task.FromResult(persisted);
+        }
+
+        public Task<CiliumNetworkPolicyDocument> ReplaceAsync(
+            CiliumNetworkPolicyDocument policy, string expectedResourceVersion, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("The manager must not replace a pinned policy.");
+
+        public Task DeleteAsync(
+            string @namespace, string name, string expectedResourceVersion, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("These execution paths must not delete a policy.");
+    }
+
+    private sealed class ManagerCommandProvider : ISandboxBuildTestCommandProvider
+    {
+        private SandboxBuildTestPodReference? _pod;
+        public bool Complete { get; set; }
+        public int Creates { get; private set; }
+        public int GateReleases { get; private set; }
+        public int Observations { get; private set; }
+
+        public Task<SandboxBuildTestPodReference> CreateGatedAsync(
+            SandboxBuildTestProviderRequest request, CancellationToken cancellationToken)
+        {
+            Creates++;
+            Assert.Null(_pod);
+            var pod = new SandboxBuildTestPodReference(
+                "sandbox", "command-" + request.AcceptedCommand.OperationId.ToString("N"),
+                Guid.NewGuid().ToString("N"), "1");
+            _pod = pod;
+            return Task.FromResult(pod);
+        }
+
+        public Task<SandboxBuildTestPodReference?> GetAsync(
+            SandboxBuildTestProviderRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(_pod);
+
+        public Task<SandboxBuildTestPodReference> ReleaseSchedulingGateAsync(
+            SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod, CancellationToken cancellationToken)
+        {
+            Assert.Equal(_pod!.Uid, pod.Uid);
+            GateReleases++;
+            return Task.FromResult(_pod);
+        }
+
+        public Task<SandboxBuildTestPodObservation> ObserveAsync(
+            SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod,
+            int maximumOutputBytes, CancellationToken cancellationToken)
+        {
+            Assert.Equal(_pod!.Uid, pod.Uid);
+            Observations++;
+            var output = new SandboxBuildTestOutputCapture(
+                pod.Uid, "buildtest-command", [], 0,
+                Convert.ToHexString(SHA256.HashData([])).ToLowerInvariant(), false, 0);
+            var terminal = Complete
+                ? new SandboxBuildTestTerminalEvidence(
+                    pod.Uid, "buildtest-command", SandboxBuildTestTerminationKind.Exited, 0,
+                    DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddSeconds(1), null)
+                : null;
+            return Task.FromResult(new SandboxBuildTestPodObservation(
+                pod, Complete ? SandboxBuildTestPodState.Succeeded : SandboxBuildTestPodState.Running,
+                terminal, output));
+        }
+
+        public Task<SandboxBuildTestPodReference> CreateOutputCollectorGatedAsync(
+            SandboxBuildTestProviderRequest request, SandboxBuildTestOutputCollectorRequest collectorRequest,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("This command has no collected file outputs.");
+
+        public Task<SandboxBuildTestPodReference?> GetOutputCollectorAsync(
+            SandboxBuildTestProviderRequest request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("This command has no collected file outputs.");
+
+        public Task StopAsync(
+            SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("The successful command must not be stopped.");
+
+        public Task DeleteAsync(
+            SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("These paths must retain their Pod evidence.");
     }
 
     private async Task<Fixture> CreateDurableFixtureAsync(Guid? operationId = null)
