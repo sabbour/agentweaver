@@ -32,6 +32,10 @@ public static class RuntimeAgentHostEndpoints
             (HttpContext context, RuntimeA2ASendRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.SendAsync(request, actor, token))).RequireAuthorization();
+        endpoints.MapPost("/runtime/v1/suspend/native-evidence",
+            (HttpContext context, RuntimeHostSuspendRequest request, CancellationToken token) =>
+                ExecuteAsync(context, configure, timeProvider,
+                    actor => host.SuspendAsync(request, actor, token))).RequireAuthorization();
         endpoints.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
         endpoints.MapGet("/health/ready", async (HttpContext context, CancellationToken token) =>
         {

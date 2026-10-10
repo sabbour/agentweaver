@@ -320,6 +320,31 @@ Unsupported platforms and invalid inputs return explicit nonzero exits.
 Command logs cannot substitute for this file receipt.
 See [Environment BuildTest](./environment-sandbox#buildtest-command-and-output-collection) for admission, reconciliation, and terminal classification.
 
+## Native suspend evidence
+
+`POST /runtime/v1/suspend/native-evidence` requires the current signed runtime proof and exact HTTPS audience.
+The request carries the owner operation ID, stable manifest ID, and exact phase version.
+Before closing turn admission, AgentHost calls Core's `POST /internal/runtime/suspend/require-current` with the unchanged request.
+Only the exact request echo permits suspension.
+Core must verify current Projects and run authority and its stored suspend intent, reserved manifest ID, execution fence, accepted selection, `fenced` phase, and version.
+The completed manifest is stored only after actual evidence is available; it is not a prerequisite for native capture.
+AgentHost closes new turn admission and waits for all admitted turns to finish.
+It waits for the observed usage accounting worker, without claiming that no later usage can exist.
+The authorized session then holds its execution gate, checks current authority, and commits the actual native cache to Events.
+The manifest ID is the cache event ID.
+The response returns the recorded native completion and the exact Events cache and journal acknowledgment.
+AgentHost repeats the Core check before and after cache capture and persistence.
+Exact replay reads the stored cache again and repeats that check; it does not send a turn or capture another cache.
+
+An abort or idle acknowledgment is not a native completion receipt.
+Missing native completion, failed accounting, changed authority, or a missing cache prevents a successful response.
+New turns, content writes, ordinary cache writes, and credential refresh remain blocked after suspension starts.
+Only the internal suspend path can capture a cache with the required current-operation check.
+Disposal, credential revocation, and Sandbox abandonment do not produce this evidence.
+This endpoint supplies native evidence only, not a completed Core suspend or resume manifest.
+Core must also resolve its checkpoint and verified Workspace content.
+The current Storage provider has no durable flush or content-checkpoint operation.
+
 ## Focused source checks
 
 After the Release build, run these commands:
@@ -332,7 +357,11 @@ node --test scripts\release\tests\measure-agenthost-image.test.mjs
 
 The host tests cover authenticated HTTP, exact replay, current-owner rejection, priority at idle boundaries, legacy accounting acknowledgment, and measured startup ceilings.
 Workflow-bound tests cover admission denial, changed admission, stale authority, missing native proof, failed receipt persistence, and no acknowledgment or resend.
+Native suspend tests hold an admitted turn, verify its exact cache receipt and replay, and reject abort-only evidence.
+They also reject changed operation authority, mismatched Core echoes, and unsigned HTTP requests before cache disclosure.
+These controlled Host tests do not prove a persisted Core suspend operation or PostgreSQL suspend success.
 The combined Broker scenario connects current Projects authority, Identity connection rotation, Orchestrator receipts, native SDK callbacks, and Events/PostgreSQL accounting.
+It covers ordinary native cache and accounting, not a completed suspend operation.
 It controls external GitHub, Key Vault SDK, placement, and native transport inputs.
 These fixtures do not prove live entitlement, Azure permissions, deployed TLS, or paid model execution.
 

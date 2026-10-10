@@ -33,6 +33,19 @@ public sealed record RuntimeHostSessionProof(
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostRefreshRequest(RuntimeHostSessionProof Proof, Guid OperationId);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeHostSuspendRequest(
+    RuntimeHostSessionProof Proof, Guid OperationId, Guid ManifestId, long PhaseVersion);
+
+public sealed record RuntimeHostSuspendReceipt(
+    int ContractVersion,
+    Guid OperationId,
+    Guid ManifestId,
+    RuntimeRegistration Registration,
+    RuntimeGrantReceipt SourceGrant,
+    RuntimeNativeTurnRecordedReceipt NativeTurn,
+    SessionMaterialAcknowledgment CacheAcknowledgment);
+
 public sealed record RuntimeHostReadinessReceipt(
     int ContractVersion,
     Guid RuntimeInstanceId,

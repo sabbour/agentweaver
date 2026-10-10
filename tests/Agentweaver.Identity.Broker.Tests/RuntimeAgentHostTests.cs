@@ -23,6 +23,333 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RuntimeAgentHostTests
 {
+    [Fact]
+    public async Task OrdinarySessionCacheWritesCannotBypassTheGuardedSuspendPath()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var material = fixture.MaterialClient();
+        var source = fixture.SourceClient();
+        await using var session = await fixture.ConfigureSessionAsync(material, timeout.Token);
+        await session.RegisterUsageAsync(source, timeout.Token);
+        var proof = new RuntimeHostSessionProof(1, session.Registration, session.SourceGrant.GrantId,
+            session.SourceGrant.Revision, RuntimeCredentialPurpose.Observe);
+        await session.SendNativeTurnAsync(fixture.Message(proof), material, source, timeout.Token);
+        await session.CommitNativeCacheAsync(material, Guid.NewGuid(), timeout.Token);
+        Assert.Equal(2, fixture.Material.Count(item => item.Kind == SessionMaterialKind.SdkCache));
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var receipt = await session.SuspendAsync(
+            material, request, token => fixture.RequireCurrentSuspendAsync(request, token), timeout.Token);
+        Assert.Equal(3, fixture.Material.Count(item => item.Kind == SessionMaterialKind.SdkCache));
+        var writes = fixture.Material.Count;
+
+        Assert.Equal("runtime_session_suspended",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                session.CommitNativeCacheAsync(material, Guid.NewGuid(), timeout.Token))).Code);
+        Assert.Equal(writes, fixture.Material.Count);
+        Assert.Equal(receipt, await session.SuspendAsync(
+            material, request, token => fixture.RequireCurrentSuspendAsync(request, token), timeout.Token));
+        Assert.Equal(writes, fixture.Material.Count);
+        Assert.Single(fixture.Sdk.Requests, rpc => rpc.Method == "session.send");
+    }
+
+    [Fact]
+    public async Task NativeSuspendWaitsForTheAdmittedTurnAndReplaysTheExactDurableCacheReceipt()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Sdk.BeforeTurnResponse = token => release.Task.WaitAsync(token);
+        var message = fixture.Message(proof);
+        var turn = fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
+        await fixture.Sdk.TurnReceived.Task.WaitAsync(timeout.Token);
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var suspend = fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token);
+        Assert.False(suspend.IsCompleted);
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
+
+        release.TrySetResult();
+        var receipt = await suspend;
+        var answer = await turn;
+        Assert.Equal(request.OperationId, receipt.OperationId);
+        Assert.Equal(request.ManifestId, receipt.ManifestId);
+        Assert.Equal(fixture.Registration, receipt.Registration);
+        Assert.Equal(request.ManifestId, receipt.CacheAcknowledgment.EventId);
+        Assert.Equal(SessionMaterialKind.SdkCache, receipt.CacheAcknowledgment.Reference.Material!.Kind);
+        Assert.Equal(message.Message.MessageId, receipt.NativeTurn.Admission.MessageId);
+        Assert.Equal(fixture.Sdk.NativeCompletionReceiptEventId,
+            receipt.NativeTurn.Observation.NativeCompletionReceiptEventId);
+        Assert.Equal(receipt, await fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token));
+        Assert.Equal(answer, await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        Assert.Equal(2, fixture.Material.Count(material => material.Kind == SessionMaterialKind.SdkCache));
+        Assert.Single(fixture.Sdk.Requests, rpc => rpc.Method == "session.send");
+        Assert.DoesNotContain(fixture.Sdk.Requests, rpc => rpc.Method is "session.abort" or "session.detach");
+        Assert.Equal("runtime_session_suspended",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token))).Code);
+        Assert.Equal("runtime_suspend_operation_conflict",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SuspendAsync(request with { ManifestId = Guid.NewGuid() },
+                    fixture.Actor, timeout.Token))).Code);
+        Assert.Equal("runtime_suspend_operation_conflict",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SuspendAsync(request with { PhaseVersion = 2 },
+                    fixture.Actor, timeout.Token))).Code);
+        fixture.Registration = fixture.Registration with { Revision = 2 };
+        Assert.Equal("runtime_registration_stale",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
+    }
+
+    [Theory]
+    [InlineData("operation")]
+    [InlineData("manifest")]
+    [InlineData("phase-version")]
+    [InlineData("project")]
+    [InlineData("run")]
+    [InlineData("session")]
+    [InlineData("fence")]
+    [InlineData("selection")]
+    [InlineData("source-grant")]
+    [InlineData("source-revision")]
+    [InlineData("proof-version")]
+    public async Task NativeSuspendRejectsChangedCoreEchoBeforeStoppingTurnsOrWritingCache(string changed)
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        fixture.SuspendEcho = current => changed switch
+        {
+            "operation" => current with { OperationId = Guid.NewGuid() },
+            "manifest" => current with { ManifestId = Guid.NewGuid() },
+            "phase-version" => current with { PhaseVersion = current.PhaseVersion + 1 },
+            "source-grant" => current with { Proof = current.Proof with { SourceGrantId = Guid.NewGuid() } },
+            "source-revision" => current with
+            {
+                Proof = current.Proof with { SourceGrantRevision = current.Proof.SourceGrantRevision + 1 }
+            },
+            "proof-version" => current with { Proof = current.Proof with { ContractVersion = 2 } },
+            _ => current with
+            {
+                Proof = current.Proof with
+                {
+                    Registration = current.Proof.Registration with
+                    {
+                        Binding = current.Proof.Registration.Binding with
+                        {
+                            ProjectId = changed == "project" ? "foreign" : proof.Registration.Binding.ProjectId,
+                            RunId = changed == "run" ? "foreign" : proof.Registration.Binding.RunId,
+                            SessionId = changed == "session" ? "foreign" : proof.Registration.Binding.SessionId,
+                            ExecutionFence = changed == "fence" ? proof.Registration.Binding.ExecutionFence + 1 :
+                                proof.Registration.Binding.ExecutionFence,
+                            AcceptedSelectionHash = changed == "selection" ? new string('f', 64) :
+                                proof.Registration.Binding.AcceptedSelectionHash
+                        }
+                    }
+                }
+            }
+        };
+
+        Assert.Equal("runtime_suspend_authority_changed",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
+        Assert.Equal(request, Assert.Single(fixture.SuspendChecks));
+        Assert.Single(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        Assert.Equal(2, fixture.Sdk.Requests.Count(rpc => rpc.Method == "session.send"));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Forbidden, "runtime_owner_denied")]
+    [InlineData(HttpStatusCode.Conflict, "runtime_owner_unavailable")]
+    [InlineData(HttpStatusCode.NotFound, "runtime_owner_unavailable")]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "runtime_owner_unavailable")]
+    public async Task NativeSuspendNeedsCoreAuthorityBeforeStoppingTurns(
+        HttpStatusCode status, string code)
+    {
+        await using var fixture = new HostFixture(workflowBound: true) { SuspendStatus = status };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+
+        Assert.Equal(code, (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
+        Assert.Single(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        Assert.Equal(2, fixture.Sdk.Requests.Count(rpc => rpc.Method == "session.send"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task NativeSuspendRequiresAPositivePhaseVersion(long phaseVersion)
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), phaseVersion);
+
+        Assert.Equal("runtime_suspend_request_invalid",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
+        Assert.Empty(fixture.SuspendChecks);
+        Assert.Empty(fixture.Material);
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        Assert.Single(fixture.Sdk.Requests, rpc => rpc.Method == "session.send");
+    }
+
+    [Theory]
+    [InlineData(4)]
+    [InlineData(5)]
+    public async Task NativeSuspendRechecksCoreBeforeCacheCaptureAndPersistence(int deniedCheck)
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        fixture.SuspendEcho = current => fixture.SuspendChecks.Count == deniedCheck
+            ? current with { PhaseVersion = 2 } : current;
+
+        Assert.Equal("runtime_suspend_authority_changed",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
+        Assert.Equal(deniedCheck, fixture.SuspendChecks.Count);
+        Assert.Single(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
+        Assert.DoesNotContain(fixture.Material, material => material.EventId == request.ManifestId);
+    }
+
+    [Fact]
+    public async Task NativeSuspendRejectsLostCoreOperationAuthorityAfterActualCachePersistence()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        fixture.AfterMaterialWrite = material =>
+        {
+            if (material.EventId == request.ManifestId)
+                fixture.SuspendStatus = HttpStatusCode.Conflict;
+        };
+
+        Assert.Equal("runtime_owner_unavailable",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
+        Assert.Single(fixture.Material, material => material.EventId == request.ManifestId);
+        Assert.Single(fixture.Sdk.Requests, rpc => rpc.Method == "session.send");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeSuspendReplayNeedsStoredCacheAndCurrentCoreOperation(bool missingCache)
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        await fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token);
+        fixture.MissingMaterialId = missingCache ? request.ManifestId : null;
+        fixture.AfterMaterialRead = read =>
+        {
+            if (read.Material.EventId == request.ManifestId)
+                fixture.SuspendStatus = HttpStatusCode.Conflict;
+        };
+
+        Assert.Equal("runtime_owner_unavailable",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
+        Assert.Equal(2, fixture.Material.Count(material => material.Kind == SessionMaterialKind.SdkCache));
+        Assert.Single(fixture.Sdk.Requests, rpc => rpc.Method == "session.send");
+    }
+
+    [Fact]
+    public async Task NativeSuspendCannotTurnAnAbortOrIdleAcknowledgmentIntoACompletionReceipt()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Sdk.BeforeTurnResponse = token => release.Task.WaitAsync(token);
+        fixture.Sdk.BeforeAbortIdle = token => idle.Task.WaitAsync(token);
+        var turn = fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, cancellation.Token);
+        await fixture.Sdk.TurnReceived.Task.WaitAsync(timeout.Token);
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var suspend = fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token);
+        await cancellation.CancelAsync();
+        await fixture.Sdk.AbortAcknowledged.Task.WaitAsync(timeout.Token);
+        Assert.False(suspend.IsCompleted);
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
+        idle.TrySetResult();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => turn);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => suspend);
+        Assert.Equal("runtime_native_suspend_receipt_unavailable",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
+        Assert.Empty(fixture.NativeObservations);
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
+    }
+
+    [Fact]
+    public async Task NativeSuspendRechecksAuthorityAfterTheActualCacheWriteBeforeReturningEvidence()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        fixture.AfterMaterialWrite = material =>
+        {
+            if (material.EventId == request.ManifestId)
+                fixture.Registration = fixture.Registration with { Revision = 2 };
+        };
+        Assert.Equal("runtime_registration_stale",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
+        Assert.Single(fixture.Material, material => material.EventId == request.ManifestId);
+        Assert.Single(fixture.Sdk.Requests, rpc => rpc.Method == "session.send");
+    }
+
+    [Fact]
+    public async Task NativeSuspendHttpRequiresSignedAuthorityAndExactAudienceBeforeCacheDisclosure()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        const string path = "/runtime/v1/suspend/native-evidence";
+        using var anonymous = await client.PostAsJsonAsync(path, request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var wrongAudience = await client.PostAsJsonAsync(
+            "http://runtime.test" + path, request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongAudience.StatusCode);
+        Assert.Single(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
+        using var response = await client.PostAsJsonAsync(path, request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        var receipt = await response.Content.ReadFromJsonAsync<RuntimeHostSuspendReceipt>(
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(request.ManifestId, receipt!.CacheAcknowledgment.EventId);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token + "invalid");
+        using var forged = await client.PostAsJsonAsync(path, request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, forged.StatusCode);
+        Assert.Equal(2, fixture.Material.Count(material => material.Kind == SessionMaterialKind.SdkCache));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -562,10 +889,16 @@ public sealed class RuntimeAgentHostTests
         public string? NativeAccountingFault { get; set; }
         public string? NativeAdmissionFault { get; set; }
         public string? NativeRecordFault { get; set; }
+        public Func<RuntimeHostSuspendRequest, RuntimeHostSuspendRequest>? SuspendEcho { get; set; }
+        public HttpStatusCode SuspendStatus { get; set; } = HttpStatusCode.OK;
+        public ConcurrentQueue<RuntimeHostSuspendRequest> SuspendChecks { get; } = new();
         public TaskCompletionSource AccountingReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Func<CancellationToken, Task>? BeforeAccounting { get; set; }
         public bool FailAccounting { get; set; }
         public bool MaterialPromptCapacityChanged { get; set; }
+        public Action<SessionMaterialWriteRequest>? AfterMaterialWrite { get; set; }
+        public Action<SessionMaterialReadResult>? AfterMaterialRead { get; set; }
+        public Guid? MissingMaterialId { get; set; }
         public int Accounted { get; private set; }
         public int Rotations { get; private set; }
 
@@ -579,6 +912,33 @@ public sealed class RuntimeAgentHostTests
         }
         public RuntimeHostSessionProof Proof(RuntimeHostReadinessReceipt ready) =>
             new(1, Configure.Registration, ready.SourceGrant.GrantId, ready.SourceGrant.Revision, RuntimeCredentialPurpose.Observe);
+        public RuntimeSessionMaterialHttpClient MaterialClient() => new(_http, new("https://events.test/"), Actor);
+        public RuntimeUsageSourceHttpClient SourceClient() => new(_http, new("https://orchestrator.test/"), Actor);
+        public async Task<AuthorizedRuntimeSession> ConfigureSessionAsync(
+            RuntimeSessionMaterialHttpClient material, CancellationToken token)
+        {
+            var credential = new SecretCredential(new string('c', 64), Configure.Registration.ExpiresAt, Time);
+            try
+            {
+                var owner = new RuntimeRegistrationHttpClient(_http, new("https://orchestrator.test/"));
+                var broker = new RuntimeBrokerCredentialClient(
+                    _http, new("https://broker.test/"), Configure.Registration.Binding.ActorIssuer, Actor, Time);
+                var bootstrap = new RuntimeSessionBootstrap(owner, broker, RuntimeCopilotSessionTests.Factory(Sdk),
+                    Actor, Time, Image, material, new(_http, new("https://orchestrator.test/"), Actor));
+                return await bootstrap.ConfigureAsync(Encoding.UTF8.GetBytes(Configure.Configuration.GetRawText()),
+                    new(_bootstrap, Configure.Registration.RuntimeInstanceId, 1, RuntimeCredentialPurpose.Configure,
+                        Configure.Registration.Binding.ConfigureEndpoint, _hash, credential),
+                    Configure.ConsumeOperationId, Configure.ExchangeOperationId, token);
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }
+        public async Task RequireCurrentSuspendAsync(RuntimeHostSuspendRequest request, CancellationToken token) =>
+            Assert.Equal(request, await RuntimeOwnerHttpTransport.SendAsync<RuntimeHostSuspendRequest>(
+                _http, new("https://orchestrator.test/"), "/internal/runtime/suspend/require-current",
+                Actor, request, token));
         public RuntimeA2ASendRequest Message(RuntimeHostSessionProof proof,
             AddressedMessageDeliveryMode mode = AddressedMessageDeliveryMode.Enqueue) =>
             new(new("message", Guid.NewGuid(), RuntimeContractValidation.NativeSessionId(proof.Registration.Binding),
@@ -628,6 +988,14 @@ public sealed class RuntimeAgentHostTests
                 return Response(request, Registration);
             if (path.EndsWith("/readiness", StringComparison.Ordinal))
                 return Response(request, Readiness);
+            if (path == "/internal/runtime/suspend/require-current")
+            {
+                Assert.Equal("orchestrator.test", request.RequestUri.Host);
+                Assert.Equal(HttpMethod.Post, request.Method);
+                var suspend = await ReadAsync<RuntimeHostSuspendRequest>(request, token);
+                SuspendChecks.Enqueue(suspend);
+                return Response(request, SuspendEcho?.Invoke(suspend) ?? suspend, SuspendStatus);
+            }
             if (path == "/internal/runtime/bootstrap/verify-pending")
                 return Response(request, Grant(_bootstrap, RuntimeCredentialPurpose.Configure));
             if (path == "/internal/runtime/bootstrap/consume")
@@ -680,7 +1048,7 @@ public sealed class RuntimeAgentHostTests
             }
             if (path == "/internal/runtime/turns/begin")
             {
-                Assert.DoesNotContain(Sdk.Requests, request => request.Method == "session.send");
+                Assert.Equal(NativeAdmissions.Count, Sdk.Requests.Count(request => request.Method == "session.send"));
                 var begin = await ReadAsync<RuntimeNativeTurnBeginRequest>(request, token);
                 NativeAdmissions.Enqueue(begin);
                 if (NativeAdmissionFault == "denied")
@@ -785,13 +1153,16 @@ public sealed class RuntimeAgentHostTests
                         }
                     });
                 _material[material.EventId] = new(receipt, material.Bytes);
+                AfterMaterialWrite?.Invoke(material);
                 return Response(request, receipt);
             }
             if (path.Contains("/material/", StringComparison.Ordinal))
             {
                 var id = Guid.Parse(path.Split('/')[5]);
-                return _material.TryGetValue(id, out var recorded) ? Response(request, recorded) :
-                    Response(request, new { }, HttpStatusCode.NotFound);
+                if (id == MissingMaterialId || !_material.TryGetValue(id, out var recorded))
+                    return Response(request, new { }, HttpStatusCode.NotFound);
+                AfterMaterialRead?.Invoke(recorded);
+                return Response(request, recorded);
             }
             throw new InvalidOperationException("Unexpected fixture owner route: " + path);
         }
