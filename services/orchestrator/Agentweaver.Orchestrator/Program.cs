@@ -87,6 +87,7 @@ builder.Services.AddSingleton(services => new CoordinationOwnerStore(
     options.Schema,
     services.GetRequiredService<TimeProvider>(),
     services.GetRequiredService<CoordinatorDecisionOwnerStore>()));
+builder.Services.AddScoped<SessionSuspendResumeCoordinator>();
 builder.Services.AddSingleton(services => new CoordinatorRunSelectionContextStore(
     services.GetRequiredService<NpgsqlDataSource>(),
     options.Schema,
@@ -208,9 +209,13 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
 });
 app.MapCoordinationEndpoints();
 app.MapBacklogEndpoints();
+app.MapSuspendResumeEndpoints();
 app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)
+{
     app.MapRuntimeRegistrationEndpoints();
+    app.MapRuntimeSuspendResumeEndpoints();
+}
 if (runtimeUsageEnabled)
     app.MapRuntimeUsageSourceEndpoints();
 app.Run();
