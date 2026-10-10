@@ -207,6 +207,9 @@ Environment resolves the complete checkpoint with Core under current authorizati
 Core returns the immutable accepted command, execution options, selection hash, and stable operation ID.
 The manager records the intent and request fingerprint in the existing `owner_effects` row before provider effects.
 Attempts, Pod references, and results use the same operation.
+The store writes UTC timestamps at PostgreSQL microsecond precision so JSON and row timestamps agree after restart.
+A terminal snapshot is immutable except for its update timestamp.
+Identical saves and additional durable attempt markers cannot replace its status, Pod references, or evidence.
 An uncertain create remains `ReconciliationRequired`; it does not authorize another Pod.
 Command create, read, and reconcile responses use `SandboxBuildTestOperationResult`, which contains the operation and replay flag.
 Reconcile requests retain the same complete checkpoint and expected binding as the original command request.
@@ -232,7 +235,8 @@ Logs are bounded command output, not file evidence.
 
 BuildTest does not advance MAF checkpoints, turns, or run status.
 Core retains that state and its interruption acknowledgement.
-These source contracts and tests do not prove PostgreSQL execution, Kubernetes isolation, Cilium datapath enforcement, or complete native accounting.
+Disposable PostgreSQL tests verify owner-store reservation, restart replay, and terminal-evidence preservation.
+They do not prove command-Pod execution, Kubernetes isolation, Cilium datapath enforcement, or complete native accounting.
 
 ## Retirement and storage retention
 

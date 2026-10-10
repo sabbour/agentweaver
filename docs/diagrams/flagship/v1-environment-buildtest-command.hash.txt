@@ -2,11 +2,11 @@
   "version": 2,
   "source": {
     "file": "v1-environment-buildtest-command.json",
-    "sha256": "f4197f98c15f8c573f55896a55e442910a020d19a006e2387c457e3189e017db"
+    "sha256": "ffe6224582776eed38ceaa9986fb54bbf4aef8be8dfe74d25ca917e499404c60"
   },
   "drawio": {
     "file": "v1-environment-buildtest-command.drawio",
-    "sha256": "a4ec0688de7d8daeef0588f553b82b02579d56041624442155416d7952fdb421"
+    "sha256": "a0140f66ddb537e5bebf5df2834827e613794788d037797ed114a9d69b3dacf3"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-environment-buildtest-command.png",
-    "sha256": "b8a1d1aa22d501c319d0f441c5191a05c6c2d395d0cf988b81312451f9c3c9cf"
+    "sha256": "0bf6f687ace630d382648eb8c76268debfa975adf1d09ab5a535c279901b5099"
   }
 }

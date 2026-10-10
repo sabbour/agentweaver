@@ -20,6 +20,20 @@ These tests cover immutable accepted intent, bounded receipts, collector interru
 The migration/model test generates metadata only; it does not connect to PostgreSQL.
 These results do not prove durable provider effects, Kubernetes isolation, Cilium datapath enforcement, or MAF recovery.
 
+Run the BuildTest owner-store tests with the existing disposable PostgreSQL fixture:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --filter "FullyQualifiedName~EnvironmentSandboxBuildTestCommandPostgresTests" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+These tests create the owner, attached Workspace, and active Sandbox through their production stores.
+They cover concurrent reservation, replay from a new store and connection pool, immutable-command conflicts, and stale-binding rejection without an effect row.
+They also cover retirement, durable policy-attempt markers, PostgreSQL timestamp precision, and terminal-result preservation.
+Replay preserves the original result; a later save cannot replace terminal evidence or return a terminal operation to Running.
+These store tests do not execute command Pods, prove HTTP authorization, or verify live Kubernetes isolation and Cilium enforcement.
+
 The lease tests use the test project's disposable PostgreSQL 16 container. They
 cover per-Environment capacity, idempotent reservation, owner lifecycle fencing,
 explicit abandonment, supported terminal evidence, exact release receipts,
