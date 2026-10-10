@@ -36,6 +36,11 @@ import {
 import { gatewayClient, GatewayError } from './api';
 import { CopilotPopupCallbackPage, CopilotUserConnectionPanel } from './CopilotUserConnectionPanel';
 import { COPILOT_CALLBACK_PATH } from './copilotCallback';
+import { RemoteMcpOAuthPopupCallbackPage } from './RemoteMcpOAuthCallbackPage';
+import {
+  isRemoteMcpOAuthCallbackMessage,
+  REMOTE_MCP_OAUTH_CALLBACK_PATH,
+} from './remoteMcpOAuthCallback';
 import {
   isCurrentRepoAppPopupCallback,
   isRepoAppConnectedCallbackMessage,
@@ -2977,6 +2982,42 @@ function RepoAppPopupCallbackPage() {
   );
 }
 
+function RemoteMcpOAuthCallbackRelay() {
+  const { apiCall } = useAuth();
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent<unknown>) => {
+      const callback = event.data;
+      if (event.origin !== window.location.origin ||
+          !event.source ||
+          event.source === window ||
+          !isRemoteMcpOAuthCallbackMessage(callback))
+        return;
+
+      setNotice('The Remote MCP provider returned. Checking the authorization with Identity.');
+      void apiCall(
+        (token, tenantSelector) =>
+          gatewayClient.completeRemoteMcpOAuthCallback(token, callback, tenantSelector),
+        null,
+      ).then(() => {
+        setNotice('The Remote MCP authorization was received by Identity.');
+      }).catch((reason: unknown) => {
+        setNotice(callback.error === 'access_denied' &&
+          errorCode(reason) === 'remote_mcp_oauth_consent_denied'
+          ? 'The Remote MCP authorization was canceled.'
+          : `The Remote MCP authorization could not be completed: ${errorMessage(reason)}`);
+      });
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [apiCall]);
+
+  return notice
+    ? <div className="v1-content" role="status" aria-live="polite">{notice}</div>
+    : null;
+}
+
 function AuthenticatedRoutes() {
   const { session, consent } = useAuth();
   if (consent) return <ConsentScreen />;
@@ -3008,7 +3049,9 @@ export default function App() {
     window.opener && window.opener !== window;
   return (
     <FluentProvider theme={agentweaverLightTheme}>
-      {window.location.pathname === COPILOT_CALLBACK_PATH
+      {window.location.pathname === REMOTE_MCP_OAUTH_CALLBACK_PATH
+        ? <RemoteMcpOAuthPopupCallbackPage />
+        : window.location.pathname === COPILOT_CALLBACK_PATH
         ? <CopilotPopupCallbackPage />
         : repoAppCallback
         ? <RepoAppPopupCallbackPage />
@@ -3018,6 +3061,7 @@ export default function App() {
           <AuthProvider>
             <BrowserRouter>
               <RepoAppCallbackRelay />
+              <RemoteMcpOAuthCallbackRelay />
               <AuthenticatedRoutes />
             </BrowserRouter>
           </AuthProvider>
