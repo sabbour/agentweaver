@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 using Xunit;
@@ -7,6 +8,58 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 
 public sealed class WorkflowBuildTestCommandTests
 {
+    [Fact]
+    public void LegacyWorkflowCommandOmitsRepositorySeedFields()
+    {
+        var json = JsonSerializer.Serialize(Command(), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.DoesNotContain("workspaceSource", json);
+    }
+
+    [Fact]
+    public void RepositorySeedChangeRequiresNewWorkflowConfirmation()
+    {
+        var source = new SandboxBuildTestWorkspaceSource(
+            2, new("project", "run", "session"), "tenant", "issuer", "actor",
+            "source-pin", new string('A', 64),
+            new(ProviderSeam.SourceControl, "github", "repository", 1),
+            "workspace", Guid.Parse("5956a121-5556-4c16-848c-0d4a2937966d"),
+            "branch", new string('a', 40), new string('c', 40),
+            "seed", new string('a', 64), 1024,
+            new string('c', 64), 512, new string('d', 64), 128);
+        var command = Command() with { WorkspaceSource = source };
+        var changed = command with
+        {
+            WorkspaceSource = source with { SeedSha256 = new string('b', 64) }
+        };
+
+        var diff = WorkflowScopeDiffer.Compare(Snapshot(command), Snapshot(changed));
+
+        Assert.True(diff.RequiresConfirmation);
+        Assert.Equal(["build-test"], diff.ChangedStepIds.ToArray());
+        Assert.False(WorkflowScopeDiffer.Compare(
+            Snapshot(command), Snapshot(command with { WorkspaceSource = source with { } })).RequiresConfirmation);
+    }
+
+    [Fact]
+    public void WorkflowRejectsARepositorySeedWithTheWrongVersion()
+    {
+        var source = new SandboxBuildTestWorkspaceSource(
+            1, new("project", "run", "session"), "tenant", "issuer", "actor",
+            "source-pin", new string('A', 64),
+            new(ProviderSeam.SourceControl, "github", "repository", 1),
+            "workspace", Guid.Parse("5956a121-5556-4c16-848c-0d4a2937966d"),
+            "branch", new string('a', 40), new string('c', 40),
+            "seed", new string('a', 64), 1024,
+            new string('c', 64), 512, new string('d', 64), 128);
+
+        var result = WorkflowDefinitionValidator.ValidateAndSnapshot(
+            Definition(Command() with { WorkspaceSource = source }));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Issues, issue => issue.Code == WorkflowValidationCode.InvalidBuildTestCommand);
+    }
+
     [Fact]
     public void SnapshotsTypedCommandWithoutInterpretingArgumentsOrChoosingExecutionOptions()
     {

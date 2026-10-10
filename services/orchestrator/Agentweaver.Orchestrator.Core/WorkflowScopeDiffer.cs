@@ -79,6 +79,7 @@ public static class WorkflowScopeDiffer
               left.ExecutableReference == right.ExecutableReference &&
               left.Arguments.SequenceEqual(right.Arguments, StringComparer.Ordinal) &&
               left.WorkingDirectory == right.WorkingDirectory &&
+              left.WorkspaceSource == right.WorkspaceSource &&
               left.Outputs.SequenceEqual(right.Outputs);
 
     private static bool Equivalent(FixedWorkSpecification? left, FixedWorkSpecification? right) =>

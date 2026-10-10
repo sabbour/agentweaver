@@ -71,6 +71,9 @@ internal sealed record MafExecutionBuildTestIntent(
     SandboxBuildTestAcceptedExecutionOptions ExecutionOptions,
     SandboxBuildTestExpectedBinding ExpectedBinding)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<byte>? WorkspaceSeed { get; init; }
+
     internal SandboxBuildTestCheckpointReference CheckpointReference() =>
         new(Identity.ProjectId, Identity.RunId, Identity.SessionId, CheckpointId, WorkPlanId,
             StepId, CheckpointRevision, DecisionStateVersion, ExecutionFence, AcceptedSelectionHash);
@@ -81,11 +84,16 @@ internal sealed record MafExecutionBuildTestIntent(
             ExecutionOptions.ProfileId != Command.ExecutionProfileReference)
             throw new ArgumentException("The BuildTest command must use its pinned execution profile.");
         var accepted = new SandboxBuildTestAcceptedCommand(
-            1, OperationId, CheckpointReference(), Command.ExecutableReference, Command.Arguments,
+            Command.WorkspaceSource is null ? 1 : 2,
+            OperationId, CheckpointReference(), Command.ExecutableReference, Command.Arguments,
             Command.WorkingDirectory,
             Command.Outputs.Select(output => new SandboxBuildTestOutputObligation(
                 output.Name, output.RelativePath, output.Required, output.MaximumBytes)).ToImmutableArray(),
-            ExecutionOptions, string.Empty);
+            ExecutionOptions, string.Empty)
+        {
+            WorkspaceSource = Command.WorkspaceSource,
+            WorkspaceSeed = WorkspaceSeed
+        };
         return (accepted with { ImmutableHash = accepted.ComputeImmutableHash() }).Validate();
     }
 

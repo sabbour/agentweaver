@@ -391,6 +391,42 @@ public sealed class GitWorkspaceManager
         }
     }
 
+    public async Task<GitWorkspaceBuildTestSeedDocument> CreateBuildTestSeedAsync(
+        GitWorkspaceCaptureRequest request,
+        GitWorkspace workspace,
+        CancellationToken cancellationToken)
+    {
+        var capture = await CaptureAsync(request, workspace, cancellationToken).ConfigureAwait(false);
+        var baseline = GitWorkspaceCapturePackage.Create(capture);
+        var emptyGitConfig = Path.Combine(Path.GetDirectoryName(workspace.Path)!, "git-empty-config");
+        var pack = await RunGitAsync(
+            workspace.Path,
+            ["pack-objects", "--stdout", "--revs", "--delta-base-offset"],
+            ProducedRunCaptureLimits.MaximumPackageBytes,
+            emptyGitConfig,
+            remoteUri: null,
+            credential: null,
+            cancellationToken,
+            standardInput: Encoding.ASCII.GetBytes(capture.BaseSha + "\n"),
+            outputFailureCode: GitWorkspaceFailureCode.CaptureTooLarge).ConfigureAwait(false);
+        var header = Encoding.ASCII.GetBytes(
+            "# v2 git bundle\n" + capture.BaseSha.ToLowerInvariant() + " refs/heads/buildtest-base\n\n");
+        if ((long)header.Length + pack.Length > ProducedRunCaptureLimits.MaximumPackageBytes)
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CaptureTooLarge, "The BuildTest Git bundle exceeds its byte limit.");
+        var bundle = new byte[header.Length + pack.Length];
+        header.CopyTo(bundle, 0);
+        pack.CopyTo(bundle, header.Length);
+        var verified = GitWorkspaceCapturePackage.Create(
+            await CaptureAsync(request, workspace, cancellationToken).ConfigureAwait(false));
+        if (verified.ManifestSha256 != baseline.ManifestSha256 ||
+            verified.PackageSha256 != baseline.PackageSha256)
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace, "The source workspace changed during BuildTest seed creation.");
+        var bytes = GitWorkspaceBuildTestSeedPackage.Create(baseline, bundle);
+        return new(baseline, bundle, bytes, GitWorkspaceCapturePackage.Hash(bytes));
+    }
+
     private async Task<ImmutableArray<GitWorkspaceCapturedFile>> ReadCapturedFilesAsync(
         string repositoryPath,
         string emptyGitConfig,

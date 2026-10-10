@@ -205,8 +205,9 @@ public static class GitWorkspaceCapturePackage
     public static string Hash(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexStringLower(SHA256.HashData(bytes));
 
-    private static void ValidateManifest(GitWorkspaceCapturedOutputManifest manifest)
+    public static void ValidateManifest(GitWorkspaceCapturedOutputManifest manifest)
     {
+        ArgumentNullException.ThrowIfNull(manifest);
         if (manifest.ContractVersion != ProducedRunCaptureLimits.ContractVersion ||
             string.IsNullOrWhiteSpace(manifest.WorkspaceId) ||
             manifest.WorkspaceId.Length > 128 ||

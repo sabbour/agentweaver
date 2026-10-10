@@ -12,6 +12,48 @@ namespace Agentweaver.SourceControl.Tests;
 public sealed class GitWorkspaceManagerTests
 {
     [Fact]
+    public async Task ExportsCredentialFreeSeedWithARealCompleteBaseBundleAndFullInventory()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            var sourceRepository = Path.Combine(temporaryRoot, "source-repository");
+            var baseSha = await CreateGitRepositoryAsync(sourceRepository);
+            var manager = new GitWorkspaceManager(
+                Path.Combine(temporaryRoot, "workspaces"),
+                new LocalGitRepositoryRemote(new Uri(sourceRepository)));
+            var request = CreateRequest("seed-run", "seed-workspace", baseSha);
+            var workspace = await manager.PrepareAsync(request, CancellationToken.None);
+            var captureRequest = new GitWorkspaceCaptureRequest(
+                request.Context.Binding, request.Context.Repository,
+                request.WorkspaceId, request.BaseSha, request.BranchName);
+            var index = Path.Combine(workspace.Path, ".git", "index");
+            var indexBefore = await File.ReadAllBytesAsync(index);
+            var seed = await manager.CreateBuildTestSeedAsync(captureRequest, workspace, CancellationToken.None);
+            var bundlePath = Path.Combine(temporaryRoot, "base.bundle");
+            await File.WriteAllBytesAsync(bundlePath, seed.BundleBytes);
+            await RunFixtureGitAsync(workspace.Path, ["bundle", "verify", bundlePath]);
+            var clone = Path.Combine(temporaryRoot, "seed-clone");
+            await RunFixtureGitAsync(
+                temporaryRoot, ["-c", "core.autocrlf=false", "clone", "--branch", "buildtest-base", bundlePath, clone]);
+
+            Assert.Equal(
+                await File.ReadAllBytesAsync(Path.Combine(workspace.Path, "README.md")),
+                await File.ReadAllBytesAsync(Path.Combine(clone, "README.md")));
+            Assert.Equal(baseSha, seed.Baseline.Manifest.BaseSha);
+            Assert.Equal(2, seed.Baseline.Manifest.Files.Length);
+            Assert.Equal(indexBefore, await File.ReadAllBytesAsync(index));
+            Assert.Equal(seed.Sha256, GitWorkspaceCapturePackage.Hash(seed.Bytes));
+            Assert.DoesNotContain("transient-token", Encoding.UTF8.GetString(seed.BundleBytes));
+            Assert.DoesNotContain("transient-token", Encoding.UTF8.GetString(seed.Baseline.ManifestBytes));
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
     public async Task CreatesIsolatedRunWorkspacesAndRecoversOwnedWorkspace()
     {
         var temporaryRoot = CreateTemporaryDirectory();
