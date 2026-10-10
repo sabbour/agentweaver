@@ -73,6 +73,37 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void ByokBindingPinMustMatchTheAcceptedModelReferenceAndProvider()
+    {
+        var pin = new RuntimeModelBindingPin(1, "byok-model", "azure-deployment", ModelSourceMode.Byok,
+            "bindings-v1", new string('a', 64)) { ProviderType = "azure" };
+        var project = new ProjectConfiguration
+        {
+            ModelSelection = new("byok-model", new SecretRef("model-key", "version-1"), ModelSourceMode.Byok)
+            {
+                ModelBindingPin = pin
+            }
+        };
+        Assert.Equal(pin, ProjectConfigurationValidator.Validate(project).ModelSelection!.ModelBindingPin);
+        foreach (var changed in new[]
+        {
+            pin with { ModelSelectionReference = "foreign" },
+            pin with { SourceMode = ModelSourceMode.HostedCopilot },
+            pin with { ProviderType = null },
+            pin with { ConfigurationHash = "invalid" },
+            pin with { ConfigurationHash = new string('A', 64) },
+            pin with { ModelId = "invalid model" },
+            pin with { ConfigurationRevision = new string('a', 257) }
+        })
+            Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(project with
+            {
+                ModelSelection = project.ModelSelection! with { ModelBindingPin = changed }
+            }));
+        Assert.DoesNotContain("modelBindingPin", JsonSerializer.Serialize(
+            new ModelSelectionSettings("legacy"), new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    }
+
+    [Fact]
     public void NormalizesEgressAndAllowsOnlySubsetWithRequiredDestinations()
     {
         var baseline = ProjectConfigurationValidator.Validate(PlatformDefaults()).EgressBaseline;

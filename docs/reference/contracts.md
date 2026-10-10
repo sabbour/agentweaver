@@ -735,6 +735,13 @@ Every asynchronous redemption and SDK preparation boundary revalidates that proo
 Rotation changes the credential revision, not the immutable accepted selection.
 Controlled native transport evidence does not prove GitHub entitlement or deployed connection services.
 BYOK usage retains token measurements and rejects Copilot nano-AIU attribution.
+BYOK selections also retain the server-owned `ModelBindingPin`, including its provider type and configuration hash.
+The Host compares this pin before SDK use. A missing or changed pin denies the session without a hosted fallback.
+`SdkSessionFacts.ByokProvider` records the actual provider type, effective deployment ID, and accepted configuration hash.
+The deployment ID must equal both source and usage model IDs.
+Core rejects missing input/output measurements, changed provider facts, and Copilot units.
+The controlled Azure fixture proves a dispatched native usage event through Broker, Core PostgreSQL, and reference-only Events accounting.
+This proof does not authorize paid Azure calls.
 Without an admitted Cost provider, its accounting remains `Unpriced`, not zero-cost or hard-bound admission proof.
 
 ## Projects & Config authorization context

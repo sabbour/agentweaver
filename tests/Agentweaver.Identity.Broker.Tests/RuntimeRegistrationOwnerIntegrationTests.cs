@@ -33,6 +33,30 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
+    private static RuntimeModelBindingsResolver AzureByokModelBindings() => new("azure-byok-bindings-v1",
+        new Dictionary<string, RuntimeModelBinding>
+        {
+            ["platform-model"] = new("controlled-model", ModelSourceMode.Byok,
+                new("azure", new Uri("https://byok.test/"), "responses", "2025-04-01-preview"))
+            {
+                PromptCapacityTokens = 20000
+            }
+        });
+
+    [Fact]
+    public Task AzureByokNativeUsageUsesBrokerCoreAndEventsWithExactDispatchProvenance() =>
+        RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            false, null, false, OwnerRunFailureState.Indeterminate, azureByok: true);
+
+    [Theory]
+    [InlineData("sdk-preparation-grant")]
+    [InlineData("sdk-preparation-lease")]
+    [InlineData("sdk-preparation-expiry")]
+    [InlineData("head")]
+    public Task AzureByokAuthorityLossPreventsNativeOrLedgerEffects(string loss) =>
+        RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            false, loss, false, OwnerRunFailureState.Indeterminate, azureByok: true);
+
     [Theory]
     [InlineData("grant")]
     [InlineData("lease")]
@@ -46,7 +70,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         EventsIntegrationFactory events, string runToken, RuntimeOwnerContext owner, Guid membershipId,
         ICoordinatorSandboxResourceProvider sandboxProvider, bool revokeSourceBeforeSdk, string? sourceLoss,
         ControlledCopilotConnection copilotConnection, string connectionOwnerToken,
-        Func<bool, Task> setHistoricalReadAuthority)
+        Func<bool, Task> setHistoricalReadAuthority, RecordingSecretRedemption? byokSecrets = null)
     {
         await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membershipId,
             ProjectAuthorityResourceType.Project, owner.ProjectId, ProjectAuthorityRole.Owner);
@@ -118,7 +142,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(owner.ModelCredentialReference, registration.Binding.ModelCredentialReference);
         Assert.Equal(owner.ModelConnectionId, registration.Binding.ModelConnectionId);
         Assert.Equal(owner.ModelConnectionScope, registration.Binding.ModelConnectionScope);
-        Assert.Equal(ModelSourceMode.HostedCopilot, owner.ModelSourceMode);
+        Assert.Equal(byokSecrets is null ? ModelSourceMode.HostedCopilot : ModelSourceMode.Byok, owner.ModelSourceMode);
+        Assert.Equal(owner.ModelBindingPin, registration.Binding.ModelBindingPin);
         Assert.Equal(owner.ModelSourceMode, registration.Binding.ModelSourceMode);
         Assert.Equal(owner.AcceptedSelectionHash, registration.Binding.AcceptedSelectionHash);
         Assert.Equal(environment.Lease.LeaseRevision, registration.Binding.EnvironmentLeaseRevision);
@@ -140,7 +165,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
             registration, signingKey, runToken, routes, failures, projects, events.Schema, ownerSchema,
             revokeSourceBeforeSdk, sourceLoss, environment, copilotConnection,
-            connectionOwnerToken, setHistoricalReadAuthority, factory.Services);
+            connectionOwnerToken, setHistoricalReadAuthority, factory.Services, byokSecrets);
         TraceNativeStage(failures, "Runtime exercise and explicit cleanup completed.");
     }
 
@@ -150,7 +175,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         ProjectsConfigResourceServer projects, string eventsSchema, string ownerSchema, bool revokeSourceBeforeSdk,
         string? sourceLoss, RuntimePlacementTestServer environment, ControlledCopilotConnection copilotConnection,
         string connectionOwnerToken, Func<bool, Task> setHistoricalReadAuthority,
-        IServiceProvider orchestratorServices)
+        IServiceProvider orchestratorServices, RecordingSecretRedemption? byokSecrets = null)
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         var expiryTimeProvider = sourceLoss == "sdk-preparation-expiry"
@@ -175,6 +200,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             configureServices: services =>
             {
                 copilotConnection.ConfigureServices(services, projects.CreateHandler);
+                if (byokSecrets is not null)
+                {
+                    services.RemoveAll<ISecretRedemption>();
+                    services.AddSingleton<ISecretRedemption>(byokSecrets);
+                }
                 services.AddHttpClient(nameof(RuntimeRegistrationHttpClient))
                     .ConfigurePrimaryHttpMessageHandler(() => new RuntimeServiceRouter(routes, failures));
                 services.AddHttpClient(nameof(BrokerRuntimeBootstrapDeliveryClient))
@@ -201,10 +231,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var redeemed = JsonSerializer.Deserialize<RuntimeModelCredentialResponse>(
                     bytes, CoordinationJsonOptions);
                 Assert.NotNull(redeemed);
-                Assert.Equal(copilotConnection.AccessToken, redeemed.Value);
+                Assert.Equal(byokSecrets?.Value ?? copilotConnection.AccessToken, redeemed.Value);
                 Assert.Equal(registration.Binding.ModelConnectionId, redeemed.Receipt.ConnectionId);
-                Assert.Equal(RuntimeModelCredentialKind.GitHubUserAccess, redeemed.Receipt.CredentialKind);
-                Assert.Equal($"version-{copilotConnection.Writes}", redeemed.Receipt.CredentialReference.Version);
+                Assert.Equal(byokSecrets is null ? RuntimeModelCredentialKind.GitHubUserAccess :
+                    RuntimeModelCredentialKind.ByokKey, redeemed.Receipt.CredentialKind);
+                Assert.Equal(byokSecrets is null ? $"version-{copilotConnection.Writes}" : "model-v1",
+                    redeemed.Receipt.CredentialReference.Version);
                 Assert.True(redeemed.ExpiresAt <= redeemed.Receipt.ExpiresAt);
                 Assert.True(response.Headers.CacheControl?.NoStore);
             };
@@ -212,7 +244,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             (request, response, token) => inspectOwnerResponse?.Invoke(request, response, token) ?? Task.CompletedTask));
         var currentOwner = new RuntimeRegistrationHttpClient(owners, new("https://orchestrator.test/"));
         await using var sdk = new ControlledCopilotRuntime(TimeSpan.FromMinutes(5));
-        sdk.SdkCredential = copilotConnection.AccessToken;
+        sdk.Byok = byokSecrets is not null;
+        sdk.SdkCredential = byokSecrets?.Value ?? copilotConnection.AccessToken;
         using var runtimeHttp = new HttpClient(new RuntimeServiceRouter(routes, failures,
             (request, response, token) => inspectRuntimeResponse?.Invoke(request, response, token) ?? Task.CompletedTask))
         {
@@ -275,13 +308,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Assert.Equal(delivered, replay);
             }
             Assert.Equal(RuntimeBootstrapReceiverState.Pending, receiver.State);
-            var factory = new RuntimeCopilotSessionFactory(
-                sdk.Connection, Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
-                new Dictionary<string, RuntimeModelBinding>
+            var modelBindings = sdk.Byok ? AzureByokModelBindings() :
+                new RuntimeModelBindingsResolver("legacy-unversioned", new Dictionary<string, RuntimeModelBinding>
                 {
                     [registration.Binding.ModelSelectionReference!] =
                         new(sdk.ModelId, ModelSourceMode.HostedCopilot)
                 });
+            var factory = new RuntimeCopilotSessionFactory(
+                sdk.Connection, Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
+                modelBindings);
             var runtimeBroker = new RuntimeBrokerCredentialClient(
                 runtimeHttp, broker.BaseAddress!, IdentityBrokerWebApplicationFactory.Issuer, actor, runtimeTimeProvider);
             sdk.ExpectedAvailableToolsCount = 7;
@@ -429,11 +464,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 bootstrap, configuration, consumeOperationId, exchangeOperationId, timeout.Token);
             TraceNativeStage(failures, "Native configure completed.");
             Assert.Equal(RuntimeBootstrapReceiverState.Ready, receiver.State);
-            Assert.Contains(copilotConnection.Reads, request =>
+            if (byokSecrets is null)
+                Assert.Contains(copilotConnection.Reads, request =>
                 request.Secret.Id == $"copilot-user-{registration.Binding.ModelConnectionId:N}" &&
                 request.Secret.Version == $"version-{copilotConnection.Writes}" &&
                 request.Purpose == RuntimeSecretPurposes.ModelSession &&
                 request.RunId == registration.Binding.RunId);
+            else
+            {
+                Assert.Contains(byokSecrets.Requests, request =>
+                    request.Secret == registration.Binding.ModelCredentialReference &&
+                    request.Purpose == RuntimeSecretPurposes.ModelSession &&
+                    request.RunId == registration.Binding.RunId);
+                Assert.Empty(copilotConnection.Reads);
+                Assert.Equal(new SdkByokProviderFacts("azure", sdk.ModelId, modelBindings.ConfigurationHash),
+                    session.Facts.ByokProvider);
+            }
             failures.Enqueue($"After SDK configure: {elapsed.Elapsed}");
             output.WriteLine(failures.Last());
             Assert.Equal(registration, session.Registration);
@@ -482,16 +528,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(7, accepted.Usage.Measurement.CachedTokens);
             Assert.Equal(5, accepted.Usage.Measurement.CacheWriteTokens);
             Assert.Equal(3, accepted.Usage.Measurement.ReasoningTokens);
-            Assert.Equal(1234567.25m, accepted.Usage.Measurement.ProviderUnits);
+            Assert.Equal(sdk.Byok ? (decimal?)null : 1234567.25m, accepted.Usage.Measurement.ProviderUnits);
             Assert.Equal(12.5m, accepted.Usage.Measurement.DurationMilliseconds);
             Assert.Null(accepted.Usage.Measurement.RequestCount);
-            Assert.Equal(2.5m, session.Facts.ModelMultiplier);
+            Assert.Equal(sdk.Byok ? (decimal?)null : 2.5m, session.Facts.ModelMultiplier);
             await sdk.EmitUsageAsync(sdk.UsageData());
             Assert.True(await usage.MoveNextAsync());
             Assert.Equal(accepted, usage.Current);
             var observation = new SdkUsageObservation(
                 accepted.Usage.EventId, accepted.Usage.SdkEventId!, session.Facts.SdkSessionId,
-                accepted.Usage.OccurredAt, session.Facts.ModelId, 17, 11, 7, 5, 3, 1234567.25m, 12.5m);
+                accepted.Usage.OccurredAt, session.Facts.ModelId, 17, 11, 7, 5, 3,
+                sdk.Byok ? null : 1234567.25m, 12.5m);
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 sourceClient.AppendAsync(session, observation with { CacheWriteTokens = 6 }, timeout.Token));
             await AssertNativeSourceCountsAsync(ownerSchema, 1, 1);
@@ -508,7 +555,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     await VerifyNativeSessionMaterialAsync(session, runToken, actor,
                         projects, failures, sdk, async () =>
                         {
-                            using var currentConnection = await SendAsync(broker, HttpMethod.Get,
+                            if (!sdk.Byok)
+                            {
+                                using var currentConnection = await SendAsync(broker, HttpMethod.Get,
                                 $"/internal/connections/copilot-user/{registration.Binding.ModelConnectionId:D}",
                                 connectionOwnerToken, [registration.Binding.TenantId]);
                             await AssertStatusAsync(currentConnection, HttpStatusCode.OK);
@@ -519,11 +568,34 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                                 "/internal/connections/copilot-user/revoke", connectionOwnerToken,
                                 new ChangeCopilotConnectionRequest(current.ConnectionId, current.Revision));
                             await AssertStatusAsync(disconnected, HttpStatusCode.OK);
+                            }
                             environment.ExpireCurrentLease();
                             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                                 currentOwner.ReadCurrentAsync(registration.RuntimeInstanceId, actor, timeout.Token));
                         }, setHistoricalReadAuthority, sourceClient, orchestratorServices, ownerSchema,
-                        materialClient, objects, timeout.Token);
+                        materialClient, objects, timeout.Token, sdk.Byok ? async recorded =>
+                        {
+                            Assert.True(await usage.MoveNextAsync());
+                            var nativeReceipt = usage.Current;
+                            Assert.Equal(sdk.NativeUsageEventId.ToString("D"), nativeReceipt.Usage.SdkEventId);
+                            Assert.Equal(recorded.Admission.MessageId, nativeReceipt.Usage.A2AMessageId);
+                            Assert.Equal(session.Facts, nativeReceipt.Usage.SdkSource);
+                            Assert.Equal(session.Registration, nativeReceipt.Registration);
+                            Assert.Contains(sdk.NativeUsageEventId, recorded.Observation.UsageEventIds);
+                            using var appended = await SendJsonAsync(materialClient, HttpMethod.Post,
+                                $"/internal/sessions/{registration.Binding.SessionId}/usage-receipts", runToken,
+                                new RuntimeUsageReceiptReferenceRequest(nativeReceipt.ReceiptId));
+                            await AssertStatusAsync(appended, HttpStatusCode.OK);
+                            var ack = await appended.Content.ReadFromJsonAsync<RuntimeUsageAccountingAcknowledgment>(
+                                CoordinationJsonOptions);
+                            Assert.NotNull(ack);
+                            Assert.Equal(CostDisposition.Unpriced, ack.Accounting.Disposition);
+                            Assert.Equal(nativeReceipt.Usage.EventId, ack.Accounting.EventId);
+                            await AssertNativeSourceCountsAsync(ownerSchema, 1, 2);
+                            await AssertNativeAccountingCountsAsync(eventsSchema, 2, 0);
+                            return ImmutableArray.Create(new RuntimeUsageCostReceiptReference(
+                                nativeReceipt.ReceiptId, ack.Accounting));
+                        } : null);
                     await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.DisposeAsync().AsTask());
                     Assert.Equal(RuntimeBootstrapReceiverState.Disposed, receiver.State);
                 });
@@ -557,15 +629,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Func<Task> endRuntimeAuthority, Func<bool, Task> setHistoricalReadAuthority,
         RuntimeUsageSourceHttpClient sourceClient, IServiceProvider orchestratorServices, string ownerSchema,
         HttpClient client, RuntimeMaterialObjects objects,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<RuntimeNativeTurnRecordedReceipt, Task<ImmutableArray<RuntimeUsageCostReceiptReference>>>?
+            accountNativeUsage = null)
     {
-        var refreshOperation = Guid.NewGuid();
-        var previousSource = session.Proof();
-        var refreshed = await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken);
-        Assert.Equal(previousSource.Revision + 1, refreshed.SourceGrant.Revision);
-        Assert.False(previousSource.Credential.IsUsable());
-        Assert.Equal(refreshed,
-            await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken));
+        var sourceCredentialValue = session.Proof().Credential.GetValue();
         var material = new RuntimeSessionMaterialHttpClient(client, client.BaseAddress!, actor);
         var eventId = Guid.NewGuid();
         const string userContent = "Run the accepted bounded turn.";
@@ -597,6 +665,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(observeOnly, HttpStatusCode.Unauthorized);
         Assert.Equal(1, objects.Writes);
         Assert.True(staleFence.Headers.CacheControl?.NoStore);
+        var refreshOperation = Guid.NewGuid();
+        var previousSource = session.Proof();
+        var refreshed = await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken);
+        Assert.Equal(previousSource.Revision + 1, refreshed.SourceGrant.Revision);
+        Assert.False(previousSource.Credential.IsUsable());
+        Assert.Equal(refreshed,
+            await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken));
+        var refreshedCredentialValue = session.Proof().Credential.GetValue();
         TraceNativeStage(failures, "Guarded actual model turn and native cache begin.");
         var sendCount = sdk.Requests.Count(request => request.Method == "session.send");
         var legacyFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
@@ -667,16 +743,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await nativeOwner.PrepareNativeTurnAsync(context, session.Registration, rootIdentity, checkpoint, intent,
             message, RequireCurrentOwner, cancellationToken);
         sdk.EmitNativeCompletionReceipt = true;
+        sdk.EmitUsageWithTurn = accountNativeUsage is not null;
         var (answer, recorded) = await session.SendNativeTurnAsync(message, material, sourceClient, cancellationToken);
         Assert.Equal(sdk.AssistantResponse, answer);
         RuntimeNativeTurnContract.ValidateRecorded(recorded);
         Assert.Equal(intent.MessageId, recorded.Admission.MessageId);
         Assert.Equal(sdk.NativeMessageId.ToString("D"), recorded.Observation.NativeMessageId);
         Assert.Equal(sdk.NativeCompletionReceiptEventId, recorded.Observation.NativeCompletionReceiptEventId);
-        Assert.Empty(recorded.Observation.UsageEventIds);
-        var accounted = await sourceClient.CompleteNativeTurnAsync(session, recorded, [], cancellationToken);
-        RuntimeNativeTurnContract.ValidateAccounted(accounted, recorded, []);
-        Assert.Equal(0.00123456725m, Assert.Single(accounted.Snapshot.CopilotTotals.Amounts).Amount);
+        var references = accountNativeUsage is null
+            ? ImmutableArray<RuntimeUsageCostReceiptReference>.Empty : await accountNativeUsage(recorded);
+        if (accountNativeUsage is null)
+            Assert.Empty(recorded.Observation.UsageEventIds);
+        else
+            Assert.Single(recorded.Observation.UsageEventIds);
+        var accounted = await sourceClient.CompleteNativeTurnAsync(session, recorded, references, cancellationToken);
+        RuntimeNativeTurnContract.ValidateAccounted(accounted, recorded, references);
+        if (accountNativeUsage is null)
+            Assert.Equal(0.00123456725m, Assert.Single(accounted.Snapshot.CopilotTotals.Amounts).Amount);
+        else
+            Assert.Equal(Assert.Single(references), Assert.Single(accounted.Snapshot.RepresentedReceipts));
         await nativeOwner.RequireNativeTurnAccountedAsync(context, session.Registration, message, answer,
             RequireCurrentOwner, cancellationToken);
         Assert.Equal(sendCount + 1, sdk.Requests.Count(request => request.Method == "session.send"));
@@ -687,7 +772,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Contains(recovery.Turns, turn => turn == ("assistant", sdk.AssistantResponse));
         Assert.Equal(session.Facts.SdkVersion, recovery.Cache.Material.Reference.Material!.SdkVersion);
         Assert.DoesNotContain(sdk.SdkCredential, System.Text.Encoding.UTF8.GetString(recovery.Cache.Bytes));
-        Assert.DoesNotContain(session.Proof().Credential.GetValue(),
+        Assert.DoesNotContain(sourceCredentialValue,
+            System.Text.Encoding.UTF8.GetString(recovery.Cache.Bytes));
+        Assert.DoesNotContain(refreshedCredentialValue,
             System.Text.Encoding.UTF8.GetString(recovery.Cache.Bytes));
         Assert.True(await objects.DeleteAsync(recovery.Cache.Material.Reference.Key, cancellationToken));
         var missing = await material.ReadRecoveryAsync(session.Registration, cancellationToken);
@@ -809,12 +896,23 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var binding = sourceReceipt.Registration.Binding;
         var sdkSource = sourceReceipt.Usage.SdkSource;
         Assert.NotNull(sdkSource);
+        var byok = sdkSource.SourceMode == "byok";
         using var configuration = new TemporaryEnvironment(new Dictionary<string, string?>
         {
             ["EventsAndSessions__RuntimeUsage__Enabled"] = "true",
-            ["AgentHost__ModelBindingsRevision"] = "native-model-bindings-v1",
+            ["AgentHost__ModelBindingsRevision"] = byok ? "azure-byok-bindings-v1" : "native-model-bindings-v1",
             [$"AgentHost__ModelBindings__{sdkSource.ModelSelectionReference}__ModelId"] = sdkSource.ModelId,
-            [$"AgentHost__ModelBindings__{sdkSource.ModelSelectionReference}__SourceMode"] = "HostedCopilot",
+            [$"AgentHost__ModelBindings__{sdkSource.ModelSelectionReference}__SourceMode"] =
+                byok ? "Byok" : "HostedCopilot",
+            [$"AgentHost__ModelBindings__{sdkSource.ModelSelectionReference}__PromptCapacityTokens"] =
+                byok ? "20000" : null,
+            [$"AgentHost__ModelBindings__{sdkSource.ModelSelectionReference}__Provider__Type"] = byok ? "azure" : null,
+            [$"AgentHost__ModelBindings__{sdkSource.ModelSelectionReference}__Provider__BaseUrl"] =
+                byok ? "https://byok.test/" : null,
+            [$"AgentHost__ModelBindings__{sdkSource.ModelSelectionReference}__Provider__WireApi"] =
+                byok ? "responses" : null,
+            [$"AgentHost__ModelBindings__{sdkSource.ModelSelectionReference}__Provider__AzureApiVersion"] =
+                byok ? "2025-04-01-preview" : null,
             ["EventsAndSessions__Cost__Copilot__ResourceId"] = "native-copilot-cost",
             ["EventsAndSessions__Cost__Copilot__ResourceGeneration"] = "1",
             ["EventsAndSessions__Cost__Copilot__OptionsRevision"] = "native-cost-v1",
@@ -834,7 +932,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var client = factory.CreateDefaultClient(
             new Uri("https://events.test/"), new MaterialResponseTraceHandler(failures));
         var modelPin = factory.Services.GetRequiredService<RuntimeModelBindingsResolver>()
-            .Pin(sdkSource.ModelSelectionReference, ModelSourceMode.HostedCopilot);
+            .Pin(sdkSource.ModelSelectionReference, byok ? ModelSourceMode.Byok : ModelSourceMode.HostedCopilot);
         Assert.Equal(sdkSource.ModelId, modelPin.ModelId);
         var path = $"/internal/sessions/{binding.SessionId}/usage-receipts";
         using var forged = await SendJsonAsync(client, HttpMethod.Post, path, runToken,
@@ -850,12 +948,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.False(accepted.IsDuplicate);
         Assert.Equal(sourceReceipt.Usage.EventId, accepted.Accounting.EventId);
         Assert.Equal(sourceReceipt.Usage.Attribution, accepted.Accounting.Attribution);
-        Assert.Equal(0.00123456725m, accepted.Accounting.Amount);
-        Assert.Equal(CostDisposition.Estimate, accepted.Accounting.Disposition);
+        Assert.Equal(byok ? (decimal?)null : 0.00123456725m, accepted.Accounting.Amount);
+        Assert.Equal(byok ? CostDisposition.Unpriced : CostDisposition.Estimate, accepted.Accounting.Disposition);
         await AssertNativeHistoryImmutabilityAsync(eventsSchema,
             [("usage_source_receipts", "source_receipt_id"), ("usage_run_cost_bindings", "meter_source")],
             "reject_usage_receipt_mutation");
-        await AssertNativeAccountingCountsAsync(eventsSchema, 1);
+        await AssertNativeAccountingCountsAsync(eventsSchema, 1, byok ? 0 : 1);
         using var replay = await SendJsonAsync(client, HttpMethod.Post, path, runToken,
             new RuntimeUsageReceiptReferenceRequest(sourceReceipt.ReceiptId));
         await AssertStatusAsync(replay, HttpStatusCode.OK);
@@ -875,7 +973,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(binding.AgentId, agent.AgentId);
         Assert.Equal(5, agent.CacheWriteTokens);
         Assert.Null(agent.RequestCount);
-        Assert.Equal(0.00123456725m, Assert.Single(totals.Amounts).Amount);
+        if (byok)
+        {
+            Assert.Empty(totals.Amounts);
+            Assert.False(totals.IsFullyPriced);
+        }
+        else
+            Assert.Equal(0.00123456725m, Assert.Single(totals.Amounts).Amount);
         await using var source = NpgsqlDataSource.Create(_connectionString);
         await using var connection = await source.OpenConnectionAsync();
         await using var check = new NpgsqlCommand($"""
@@ -888,7 +992,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             """, connection);
         await using var reader = await check.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        Assert.All(Enumerable.Range(0, 5), column => Assert.Equal(1L, reader.GetInt64(column)));
+        Assert.All(Enumerable.Range(0, 5), column =>
+            Assert.Equal(byok && column == 1 ? 0L : 1L, reader.GetInt64(column)));
         routes.Add("events.test", () => factory.Server.CreateHandler());
         try
         {
@@ -944,7 +1049,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(observations, reader.GetInt64(1));
     }
 
-    private async Task AssertNativeAccountingCountsAsync(string schema, long expected)
+    private async Task AssertNativeAccountingCountsAsync(string schema, long expected, long? rateCards = null)
     {
         await using var connection = await _nativeDataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
@@ -957,7 +1062,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             """, connection);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        Assert.All(Enumerable.Range(0, 5), column => Assert.Equal(expected, reader.GetInt64(column)));
+        Assert.All(Enumerable.Range(0, 5), column =>
+            Assert.Equal(column == 1 ? rateCards ?? expected :
+                column == 3 && rateCards is not null ? Math.Min(expected, 1) : expected, reader.GetInt64(column)));
     }
 
     private Task AssertNativeSourceImmutabilityAsync(string schema) =>

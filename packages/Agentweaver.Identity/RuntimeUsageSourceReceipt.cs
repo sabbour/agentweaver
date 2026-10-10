@@ -327,7 +327,9 @@ public static class RuntimeUsageSourceReceiptContract
             model.MeterSource != source.MeterSource || model.SelectionRevision != binding.ContextRevision ||
             measurement.RequestCount is not null ||
             measurement.ProviderUnit != (source.SourceMode == "hosted-copilot" ? "nano_aiu" : "tokens") ||
-            source.SourceMode == "byok" && measurement.ProviderUnits is not null ||
+            source.SourceMode == "byok" &&
+                (measurement.ProviderUnits is not null || measurement.InputTokens is null ||
+                 measurement.OutputTokens is null) ||
             measurement.InputTokens < 0 || measurement.OutputTokens < 0 ||
             measurement.CachedTokens < 0 || measurement.CacheWriteTokens < 0 ||
             measurement.ReasoningTokens < 0 || measurement.ProviderUnits < 0 ||
@@ -383,6 +385,15 @@ public static class RuntimeUsageSourceReceiptContract
                 (source.MaxPromptTokens is null or < 1 || source.MaxPromptTokens > promptLimit))
             throw new RuntimeAuthorizationException("runtime_usage_binding_invalid");
         RuntimeContractValidation.ValidateHash(source.CatalogHash);
+        if (binding.ModelSourceMode == ModelSourceMode.Byok)
+        {
+            if (binding.ModelBindingPin is not { } pin || source.ByokProvider is not { } provider ||
+                provider.Type != pin.ProviderType || provider.Type is not ("azure" or "openai" or "anthropic") ||
+                provider.DeploymentId != source.ModelId || provider.ConfigurationHash != pin.ConfigurationHash)
+                throw new RuntimeAuthorizationException("runtime_byok_source_binding_invalid");
+        }
+        else if (source.ByokProvider is not null)
+            throw new RuntimeAuthorizationException("runtime_usage_binding_invalid");
         RequireText(source.SdkVersion);
         RequireText(source.RuntimeVersion);
         RequireText(source.ModelId);

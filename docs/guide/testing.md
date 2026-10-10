@@ -129,6 +129,15 @@ values are confirmed. The native filter is not part of offline test runs.
 
 ## Meter-keyed Cost source selection
 
+`AzureByokNativeUsageUsesBrokerCoreAndEventsWithExactDispatchProvenance` uses the real Broker, Projects, Core PostgreSQL, and Events owners.
+Only the external native SDK transport and credential backend are controlled.
+The fixture requires an accepted Azure provider pin and exact-version model-session redemption.
+It records an actual dispatch-correlated SDK usage event, duplicate/conflict outcomes, and reference-only Events acknowledgment.
+BYOK authority-loss cases reject stale grants, retired leases, and expiry without native or ledger effects.
+The Projects fixture reuses its role-bound connection pool and closes it before role cleanup.
+Provider/model mismatch and missing-measurement tests reject invalid source facts.
+These checks do not call a paid model or prove Azure deployment.
+
 Provider tests cover independent enabled selections, duplicate/disabled/wrong-seam
 catalog rejection, absent sources, exact adapter/options schema requirements and
 required capabilities. The Projects disposable-PostgreSQL tests use the production
