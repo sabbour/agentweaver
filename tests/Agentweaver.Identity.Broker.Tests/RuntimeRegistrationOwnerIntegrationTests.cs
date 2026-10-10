@@ -552,6 +552,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Func<Task> endRuntimeAuthority, Func<bool, Task> setHistoricalReadAuthority,
         CancellationToken cancellationToken)
     {
+        var refreshOperation = Guid.NewGuid();
+        var previousSource = session.Proof();
+        var refreshed = await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken);
+        Assert.Equal(previousSource.Revision + 1, refreshed.SourceGrant.Revision);
+        Assert.False(previousSource.Credential.IsUsable());
+        Assert.Equal(refreshed,
+            await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken));
         var objects = new RuntimeMaterialObjects();
         await using var factory = new EventsIntegrationFactory(
             _connectionString, eventsSchema, signingKey, projects.CreateHandler,
@@ -589,13 +596,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(observeOnly, HttpStatusCode.Unauthorized);
         Assert.Equal(1, objects.Writes);
         Assert.True(staleFence.Headers.CacheControl?.NoStore);
-        var refreshOperation = Guid.NewGuid();
-        var previousSource = session.Proof();
-        var refreshed = await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken);
-        Assert.Equal(previousSource.Revision + 1, refreshed.SourceGrant.Revision);
-        Assert.False(previousSource.Credential.IsUsable());
-        Assert.Equal(refreshed,
-            await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken));
         TraceNativeStage(failures, "Guarded actual model turn and native cache begin.");
         var answer = await session.SendTurnAsync("A bounded user request.", material, cancellationToken);
         Assert.Equal(sdk.AssistantResponse, answer);
