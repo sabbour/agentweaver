@@ -244,6 +244,56 @@ The focused Copilot lifecycle cases cover cookie/subject/state rejection before 
 concurrent refresh, transient recovery, permanent rejection, uncertain rotation, account change, and current Core revocation.
 These cases use disposable PostgreSQL and controlled external transports, not live OAuth or paid model calls.
 
+## P1 retained-surface harness candidates
+
+The [API adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/api-harness/README.md), [UI adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/ui-harness/README.md),
+and [MCP adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/mcp-harness/README.md) selectively reuse released 0.x patterns.
+They use current v1 contracts, not retired monolith routes or an inherited P0 acceptance result.
+
+```powershell
+npm run test:harness
+npm run test:harness:api
+npm run test:harness:ui
+npm run test:harness:mcp
+```
+
+The combined command runs controlled adapter checks.
+API tests use actual loopback HTTP with controlled contracts.
+MCP tests use the pinned SDK with an actual loopback JSON-RPC server.
+UI tests use a controlled injected-page contract, not a browser.
+These checks do not prove a real cross-surface journey, native model execution, or deployment.
+
+For an approved journey, discover the live API and MCP menus first.
+Use `requireJourneyCapabilities` from `scripts/harness-shared/journey-capabilities.mjs` before dispatch.
+It checks only the selected gate action, message, or journal requirements.
+Missing required operations block the journey; they do not produce a skipped success.
+Helper and menu presence are not proof of current DOM controls or owner authority.
+Journal replay requires API SSE support, but MCP deliberately does not advertise an SSE tool.
+
+The UI adapter requires an already authorized page and exact Broker identity metadata.
+It neither starts a browser nor changes its profile or stored credentials.
+Gate actions require current owner snapshots and exact request, actor, fence, state version, and answer contracts.
+Decision receipts must match that fence and the next state version, including owner denials.
+After awaited work, the adapter rechecks the exact page scope before final action clicks and replay proof.
+Actual denials remain denials.
+Message acceptance and local browser echoes cannot prove delivery or gate completion.
+
+The retained journal exposes ordered event DTOs and opaque object references.
+The public Gateway has no object-content read route.
+The UI adapter checks replay pages against the current DOM, without inventing transcript text.
+
+![Retained journal and owner evidence boundaries](/diagrams/flagship/v1-sessions-journal.png)
+
+The retained surfaces observe owner evidence; they do not create authority from browser output.
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> | <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
+
+Use the shared redacted JSONL writer and the [P1 judge brief](https://github.com/sabbour/agentweaver/blob/v1/scripts/harness-judge/README.md).
+Record exact source, target, scenario, surface, and owner evidence references.
+Do not persist transient raw bodies or credential values.
+An expected source SHA does not observe a deployment.
+Client disposal does not clean up a project, run, session, or Environment.
+Product cleanup requires current authority, exact test-owned identities, and verified owner receipts.
+
 ## Validate the documentation site
 
 Run these commands after changing a documentation page, link, or diagram:
