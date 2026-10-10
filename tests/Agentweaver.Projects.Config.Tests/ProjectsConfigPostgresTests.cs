@@ -310,6 +310,50 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             runId,
             RunRequest(assigned.Revision, defaults.Revision),
             CancellationToken.None);
+        var selectedRun = await db.RunSelections.AsNoTracking()
+            .SingleAsync(item => item.ProjectId == project.ProjectId &&
+                item.RunId == runId);
+        var acceptedSelection = JsonSerializer.Deserialize<EffectiveRunSelection>(
+            selectedRun.SnapshotJson, LegacyJsonOptions())
+            ?? throw new InvalidOperationException("The accepted run selection could not be read.");
+        var legacyRunId = "legacy-" + suffix;
+        var legacySelection = JsonSerializer.Serialize(
+            acceptedSelection with
+            {
+                RunId = legacyRunId,
+                ProjectConfiguration = acceptedSelection.ProjectConfiguration with
+                {
+                    Skills = [new SkillCatalogSetting(firstReceipt.SkillId, true, 0)],
+                },
+            },
+            LegacyJsonOptions());
+        db.RunSelections.Add(new ProjectRunSelectionRecord
+        {
+            RunId = legacyRunId,
+            ProjectId = project.ProjectId,
+            ProjectRevision = acceptedSelection.ProjectRevision,
+            ProjectConfigurationRevision = acceptedSelection.ProjectConfigurationRevision,
+            PlatformRuntimeRevision = acceptedSelection.PlatformRuntimeRevision,
+            ContextRevision = acceptedSelection.ContextRevision,
+            RequestFingerprint = selectedRun.RequestFingerprint,
+            SnapshotJson = legacySelection,
+            CreatedAt = selectedRun.CreatedAt,
+        });
+        await db.SaveChangesAsync();
+        var legacyPrincipal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "skill-orchestrator-" + suffix),
+            new Claim("scope", "api.read projects.orchestrator"),
+            new Claim("project_id", project.ProjectId),
+            new Claim("run_id", legacyRunId),
+        ], "test"));
+        var legacyRunCaller = await new ProjectAuthorizationOwner(
+                db, new ProjectsConfigIdentityOptions(TestIssuer))
+            .ResolveAsync(legacyPrincipal, [tenantId], CancellationToken.None);
+        var unpinnedLegacy = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            contentService.ReadAcceptedRunSkillsAsync(
+                legacyRunCaller, project.ProjectId, legacyRunId, "agent-one", CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, unpinnedLegacy.StatusCode);
 
         _ = await contentService.UpdateAsync(
             owner,
@@ -1134,35 +1178,63 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             tenantId,
             ProjectAuthorityRole.TenantAdmin);
         var project = await service.CreateProjectAsync(owner, "Scenario casting", CancellationToken.None);
-        var initial = await service.UpdateProjectConfigurationAsync(
-            owner,
-            project.ProjectId,
-            project.ConfigurationRevision,
+        var initial = await SeedHistoricalConfigurationAsync(
+            db,
+            project,
+            owner.ActorId,
             new ProjectConfiguration
             {
                 AgentCharters = [new ProjectAgentCharter("existing-agent", "Existing", "builder", "Existing charter")],
                 Casting = [new ProjectAgentCast("existing-agent", "builder", 0)],
-                DefaultWorkflowId = "baseline-workflow",
                 Skills = [new SkillCatalogSetting("existing-skill", true, 0)],
-            },
+            });
+        var newUnpinnedSkill = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.UpdateProjectConfigurationAsync(
+                owner,
+                project.ProjectId,
+                initial.Revision,
+                initial.Configuration with
+                {
+                    Skills = initial.Configuration.Skills.Add(
+                        new SkillCatalogSetting("new-legacy-skill", true, 1)),
+                },
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, newUnpinnedSkill.StatusCode);
+        var modifiedUnpinnedSkill = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.UpdateProjectConfigurationAsync(
+                owner,
+                project.ProjectId,
+                initial.Revision,
+                initial.Configuration with
+                {
+                    Skills = [initial.Configuration.Skills[0] with { Order = 1 }],
+                },
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, modifiedUnpinnedSkill.StatusCode);
+        var ordinaryUpdate = await service.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            initial.Revision,
+            initial.Configuration with { DefaultWorkflowId = "baseline-workflow" },
             CancellationToken.None);
+        Assert.Equal(initial.Configuration.Skills.ToArray(), ordinaryUpdate.Configuration.Skills.ToArray());
         var revisionsBeforeProposal = await db.ProjectConfigurationRevisions.AsNoTracking()
             .CountAsync(item => item.ProjectId == project.ProjectId);
 
         var proposal = await service.CreateScenarioCastingProposalAsync(
             owner,
             project.ProjectId,
-            initial.Revision,
+            ordinaryUpdate.Revision,
             "quick-software-development",
             CancellationToken.None);
 
         Assert.Equal(ProjectCastingProposalState.Pending, proposal.State);
-        Assert.Equal(initial.Revision, proposal.BaseConfigurationRevision);
+        Assert.Equal(ordinaryUpdate.Revision, proposal.BaseConfigurationRevision);
         Assert.Equal(
             new[] { "frontend-engineer", "backend-engineer", "security-engineer", "devops-engineer", "qa-engineer" },
             proposal.Draft.Casting.Select(item => item.AgentId));
         Assert.Equal("baseline-workflow", proposal.Draft.DefaultWorkflowId);
-        Assert.Equal(initial.Configuration.Skills.ToArray(), proposal.Draft.Skills.ToArray());
+        Assert.Equal(ordinaryUpdate.Configuration.Skills.ToArray(), proposal.Draft.Skills.ToArray());
         Assert.Contains("Responsibilities:", proposal.Draft.AgentCharters[1].Charter, StringComparison.Ordinal);
         Assert.Equal(revisionsBeforeProposal, await db.ProjectConfigurationRevisions.AsNoTracking()
             .CountAsync(item => item.ProjectId == project.ProjectId));
@@ -1176,11 +1248,19 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         Assert.Equal(proposal.Draft.Casting.ToArray(), reviewed.Draft.Casting.ToArray());
         Assert.Equal(proposal.Draft.Skills.ToArray(), reviewed.Draft.Skills.ToArray());
 
+        var updatedProposal = await service.UpdateCastingProposalAsync(
+            owner,
+            project.ProjectId,
+            proposal.ProposalId,
+            proposal.DraftRevision,
+            proposal.Draft with { DefaultWorkflowId = "reviewed-workflow" },
+            CancellationToken.None);
+        Assert.Equal(ordinaryUpdate.Configuration.Skills.ToArray(), updatedProposal.Draft.Skills.ToArray());
         var confirmed = await service.ConfirmCastingProposalAsync(
-            owner, project.ProjectId, proposal.ProposalId, proposal.DraftRevision, CancellationToken.None);
+            owner, project.ProjectId, proposal.ProposalId, updatedProposal.DraftRevision, CancellationToken.None);
         Assert.Equal(ProjectCastingProposalState.Confirmed, confirmed.State);
-        Assert.Equal("baseline-workflow", confirmed.Result?.DefaultWorkflowId);
-        Assert.Equal(initial.Configuration.Skills.ToArray(), confirmed.Result?.Skills.ToArray());
+        Assert.Equal("reviewed-workflow", confirmed.Result?.DefaultWorkflowId);
+        Assert.Equal(ordinaryUpdate.Configuration.Skills.ToArray(), confirmed.Result?.Skills.ToArray());
     }
 
     [Fact]
@@ -1262,18 +1342,17 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
             tenantId,
             ProjectAuthorityRole.TenantAdmin);
         var source = await service.CreateProjectAsync(owner, "Transfer source", CancellationToken.None);
-        var sourceConfiguration = await service.UpdateProjectConfigurationAsync(
-            owner,
-            source.ProjectId,
-            source.ConfigurationRevision,
+        var sourceConfiguration = await SeedHistoricalConfigurationAsync(
+            db,
+            source,
+            owner.ActorId,
             CastingConfiguration(
                 "source-agent",
                 "Source charter",
                 [new SkillCatalogSetting("source-skill", true, 0)]) with
             {
                 DefaultWorkflowId = "source-workflow",
-            },
-            CancellationToken.None);
+            });
         var transfer = await service.ExportCastingTransferAsync(
             owner, source.ProjectId, sourceConfiguration.Revision, CancellationToken.None);
         Assert.Equal(ProjectCastingTransfer.CurrentFormatVersion, transfer.FormatVersion);
@@ -1282,18 +1361,17 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         Assert.Equal(64, transfer.ContentDigest.Length);
 
         var target = await service.CreateProjectAsync(owner, "Transfer target", CancellationToken.None);
-        var targetConfiguration = await service.UpdateProjectConfigurationAsync(
-            owner,
-            target.ProjectId,
-            target.ConfigurationRevision,
+        var targetConfiguration = await SeedHistoricalConfigurationAsync(
+            db,
+            target,
+            owner.ActorId,
             CastingConfiguration(
                 "target-agent",
                 "Target charter",
                 [new SkillCatalogSetting("target-skill", true, 0)]) with
             {
                 DefaultWorkflowId = "target-workflow",
-            },
-            CancellationToken.None);
+            });
         var imported = await service.ImportCastingTransferAsync(
             owner,
             target.ProjectId,
@@ -2087,6 +2165,33 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         string[] RequiredL3L4Capabilities,
         string[] RequiredL7Capabilities,
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MeterSource);
+
+    private static async Task<VersionedProjectConfiguration> SeedHistoricalConfigurationAsync(
+        ProjectsConfigDbContext db,
+        ProjectSummary project,
+        string actorId,
+        ProjectConfiguration configuration)
+    {
+        var revision = checked(project.ConfigurationRevision + 1);
+        var now = DateTimeOffset.UtcNow;
+        var storedProject = await db.Projects.SingleAsync(item => item.ProjectId == project.ProjectId);
+        if (storedProject.ConfigurationRevision != project.ConfigurationRevision)
+            throw new InvalidOperationException("The project configuration changed before historical setup.");
+
+        db.ProjectConfigurationRevisions.Add(new ProjectConfigurationRevisionRecord
+        {
+            ProjectId = project.ProjectId,
+            Revision = revision,
+            ConfigurationJson = JsonSerializer.Serialize(configuration, LegacyJsonOptions()),
+            UpdatedByActorId = actorId,
+            CreatedAt = now,
+        });
+        storedProject.ConfigurationRevision = revision;
+        storedProject.UpdatedAt = now;
+        await db.SaveChangesAsync();
+        return new VersionedProjectConfiguration(
+            project.ProjectId, revision, configuration, actorId, now);
+    }
 
     private static JsonSerializerOptions LegacyJsonOptions()
     {

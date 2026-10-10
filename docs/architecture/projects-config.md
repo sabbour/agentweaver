@@ -152,7 +152,10 @@ different request or importing against a stale revision returns a conflict.
 `PUT /api/projects/{projectId}/skills/{skillId}/assignment` writes an ordinary
 configuration revision. An enabled assignment pins an imported content revision
 and digest and names one or more active agents in the project casting. Configuration
-validation rejects missing, mismatched, revoked, or inactive-agent pins.
+validation rejects missing, mismatched, revoked, or inactive-agent pins. New or
+changed enabled skill entries must have these pins. An unchanged legacy entry
+can remain during an unrelated configuration edit, but it is never returned
+as accepted runtime content.
 
 `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` rechecks
 current Orchestrator authority and the accepted project/run binding. It returns

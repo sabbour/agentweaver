@@ -282,6 +282,36 @@ public static class ProjectConfigurationValidator
         return configuration with { EgressNarrowing = normalizedEgress };
     }
 
+    public static ProjectConfiguration ValidateTransition(
+        ProjectConfiguration previous,
+        ProjectConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (configuration.Skills.IsDefault)
+            return Validate(configuration);
+
+        foreach (var skill in configuration.Skills)
+        {
+            if (skill is not { Enabled: true } || !IsUnpinned(skill))
+                continue;
+            if (previous.Skills.IsDefaultOrEmpty || !previous.Skills.Contains(skill))
+                throw Invalid(
+                    "Enabled skills without imported pins may only be preserved unchanged from the previous configuration.");
+        }
+
+        var strictSkills = configuration.Skills
+            .Select(skill => skill is { Enabled: true } && IsUnpinned(skill)
+                ? skill with { Enabled = false }
+                : skill)
+            .ToImmutableArray();
+        var validated = Validate(configuration with { Skills = strictSkills });
+        return validated with { Skills = configuration.Skills };
+    }
+
+    private static bool IsUnpinned(SkillCatalogSetting skill) =>
+        skill.Revision is null && skill.ContentDigest is null && skill.AgentIds is null;
+
     private static void ValidateCastingProjection(
         ImmutableArray<ProjectAgentCharter> charters,
         ImmutableArray<ProjectAgentCast> casting)

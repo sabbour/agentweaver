@@ -298,6 +298,12 @@ public sealed class SkillContentService(
         if (accepted.ProjectId != projectId || accepted.RunId != runId ||
             accepted.ProjectConfigurationRevision != selection.ProjectConfigurationRevision)
             throw SkillContentServiceException.Conflict("The accepted skill configuration binding is inconsistent.");
+        if (!accepted.ProjectConfiguration.Skills.IsDefault &&
+            accepted.ProjectConfiguration.Skills.Any(item =>
+                item is { Enabled: true } &&
+                (item.Revision is null || item.ContentDigest is null || item.AgentIds is null)))
+            throw SkillContentServiceException.Conflict(
+                "The accepted run contains an enabled skill without an imported revision and agent assignment.");
         var configuration = ProjectConfigurationValidator.Validate(accepted.ProjectConfiguration);
         var activeAgents = configuration.Casting.Select(item => item.AgentId)
             .ToHashSet(StringComparer.Ordinal);
@@ -358,18 +364,22 @@ public sealed class SkillContentService(
         return result.ToImmutable();
     }
 
-    internal static async Task ValidateConfigurationAsync(
+    internal static async Task<ProjectConfiguration> ValidateConfigurationAsync(
         ProjectsConfigDbContext db,
         string projectId,
+        ProjectConfiguration previous,
         ProjectConfiguration configuration,
         CancellationToken cancellationToken)
     {
-        var activeAgentIds = configuration.Casting
+        var normalized = ProjectConfigurationValidator.ValidateTransition(previous, configuration);
+        var activeAgentIds = normalized.Casting
             .Select(item => item.AgentId)
             .ToHashSet(StringComparer.Ordinal);
-        foreach (var assignment in configuration.Skills.Where(item => item.Enabled))
+        foreach (var assignment in normalized.Skills.Where(item => item.Enabled))
         {
-            if (assignment.Revision is null || assignment.ContentDigest is null || assignment.AgentIds is null)
+            if (assignment.Revision is null)
+                continue;
+            if (assignment.ContentDigest is null || assignment.AgentIds is null)
                 throw SkillContentServiceException.Invalid(
                     "Enabled skills must pin an imported revision, content digest, and agent assignment.");
             if (assignment.AgentIds.Value.IsEmpty ||
@@ -384,6 +394,7 @@ public sealed class SkillContentService(
                 assignment.ContentDigest,
                 cancellationToken).ConfigureAwait(false);
         }
+        return normalized;
     }
 
     private async Task EnsureWriteAccessAsync(

@@ -239,7 +239,6 @@ public sealed partial class ProjectsConfigService
     {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
-        var normalized = ProjectConfigurationValidator.Validate(configuration);
         var project = await FindProjectAsync(caller, projectId, ProjectAccess.Write, cancellationToken)
             .ConfigureAwait(false);
         if (normalized.ReviewedRemoteToolSnapshots is { } reviewedSnapshots &&
@@ -250,10 +249,18 @@ public sealed partial class ProjectsConfigService
                 (int)HttpStatusCode.BadRequest);
         if (project.State != ProjectLifecycleState.Active)
             throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
-        await SkillContentService.ValidateConfigurationAsync(
-            db, project.ProjectId, normalized, cancellationToken).ConfigureAwait(false);
         if (project.ConfigurationRevision != expectedRevision)
             throw ProjectConfigException.Conflict("The project configuration revision has changed.");
+        var currentRevision = await db.ProjectConfigurationRevisions.AsNoTracking()
+            .SingleOrDefaultAsync(
+                record => record.ProjectId == project.ProjectId &&
+                    record.Revision == project.ConfigurationRevision,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw ProjectConfigException.NotFound();
+        var previous = Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson);
+        var normalized = await SkillContentService.ValidateConfigurationAsync(
+            db, project.ProjectId, previous, configuration, cancellationToken).ConfigureAwait(false);
 
         await EnsureProjectNarrowingAsync(normalized, cancellationToken).ConfigureAwait(false);
         var now = timeProvider.GetUtcNow();
@@ -373,7 +380,8 @@ public sealed partial class ProjectsConfigService
         var projectConfiguration = ProjectConfigurationValidator.Validate(
             Deserialize<ProjectConfiguration>(projectVersion.ConfigurationJson));
         await SkillContentService.ValidateConfigurationAsync(
-            db, project.ProjectId, projectConfiguration, cancellationToken).ConfigureAwait(false);
+            db, project.ProjectId, projectConfiguration, projectConfiguration, cancellationToken)
+            .ConfigureAwait(false);
 
         var platformHead = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
         if (platformHead.CurrentRevision == 0)
