@@ -1,4 +1,5 @@
 ---
+"Agentweaver.Abstractions": minor
 "Agentweaver.Environment": minor
 ---
 

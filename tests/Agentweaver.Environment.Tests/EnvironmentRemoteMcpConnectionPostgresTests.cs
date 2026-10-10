@@ -32,9 +32,23 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
 
         await using (var context = new EnvironmentDbContext(options))
             await context.GetService<IMigrator>()
-                .MigrateAsync("20261009051500_AddRemoteMcpConnections");
+                .MigrateAsync("20261010135714_AddRemoteMcpConnections");
         Assert.True(await RemoteMcpTablesExistAsync(fixture.DataSource));
+        await using (var context = new EnvironmentDbContext(options))
+            await context.GetService<IMigrator>().MigrateAsync();
         await EnvironmentMigrator.VerifyMigrationsAppliedAsync(fixture.DataSource, options);
+    }
+
+    [Fact]
+    public void CurrentConnectionModelMatchesItsMigrationSnapshot()
+    {
+        var options = new DbContextOptionsBuilder<EnvironmentDbContext>()
+            .UseNpgsql(fixture.DataSource, npgsql => npgsql.MigrationsHistoryTable(
+                "__ef_migrations_history", EnvironmentDbContext.Schema))
+            .Options;
+        using var context = new EnvironmentDbContext(options);
+
+        Assert.False(context.Database.HasPendingModelChanges());
     }
 
     [Fact]
@@ -292,6 +306,16 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
                 "not-a-uuid",
                 "bind-invalid-reference",
                 CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.BindIdentityAsync(
+                caller,
+                projectId,
+                connectionId,
+                created.Snapshot.Configuration.ConfigurationRevision,
+                created.Snapshot.Configuration.ConfigurationSha256,
+                Guid.Empty.ToString("N"),
+                "bind-empty-reference",
+                CancellationToken.None));
 
         var unauthenticatedConnection = await store.CreateAsync(
             caller, projectId, Draft(), "create-no-auth", CancellationToken.None);
@@ -464,9 +488,13 @@ public sealed class EnvironmentRemoteMcpConnectionPostgresTests(EnvironmentPostg
             ImmutableArray.Create(new EffectiveProjectAuthorization(
                 ProjectAuthorityResourceType.Project,
                 projectId,
-                ImmutableArray.Create(new ProjectAuthorizationPermissionGrant(
-                    permission,
-                    RoleRevision: 1)))));
+                permission == ProjectAuthorizationPermission.ReadProjects
+                    ? ImmutableArray.Create(new ProjectAuthorizationPermissionGrant(
+                        ProjectAuthorizationPermission.ReadProjects, RoleRevision: 1))
+                    : ImmutableArray.Create(
+                        new ProjectAuthorizationPermissionGrant(
+                            ProjectAuthorizationPermission.ReadProjects, RoleRevision: 1),
+                        new ProjectAuthorizationPermissionGrant(permission, RoleRevision: 1)))));
 
     private static async Task<bool> RemoteMcpTablesExistAsync(NpgsqlDataSource dataSource)
     {

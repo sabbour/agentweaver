@@ -6,6 +6,11 @@
 
 The Environment API stores connection state in PostgreSQL. Each create or update writes an immutable configuration revision. The connection head points to the current revision. Row revisions support compare-and-swap. Each mutation also requires an idempotency key.
 
+The migration adds four remote MCP tables to the existing Environment schema.
+It does not recreate existing tables. The EF model snapshot includes the existing
+Environment tables and remote MCP records. A PostgreSQL test checks that the
+snapshot matches the current model.
+
 Read routes require current `ReadProjects` authority. Write routes require current `WriteProjects` authority. Environment reads current authorization context from Projects & Config and repeats authority checks around mutations.
 
 Connection mutation bodies do not accept OAuth codes, access tokens, or client secrets. API calls use the current bearer in the `Authorization` header; Environment forwards it to Projects & Config for authorization and never persists it.
@@ -31,6 +36,10 @@ Mutation bodies include an idempotency key. Update and state mutations also incl
 `RemoteMcpConnectionConfiguration` contains the project and connection IDs, configuration revision, display name, canonical endpoint and optional resource URI, authentication mode, transport profile, optional exact Registry pin, optional Identity correlation handle, and `ConfigurationSha256`.
 
 Environment supports the `StreamableHttp20250618` transport profile. Endpoints and resource URIs must be absolute HTTPS DNS URIs without user information or fragments.
+
+HTTP responses use camel-case enum values: `draft`, `enabled`, `disabled`, and `removed`.
+Authentication is `none` or `delegatedOAuth`; the transport is `streamableHttp20250618`.
+An Identity reference must be a nonempty canonical lower-case UUID-N value.
 
 Delegated OAuth requires an explicit resource URI. A connection can remain unlinked while the Identity owner has not issued a correlation handle. In this state, `IdentityBindingReference` is null.
 

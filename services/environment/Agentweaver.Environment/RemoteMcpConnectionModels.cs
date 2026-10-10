@@ -28,6 +28,8 @@ internal static class RemoteMcpConnectionModel
             entity.Property(row => row.State).HasColumnName("state").HasMaxLength(16);
             entity.Property(row => row.CreatedAt).HasColumnName("created_at");
             entity.Property(row => row.UpdatedAt).HasColumnName("updated_at");
+            entity.HasIndex(row => new { row.TenantId, row.ProjectId, row.State, row.ConnectionId })
+                .HasDatabaseName("ix_environment_remote_mcp_connections_project_state");
         });
 
         modelBuilder.Entity<RemoteMcpConnectionConfigurationRow>(entity =>
@@ -49,6 +51,9 @@ internal static class RemoteMcpConnectionModel
                 table.HasCheckConstraint(
                     "ck_environment_remote_mcp_connection_configurations_oauth_resource",
                     "authentication_mode <> 'DelegatedOAuth' OR resource_uri IS NOT NULL");
+                table.HasCheckConstraint(
+                    "ck_environment_remote_mcp_connection_configurations_digests",
+                    "configuration_sha256 ~ '^[0-9a-f]{64}$'");
             });
             entity.HasKey(row => new
                 {
@@ -160,6 +165,13 @@ internal static class RemoteMcpConnectionModel
             entity.Property(row => row.RequestFingerprint).HasColumnName("request_fingerprint").HasMaxLength(64);
             entity.Property(row => row.ResultJson).HasColumnName("result_json").HasColumnType("jsonb");
             entity.Property(row => row.CreatedAt).HasColumnName("created_at");
+            entity.HasOne<RemoteMcpConnectionRow>()
+                .WithMany()
+                .HasForeignKey(row => new { row.TenantId, row.ProjectId, row.ConnectionId })
+                .OnDelete(DeleteBehavior.Restrict)
+                .HasConstraintName("fk_environment_remote_mcp_connection_idempotency_connection");
+            entity.HasIndex(row => new { row.TenantId, row.ProjectId, row.ConnectionId })
+                .HasDatabaseName("ix_environment_remote_mcp_connection_idempotency_connection");
         });
     }
 }

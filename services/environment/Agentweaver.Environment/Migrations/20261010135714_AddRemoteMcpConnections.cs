@@ -1,11 +1,8 @@
-using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace Agentweaver.Environment.Migrations;
 
-[DbContext(typeof(EnvironmentDbContext))]
-[Migration("20261009051500_AddRemoteMcpConnections")]
-public sealed class AddRemoteMcpConnections : Migration
+public partial class AddRemoteMcpConnections : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)
     {

@@ -297,6 +297,7 @@ public sealed class RemoteMcpConnectionStore(
             nameof(expectedConfigurationSha256));
         ArgumentException.ThrowIfNullOrWhiteSpace(identityBindingReference);
         if (!Guid.TryParseExact(identityBindingReference, "N", out var identityBindingId) ||
+            identityBindingId == Guid.Empty ||
             !string.Equals(identityBindingId.ToString("N"), identityBindingReference, StringComparison.Ordinal))
             throw new ArgumentException(
                 "Identity binding references must be canonical lower-case UUID-N values.",
