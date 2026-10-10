@@ -245,6 +245,33 @@ Confirmation is a durable gate with a request id, not a favorable sentence in an
 agent reply. The [coordination verbs](sessions-and-coordination.md#coordination-verbs)
 route the request and record an explicit answer.
 
+## Schedule and event trigger evaluation
+
+`Agentweaver.Orchestrator.Core` provides pure evaluation contracts for daily,
+weekly, and monthly schedules and a curated GitHub event-predicate language.
+Schedule `TimeOfDay` values are UTC; evaluation normalizes the caller-supplied
+`DateTimeOffset` to UTC. Weekly schedules select a weekday, and monthly schedules
+select days 1 through 28. The evaluator reports invalid definitions, not-yet-due
+times, and due occurrences separately. Daily and weekly period keys use
+`yyyy-MM-dd`; monthly keys use `yyyy-MM`. The workflow ID, stable trigger ID, and
+period form the schedule idempotency input. That key is not a backlog task ID, run
+ID, claim, or proof that work was started.
+
+Event predicates are ANDed at the top level and support nested `or` and `not`.
+The supported leaves cover issue/pull-request labels, pull-request base branch,
+review state, pushed-ref equality or prefix, discussion category, and bounded
+comment matching. Matching follows the existing 0.x case rules. Comment patterns
+use a restricted, nonbacktracking regular-expression subset with a 200 ms match
+timeout; comment text is supplied only to the in-memory evaluator and is not a
+retained event field.
+
+These Core contracts do not persist trigger definitions, establish an authorized
+project/accountable-actor binding, subscribe to events, run a hosted scheduler,
+claim backlog work, or dispatch an execution. An occurrence key is only an
+idempotency input to the existing Orchestrator owner path. Automatic initiation
+remains unavailable until the real source-actor authority and owner claim path
+are integrated and revalidated at claim and dispatch.
+
 ## Step-snapped WorkPlans
 
 A WorkPlan is the proposed directed acyclic graph (DAG) of child work. Every subtask
