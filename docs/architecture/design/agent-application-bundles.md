@@ -738,6 +738,17 @@ The issue does not add another P1 or cutover prerequisite.
 | B4: Upgrade, rollback, uninstall | Projects, Orchestrator, Environment, Identity, retention owners. B2/B3 and exact owner receipts. | Old-run affinity, fresh new-run authority, pending-gate continuity, honest migration/rollback limits, drain, user-data retention, and exact cleanup or pending state |
 | B5: Interoperability and approved live acceptance | Registry/release configuration, Gateway/MCP/web, acceptance coordinator. Separate target-specific authority. | Native referrers/404 fallback, tag mutation, missing evidence, copy/export, auth/TLS/redirect failures, and exact-SHA Azure API/UI/MCP journeys |
 
+The current v1 source includes a pure, inert Projects.Config validator for the
+application manifest. It checks raw configuration identity, manifest and
+entry-point shape, declared inventory metadata and documented bounds,
+dependency constraints against a supplied graph, and compatibility against
+explicit host context and the read-only provider catalog. It does not inspect
+content-layer bytes or archives, verify signatures or provenance, import skill
+content, persist an installation or dependency lock, or load executable
+content. This is a source-only validation foundation, not completion of B1 or
+installation acceptance; the remaining B1 checks require their owning
+implementations and evidence.
+
 Implementation issues can use those owner-aligned slices.
 The tracking issue contains B1-B5 and Canvas C1-C5.
 This specification does not add a new internal coordination ledger.
