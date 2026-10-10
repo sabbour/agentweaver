@@ -49,6 +49,11 @@ builder.Services.AddDbContext<ProjectsConfigDbContext>((provider, options) =>
             "__ef_migrations_history", ProjectsConfigDbContext.Schema));
 });
 builder.Services.AddScoped<ProjectsConfigService>();
+builder.Services.AddScoped<MarketplaceSourceStore>();
+builder.Services.AddScoped<IProjectMarketplaceSourceStore>(
+    provider => provider.GetRequiredService<MarketplaceSourceStore>());
+builder.Services.AddScoped<ProjectMarketplaceSourceService>();
+builder.Services.AddHttpClient<SkillMarketplaceBrowseService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(provider =>
     ProviderCatalogConfiguration.Load(provider.GetRequiredService<IConfiguration>()));
@@ -94,6 +99,7 @@ app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapProjectConfigEndpoints();
+app.MapSkillMarketplaceEndpoints();
 app.Run();
 
 public partial class Program;

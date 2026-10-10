@@ -57,6 +57,25 @@ public sealed class ProjectsConfigService(
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
+    internal async Task<ProjectRecord> GetMarketplaceProjectAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        bool requireWrite,
+        CancellationToken cancellationToken)
+    {
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        if (requireWrite)
+            caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        var project = await FindProjectAsync(
+            caller,
+            projectId,
+            requireWrite ? ProjectAccess.Write : ProjectAccess.Read,
+            cancellationToken).ConfigureAwait(false);
+        if (requireWrite && project.State != ProjectLifecycleState.Active)
+            throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
+        return project;
+    }
+
     public async Task<ProjectSummary> CreateProjectAsync(
         ProjectAuthorizationContext caller,
         string name,

@@ -24,6 +24,7 @@ This site documents code and procedures that exist in the `v1` source. Proposed 
 | [Knowledge and Memory](./architecture/knowledge-memory) | Project memory, immutable revisions, authorized context composition, and provider binding. |
 | [Providers and models](./architecture/providers-models) | Provider resolution, pinning, and model support. |
 | [Projects & Config](./architecture/projects-config) | Project APIs, revisioned settings, and immutable run-selection snapshots. |
+| [Skill marketplace sources](./architecture/skill-marketplace) | Revisioned project source management, bounded commit-pinned browse, and the import boundary. |
 | [Environment egress](./architecture/environment-egress) | The unpublished, generation-fenced Cilium egress-intent candidate and its enforcement limits. |
 | [Identity and secrets](./architecture/identity-secrets) | OAuth, run grants, Key Vault, and workload identity. |
 | [PostgreSQL and Blob](./architecture/persistence-objects) | Outbox, inbox, relay, and object storage. |
