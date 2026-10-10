@@ -241,6 +241,9 @@ public sealed partial class MafCheckpointStorePostgresTests
         }
         finally
         {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(
+                         directory, "*", SearchOption.AllDirectories))
+                File.SetAttributes(entry, FileAttributes.Normal);
             Directory.Delete(directory, recursive: true);
         }
     }
