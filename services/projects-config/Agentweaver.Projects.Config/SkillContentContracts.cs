@@ -77,9 +77,8 @@ public sealed record SkillContentInventoryPage(
     long ConfigurationRevision,
     ImmutableArray<SkillContentAssignmentSummary> Assignments,
     ImmutableArray<SkillContentRevisionSummary> Revisions,
-    int Page,
     int PageSize,
-    bool HasMore);
+    string? NextCursor);
 
 public interface ISkillContentService
 {
@@ -88,7 +87,7 @@ public interface ISkillContentService
     Task<SkillContentInventoryPage> ListInventoryAsync(
         ProjectAuthorizationContext caller,
         string projectId,
-        int page,
+        string? cursor,
         int pageSize,
         CancellationToken cancellationToken);
 

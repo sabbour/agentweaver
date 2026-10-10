@@ -53,7 +53,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/platform/runtime-defaults` | Append platform defaults using an expected revision. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
-| `GET /api/projects/{projectId}/skills?page={n}&pageSize={n}` | List bounded skill revision metadata and current assignments for project administrators. |
+| `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` | List bounded skill revision metadata and current assignments for project administrators; omit `cursor` for the first page. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
 | `GET, POST /api/projects/{projectId}/skill-marketplaces/sources` | List or add revisioned project skill sources. |
@@ -68,6 +68,15 @@ Browse reads only current-page `SKILL.md` descriptions. The separate Skills
 owner supplies selected-content preview, immutable import receipts, and runtime
 assignment; Projects does not create a second content loader or catalog
 authority.
+
+Skill inventory uses a URL-safe opaque continuation cursor. The default page
+size is 25 and the maximum is 50. The cursor binds the project, page size, and
+versioned `skillId`-ascending/revision-descending order. New revisions that sort
+before a cursor do not shift later pages; restart without a cursor to see them.
+Current tenant administrators and project owners can read metadata for active
+or archived projects while their authority remains current. Viewers and callers
+with revoked or stale authority are denied. Inventory contains no instructions,
+resource bytes, or object keys.
 
 ### Reviewed casting proposals and explicit transfers
 

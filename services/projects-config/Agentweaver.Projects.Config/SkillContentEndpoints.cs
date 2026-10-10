@@ -114,7 +114,7 @@ public static class SkillContentEndpoints
         var projects = app.MapGroup("/api/projects/{projectId}/skills").RequireAuthorization();
         projects.MapGet("/", async (
             string projectId,
-            int? page,
+            string? cursor,
             int? pageSize,
             HttpContext context,
             ProjectAuthorizationOwner authorizationOwner,
@@ -124,7 +124,7 @@ public static class SkillContentEndpoints
             context.Response.Headers.CacheControl = "no-store";
             try
             {
-                if (context.Request.Query.Keys.Any(key => key is not ("page" or "pageSize")) ||
+                if (context.Request.Query.Keys.Any(key => key is not ("cursor" or "pageSize")) ||
                     context.Request.Query.Any(item => item.Value.Count > 1))
                     throw SkillContentServiceException.Invalid(
                         "The skill inventory query contains an unsupported or repeated parameter.");
@@ -134,7 +134,7 @@ public static class SkillContentEndpoints
                 return Results.Ok(await service.ListInventoryAsync(
                     caller,
                     projectId,
-                    page ?? 1,
+                    cursor,
                     pageSize ?? SkillContentService.DefaultInventoryPageSize,
                     cancellationToken).ConfigureAwait(false));
             }

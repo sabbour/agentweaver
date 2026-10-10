@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Agentweaver.Abstractions;
 using Agentweaver.Projects.Config;
 using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
@@ -85,22 +86,39 @@ public sealed partial class ProjectsConfigPostgresTests
         var inventoryService = new SkillContentService(
             reloadedDb, null, reloadedConfigurations, TimeProvider.System);
         var unassignedFirstPage = await inventoryService.ListInventoryAsync(
-            setup.Owner, setup.Project.ProjectId, 1, 2, CancellationToken.None);
+            setup.Owner, setup.Project.ProjectId, null, 2, CancellationToken.None);
+        var earlierCandidate = SkillCandidate("Earlier skill.", "# Earlier reference\n");
+        var earlierPreview = writer.Preview(earlierCandidate);
+        _ = await writer.ImportAsync(
+            setup.Owner,
+            setup.Project.ProjectId,
+            new SkillContentImportRequest(
+                "inventory-earlier-" + setup.Suffix,
+                earlierPreview.ContentDigest,
+                "skill-000",
+                null,
+                null,
+                earlierCandidate),
+            CancellationToken.None);
         var unassignedSecondPage = await inventoryService.ListInventoryAsync(
-            setup.Owner, setup.Project.ProjectId, 2, 2, CancellationToken.None);
+            setup.Owner,
+            setup.Project.ProjectId,
+            unassignedFirstPage.NextCursor,
+            2,
+            CancellationToken.None);
 
         Assert.Equal(projectConfiguration.Revision, unassignedFirstPage.ConfigurationRevision);
         Assert.Empty(unassignedFirstPage.Assignments);
         Assert.Equal(["skill-alpha:2", "skill-alpha:1"], unassignedFirstPage.Revisions
             .Select(item => $"{item.SkillId}:{item.Revision}"));
-        Assert.True(unassignedFirstPage.HasMore);
+        Assert.NotNull(unassignedFirstPage.NextCursor);
         Assert.Equal("source-alpha", unassignedFirstPage.Revisions[0].SourceId);
         Assert.Equal("source-revision-2", unassignedFirstPage.Revisions[0].SourceRevision);
         Assert.Equal("skills/alpha", unassignedFirstPage.Revisions[0].SelectedPath);
         Assert.Equal(projectConfiguration.Revision, unassignedSecondPage.ConfigurationRevision);
         Assert.Equal(["skill-bravo:1"], unassignedSecondPage.Revisions
             .Select(item => $"{item.SkillId}:{item.Revision}"));
-        Assert.False(unassignedSecondPage.HasMore);
+        Assert.Null(unassignedSecondPage.NextCursor);
         Assert.Equal(other.ContentDigest, Assert.Single(unassignedSecondPage.Revisions).ContentDigest);
 
         var assignedConfiguration = await inventoryService.UpdateAsync(
@@ -116,9 +134,13 @@ public sealed partial class ProjectsConfigPostgresTests
                 ["agent-one"]),
             CancellationToken.None);
         var assignedFirstPage = await inventoryService.ListInventoryAsync(
-            setup.Owner, setup.Project.ProjectId, 1, 2, CancellationToken.None);
+            setup.Owner, setup.Project.ProjectId, null, 2, CancellationToken.None);
         var assignedSecondPage = await inventoryService.ListInventoryAsync(
-            setup.Owner, setup.Project.ProjectId, 2, 2, CancellationToken.None);
+            setup.Owner,
+            setup.Project.ProjectId,
+            assignedFirstPage.NextCursor,
+            2,
+            CancellationToken.None);
 
         Assert.Equal(assignedConfiguration.Revision, assignedFirstPage.ConfigurationRevision);
         Assert.Equal(assignedConfiguration.Revision, assignedSecondPage.ConfigurationRevision);
@@ -128,20 +150,34 @@ public sealed partial class ProjectsConfigPostgresTests
         Assert.Equal(3, assignment.Order);
         Assert.Equal(second.Revision, assignment.Revision);
         Assert.Equal(second.ContentDigest, assignment.ContentDigest);
-        Assert.Equal(["agent-one"], assignment.AgentIds!.Value);
+        Assert.Equal(["agent-one"], assignment.AgentIds!.Value.ToArray());
 
-        var invalidPage = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+        var invalidPageSize = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
             inventoryService.ListInventoryAsync(
-                setup.Owner, setup.Project.ProjectId, 0, 2, CancellationToken.None));
-        Assert.Equal(StatusCodes.Status400BadRequest, invalidPage.StatusCode);
+                setup.Owner, setup.Project.ProjectId, null, 0, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, invalidPageSize.StatusCode);
         var oversizedPage = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
             inventoryService.ListInventoryAsync(
                 setup.Owner,
                 setup.Project.ProjectId,
-                int.MaxValue,
-                SkillContentService.MaxInventoryPageSize,
+                null,
+                SkillContentService.MaxInventoryPageSize + 1,
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, oversizedPage.StatusCode);
+        var invalidCursor = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            inventoryService.ListInventoryAsync(
+                setup.Owner, setup.Project.ProjectId, "not-a-cursor", 2, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, invalidCursor.StatusCode);
+        var mismatchedPageSize = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            inventoryService.ListInventoryAsync(
+                setup.Owner, setup.Project.ProjectId, unassignedFirstPage.NextCursor, 1, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, mismatchedPageSize.StatusCode);
+        var otherProject = await configurations.CreateProjectAsync(
+            setup.Owner, "Other inventory project " + setup.Suffix, CancellationToken.None);
+        var mismatchedProject = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            inventoryService.ListInventoryAsync(
+                setup.Owner, otherProject.ProjectId, unassignedFirstPage.NextCursor, 2, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, mismatchedProject.StatusCode);
     }
 
     [Fact]
@@ -165,8 +201,44 @@ public sealed partial class ProjectsConfigPostgresTests
             ["api.read", "projects.admin"]);
         var forbidden = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.ListInventoryAsync(
-                sameTenantReader, setup.Project.ProjectId, 1, 10, CancellationToken.None));
+                sameTenantReader, setup.Project.ProjectId, null, 10, CancellationToken.None));
         Assert.Equal(StatusCodes.Status403Forbidden, forbidden.StatusCode);
+
+        var viewer = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "inventory-viewer-" + setup.Suffix,
+            setup.TenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Project,
+            setup.Project.ProjectId,
+            ProjectAuthorityRole.Viewer);
+        var viewerForbidden = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.ListInventoryAsync(
+                viewer, setup.Project.ProjectId, null, 10, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, viewerForbidden.StatusCode);
+
+        var revokedAdmin = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "inventory-revoked-admin-" + setup.Suffix,
+            setup.TenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Tenant,
+            setup.TenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var adminAssignment = await db.RoleAssignments.AsNoTracking().SingleAsync(item =>
+            item.MembershipId == revokedAdmin.MembershipId &&
+            item.ResourceType == ProjectAuthorityResourceType.Tenant &&
+            item.ResourceId == setup.TenantId &&
+            item.Role == ProjectAuthorityRole.TenantAdmin &&
+            item.State == ProjectAuthorityRecordState.Active);
+        await authorityStore.RevokeRoleAssignmentAsync(
+            adminAssignment.AssignmentId, adminAssignment.Revision, "inventory-test");
+        var revokedAdminForbidden = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.ListInventoryAsync(
+                revokedAdmin, setup.Project.ProjectId, null, 10, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, revokedAdminForbidden.StatusCode);
 
         var foreignTenant = "inventory-foreign-tenant-" + setup.Suffix;
         var foreignAdmin = await SeedCallerAsync(
@@ -180,8 +252,20 @@ public sealed partial class ProjectsConfigPostgresTests
             ProjectAuthorityRole.TenantAdmin);
         var hiddenProject = await Assert.ThrowsAsync<ProjectConfigException>(() =>
             service.ListInventoryAsync(
-                foreignAdmin, setup.Project.ProjectId, 1, 10, CancellationToken.None));
+                foreignAdmin, setup.Project.ProjectId, null, 10, CancellationToken.None));
         Assert.Equal(StatusCodes.Status404NotFound, hiddenProject.StatusCode);
+
+        var configurations = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        _ = await configurations.UpdateProjectAsync(
+            setup.Owner,
+            setup.Project.ProjectId,
+            setup.Project.Revision,
+            setup.Project.Name,
+            ProjectLifecycleState.Archived,
+            CancellationToken.None);
+        var archivedInventory = await service.ListInventoryAsync(
+            setup.Owner, setup.Project.ProjectId, null, 10, CancellationToken.None);
+        Assert.Equal(setup.Project.ConfigurationRevision, archivedInventory.ConfigurationRevision);
     }
 
     [Fact]
@@ -272,7 +356,7 @@ public sealed partial class ProjectsConfigPostgresTests
             CancellationToken.None);
 
         var inventory = await service.ListInventoryAsync(
-            setup.Owner, setup.Project.ProjectId, 1, 10, CancellationToken.None);
+            setup.Owner, setup.Project.ProjectId, null, 10, CancellationToken.None);
         var revision = Assert.Single(inventory.Revisions);
         Assert.True(revision.IsRevoked);
         Assert.Equal(setup.Owner.ActorId, revision.RevokedByActorId);

@@ -39,6 +39,8 @@ public sealed class SkillContentService(
     public const int DefaultInventoryPageSize = SkillMarketplaceBrowseService.DefaultPageSize;
     public const int MaxInventoryPageSize = SkillMarketplaceBrowseService.MaxPageSize;
 
+    private const int InventoryCursorVersion = 1;
+    private const string InventoryCursorOrder = "skillId-ascending,revision-descending";
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     public SkillContentPreview Preview(SkillContentCandidate candidate)
@@ -56,7 +58,7 @@ public sealed class SkillContentService(
     public async Task<SkillContentInventoryPage> ListInventoryAsync(
         ProjectAuthorizationContext caller,
         string projectId,
-        int page,
+        string? cursor,
         int pageSize,
         CancellationToken cancellationToken)
     {
@@ -64,15 +66,12 @@ public sealed class SkillContentService(
         RequireProjectId(projectId);
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
-        if (page < 1 || pageSize is < 1 or > MaxInventoryPageSize)
+        if (pageSize is < 1 or > MaxInventoryPageSize)
             throw SkillContentServiceException.Invalid(
-                $"Skill inventory page must be positive and page size must be between 1 and {MaxInventoryPageSize}.");
+                $"Skill inventory page size must be between 1 and {MaxInventoryPageSize}.");
+        var after = cursor is null ? null : DecodeInventoryCursor(projectId, pageSize, cursor);
 
-        var offset = (long)(page - 1) * pageSize;
-        if (offset > int.MaxValue)
-            throw SkillContentServiceException.Invalid("The requested skill inventory page is too large.");
-
-        await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
+        await EnsureInventoryAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
 
         VersionedProjectConfiguration current;
         (ProjectSkillContentRevisionRecord Revision, ProjectSkillContentRevocationRecord? Revocation)[] rows;
@@ -83,9 +82,20 @@ public sealed class SkillContentService(
             current = await configurations.GetProjectConfigurationAsync(
                 caller, projectId, revision: null, cancellationToken).ConfigureAwait(false);
 
+            var revisionQuery = db.SkillContentRevisions.AsNoTracking()
+                .Where(item => item.ProjectId == projectId);
+            if (after is not null)
+            {
+                var afterSkillId = after.SkillId;
+                var afterRevision = after.Revision;
+                revisionQuery = revisionQuery.Where(item =>
+                    EF.Functions.Collate(item.SkillId, "C").CompareTo(afterSkillId) > 0 ||
+                    (EF.Functions.Collate(item.SkillId, "C") == afterSkillId &&
+                        item.Revision < afterRevision));
+            }
+
             rows = await (
-                from revision in db.SkillContentRevisions.AsNoTracking()
-                where revision.ProjectId == projectId
+                from revision in revisionQuery
                 join revocation in db.SkillContentRevocations.AsNoTracking()
                     on new { revision.ProjectId, revision.SkillId, revision.Revision }
                     equals new { revocation.ProjectId, revocation.SkillId, revocation.Revision }
@@ -93,7 +103,6 @@ public sealed class SkillContentService(
                 from revocation in revocations.DefaultIfEmpty()
                 orderby EF.Functions.Collate(revision.SkillId, "C"), revision.Revision descending
                 select new { Revision = revision, Revocation = revocation })
-                .Skip((int)offset)
                 .Take(pageSize + 1)
                 .Select(row => new ValueTuple<ProjectSkillContentRevisionRecord, ProjectSkillContentRevocationRecord?>(
                     row.Revision, row.Revocation))
@@ -102,7 +111,7 @@ public sealed class SkillContentService(
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        await EnsureWriteAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
+        await EnsureInventoryAccessAsync(caller, projectId, cancellationToken).ConfigureAwait(false);
 
         var settings = current.Configuration.Skills.IsDefault
             ? ImmutableArray<SkillCatalogSetting>.Empty
@@ -135,13 +144,15 @@ public sealed class SkillContentService(
                 row.Revocation?.RevokedAt))
             .ToImmutableArray();
 
+        var nextCursor = rows.Length > pageSize && revisions.Length > 0
+            ? EncodeInventoryCursor(projectId, pageSize, revisions[^1].SkillId, revisions[^1].Revision)
+            : null;
         return new SkillContentInventoryPage(
             current.Revision,
             assignments,
             revisions,
-            page,
             pageSize,
-            rows.Length > pageSize);
+            nextCursor);
     }
 
     public async Task<SkillContentImportReceipt> ImportAsync(
@@ -524,6 +535,35 @@ public sealed class SkillContentService(
             throw ProjectConfigException.Forbidden();
     }
 
+    private async Task EnsureInventoryAccessAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        caller.RequireResourceBinding(projectId);
+        var currentMembership = await db.TenantMemberships.AsNoTracking().AnyAsync(
+            membership =>
+                membership.MembershipId == caller.MembershipId &&
+                membership.Issuer == caller.Issuer &&
+                membership.Subject == caller.ActorId &&
+                membership.TenantId == caller.TenantId &&
+                membership.Revision == caller.MembershipRevision &&
+                membership.State == ProjectAuthorityRecordState.Active,
+            cancellationToken).ConfigureAwait(false);
+        var project = await db.Projects.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.ProjectId == projectId, cancellationToken)
+            .ConfigureAwait(false);
+        if (!currentMembership || project is null || project.TenantId != caller.TenantId)
+            throw ProjectConfigException.NotFound();
+        if (!await HasCurrentRoleAsync(
+            caller, ProjectAuthorityResourceType.Tenant, caller.TenantId,
+            ProjectAuthorityRole.TenantAdmin, cancellationToken).ConfigureAwait(false) &&
+            !await HasCurrentRoleAsync(
+                caller, ProjectAuthorityResourceType.Project, projectId,
+                ProjectAuthorityRole.Owner, cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
+    }
+
     private async Task EnsureCurrentRunAuthorityAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -646,6 +686,51 @@ public sealed class SkillContentService(
     private static string Hash(ReadOnlySpan<byte> content) =>
         Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
 
+    private static string EncodeInventoryCursor(string projectId, int pageSize, string skillId, long revision)
+    {
+        var payload = JsonSerializer.SerializeToUtf8Bytes(
+            new SkillInventoryCursor(
+                InventoryCursorVersion, InventoryCursorOrder, projectId, pageSize, skillId, revision),
+            JsonOptions);
+        return Convert.ToBase64String(payload).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    private static SkillInventoryCursor DecodeInventoryCursor(string projectId, int pageSize, string value)
+    {
+        if (value.Length is 0 or > 2048)
+            throw SkillContentServiceException.Invalid("The skill inventory cursor is invalid.");
+        try
+        {
+            var base64 = value.Replace('-', '+').Replace('_', '/');
+            base64 += (base64.Length % 4) switch
+            {
+                0 => string.Empty,
+                2 => "==",
+                3 => "=",
+                _ => throw SkillContentServiceException.Invalid("The skill inventory cursor is invalid."),
+            };
+            var cursor = JsonSerializer.Deserialize<SkillInventoryCursor>(
+                Convert.FromBase64String(base64), JsonOptions);
+            if (cursor is null ||
+                cursor.Version != InventoryCursorVersion ||
+                cursor.Order != InventoryCursorOrder ||
+                cursor.ProjectId != projectId ||
+                cursor.PageSize != pageSize ||
+                cursor.Revision <= 0)
+                throw SkillContentServiceException.Invalid("The skill inventory cursor is invalid.");
+            RequireIdentifier(cursor.SkillId, nameof(cursor.SkillId));
+            return cursor;
+        }
+        catch (FormatException)
+        {
+            throw SkillContentServiceException.Invalid("The skill inventory cursor is invalid.");
+        }
+        catch (JsonException)
+        {
+            throw SkillContentServiceException.Invalid("The skill inventory cursor is invalid.");
+        }
+    }
+
     private static long SemanticByteCount(ValidatedSkillContent content)
     {
         var utf8 = new UTF8Encoding(false, true);
@@ -739,4 +824,12 @@ public sealed class SkillContentService(
         options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
         return options;
     }
+
+    private sealed record SkillInventoryCursor(
+        int Version,
+        string Order,
+        string ProjectId,
+        int PageSize,
+        string SkillId,
+        long Revision);
 }

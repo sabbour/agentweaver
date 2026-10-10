@@ -963,13 +963,19 @@ and returns its receipt. The request supplies the expected digest, an idempotenc
 key, and optional expected revision and source provenance. A repeated key with
 different request data or a stale revision returns a conflict.
 
-`GET /api/projects/{projectId}/skills?page={n}&pageSize={n}` lists stored skill
+`GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` lists stored skill
 revision metadata and exact current assignments. It includes unassigned and
 revoked revisions, source provenance, and the current project configuration
-revision. Pages are stable and bounded: the default size is 25 and the maximum
-is 50. The endpoint requires current project-admin authority. It returns no
-skill instructions, resource bytes, or storage object keys. Revoked metadata
-does not permit runtime use.
+revision. Omit `cursor` for the first page. The response supplies a URL-safe
+opaque `nextCursor` when another page is available. Cursors bind the project,
+page size, and versioned `skillId`-ascending/revision-descending order; clients
+must forward them unchanged. Pages are bounded: the default size is 25 and the
+maximum is 50. Newly inserted rows before a cursor do not shift later pages;
+restart without a cursor to include them. Current tenant administrators and
+project owners can read active or archived project metadata while their
+authority remains current; Viewers and callers with revoked or stale authority
+are denied. The endpoint returns no skill instructions, resource bytes, or
+storage object keys. Revoked metadata does not permit runtime use.
 
 `PUT /api/projects/{projectId}/skills/{skillId}/assignment` appends a project
 configuration revision. An enabled `SkillCatalogSetting` includes the exact
