@@ -48,7 +48,7 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is < 1 or > 15) ||
+        if (applied.Any(version => version is not (>= 1 and <= 15) and not 19) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -62,7 +62,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(12) && !applied.Contains(11)) ||
             (applied.Contains(13) && !applied.Contains(12)) ||
             (applied.Contains(14) && !applied.Contains(13)) ||
-            (applied.Contains(15) && !applied.Contains(14)))
+            (applied.Contains(15) && !applied.Contains(14)) ||
+            (applied.Contains(19) && !applied.Contains(15)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         foreach (var version in Enumerable.Range(1, 15).Where(version => !applied.Contains(version)))
         {
@@ -100,6 +101,22 @@ public static class CoordinationOwnerMigrator
                 await record.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        if (!applied.Contains(19))
+        {
+            await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
+                "Agentweaver.Orchestrator.Migrations.019_session_suspend_resume.sql")
+                ?? throw new InvalidOperationException("The session suspend/resume migration resource is missing.");
+            using var text = new StreamReader(resource);
+            var sql = (await text.ReadToEndAsync(cancellationToken))
+                .Replace("{schema}", quotedSchema, StringComparison.Ordinal);
+            await using (var migration = new NpgsqlCommand(sql, connection, transaction))
+                await migration.ExecuteNonQueryAsync(cancellationToken);
+            await using (var record = new NpgsqlCommand(
+                $"INSERT INTO {quotedSchema}.coordination_schema_migrations (version) VALUES (19)",
+                connection, transaction))
+                await record.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -129,7 +146,8 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 13),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 19)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -171,7 +189,8 @@ public static class CoordinationOwnerMigrator
                 to_regclass(@usageObservations) IS NOT NULL,
                 to_regclass(@mafExecutionRunGuards) IS NOT NULL,
                 to_regclass(@mafExecutionDispatches) IS NOT NULL,
-                to_regclass(@mafExecutionOutputWitnesses) IS NOT NULL
+                to_regclass(@mafExecutionOutputWitnesses) IS NOT NULL,
+                to_regclass(@sessionConsistencyManifests) IS NOT NULL
             """, connection);
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
@@ -200,6 +219,8 @@ public static class CoordinationOwnerMigrator
         command.Parameters.AddWithValue(
             "mafExecutionOutputWitnesses", NpgsqlDbType.Text, $"{schema}.maf_execution_output_witnesses");
         command.Parameters.AddWithValue(
+            "sessionConsistencyManifests", NpgsqlDbType.Text, $"{schema}.session_consistency_manifests");
+        command.Parameters.AddWithValue(
             "treeCommands", NpgsqlDbType.Text, $"{schema}.coordination_tree_commands");
         command.Parameters.AddWithValue(
             "idleSubscriptions", NpgsqlDbType.Text, $"{schema}.coordination_idle_subscriptions");
@@ -227,12 +248,14 @@ public static class CoordinationOwnerMigrator
             reader.GetInt64(8) != 1 || reader.GetInt64(9) != 1 ||
             reader.GetInt64(10) != 1 || reader.GetInt64(11) != 1 ||
             reader.GetInt64(12) != 1 || reader.GetInt64(13) != 1 ||
-            reader.GetInt64(14) != 1 || reader.GetInt64(15) != 0 ||
-            reader.GetInt64(16) != 1 || reader.GetInt64(17) != 1 ||
-            reader.GetInt64(18) != 0 ||
-            Enumerable.Range(19, 25).Any(column => !reader.GetBoolean(column)) ||
-            Enumerable.Range(44, 5).Any(column => !reader.GetBoolean(column)) ||
-            Enumerable.Range(49, 3).Any(column => !reader.GetBoolean(column)))
+            reader.GetInt64(14) != 1 || reader.GetInt64(15) != 1 ||
+            reader.GetInt64(16) != 0 ||
+            reader.GetInt64(17) != 1 || reader.GetInt64(18) != 1 ||
+            reader.GetInt64(19) != 0 ||
+            Enumerable.Range(20, 25).Any(column => !reader.GetBoolean(column)) ||
+            Enumerable.Range(45, 5).Any(column => !reader.GetBoolean(column)) ||
+            Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
+            !reader.GetBoolean(53))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }
