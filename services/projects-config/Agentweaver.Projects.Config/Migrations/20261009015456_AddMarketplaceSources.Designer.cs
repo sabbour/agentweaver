@@ -3,6 +3,7 @@ using System;
 using Agentweaver.Projects.Config;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Agentweaver.Projects.Config.Migrations
 {
     [DbContext(typeof(ProjectsConfigDbContext))]
-    partial class ProjectsConfigDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261009015456_AddMarketplaceSources")]
+    partial class AddMarketplaceSources
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -164,104 +167,6 @@ namespace Agentweaver.Projects.Config.Migrations
                             t.HasCheckConstraint("ck_authority_audit_event_type", "event_type IN ('membership_granted', 'membership_revoked', 'role_assigned', 'role_revoked')");
 
                             t.HasCheckConstraint("ck_authority_audit_revision", "revision > 0");
-                        });
-                });
-
-            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectCastingProposalRecord", b =>
-                {
-                    b.Property<Guid>("ProposalId")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("proposal_id");
-
-                    b.Property<long>("BaseConfigurationRevision")
-                        .HasColumnType("bigint")
-                        .HasColumnName("base_configuration_revision");
-
-                    b.Property<long?>("ConfirmedConfigurationRevision")
-                        .HasColumnType("bigint")
-                        .HasColumnName("confirmed_configuration_revision");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("CreatedByActorId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("created_by_actor_id");
-
-                    b.Property<string>("DraftJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb")
-                        .HasColumnName("draft");
-
-                    b.Property<long>("DraftRevision")
-                        .IsConcurrencyToken()
-                        .HasColumnType("bigint")
-                        .HasColumnName("draft_revision");
-
-                    b.Property<string>("ProjectId")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("project_id");
-
-                    b.Property<string>("ResultJson")
-                        .HasColumnType("jsonb")
-                        .HasColumnName("result");
-
-                    b.Property<string>("State")
-                        .IsConcurrencyToken()
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)")
-                        .HasColumnName("state");
-
-                    b.Property<string>("TransferContentDigest")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("transfer_content_digest");
-
-                    b.Property<int?>("TransferFormatVersion")
-                        .HasColumnType("integer")
-                        .HasColumnName("transfer_format_version");
-
-                    b.Property<long?>("TransferSourceConfigurationRevision")
-                        .HasColumnType("bigint")
-                        .HasColumnName("transfer_source_configuration_revision");
-
-                    b.Property<string>("TransferSourceProjectId")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("transfer_source_project_id");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.Property<string>("UpdatedByActorId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("updated_by_actor_id");
-
-                    b.HasKey("ProposalId");
-
-                    b.HasIndex("ProjectId", "CreatedAt");
-
-                    b.ToTable("project_casting_proposals", "projects_config", t =>
-                        {
-                            t.HasCheckConstraint("ck_project_casting_proposals_base_revision", "base_configuration_revision > 0");
-
-                            t.HasCheckConstraint("ck_project_casting_proposals_confirmed_result", "(state = 'Confirmed' AND confirmed_configuration_revision IS NOT NULL AND result IS NOT NULL) OR (state <> 'Confirmed' AND confirmed_configuration_revision IS NULL AND result IS NULL)");
-
-                            t.HasCheckConstraint("ck_project_casting_proposals_draft_revision", "draft_revision > 0");
-
-                            t.HasCheckConstraint("ck_project_casting_proposals_state", "state IN ('Pending', 'Confirmed', 'Rejected')");
-
-                            t.HasCheckConstraint("ck_project_casting_proposals_transfer_provenance", "(transfer_format_version IS NULL AND transfer_source_project_id IS NULL AND transfer_source_configuration_revision IS NULL AND transfer_content_digest IS NULL) OR (transfer_format_version = 1 AND transfer_source_project_id IS NOT NULL AND transfer_source_configuration_revision > 0 AND transfer_content_digest ~ '^[0-9a-f]{64}$')");
                         });
                 });
 
@@ -582,193 +487,6 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.ToTable("project_run_selections", "projects_config");
                 });
 
-            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillContentRevisionRecord", b =>
-                {
-                    b.Property<string>("ProjectId")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("project_id");
-
-                    b.Property<string>("SkillId")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("skill_id");
-
-                    b.Property<long>("Revision")
-                        .HasColumnType("bigint")
-                        .HasColumnName("revision");
-
-                    b.Property<string>("ContentDigest")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("content_digest");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("CreatedByActorId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("created_by_actor_id");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasMaxLength(1024)
-                        .HasColumnType("character varying(1024)")
-                        .HasColumnName("description");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("name");
-
-                    b.Property<string>("ObjectKey")
-                        .IsRequired()
-                        .HasMaxLength(512)
-                        .HasColumnType("character varying(512)")
-                        .HasColumnName("object_key");
-
-                    b.Property<string>("RequestedRef")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("requested_ref");
-
-                    b.Property<string>("ResolvedCommitSha")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("resolved_commit_sha");
-
-                    b.Property<int>("ResourceCount")
-                        .HasColumnType("integer")
-                        .HasColumnName("resource_count");
-
-                    b.Property<string>("SelectedPath")
-                        .HasMaxLength(1024)
-                        .HasColumnType("character varying(1024)")
-                        .HasColumnName("selected_path");
-
-                    b.Property<string>("SourceId")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("source_id");
-
-                    b.Property<string>("SourceRevision")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("source_revision");
-
-                    b.Property<long>("TotalBytes")
-                        .HasColumnType("bigint")
-                        .HasColumnName("total_bytes");
-
-                    b.HasKey("ProjectId", "SkillId", "Revision");
-
-                    b.ToTable("project_skill_content_revisions", "projects_config", t =>
-                        {
-                            t.HasCheckConstraint("ck_project_skill_digest", "content_digest ~ '^[0-9a-f]{64}$'");
-
-                            t.HasCheckConstraint("ck_project_skill_resource_count", "resource_count BETWEEN 0 AND 64");
-
-                            t.HasCheckConstraint("ck_project_skill_revision", "revision > 0");
-
-                            t.HasCheckConstraint("ck_project_skill_total_bytes", "total_bytes >= 0");
-                        });
-                });
-
-            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillContentRevocationRecord", b =>
-                {
-                    b.Property<string>("ProjectId")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("project_id");
-
-                    b.Property<string>("SkillId")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("skill_id");
-
-                    b.Property<long>("Revision")
-                        .HasColumnType("bigint")
-                        .HasColumnName("revision");
-
-                    b.Property<string>("Reason")
-                        .IsRequired()
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)")
-                        .HasColumnName("reason");
-
-                    b.Property<DateTimeOffset>("RevokedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("revoked_at");
-
-                    b.Property<string>("RevokedByActorId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("revoked_by_actor_id");
-
-                    b.HasKey("ProjectId", "SkillId", "Revision");
-
-                    b.ToTable("project_skill_content_revocations", "projects_config", t =>
-                        {
-                            t.HasCheckConstraint("ck_project_skill_revocation_revision", "revision > 0");
-                        });
-                });
-
-            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillImportIdempotencyRecord", b =>
-                {
-                    b.Property<string>("ProjectId")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("project_id");
-
-                    b.Property<string>("ScopeDigest")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("scope_digest");
-
-                    b.Property<string>("ActorId")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("actor_id");
-
-                    b.Property<string>("ActorIssuer")
-                        .IsRequired()
-                        .HasMaxLength(512)
-                        .HasColumnType("character varying(512)")
-                        .HasColumnName("actor_issuer");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("IdempotencyKey")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("idempotency_key");
-
-                    b.Property<string>("ReceiptJson")
-                        .IsRequired()
-                        .HasColumnType("jsonb")
-                        .HasColumnName("receipt");
-
-                    b.Property<string>("RequestDigest")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("request_digest");
-
-                    b.HasKey("ProjectId", "ScopeDigest");
-
-                    b.ToTable("project_skill_import_idempotency", "projects_config");
-                });
-
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectTenantMembershipRecord", b =>
                 {
                     b.Property<Guid>("MembershipId")
@@ -849,15 +567,6 @@ namespace Agentweaver.Projects.Config.Migrations
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectCastingProposalRecord", b =>
-                {
-                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectConfigurationRevisionRecord", b =>
                 {
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
@@ -886,33 +595,6 @@ namespace Agentweaver.Projects.Config.Migrations
                 });
 
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectRunSelectionRecord", b =>
-                {
-                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillContentRevisionRecord", b =>
-                {
-                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillContentRevocationRecord", b =>
-                {
-                    b.HasOne("Agentweaver.Projects.Config.ProjectSkillContentRevisionRecord", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectId", "SkillId", "Revision")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillImportIdempotencyRecord", b =>
                 {
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
                         .WithMany()
