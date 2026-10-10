@@ -872,7 +872,7 @@ public sealed class CosmosMemoryProviderTests
     private sealed class FakeCosmosMemoryStore(CosmosMemoryOptions options) : ICosmosMemoryDocumentStore
     {
         private readonly object _gate = new();
-        private readonly Dictionary<(string ProjectId, string Id), CosmosMemoryStoredDocument> _documents = [];
+        private readonly Dictionary<(string ProjectId, string Id), MemoryStoredDocument> _documents = [];
         private long _etag;
         private int _pauseNextRecordRead;
         private int _pauseNextBatch;
@@ -960,7 +960,7 @@ public sealed class CosmosMemoryProviderTests
             return Task.FromResult(Identity);
         }
 
-        public async Task<CosmosMemoryStoredDocument?> ReadAsync(
+        public async Task<MemoryStoredDocument?> ReadAsync(
             string projectId,
             string documentId,
             CancellationToken cancellationToken)
@@ -976,14 +976,14 @@ public sealed class CosmosMemoryProviderTests
                 return _documents.GetValueOrDefault((projectId, documentId));
         }
 
-        public Task<IReadOnlyList<CosmosMemoryDocument>> FindAcceptedEffectAsync(
+        public Task<IReadOnlyList<KnowledgeMemoryDocument>> FindAcceptedEffectAsync(
             Guid receiptId,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             lock (_gate)
             {
-                IReadOnlyList<CosmosMemoryDocument> matches = _documents.Values
+                IReadOnlyList<KnowledgeMemoryDocument> matches = _documents.Values
                     .Select(item => item.Document)
                     .Where(item => item.DocumentType == "accepted-effect" &&
                         item.Receipt?.ReceiptId == receiptId)
@@ -1143,18 +1143,18 @@ public sealed class CosmosMemoryProviderTests
                     !item.Document.IsDelivered));
         }
 
-        public Task<CosmosMemoryBatchResult> ExecuteBatchAsync(
+        public Task<MemoryBatchResult> ExecuteBatchAsync(
             string projectId,
-            IReadOnlyList<CosmosMemoryBatchOperation> operations,
+            IReadOnlyList<MemoryBatchOperation> operations,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return ExecuteBatchCoreAsync(projectId, operations, cancellationToken);
         }
 
-        private async Task<CosmosMemoryBatchResult> ExecuteBatchCoreAsync(
+        private async Task<MemoryBatchResult> ExecuteBatchCoreAsync(
             string projectId,
-            IReadOnlyList<CosmosMemoryBatchOperation> operations,
+            IReadOnlyList<MemoryBatchOperation> operations,
             CancellationToken cancellationToken)
         {
             if (Interlocked.Exchange(ref _pauseNextBatch, 0) == 1)
@@ -1168,30 +1168,36 @@ public sealed class CosmosMemoryProviderTests
                 if (FailNextBatch)
                 {
                     FailNextBatch = false;
-                    return new CosmosMemoryBatchResult(HttpStatusCode.ServiceUnavailable);
+                    return new MemoryBatchResult(MemoryBatchStatus.Failed);
                 }
                 if (FailNextBatchStatus is { } failureStatus)
                 {
                     FailNextBatchStatus = null;
-                    return new CosmosMemoryBatchResult(failureStatus);
+                    return new MemoryBatchResult(ToBatchStatus(failureStatus));
                 }
                 foreach (var operation in operations)
                 {
                     var key = (projectId, operation.Document.Id);
                     var existing = _documents.GetValueOrDefault(key);
-                    if (operation.Kind == CosmosMemoryBatchOperationKind.Create && existing is not null)
-                        return new CosmosMemoryBatchResult(HttpStatusCode.Conflict);
-                    if (operation.Kind == CosmosMemoryBatchOperationKind.Replace &&
+                    if (operation.Kind == MemoryBatchOperationKind.Create && existing is not null)
+                        return new MemoryBatchResult(MemoryBatchStatus.Conflict);
+                    if (operation.Kind == MemoryBatchOperationKind.Replace &&
                         (existing is null || !string.Equals(existing.ETag, operation.ETag, StringComparison.Ordinal)))
-                        return new CosmosMemoryBatchResult(
-                            existing is null ? HttpStatusCode.NotFound : HttpStatusCode.PreconditionFailed);
+                        return new MemoryBatchResult(MemoryBatchStatus.Conflict);
                 }
                 foreach (var operation in operations)
-                    _documents[(projectId, operation.Document.Id)] = new CosmosMemoryStoredDocument(
+                    _documents[(projectId, operation.Document.Id)] = new MemoryStoredDocument(
                         operation.Document, Interlocked.Increment(ref _etag).ToString());
-                return new CosmosMemoryBatchResult(HttpStatusCode.OK);
+                return new MemoryBatchResult(MemoryBatchStatus.Succeeded);
             }
         }
+
+        private static MemoryBatchStatus ToBatchStatus(HttpStatusCode statusCode) =>
+            statusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed or HttpStatusCode.NotFound
+                ? MemoryBatchStatus.Conflict
+                : (int)statusCode is >= 200 and < 300
+                    ? MemoryBatchStatus.Succeeded
+                    : MemoryBatchStatus.Failed;
 
         private static string SearchableText(KnowledgeRecord record) =>
             string.Join(' ', record.Type, record.Title, record.Content, string.Join(' ', record.Tags));

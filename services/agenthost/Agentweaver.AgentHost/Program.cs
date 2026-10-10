@@ -6,6 +6,12 @@ using GitHub.Copilot;
 using Microsoft.Extensions.Logging.Abstractions;
 using OpenIddict.Validation.AspNetCore;
 
+if (args.Length > 0 && args[0] == Agentweaver.Abstractions.SandboxBuildTestLimits.OutputCollectorMode)
+{
+    Environment.ExitCode = await BuildTestOutputCollectorProgram.RunAsync(args[1..]);
+    return;
+}
+
 if (args.SequenceEqual(["--verify-native-runtime"]))
 {
     var verified = NativeRuntimeManifest.ReadAndVerify(AppContext.BaseDirectory);
@@ -26,7 +32,7 @@ if (args.SequenceEqual(["--verify-native-runtime"]))
         throw new InvalidOperationException("The native runtime extracted executable packages into private session state.");
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
     {
-        sdkVersion = "1.0.11", runtimeVersion = status.Version, status.ProtocolVersion,
+        sdkVersion = "1.0.18", runtimeVersion = status.Version, status.ProtocolVersion,
         nativeDistribution = Path.GetDirectoryName(verified.ExecutablePath),
         privatePackageCacheAbsent = true
     }));
@@ -43,8 +49,12 @@ var authority = new Uri(Required(section["Authentication:Authority"], "AgentHost
 if (!RuntimeContractValidation.IsHttpsEndpoint(authority))
     throw new InvalidOperationException("AgentHost authentication requires an exact HTTPS issuer.");
 var audience = Required(section["Authentication:Audience"], "AgentHost:Authentication:Audience");
-var models = section.GetSection("ModelBindings").Get<Dictionary<string, RuntimeModelBinding>>()
-    ?? throw new InvalidOperationException("Explicit server-owned AgentHost model bindings are required.");
+var models = new RuntimeModelBindingsResolver(
+    Required(builder.Configuration[RuntimeModelBindingsResolver.RevisionConfigurationKey],
+        RuntimeModelBindingsResolver.RevisionConfigurationKey),
+    builder.Configuration.GetSection(RuntimeModelBindingsResolver.ConfigurationSection)
+        .Get<Dictionary<string, RuntimeModelBinding>>()
+        ?? throw new InvalidOperationException("Explicit server-owned AgentHost model bindings are required."));
 var baseDirectory = Required(section["PrivateStateDirectory"], "AgentHost:PrivateStateDirectory");
 var workingDirectory = Required(section["WorkingDirectory"], "AgentHost:WorkingDirectory");
 if (!Path.IsPathFullyQualified(baseDirectory) || !Path.IsPathFullyQualified(workingDirectory) ||

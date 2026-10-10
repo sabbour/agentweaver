@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mxfile host="Agentweaver" version="31.4.5" compressed="false" fluentProfile="react-optical-v1">
+<mxfile host="Agentweaver" compressed="false" fluentProfile="react-optical-v1">
 <diagram id="v1-azure-foundation" name="Azure resource and evidence dependencies"><mxGraphModel page="1" pageScale="2.500077519379845" pageWidth="794" pageHeight="559" background="#efeae7" grid="0"><root>
 <mxCell id="0"/><mxCell id="1" parent="0"/>
 <mxCell id="fluent-paper" fluentRole="canvas" value="" style="rounded=1;absoluteArcSize=1;arcSize=32;fillColor=#efeae7;strokeColor=none;strokeWidth=1;shadow=0;" parent="1" vertex="1"><mxGeometry x="186.5307751937985" y="0" width="1612" height="1397.5433333333333" as="geometry"/></mxCell>

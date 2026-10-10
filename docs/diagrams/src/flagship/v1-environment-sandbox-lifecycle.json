@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["environment", "projects"],
-      "label": "Placement retains its lease during authority and bootstrap-context reads.\nLater effects recheck independently; public write permission is unchanged."
+      "label": "Workspace reads retain both lease and exact attached volume.\nMetadata only: no Storage flush or content checkpoint."
     },
     {
       "type": "message",

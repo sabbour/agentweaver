@@ -10,6 +10,7 @@ using Azure.Core;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Azure.Cosmos;
 using Npgsql;
+using StackExchange.Redis;
 
 var migrate = args.SequenceEqual(["--migrate"], StringComparer.Ordinal);
 if (args.Contains("--migrate", StringComparer.Ordinal) && !migrate)
@@ -43,6 +44,7 @@ var runtimeCredential = KnowledgePostgresDataSource.CreateCredential(runtimeConn
 var dataSource = KnowledgePostgresDataSource.Create(runtimeConnection.ConnectionString, runtimeCredential);
 var providerCatalog = ProviderCatalogConfiguration.Load(builder.Configuration);
 var cosmosMemoryOptions = CosmosMemoryOptions.ReadOptional(builder.Configuration);
+var redisMemoryOptions = RedisMemoryOptions.ReadOptional(builder.Configuration);
 
 builder.Services.AddSingleton(runtimeOptions);
 builder.Services.AddSingleton(runtimeOptions.MemoryProvider);
@@ -73,6 +75,16 @@ if (cosmosMemoryOptions is not null)
     builder.Services.AddSingleton<ICosmosMemoryDocumentStore, CosmosMemoryDocumentStore>();
     builder.Services.AddSingleton<CosmosMemoryProvider>();
 }
+if (redisMemoryOptions is not null)
+{
+    builder.Services.AddSingleton(redisMemoryOptions);
+    builder.Services.AddSingleton<IRedisMemoryCommandClient>(_ =>
+        new RedisMemoryCommandClient(
+            () => ConnectionMultiplexer.Connect(redisMemoryOptions.CreateConnectionOptions()),
+            redisMemoryOptions));
+    builder.Services.AddSingleton<RedisMemoryDocumentStore>();
+    builder.Services.AddSingleton<RedisMemoryProvider>();
+}
 builder.Services.AddSingleton<IMemoryProvider>(services =>
     services.GetRequiredService<NativePostgresMemoryProvider>());
 builder.Services.AddSingleton<IReadOnlyDictionary<string, IMemoryProvider>>(services =>
@@ -84,6 +96,11 @@ builder.Services.AddSingleton<IReadOnlyDictionary<string, IMemoryProvider>>(serv
     {
         var cosmosProvider = services.GetRequiredService<CosmosMemoryProvider>();
         providers.Add(cosmosProvider.Descriptor.Id, cosmosProvider);
+    }
+    if (redisMemoryOptions is not null)
+    {
+        var redisProvider = services.GetRequiredService<RedisMemoryProvider>();
+        providers.Add(redisProvider.Descriptor.Id, redisProvider);
     }
     return providers.ToImmutable();
 });
@@ -131,6 +148,12 @@ if (cosmosMemoryOptions is not null &&
         providerCatalog,
         app.Services.GetRequiredService<CosmosMemoryProvider>(),
         cosmosMemoryOptions);
+if (redisMemoryOptions is not null &&
+    providerCatalog.TryGetProvider(RedisMemoryProvider.ProviderId, out _))
+    VerifyRedisProviderRegistration(
+        providerCatalog,
+        app.Services.GetRequiredService<RedisMemoryProvider>(),
+        redisMemoryOptions);
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
@@ -187,6 +210,23 @@ static void VerifyCosmosProviderRegistration(
         !registration.Descriptor.AdvertisedCapabilities.SetEquals(provider.Descriptor.AdvertisedCapabilities))
         throw new InvalidOperationException(
             "The provider catalog owner must register the exact Cosmos Memory descriptor and options revision.");
+}
+
+static void VerifyRedisProviderRegistration(
+    ProviderCatalog catalog,
+    RedisMemoryProvider provider,
+    RedisMemoryOptions options)
+{
+    if (!catalog.TryGetProvider(provider.Descriptor.Id, out var registration) ||
+        registration is null ||
+        registration.Descriptor.Seam != ProviderSeam.Memory ||
+        registration.Descriptor.AdapterVersion != provider.Descriptor.AdapterVersion ||
+        registration.Descriptor.OptionsSchemaVersion != options.OptionsSchemaVersion ||
+        registration.OptionsSchemaVersion != options.OptionsSchemaVersion ||
+        !string.Equals(registration.OptionsRevision, options.OptionsRevision, StringComparison.Ordinal) ||
+        !registration.Descriptor.AdvertisedCapabilities.SetEquals(provider.Descriptor.AdvertisedCapabilities))
+        throw new InvalidOperationException(
+            "The provider catalog owner must register the exact Redis Memory descriptor and options revision.");
 }
 
 public partial class Program;

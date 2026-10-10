@@ -7,6 +7,40 @@ namespace Agentweaver.Identity.Tests;
 
 public sealed class RuntimeContractTests
 {
+    [Theory]
+    [InlineData(1, 0, false)]
+    [InlineData(1, 1, true)]
+    [InlineData(1, 2, true)]
+    [InlineData(1000, 999, false)]
+    [InlineData(null, 100000, false)]
+    public void InvocationLimitsDenyTheNextReservationAtAndBeyondTheCap(
+        int? limit, long reserved, bool exhausted)
+    {
+        if (exhausted)
+            Assert.Equal("runtime_model_turn_limit_exhausted",
+                Assert.Throws<RuntimeAuthorizationException>(() =>
+                    RuntimeActionContract.RequireInvocationCapacity(
+                        limit, reserved, "runtime_model_turn_limit_exhausted")).Code);
+        else
+            RuntimeActionContract.RequireInvocationCapacity(limit, reserved, "runtime_model_turn_limit_exhausted");
+    }
+
+    [Fact]
+    public void InvocationKindAndDispatchIdentityAreOptionalButBoundToTheExactRequest()
+    {
+        var request = new RuntimeActionRequest(1, Guid.NewGuid(), 1, 1, Guid.NewGuid(),
+            "tool.read", new string('a', 64));
+        var original = RuntimeActionContract.Hash(request);
+        Assert.DoesNotContain("IsToolInvocation", JsonSerializer.Serialize(request));
+        Assert.DoesNotContain("DispatchId", JsonSerializer.Serialize(request));
+        Assert.NotEqual(original, RuntimeActionContract.Hash(request with { IsToolInvocation = true }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeActionContract.Validate(request with { DispatchId = Guid.NewGuid() }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeActionContract.Validate(request with { ActionId = "model.turn", IsToolInvocation = true }));
+        RuntimeActionContract.Validate(request with { ActionId = "model.turn", DispatchId = Guid.NewGuid() });
+    }
+
     [Fact]
     public void NativeSessionIdentitySurvivesRuntimeReplacementButNotAChangeOfScope()
     {
@@ -60,6 +94,12 @@ public sealed class RuntimeContractTests
         Assert.DoesNotContain("EnvironmentLifecycleGeneration", serialized);
         Assert.DoesNotContain("EnvironmentLeaseRevision", serialized);
         Assert.DoesNotContain("Image", serialized);
+        Assert.DoesNotContain("MaxModelTurns", serialized);
+        Assert.DoesNotContain("MaxToolCalls", serialized);
+        Assert.DoesNotContain("MaxPromptTokens", serialized);
+        Assert.DoesNotContain("MaxRevisionAttempts", serialized);
+        Assert.DoesNotContain("CopilotSoftCreditLimit", serialized);
+        Assert.DoesNotContain("CopilotHardCreditLimit", serialized);
         var pinned = binding with { ModelSelectionReference = "accepted-model" };
         Assert.Contains("ModelSelectionReference", JsonSerializer.Serialize(pinned));
         var credentialPinned = pinned with
@@ -75,6 +115,40 @@ public sealed class RuntimeContractTests
                     ModelCredentialReference = new SecretRef("model-credential", "version-1")
                 }
             }));
+    }
+
+    [Fact]
+    public void AcceptedBudgetPinsChangeTheRegistrationHashAndRejectWidenedOrInvalidValues()
+    {
+        var registration = CreateRegistration();
+        var originalHash = RuntimeContractValidation.RegistrationHash(registration);
+        foreach (var binding in new[]
+        {
+            registration.Binding with { MaxModelTurns = 1 },
+            registration.Binding with { MaxToolCalls = 1 },
+            registration.Binding with { MaxPromptTokens = 1024 },
+            registration.Binding with { MaxRevisionAttempts = 0 },
+            registration.Binding with { CopilotSoftCreditLimit = 0 },
+            registration.Binding with { CopilotHardCreditLimit = 0 },
+            registration.Binding with { CopilotSoftCreditLimit = 1, CopilotHardCreditLimit = 2 }
+        })
+        {
+            RuntimeContractValidation.Validate(registration with { Binding = binding });
+            Assert.NotEqual(originalHash, RuntimeContractValidation.RegistrationHash(
+                registration with { Binding = binding }));
+        }
+        foreach (var binding in new[]
+        {
+            registration.Binding with { MaxModelTurns = 0 },
+            registration.Binding with { MaxToolCalls = 10001 },
+            registration.Binding with { MaxPromptTokens = 1023 },
+            registration.Binding with { MaxRevisionAttempts = -1 },
+            registration.Binding with { CopilotSoftCreditLimit = -1 },
+            registration.Binding with { CopilotHardCreditLimit = -1 },
+            registration.Binding with { CopilotSoftCreditLimit = 2, CopilotHardCreditLimit = 1 }
+        })
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeContractValidation.Validate(registration with { Binding = binding }));
     }
 
     [Fact]

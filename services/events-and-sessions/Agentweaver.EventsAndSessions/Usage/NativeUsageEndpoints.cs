@@ -79,6 +79,35 @@ internal sealed class NativeUsageApplicationService(
         return result;
     }
 
+    internal async Task<RuntimeUsageCostSnapshotReceipt> ReadCostSnapshotAsync(
+        HttpContext context, string projectId, string runId, RuntimeUsageCostSnapshotRequest request,
+        CancellationToken cancellationToken)
+    {
+        RuntimeUsageCostSnapshotContract.ValidateRequest(request);
+        var first = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+        RequireReadAuthority(first);
+        var binding = request.Registration.Binding;
+        if (first.BoundProjectId != projectId || first.BoundRunId != runId ||
+            binding.TenantId != first.TenantId || binding.ProjectId != projectId || binding.RunId != runId)
+            throw new RuntimeAuthorizationException("runtime_usage_receipt_scope_invalid");
+        var bearer = await BearerAsync(context, timeProvider).ConfigureAwait(false);
+        try
+        {
+            return await consumer.ReadCostSnapshotAsync(request, async token =>
+            {
+                var current = await projects.GetCurrentAsync(context, token).ConfigureAwait(false);
+                RequireReadAuthority(current);
+                if (current.TenantId != first.TenantId || current.BoundProjectId != projectId ||
+                    current.BoundRunId != runId || !bearer.IsUsable())
+                    throw new RuntimeAuthorizationException("runtime_usage_authority_changed");
+            }, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            bearer.Invalidate();
+        }
+    }
+
     internal static async Task<SecretCredential> BearerAsync(HttpContext context, TimeProvider timeProvider)
     {
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
@@ -107,11 +136,19 @@ public static class NativeUsageEndpoints
     {
         if (!configuration.GetValue<bool>("EventsAndSessions:RuntimeUsage:Enabled"))
             return false;
+        services.AddSingleton(new Agentweaver.AgentRuntime.RuntimeModelBindingsResolver(
+            configuration[Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.RevisionConfigurationKey]
+                ?? throw new InvalidOperationException("AgentHost:ModelBindingsRevision is required."),
+            configuration.GetSection(Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.ConfigurationSection)
+                .Get<Dictionary<string, Agentweaver.AgentRuntime.RuntimeModelBinding>>()
+                ?? throw new InvalidOperationException("The shared AgentHost:ModelBindings configuration is required.")));
         services.AddSingleton<PostgresUsageLedger>(services => new(
             services.GetRequiredService<Npgsql.NpgsqlDataSource>(),
             services.GetRequiredService<PostgresSessionsProviderOptions>().Schema));
         services.AddSingleton<NativeUsageReceiptConsumer>();
         services.AddScoped<NativeUsageApplicationService>();
+        services.AddHttpClient<RuntimeRunAdmissionService>(client => client.Timeout = TimeSpan.FromSeconds(20))
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
         services.AddHttpClient<NativeUsageReceiptClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
             .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
         return true;
@@ -119,6 +156,12 @@ public static class NativeUsageEndpoints
 
     public static IEndpointRouteBuilder MapNativeUsageEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapPost("/internal/projects/{projectId}/runs/{runId}/usage/copilot-run-admission",
+            (string projectId, string runId, RuntimeRunAdmissionRequest request, HttpContext context,
+                [FromServices] RuntimeRunAdmissionService service, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => service.ReadAsync(
+                    context, projectId, runId, request, cancellationToken)))
+            .RequireAuthorization();
         endpoints.MapPost("/internal/sessions/{sessionId}/usage-receipts",
             (string sessionId, RuntimeUsageReceiptReferenceRequest request, HttpContext context,
                 [FromServices] NativeUsageApplicationService service, CancellationToken cancellationToken) =>
@@ -128,6 +171,12 @@ public static class NativeUsageEndpoints
             (string projectId, string runId, HttpContext context,
                 [FromServices] NativeUsageApplicationService service, CancellationToken cancellationToken) =>
                 ExecuteAsync(context, () => service.GetTotalsAsync(context, projectId, runId, cancellationToken)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/projects/{projectId}/runs/{runId}/usage/copilot-cost-snapshot",
+            (string projectId, string runId, RuntimeUsageCostSnapshotRequest request, HttpContext context,
+                [FromServices] NativeUsageApplicationService service, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => service.ReadCostSnapshotAsync(
+                    context, projectId, runId, request, cancellationToken)))
             .RequireAuthorization();
         return endpoints;
     }

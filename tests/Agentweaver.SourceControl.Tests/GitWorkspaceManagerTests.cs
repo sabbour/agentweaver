@@ -66,6 +66,75 @@ public sealed class GitWorkspaceManagerTests
     }
 
     [Fact]
+    public async Task CapturesDirtyDeletedAndUntrackedFilesWithoutChangingGitIndex()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            var sourceRepository = Path.Combine(temporaryRoot, "source-repository");
+            var baseSha = await CreateGitRepositoryAsync(sourceRepository);
+            var manager = new GitWorkspaceManager(
+                Path.Combine(temporaryRoot, "workspaces"),
+                new LocalGitRepositoryRemote(new Uri(sourceRepository)));
+            var request = CreateRequest("run-capture", "workspace-capture", baseSha);
+            var workspace = await manager.PrepareAsync(request, CancellationToken.None);
+
+            var modifiedContent = Encoding.UTF8.GetBytes("updated README\n");
+            var untrackedContent = Encoding.UTF8.GetBytes("new output\n");
+            await File.WriteAllBytesAsync(
+                Path.Combine(workspace.Path, "README.md"), modifiedContent);
+            File.Delete(Path.Combine(workspace.Path, "delete-me.txt"));
+            await File.WriteAllBytesAsync(
+                Path.Combine(workspace.Path, "new-output.txt"), untrackedContent);
+
+            var indexPath = Path.Combine(workspace.Path, ".git", "index");
+            var indexBeforeCapture = await File.ReadAllBytesAsync(indexPath);
+            var captureRequest = new GitWorkspaceCaptureRequest(
+                request.Context.Binding, request.Context.Repository,
+                request.WorkspaceId, request.BaseSha, request.BranchName);
+            var reopened = await manager.OpenExistingAsync(captureRequest, CancellationToken.None);
+            Assert.Equal(workspace.Path, reopened.Path);
+            var capture = await manager.CaptureAsync(
+                captureRequest, reopened, CancellationToken.None);
+            var document = GitWorkspaceCapturePackage.Create(capture);
+            var manifest = GitWorkspaceCapturePackage.ParseManifest(document.ManifestBytes);
+            GitWorkspaceCapturePackage.VerifyPackage(
+                document.PackageBytes, manifest, document.PackageSha256);
+            var indexAfterCapture = await File.ReadAllBytesAsync(indexPath);
+            var files = capture.Files.ToDictionary(file => file.Path, StringComparer.Ordinal);
+            var manifestFiles = manifest.Files.ToDictionary(file => file.Path, StringComparer.Ordinal);
+
+            Assert.Equal(indexBeforeCapture, indexAfterCapture);
+            Assert.Equal(request.BaseSha, capture.BaseSha);
+            Assert.Equal(40, capture.OutputTreeSha.Length);
+            Assert.Equal(request.BranchName, manifest.BranchName);
+            Assert.Equal(
+                new[] { "README.md", "new-output.txt" },
+                files.Keys.Order(StringComparer.Ordinal).ToArray());
+            AssertCapturedFile(files["README.md"], "100644", modifiedContent);
+            AssertCapturedFile(files["new-output.txt"], "100644", untrackedContent);
+            Assert.Equal(document.ManifestSha256, GitWorkspaceCapturePackage.Hash(document.ManifestBytes));
+            Assert.Equal(document.PatchSha256, GitWorkspaceCapturePackage.Hash(document.PatchBytes));
+            Assert.Equal(document.PackageSha256, GitWorkspaceCapturePackage.Hash(document.PackageBytes));
+            Assert.Equal(files["README.md"].Sha256, manifestFiles["README.md"].Sha256);
+            Assert.Equal(files["new-output.txt"].ByteLength, manifestFiles["new-output.txt"].ByteLength);
+            Assert.Equal(
+                modifiedContent,
+                GitWorkspaceCapturePackage.ExtractFile(
+                    document.PackageBytes, manifest, document.PackageSha256, "README.md"));
+            Assert.Contains("delete-me.txt", capture.Patch, StringComparison.Ordinal);
+            Assert.Contains("new-output.txt", capture.Patch, StringComparison.Ordinal);
+            Assert.Empty(Directory.GetFiles(
+                Path.GetDirectoryName(workspace.Path)!,
+                "capture-*.index*"));
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
     public async Task RedactsCheckoutCredentialFromGitDiagnostics()
     {
         var temporaryRoot = CreateTemporaryDirectory();
@@ -203,7 +272,8 @@ public sealed class GitWorkspaceManagerTests
         await RunFixtureGitAsync(path, ["config", "--local", "user.name", "SourceControl Test"]);
         await RunFixtureGitAsync(path, ["config", "--local", "user.email", "source-control@example.invalid"]);
         await File.WriteAllTextAsync(Path.Combine(path, "README.md"), "original\n");
-        await RunFixtureGitAsync(path, ["add", "--", "README.md"]);
+        await File.WriteAllTextAsync(Path.Combine(path, "delete-me.txt"), "delete me\n");
+        await RunFixtureGitAsync(path, ["add", "--", "README.md", "delete-me.txt"]);
         await RunFixtureGitAsync(path, ["commit", "-m", "initial"]);
         var sha = (await RunFixtureGitAsync(path, ["rev-parse", "--verify", "HEAD^{commit}"])).Trim();
         Assert.Equal(40, sha.Length);
@@ -256,6 +326,19 @@ public sealed class GitWorkspaceManagerTests
 
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..32].ToLowerInvariant();
+
+    private static void AssertCapturedFile(
+        GitWorkspaceCapturedFile file,
+        string expectedMode,
+        byte[] expectedContent)
+    {
+        Assert.Equal(expectedMode, file.Mode);
+        Assert.Equal(expectedContent.LongLength, file.ByteLength);
+        Assert.Equal(expectedContent, file.Content.AsSpan().ToArray());
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(expectedContent)).ToLowerInvariant(),
+            file.Sha256);
+    }
 
     private sealed class LocalGitRepositoryRemote(Uri origin) : IGitRepositoryRemote
     {

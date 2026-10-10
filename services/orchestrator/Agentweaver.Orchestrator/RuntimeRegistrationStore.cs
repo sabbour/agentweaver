@@ -9,6 +9,8 @@ namespace Agentweaver.Orchestrator;
 
 internal sealed class RuntimeRegistrationStore
 {
+    internal const int MaximumCandidateIdPageSize = 32;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
@@ -126,6 +128,43 @@ internal sealed class RuntimeRegistrationStore
         if (registration is not null && revalidateCurrentAuthority is not null)
             RequireAvailable(registration);
         return registration;
+    }
+
+    internal async Task<IReadOnlyList<Guid>> ReadCandidateRuntimeIdsPageAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        Guid? afterRuntimeInstanceId,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        if (pageSize is < 1 or > MaximumCandidateIdPageSize)
+            throw new ArgumentOutOfRangeException(nameof(pageSize));
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand($"""
+            SELECT head.runtime_instance_id
+            FROM {_heads} AS head
+            JOIN {_revisions} AS revision
+              ON revision.runtime_instance_id = head.runtime_instance_id
+             AND revision.revision = head.current_revision
+            WHERE (revision.binding_json::jsonb ->> 'ProjectId') = @project
+              AND (revision.binding_json::jsonb ->> 'RunId') = @run
+              AND (revision.binding_json::jsonb ->> 'SessionId') = @session
+              AND (@after IS NULL OR head.runtime_instance_id > @after)
+            ORDER BY head.runtime_instance_id
+            LIMIT @limit
+            """, connection);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Text, projectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Text, runId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Text, sessionId);
+        command.Parameters.AddWithValue("after", NpgsqlDbType.Uuid,
+            (object?)afterRuntimeInstanceId ?? DBNull.Value);
+        command.Parameters.AddWithValue("limit", NpgsqlDbType.Integer, pageSize);
+        var ids = new List<Guid>(pageSize);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            ids.Add(reader.GetGuid(0));
+        return ids;
     }
 
     internal async Task<RuntimeRegistration> RevokeAsync(

@@ -160,6 +160,7 @@ public sealed class ProjectAuthorizationContext
                         {
                             Add(grant, ProjectAuthorizationPermission.WriteProjects);
                             Add(grant, ProjectAuthorizationPermission.CreateProjects);
+                            Add(grant, ProjectAuthorizationPermission.AccessPrivateKnowledge);
                         }
                     }
                     else
@@ -170,18 +171,29 @@ public sealed class ProjectAuthorizationContext
                             ProjectAuthorityResourceType.Project,
                             BoundProjectId);
                         if (adminScope)
+                        {
                             Add(
                                 grant,
                                 ProjectAuthorizationPermission.WriteProjects,
                                 ProjectAuthorityResourceType.Project,
                                 BoundProjectId);
+                            Add(
+                                grant,
+                                ProjectAuthorizationPermission.AccessPrivateKnowledge,
+                                ProjectAuthorityResourceType.Project,
+                                BoundProjectId);
+                        }
                     }
                     break;
-                case (ProjectAuthorityResourceType.Project, ProjectAuthorityRole.Owner)
-                    when BoundRunId is null:
-                    Add(grant, ProjectAuthorizationPermission.ReadProjects);
+                case (ProjectAuthorityResourceType.Project, ProjectAuthorityRole.Owner):
+                    if (BoundRunId is null)
+                        Add(grant, ProjectAuthorizationPermission.ReadProjects);
                     if (adminScope)
-                        Add(grant, ProjectAuthorizationPermission.WriteProjects);
+                    {
+                        Add(grant, ProjectAuthorizationPermission.AccessPrivateKnowledge);
+                        if (BoundRunId is null)
+                            Add(grant, ProjectAuthorizationPermission.WriteProjects);
+                    }
                     break;
                 case (ProjectAuthorityResourceType.Project,
                     ProjectAuthorityRole.Contributor or ProjectAuthorityRole.Viewer)

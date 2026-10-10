@@ -42,6 +42,13 @@ public static class RuntimeContractValidation
         if (binding.ModelSourceMode is { } modelSourceMode &&
             (!Enum.IsDefined(modelSourceMode) || binding.ModelSelectionReference is null))
             throw new RuntimeAuthorizationException("runtime_binding_invalid");
+        if (binding.ModelBindingPin is { } modelBindingPin)
+        {
+            Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.ValidatePin(modelBindingPin);
+            if (modelBindingPin.ModelSelectionReference != binding.ModelSelectionReference ||
+                modelBindingPin.SourceMode != binding.ModelSourceMode)
+                throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
+        }
         if (binding.ModelCredentialReference is { } modelCredentialReference)
         {
             ValidateIdentifier(modelCredentialReference.Id);
@@ -55,6 +62,18 @@ public static class RuntimeContractValidation
                 binding.ModelConnectionScope is not (Agentweaver.Abstractions.ProjectAuthorityResourceType.Project or
                     Agentweaver.Abstractions.ProjectAuthorityResourceType.Platform)) ||
             binding.ModelConnectionId is null && binding.ModelConnectionScope is not null)
+            throw new RuntimeAuthorizationException("runtime_binding_invalid");
+        if (binding.MaxModelTurns is { } maxModelTurns &&
+                (maxModelTurns < 1 || maxModelTurns > 1000) ||
+            binding.MaxToolCalls is { } maxToolCalls &&
+                (maxToolCalls < 1 || maxToolCalls > 10000) ||
+            binding.MaxPromptTokens is { } maxPromptTokens &&
+                (maxPromptTokens < 1024 || maxPromptTokens > 200000) ||
+            binding.MaxRevisionAttempts is < 0 ||
+            binding.CopilotSoftCreditLimit is < 0 ||
+            binding.CopilotHardCreditLimit is < 0 ||
+            binding.CopilotSoftCreditLimit is { } softLimit &&
+                binding.CopilotHardCreditLimit is { } hardLimit && softLimit > hardLimit)
             throw new RuntimeAuthorizationException("runtime_binding_invalid");
         if (binding.PlacementProviderId is { } placementProviderId)
         {

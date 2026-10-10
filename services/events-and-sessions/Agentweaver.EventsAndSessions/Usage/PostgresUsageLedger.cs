@@ -119,20 +119,40 @@ public sealed class PostgresUsageLedger : IUsageLedger
     {
         UsageLedgerValidation.ValidateRunScope(tenantId, projectId, runId);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        return await GetRunTotalsCoreAsync(
+            connection, null, tenantId, projectId, runId, null, cancellationToken);
+    }
+
+    internal Task<UsageRunTotals> GetCopilotRunTotalsWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction,
+        string tenantId, string projectId, string runId, CancellationToken cancellationToken)
+    {
+        UsageLedgerValidation.ValidateRunScope(tenantId, projectId, runId);
+        return GetRunTotalsCoreAsync(connection, transaction, tenantId, projectId, runId,
+            SdkMeterSources.CopilotNanoAiu, cancellationToken);
+    }
+
+    private async Task<UsageRunTotals> GetRunTotalsCoreAsync(
+        NpgsqlConnection connection, NpgsqlTransaction? transaction,
+        string tenantId, string projectId, string runId, string? filterMeterSource,
+        CancellationToken cancellationToken)
+    {
         await using var command = new NpgsqlCommand($"""
             SELECT l.agent_id, l.meter_source, l.price_unit, r.unit,
                    l.input_tokens, l.output_tokens, l.cached_tokens, l.reasoning_tokens,
                    l.duration_milliseconds, l.request_count, l.price_amount, l.price_disposition,
-                   l.cache_write_tokens
+                   l.cache_write_tokens, (l.payload->'usage')::text
             FROM {_quotedSchema}.usage_ledger l
             LEFT JOIN {_quotedSchema}.usage_rate_cards r
                 ON r.card_id = l.rate_card_id AND r.version = l.rate_card_version
             WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id AND l.run_id = @run_id
+                AND (@meter_source IS NULL OR l.meter_source = @meter_source)
             ORDER BY l.agent_id, l.event_id
-            """, connection);
+            """, connection, transaction);
         command.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Varchar, tenantId);
         command.Parameters.AddWithValue("project_id", NpgsqlDbType.Varchar, projectId);
         command.Parameters.AddWithValue("run_id", NpgsqlDbType.Varchar, runId);
+        command.Parameters.AddWithValue("meter_source", NpgsqlDbType.Varchar, (object?)filterMeterSource ?? DBNull.Value);
 
         var agents = new Dictionary<string, AgentAccumulator>(StringComparer.Ordinal);
         var runAmounts = new Dictionary<(string MeterSource, string Unit), AmountAccumulator>();
@@ -153,7 +173,10 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 events = checked(events + 1);
                 var disposition = Enum.Parse<CostDisposition>(reader.GetString(11), ignoreCase: false);
                 var priced = disposition != CostDisposition.Unpriced;
-                fullyPriced &= priced;
+                var usage = JsonSerializer.Deserialize<UsageSubmission>(reader.GetString(13), JsonOptions)
+                    ?? throw new InvalidOperationException("A stored usage payload has no usage submission.");
+                var financiallyComplete = UsageLedgerValidation.IsFinanciallyComplete(usage, disposition);
+                fullyPriced &= financiallyComplete;
                 var meterSource = reader.GetString(1);
                 var unit = reader.IsDBNull(2)
                     ? reader.IsDBNull(3) ? null : reader.GetString(3)
@@ -168,7 +191,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
                     reader.IsDBNull(8) ? null : reader.GetDecimal(8),
                     reader.IsDBNull(9) ? null : reader.GetInt64(9),
                     reader.IsDBNull(12) ? null : reader.GetInt64(12),
-                    priced);
+                    financiallyComplete);
 
                 if (unit is not null)
                 {

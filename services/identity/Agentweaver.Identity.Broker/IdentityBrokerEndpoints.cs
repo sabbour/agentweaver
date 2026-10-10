@@ -20,10 +20,12 @@ public static class IdentityBrokerEndpoints
 
     public static void MapIdentityBrokerEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapMethods("/connect/authorize", [HttpMethods.Get], AuthorizeAsync);
-        app.MapGet("/connect/authorize/resume", ResumeAsync);
-        app.MapPost("/connect/consent", ConsentAsync);
-        app.MapPost("/connect/token", TokenAsync);
+        var webEndpoints = app.MapGroup("/connect")
+            .RequireCors(IdentityBrokerOptions.WebCorsPolicyName);
+        webEndpoints.MapMethods("/authorize", [HttpMethods.Get], AuthorizeAsync);
+        webEndpoints.MapGet("/authorize/resume", ResumeAsync);
+        webEndpoints.MapPost("/consent", ConsentAsync);
+        webEndpoints.MapPost("/token", TokenAsync);
 
         app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
         app.MapGet("/health/ready", async (IdentityBrokerDbContext db, CancellationToken ct) =>

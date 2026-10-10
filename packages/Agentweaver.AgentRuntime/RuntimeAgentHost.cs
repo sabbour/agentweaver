@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
 using Agentweaver.Abstractions;
@@ -47,6 +48,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private readonly Queue<PendingTurn> _immediate = new();
     private readonly Queue<PendingTurn> _enqueue = new();
     private readonly Dictionary<Guid, PendingTurn> _turns = new();
+    private readonly ConcurrentDictionary<Guid, RuntimeUsageCostReceiptReference> _accountedUsage = new();
     private readonly SemaphoreSlim _available = new(0);
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _dispatcher;
@@ -55,7 +57,10 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private RuntimeActorAuthorization? _actor;
     private AuthorizedRuntimeSession? _session;
     private RuntimeSessionMaterialHttpClient? _material;
+    private RuntimeUsageSourceHttpClient? _usageSource;
     private Task? _usage;
+    private RuntimeHostSuspendRequest? _suspendRequest;
+    private PendingTurn? _lastTurn;
     private DateTimeOffset? _configuredAt;
     private DateTimeOffset? _readyAt;
     private int _disposed;
@@ -130,7 +135,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             _session = await receiver.ConfigureAsync(
                 bootstrap, bytes, request.ConsumeOperationId, request.ExchangeOperationId, token).ConfigureAwait(false);
             _configuredAt ??= _time.GetUtcNow();
-            var source = new RuntimeUsageSourceHttpClient(_http, _options.OrchestratorAddress, retained);
+            var source = _usageSource ??= new(_http, _options.OrchestratorAddress, retained);
             if (_usage is null)
             {
                 await _session.RegisterUsageAsync(source, token).ConfigureAwait(false);
@@ -188,9 +193,11 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             }
             else
             {
+                if (_suspendRequest is not null)
+                    throw new RuntimeAuthorizationException("runtime_session_suspended");
                 if (_immediate.Count + _enqueue.Count >= _options.MaximumPendingTurns)
                     throw new RuntimeAuthorizationException("runtime_a2a_pending_capacity_exceeded");
-                pending = new(message.MessageId, fingerprint, part.Text, message.Metadata.Runtime, actor,
+                pending = new(message.MessageId, fingerprint, request, message.Metadata.Runtime, actor,
                     token, new(TaskCreationOptions.RunContinuationsAsynchronously));
                 _turns.Add(message.MessageId, pending);
                 (message.Metadata.DeliveryMode == AddressedMessageDeliveryMode.Immediate
@@ -199,6 +206,51 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             }
         }
         return await pending.Completion.Task.WaitAsync(token).ConfigureAwait(false);
+    }
+
+    public async Task<RuntimeHostSuspendReceipt> SuspendAsync(
+        RuntimeHostSuspendRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.OperationId == Guid.Empty || request.ManifestId == Guid.Empty || request.PhaseVersion <= 0 ||
+            request.OperationId == request.ManifestId)
+            throw new RuntimeAuthorizationException("runtime_suspend_request_invalid");
+        var session = await RequireSessionAsync(request.Proof, actor, token).ConfigureAwait(false);
+        await RequireCurrentSuspendAsync(request, actor, token).ConfigureAwait(false);
+        Task[] admitted;
+        lock (_queueLock)
+        {
+            RequireAvailable();
+            if (_suspendRequest is not null && _suspendRequest != request)
+                throw new RuntimeAuthorizationException("runtime_suspend_operation_conflict");
+            _suspendRequest = request;
+            admitted = _turns.Values.Where(turn => !turn.Completion.Task.IsCompleted)
+                .Select(turn => (Task)turn.Completion.Task).ToArray();
+        }
+        await Task.WhenAll(admitted).WaitAsync(token).ConfigureAwait(false);
+        lock (_queueLock)
+        {
+            RequireAvailable();
+            if (_lastTurn?.Completion.Task.Status != TaskStatus.RanToCompletion)
+                throw new RuntimeAuthorizationException("runtime_native_suspend_receipt_unavailable");
+        }
+        await RequireCurrentSuspendAsync(request, actor, token).ConfigureAwait(false);
+        await session.FlushUsageAsync(token).ConfigureAwait(false);
+        RequireAvailable();
+        return await session.SuspendAsync(
+            _material!, request, cancellation => RequireCurrentSuspendAsync(request, actor, cancellation), token)
+            .ConfigureAwait(false);
+    }
+
+    private async Task RequireCurrentSuspendAsync(
+        RuntimeHostSuspendRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        var current = await RuntimeOwnerHttpTransport.SendAsync<RuntimeHostSuspendRequest>(
+            _http, _options.OrchestratorAddress, "/internal/runtime/suspend/require-current",
+            actor, request, token).ConfigureAwait(false);
+        if (current != request)
+            throw new RuntimeAuthorizationException("runtime_suspend_authority_changed");
+        token.ThrowIfCancellationRequested();
     }
 
     public async Task<RuntimeHostReadinessReceipt> ReadinessAsync(CancellationToken token)
@@ -299,9 +351,16 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             owner.WorkflowStepId != binding.WorkflowStepId ||
             owner.ModelSelectionReference != binding.ModelSelectionReference ||
             owner.ModelSourceMode != binding.ModelSourceMode ||
+            owner.ModelBindingPin != binding.ModelBindingPin ||
             owner.ModelCredentialReference != binding.ModelCredentialReference ||
             owner.ModelConnectionId != binding.ModelConnectionId ||
-            owner.ModelConnectionScope != binding.ModelConnectionScope)
+            owner.ModelConnectionScope != binding.ModelConnectionScope ||
+            owner.MaxModelTurns != binding.MaxModelTurns ||
+            owner.MaxToolCalls != binding.MaxToolCalls ||
+            owner.MaxPromptTokens != binding.MaxPromptTokens ||
+            owner.MaxRevisionAttempts != binding.MaxRevisionAttempts ||
+            owner.CopilotSoftCreditLimit != binding.CopilotSoftCreditLimit ||
+            owner.CopilotHardCreditLimit != binding.CopilotHardCreditLimit)
             throw new RuntimeAuthorizationException("runtime_owner_context_stale");
         var phases = observation.StartupPhases;
         if (phases.IsDefault || phases.Length != 3 ||
@@ -352,6 +411,10 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                     acknowledgment.Accounting.EventId != receipt.Usage.EventId ||
                     acknowledgment.Accounting.Attribution != receipt.Usage.Attribution)
                     throw new RuntimeAuthorizationException("runtime_usage_accounting_mismatch");
+                var reference = new RuntimeUsageCostReceiptReference(receipt.ReceiptId, acknowledgment.Accounting);
+                if (!_accountedUsage.TryAdd(receipt.Usage.EventId, reference) &&
+                    _accountedUsage[receipt.Usage.EventId] != reference)
+                    throw new RuntimeAuthorizationException("runtime_usage_accounting_mismatch");
             }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested)
@@ -375,16 +438,38 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 await _available.WaitAsync(_stop.Token).ConfigureAwait(false);
                 PendingTurn pending;
                 lock (_queueLock)
+                {
                     pending = _immediate.Count > 0 ? _immediate.Dequeue() : _enqueue.Dequeue();
+                    _lastTurn = pending;
+                }
                 using var turn = CancellationTokenSource.CreateLinkedTokenSource(pending.Cancellation, _stop.Token);
                 try
                 {
                     turn.Token.ThrowIfCancellationRequested();
                     var session = await RequireSessionAsync(pending.Proof, pending.Actor, turn.Token).ConfigureAwait(false);
-                    var answer = await session.SendTurnAsync(
-                        pending.Prompt, _material!, turn.Token, pending.MessageId).ConfigureAwait(false);
+                    string answer;
+                    RuntimeNativeTurnRecordedReceipt? recorded = null;
+                    if (session.Registration.Binding.WorkflowStepId is not null)
+                        (answer, recorded) = await session.SendNativeTurnAsync(
+                            pending.Request, _material!, _usageSource!, turn.Token).ConfigureAwait(false);
+                    else
+                        answer = await session.SendTurnAsync(
+                            pending.Request.Message.Parts[0].Text, _material!, turn.Token, pending.MessageId)
+                            .ConfigureAwait(false);
                     await session.FlushUsageAsync(turn.Token).ConfigureAwait(false);
                     RequireAvailable();
+                    if (recorded is not null)
+                    {
+                        var references = recorded.Observation.UsageEventIds.Select(nativeId =>
+                        {
+                            var eventId = SdkUsageIdentity.Create(
+                                session.Facts.RuntimeInstanceId, session.Facts.SdkSessionId, nativeId.ToString("D"));
+                            return _accountedUsage.TryGetValue(eventId, out var reference)
+                                ? reference : throw new RuntimeAuthorizationException("runtime_usage_accounting_pending");
+                        }).ToImmutableArray();
+                        await _usageSource!.CompleteNativeTurnAsync(session, recorded, references, turn.Token)
+                            .ConfigureAwait(false);
+                    }
                     pending.Completion.TrySetResult(new(
                         "message", Guid.NewGuid(), session.Facts.SdkSessionId, "agent", [new("text", answer)]));
                 }
@@ -445,6 +530,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     }
 
     private sealed record PendingTurn(
-        Guid MessageId, string Fingerprint, string Prompt, RuntimeHostSessionProof Proof,
+        Guid MessageId, string Fingerprint, RuntimeA2ASendRequest Request, RuntimeHostSessionProof Proof,
         RuntimeActorAuthorization Actor, CancellationToken Cancellation, TaskCompletionSource<RuntimeA2AResponse> Completion);
 }

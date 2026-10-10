@@ -33,6 +33,8 @@ internal sealed class RuntimeRegistrationOwner(
     RuntimeEnvironmentContextClient environment,
     TimeProvider timeProvider)
 {
+    private const int MaximumRegistrationCandidatesPerSession = 64;
+
     public async Task<RuntimeRegistration> RegisterAsync(
         HttpContext context, string projectId, string runId, string sessionId,
         RegisterRuntimeRequest request, CancellationToken cancellationToken)
@@ -59,6 +61,78 @@ internal sealed class RuntimeRegistrationOwner(
         HttpContext context, Guid runtimeInstanceId, CancellationToken cancellationToken) =>
         await ExecuteCurrentAsync(context, runtimeInstanceId,
             (current, _) => Task.FromResult(current), cancellationToken).ConfigureAwait(false);
+
+    public async Task<RuntimeRegistration> ReadCurrentForSessionAsync(
+        HttpContext context,
+        string projectId,
+        string runId,
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        var authorizedOwner = await ReadOwnerAsync(
+            context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false);
+        var candidateIds = new List<Guid>();
+        Guid? afterRuntimeInstanceId = null;
+        while (true)
+        {
+            var page = await registrations.ReadCandidateRuntimeIdsPageAsync(
+                authorizedOwner.ProjectId,
+                authorizedOwner.RunId,
+                authorizedOwner.SessionId,
+                afterRuntimeInstanceId,
+                RuntimeRegistrationStore.MaximumCandidateIdPageSize,
+                cancellationToken).ConfigureAwait(false);
+            if (candidateIds.Count + page.Count > MaximumRegistrationCandidatesPerSession)
+                throw new CoordinationException(
+                    "runtime_registration_candidate_limit_exceeded", StatusCodes.Status409Conflict);
+            candidateIds.AddRange(page);
+            if (page.Count < RuntimeRegistrationStore.MaximumCandidateIdPageSize)
+                break;
+            afterRuntimeInstanceId = page[^1];
+        }
+
+        var currentMatches = new List<RuntimeRegistration>();
+        foreach (var runtimeInstanceId in candidateIds)
+        {
+            try
+            {
+                currentMatches.Add(await ExecuteCurrentAsync(
+                    context, runtimeInstanceId, (current, _) => Task.FromResult(current), cancellationToken)
+                    .ConfigureAwait(false));
+            }
+            catch (RuntimeAuthorizationException exception) when (IsStaleCandidate(exception))
+            {
+            }
+        }
+
+        if (await ReadOwnerAsync(context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false)
+            != authorizedOwner)
+            throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+        if (currentMatches.Count == 0)
+            throw new CoordinationException(
+                "runtime_registration_unavailable", StatusCodes.Status409Conflict);
+        if (currentMatches.Count > 1)
+            throw new CoordinationException(
+                "runtime_registration_ambiguous", StatusCodes.Status409Conflict);
+
+        try
+        {
+            var selected = await ExecuteCurrentAsync(
+                context,
+                currentMatches[0].RuntimeInstanceId,
+                (current, _) => Task.FromResult(current),
+                cancellationToken).ConfigureAwait(false);
+            if (await ReadOwnerAsync(context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false)
+                != authorizedOwner)
+                throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+            return selected;
+        }
+        catch (RuntimeAuthorizationException exception) when (IsStaleCandidate(exception))
+        {
+            throw new CoordinationException(
+                "runtime_registration_unavailable", StatusCodes.Status409Conflict);
+        }
+    }
 
     internal async Task<T> ExecuteCurrentAsync<T>(
         HttpContext context, Guid runtimeInstanceId,
@@ -125,8 +199,15 @@ internal sealed class RuntimeRegistrationOwner(
                 ModelSelectionReference = owner.ModelSelectionReference,
                 ModelCredentialReference = owner.ModelCredentialReference,
                 ModelSourceMode = owner.ModelSourceMode,
+                ModelBindingPin = owner.ModelBindingPin,
                 ModelConnectionId = owner.ModelConnectionId,
                 ModelConnectionScope = owner.ModelConnectionScope,
+                MaxModelTurns = owner.MaxModelTurns,
+                MaxToolCalls = owner.MaxToolCalls,
+                MaxPromptTokens = owner.MaxPromptTokens,
+                MaxRevisionAttempts = owner.MaxRevisionAttempts,
+                CopilotSoftCreditLimit = owner.CopilotSoftCreditLimit,
+                CopilotHardCreditLimit = owner.CopilotHardCreditLimit,
                 PlacementProviderId = placement.Resource.ProviderId,
                 EnvironmentLifecycleGeneration = placement.LifecycleGeneration,
                 EnvironmentLeaseRevision = placement.LeaseRevision,
@@ -192,6 +273,9 @@ internal sealed class RuntimeRegistrationOwner(
             registration.ExpiresAt <= timeProvider.GetUtcNow())
             throw new RuntimeAuthorizationException("runtime_registration_unavailable");
     }
+
+    private static bool IsStaleCandidate(RuntimeAuthorizationException exception) =>
+        exception.Code is "runtime_registration_stale" or "runtime_registration_unavailable";
 
     private sealed record DerivedBinding(RuntimeBinding Binding, DateTimeOffset ExpiresAt);
 }

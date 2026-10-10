@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { reportsIn } from '../dotnet.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const runner = readFileSync(resolve(root, 'scripts/coverage/dotnet.mjs'), 'utf8');
@@ -26,6 +28,32 @@ const brokerTestProject = readFileSync(resolve(
   root, 'tests', 'Agentweaver.Identity.Broker.Tests', 'Agentweaver.Identity.Broker.Tests.csproj'), 'utf8');
 const mcpTestProject = readFileSync(resolve(
   root, 'tests', 'Agentweaver.Mcp.Tests', 'Agentweaver.Mcp.Tests.csproj'), 'utf8');
+
+test('TRX attachment copies count once, while distinct and missing Cobertura reports still fail the one-report contract', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'agentweaver-coverage-attachments-'));
+  try {
+    assert.deepEqual(reportsIn(directory), []);
+    for (const folder of ['collector', 'trx-attachments']) {
+      mkdirSync(resolve(directory, folder));
+      writeFileSync(resolve(directory, folder, 'coverage.cobertura.xml'), '<coverage lines-valid="9" />');
+    }
+    assert.equal(reportsIn(directory).length, 1);
+    writeFileSync(resolve(directory, 'trx-attachments', 'coverage.cobertura.xml'), '<coverage lines-valid="10" />');
+    assert.equal(reportsIn(directory).length, 2);
+    writeFileSync(resolve(directory, 'trx-attachments', 'coverage.cobertura.xml'), '');
+    assert.equal(reportsIn(directory).length, 1);
+    writeFileSync(resolve(directory, 'collector', 'coverage.cobertura.xml'), '');
+    assert.deepEqual(reportsIn(directory), []);
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test('the existing coverage artifact retains per-suite TRX case receipts without a test filter', () => {
+  assert.match(runner, /'--logger', `trx;LogFileName=\$\{name\}\.trx`/);
+  assert.match(runner, /'--results-directory', directory/);
+  assert.doesNotMatch(runner, /'--filter'/);
+});
 
 test('the explicit .NET coverage runner covers Agent Runtime through the Broker suite', () => {
   assert.match(runner, /\['identity-broker', 'Agentweaver\.Identity\.Broker\.Tests'\]/);

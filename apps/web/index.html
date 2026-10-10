@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="referrer" content="no-referrer" />
+    <script>
+      (() => {
+        const repoAppCallbackPath = '/settings/source-control';
+        if (window.location.pathname === repoAppCallbackPath) {
+          const parameters = new URLSearchParams(window.location.search);
+          if (parameters.size === 1 &&
+              parameters.getAll('repoApp').length === 1 &&
+              parameters.get('repoApp') === 'connected') {
+            window.__AGENTWEAVER_REPO_APP_CALLBACK__ = true;
+          }
+          window.history.replaceState(null, '', repoAppCallbackPath);
+          return;
+        }
+
+        const identityCallbackPath = '/auth/callback';
+        if (window.location.pathname === identityCallbackPath) {
+          window.__AGENTWEAVER_IDENTITY_CALLBACK__ = window.location.search;
+          window.history.replaceState(null, '', identityCallbackPath);
+          return;
+        }
+
+        const callbackPath = '/auth/github/copilot-app/callback';
+        if (window.location.pathname !== callbackPath) return;
+
+        const parameters = new URLSearchParams(window.location.search);
+        const states = parameters.getAll('state');
+        const codes = parameters.getAll('code');
+        const errors = parameters.getAll('error');
+        const hasOnlyAllowedParameters = [...parameters.keys()].every(
+          (key) => key === 'state' || key === 'code' || key === 'error',
+        );
+        const hasControlCharacters = (value) => {
+          for (let index = 0; index < value.length; index += 1) {
+            const code = value.charCodeAt(index);
+            if (code <= 0x1f || code === 0x7f) return true;
+          }
+          return false;
+        };
+        const isBounded = (value, limit) =>
+          typeof value === 'string' &&
+          value.length > 0 &&
+          value.length <= limit &&
+          !hasControlCharacters(value);
+
+        if (hasOnlyAllowedParameters && states.length === 1 && isBounded(states[0], 512)) {
+          if (codes.length === 1 && errors.length === 0 && isBounded(codes[0], 4096)) {
+            window.__AGENTWEAVER_COPILOT_CALLBACK__ = {
+              type: 'agentweaver.copilot-user.callback',
+              state: states[0],
+              code: codes[0],
+            };
+          } else if (codes.length === 0 && errors.length === 1 && errors[0] === 'access_denied') {
+            window.__AGENTWEAVER_COPILOT_CALLBACK__ = {
+              type: 'agentweaver.copilot-user.callback',
+              state: states[0],
+              error: 'access_denied',
+            };
+          }
+        }
+
+        window.history.replaceState(null, '', callbackPath);
+      })();
+    </script>
+    <link rel="icon" type="image/png" href="/agentweaver.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agentweaver</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

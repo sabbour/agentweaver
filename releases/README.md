@@ -196,6 +196,17 @@ Platform release composition, chart wiring, and deployment gates remain future w
 - No version bump or publication is implied by this draft entry. Documentation,
   tests, and CI-only changes do not require a component changeset; product component
   changes require a fresh changeset even when the release prose describes them.
+- `Agentweaver.Web` is the React client mirrored by `apps/web/package.json` and
+  `apps/web/package-lock.json`. It is a separate service image in the draft
+  manifest, served by the ASP.NET Core 10 host under `apps/web/host`. Its
+  source-bound preparation runs `npm ci --offline` and the Vite build with
+  ambient `VITE_*` values removed, then restores the host with its checked-in
+  `packages.lock.json` in locked mode and publishes it as a framework-dependent
+  application. It builds a local image from the checked-in digest-pinned ASP.NET
+  runtime Dockerfile; the host supplies browser configuration from container
+  environment variables without shell interpolation. The resulting local image
+  archive and source/build-output hashes are recorded in provenance; preparation
+  does not publish or deploy it.
 
 Run `npm run release:validate` to check the draft against checked-in projects
 and validate all `.changeset/*.md` records. Run
@@ -305,6 +316,11 @@ The manual workflow has a separate publication choice.
   By default it packs contracts/libraries and prepares service images in a fresh,
   empty `artifacts/release/pack/` directory. Pass `--packages-only` to prepare
   only the manifest's contracts and libraries; service images are not rebuilt.
+  The web service uses its committed npm and ASP.NET host lockfiles and an
+  isolated staging context containing the source-bound `apps/web` files, Vite
+  assets, and framework-dependent host publish output. Its `FROM` image must be
+  an immutable digest reference already available locally; web packing disables
+  network access during Docker build and never pulls or pushes an image.
   It writes an atomic `provenance.json` receipt after all artifacts succeed.
   The receipt includes the source commit SHA, manifest hash, each component's ID/kind/version,
   and a SHA-256 hash of every artifact file it actually produced. It refuses
@@ -314,14 +330,21 @@ The manual workflow has a separate publication choice.
   expected package or image artifact exists for each component rather
   than trusting a nonempty output directory. `release:pack` never pushes a
   package to a feed.
-  Every component requires a checked-in `packages.lock.json`.
-  Services use native .NET `PublishContainer` with an explicit immutable
+  .NET components retain their checked-in `packages.lock.json`; `Agentweaver.Web`
+  binds its committed npm lockfile and ASP.NET host `packages.lock.json`.
+  .NET services use native `PublishContainer` with an explicit immutable
   `<ContainerBaseImage>...@sha256:...</ContainerBaseImage>` in their project.
   Exactly one active declaration is required; XML comments do not supply a pin.
   Multiple active declarations, including conditional declarations, block preparation.
   The validated digest is passed explicitly to Release build and container publication.
   A Debug-only project condition cannot select an unpinned SDK default instead.
   The SDK writes a local `<id>.<version>.tar.gz` image archive without a registry push.
+  Web packing instead builds from its locked npm and .NET dependencies and committed
+  Dockerfile, whose ASP.NET runtime base must be digest-pinned and already available
+  locally. It writes a local `<id>.<version>.tar` archive without pulling or pushing.
+  Its provenance binds the exact source tree, npm and host lockfiles, Dockerfile,
+  Vite and host publish outputs, image ID, base-image digest, source/version labels,
+  and `linux/amd64` platform.
   Provenance records lock hashes and image archive hashes, not fabricated registry digests.
   A failed preparation produces no completed provenance.
   Partial output must not mix with a later run.
@@ -377,6 +400,9 @@ Existing claim or result refs, ambiguous responses, and API errors block publica
 The script never overwrites or deletes these refs.
 It pushes packages with native `dotnet nuget push`.
 It loads prepared service images with Docker, then pushes their exact version tags.
+For `Agentweaver.Web`, publication revalidates the committed source and prepared
+image provenance, then checks the loaded image ID, `linux/amd64` platform, and
+source/version labels before registry login, tagging, or push.
 `publication.json` records package hashes and actual immutable registry digests at the source SHA.
 The workflow uploads that receipt separately.
 The script does not modify the draft composition or fabricate deployment evidence.

@@ -1,7 +1,9 @@
 extern alias ProjectsConfig;
 extern alias EnvironmentService;
 extern alias KnowledgeService;
+extern alias WebHost;
 
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
@@ -22,8 +24,11 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.Playwright;
 using Npgsql;
 using ProjectsConfig::Agentweaver.Projects.Config;
 using EnvironmentCaller = EnvironmentService::Agentweaver.Environment.CurrentCallerRequest;
@@ -66,10 +71,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
     private string _connectionString = string.Empty;
     private NpgsqlDataSource _nativeDataSource = null!;
     private (string PfxPath, string Password) _signingCertificate;
+    private int _browserPort;
     private int _subjectSequence;
 
     public async Task InitializeAsync()
     {
+        _browserPort = BrowserIntegrationReverseProxy.GetAvailablePort();
         _connectionString = await postgres.CreateMigratedDatabaseAsync();
         _nativeDataSource = NpgsqlDataSource.Create(_connectionString);
         _fakeIdp = await FakeIdentityProvider.StartAsync();
@@ -80,9 +87,36 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             signingCertificate: _signingCertificate,
             configure: settings =>
             {
+                settings["IdentityBroker__WebOrigin"] =
+                    $"https://web.broker.test:{_browserPort}/";
+                settings["IdentityBroker__GitHubRepoApp__OAuthClientId"] = "repo-app-client";
+                settings["IdentityBroker__GitHubRepoApp__OAuthClientSecret"] = "repo-app-client-secret";
+                settings["IdentityBroker__GitHubRepoApp__CallbackUri"] =
+                    $"https://broker.test:{_browserPort}/auth/github/repo-app/callback";
+                settings["IdentityBroker__GitHubRepoApp__AppId"] = "123";
+                settings["IdentityBroker__GitHubRepoApp__AppSlug"] = "agentweaver";
+                settings["IdentityBroker__GitHubRepoApp__PrivateKeySecretId"] = "github-app-key";
+                settings["IdentityBroker__GitHubRepoApp__PrivateKeySecretVersion"] = "key-version-1";
                 for (var i = 0; i < ProjectScopes.Length; i++)
                     settings[$"IdentityBroker__Clients__0__Scopes__{i + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
                         ProjectScopes[i];
+            },
+            configureServices: services =>
+            {
+                services.RemoveAll<ISecretVersionWriter>();
+                services.AddSingleton<ISecretVersionWriter>(_ =>
+                    new BrowserRepoAppSecretVersionWriter(
+                        () => _allowRepoAppBrowserProviderEffects,
+                        () => _repoAppBrowserSecretWrites++));
+                services.AddHttpClient("github-repo-app-oauth")
+                    .ConfigurePrimaryHttpMessageHandler(() =>
+                        new BrowserRepoAppOAuthHandler(() => _allowRepoAppBrowserProviderEffects));
+                services.AddHttpClient("github-repo-app-api")
+                    .ConfigurePrimaryHttpMessageHandler(() =>
+                        new BrowserRepoAppApiHandler(() => _allowRepoAppBrowserProviderEffects));
+                services.AddHttpClient("github-repo-app-installation-api")
+                    .ConfigurePrimaryHttpMessageHandler(
+                        () => new BrowserRepoAppUnexpectedHttpHandler());
             });
         _fakeIdpClient = new HttpClient(_fakeIdp.Server.CreateHandler())
         {
@@ -179,6 +213,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         Assert.True(HasPermission(
             ownerConsumerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
             ProjectAuthorizationPermission.WriteProjects));
+        Assert.True(HasPermission(
+            ownerConsumerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.AccessPrivateKnowledge));
 
         using var updateProjectConfiguration = new HttpRequestMessage(
             HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
@@ -225,6 +262,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         Assert.True(HasPermission(
             ownerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
             ProjectAuthorizationPermission.WriteProjects));
+        Assert.True(HasPermission(
+            ownerContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.AccessPrivateKnowledge));
         var ownerProjectAuthority = Assert.Single(
             ownerContext.EffectiveAuthority,
             item => item.ResourceType == ProjectAuthorityResourceType.Project &&
@@ -441,6 +481,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         Assert.False(HasPermission(
             runContext, ProjectAuthorityResourceType.Project, project.ProjectId,
             ProjectAuthorizationPermission.ReadProjects));
+        Assert.False(HasPermission(
+            runContext, ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.AccessPrivateKnowledge));
 
         var viewerAssignment = await AssignRoleAsync(
             projects.PrivilegedFixtureDataSource,
@@ -795,6 +838,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         Assert.True(HasPermission(
             tenantAdminContext, ProjectAuthorityResourceType.Tenant, TenantId,
             ProjectAuthorizationPermission.WriteProjects));
+        Assert.True(HasPermission(
+            tenantAdminContext, ProjectAuthorityResourceType.Tenant, TenantId,
+            ProjectAuthorizationPermission.AccessPrivateKnowledge));
         Assert.False(HasPermission(
             tenantAdminContext, ProjectAuthorityResourceType.Project, project.ProjectId,
             ProjectAuthorizationPermission.WriteProjects));
@@ -971,10 +1017,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         using var revokedContextResponse = await SendAsync(
             projects.Client, HttpMethod.Get, "/api/authorization/context", ownerToken, [TenantId]);
         Assert.Equal(HttpStatusCode.OK, revokedContextResponse.StatusCode);
+        var revokedContext = await ReadAuthorizationContextAsync(revokedContextResponse);
         Assert.False(HasPermission(
-            await ReadAuthorizationContextAsync(revokedContextResponse),
+            revokedContext,
             ProjectAuthorityResourceType.Project, project.ProjectId,
             ProjectAuthorizationPermission.WriteProjects));
+        Assert.False(HasPermission(
+            revokedContext,
+            ProjectAuthorityResourceType.Project, project.ProjectId,
+            ProjectAuthorizationPermission.AccessPrivateKnowledge));
 
         foreach (var path in ownerReadPaths)
         {
@@ -983,6 +1034,567 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
             Assert.DoesNotContain(ownerSecret, body, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public async Task KnowledgeBrowserCompletesBoundRevisionDecisionAndTransferLifecycle()
+    {
+        const string upstreamSubject = "knowledge-browser-owner";
+        const string runId = "knowledge-run-owner";
+        const string agentId = "agent-a";
+        const string actorFingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath, _signingCertificate.Password);
+        await using var database = await KnowledgeTestDatabase.CreateAsync(_connectionString);
+        var catalog = CreateKnowledgeMemoryCatalog(database);
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            _connectionString,
+            new X509SecurityKey(certificate),
+            providerCatalog: catalog);
+
+        var tenantAdminToken = await IssueTokenAsync(
+            "projects.admin projects.orchestrator",
+            [TenantId],
+            "knowledge-browser-tenant-admin",
+            null,
+            null,
+            []);
+        var tenantAdminSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(tenantAdminToken).Claims, "sub");
+        var tenantAdminMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, tenantAdminSubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            tenantAdminMembership.MembershipId,
+            ProjectAuthorityResourceType.Tenant,
+            TenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await CreateProjectsTestProjectAsync(
+            projects.Client, tenantAdminToken, TenantId, "Knowledge browser lifecycle");
+
+        var browserOwnerToken = await IssueTokenAsync(
+            "projects.admin projects.orchestrator",
+            [TenantId],
+            upstreamSubject,
+            null,
+            null,
+            []);
+        var browserOwnerSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(browserOwnerToken).Claims, "sub");
+        var ownerMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, browserOwnerSubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            ownerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Owner);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            ownerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+        await AcceptKnowledgeRunSelectionAsync(projects, database, project, tenantAdminToken);
+        await CreateRunBindingGrantAsync(
+            browserOwnerSubject,
+            project.ProjectId,
+            runId,
+            $"knowledge-browser:{runId}");
+        var boundOwnerToken = CreateSignedAccessToken(
+            browserOwnerSubject,
+            new Claim("project_id", project.ProjectId),
+            new Claim("run_id", runId));
+        using (var boundOwnerContextResponse = await SendAsync(
+                   projects.Client,
+                   HttpMethod.Get,
+                   "/api/authorization/context",
+                   boundOwnerToken,
+                   [TenantId]))
+        {
+            Assert.Equal(HttpStatusCode.OK, boundOwnerContextResponse.StatusCode);
+            var boundOwnerContext = await ReadAuthorizationContextAsync(boundOwnerContextResponse);
+            Assert.True(HasPermission(
+                boundOwnerContext,
+                ProjectAuthorityResourceType.Project,
+                project.ProjectId,
+                ProjectAuthorizationPermission.AccessPrivateKnowledge));
+            Assert.False(HasPermission(
+                boundOwnerContext,
+                ProjectAuthorityResourceType.Project,
+                project.ProjectId,
+                ProjectAuthorizationPermission.WriteProjects));
+        }
+
+        var seededMemory = await database.Provider.CreateAsync(
+            new KnowledgeRecordCreate(
+                project.ProjectId,
+                agentId,
+                KnowledgeRecordKind.Memory,
+                "preference",
+                "Browser seeded memory",
+                "Original browser memory",
+                null,
+                "medium",
+                ["browser"],
+                runId,
+                null,
+                actorFingerprint,
+                "browser test seed"),
+            "knowledge-browser-seed-memory");
+        Assert.Equal(KnowledgeWriteStatus.Created, seededMemory.Status);
+        var firstDecision = await CreateKnowledgeDecisionAsync(
+            database,
+            project.ProjectId,
+            runId,
+            agentId,
+            actorFingerprint,
+            "Browser decision to supersede",
+            "First decision content",
+            "knowledge-browser-first-decision");
+        var pendingDecision = await database.Provider.RestoreAsync(
+            new KnowledgeRecordRestore(
+                project.ProjectId,
+                firstDecision.RecordId,
+                firstDecision.Revision,
+                firstDecision.Revision,
+                actorFingerprint,
+                "Browser approval fixture"),
+            "knowledge-browser-first-decision-pending");
+        Assert.Equal(KnowledgeWriteStatus.Updated, pendingDecision.Status);
+        firstDecision = Assert.IsType<KnowledgeRecord>(pendingDecision.Record);
+        Assert.Equal(KnowledgeTrustState.Pending, firstDecision.TrustState);
+        var replacementDecision = await CreateKnowledgeDecisionAsync(
+            database,
+            project.ProjectId,
+            runId,
+            agentId,
+            actorFingerprint,
+            "Browser replacement decision",
+            "Replacement decision content",
+            "knowledge-browser-replacement-decision");
+
+        await using var knowledgeApp = await CreateKnowledgeTestAppAsync(
+            database, catalog, projects.Client, new X509SecurityKey(certificate));
+        using var knowledge = knowledgeApp.GetTestClient();
+        await using var gateway = GatewayProductionResourceServer.Start(
+            new X509SecurityKey(certificate),
+            (request, cancellationToken) =>
+                ForwardOwnerRequestAsync(request, projects.Client, cancellationToken),
+            knowledgeOwner: (request, cancellationToken) =>
+                ForwardOwnerRequestAsync(request, knowledge, cancellationToken),
+            identityAudience: "https://api.test");
+
+        var brokerAuthority = $"https://broker.test:{_browserPort}";
+        var webAuthority = $"https://web.broker.test:{_browserPort}";
+        var brokerIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
+        var browserRedirectUri = $"{webAuthority}/auth/callback";
+        var scopes = string.Join(
+            " ",
+            IdentityBrokerWebApplicationFactory.TestClientScopes.Concat(ProjectScopes));
+        var webClient = await StartWebClientAsync(brokerAuthority, browserRedirectUri, scopes);
+        try
+        {
+            _fakeIdp.Subject = upstreamSubject;
+            _fakeIdp.TenantIds = [TenantId];
+            _fakeIdp.Roles = [];
+            await AddBrowserRedirectUriAsync(browserRedirectUri);
+
+            using var brokerProxy = new HttpClient(_brokerFactory.Server.CreateHandler())
+            {
+                BaseAddress = new Uri(brokerAuthority),
+            };
+            using var fakeIdpProxy = new HttpClient(_fakeIdp.Server.CreateHandler())
+            {
+                BaseAddress = new Uri(FakeIdentityProvider.Authority),
+            };
+            using var webClientProxy = new HttpClient
+            {
+                BaseAddress = webClient.BaseAddress,
+            };
+            using var webCallbackFactory = new WebApplicationFactory<WebHost::Program>()
+                .WithWebHostBuilder(builder =>
+                {
+                    builder.UseWebRoot(Path.Combine(FindRepositoryRootForWebHost(), "apps", "web", "dist"));
+                    builder.ConfigureAppConfiguration((_, configuration) =>
+                        configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                        {
+                            ["VITE_IDENTITY_BROKER_URL"] = brokerAuthority,
+                            ["VITE_IDENTITY_BROKER_ISSUER"] = brokerIssuer,
+                            ["VITE_OAUTH_REDIRECT_URI"] = browserRedirectUri,
+                        }));
+                });
+            using var webCallback = webCallbackFactory.CreateClient(
+                new WebApplicationFactoryClientOptions
+                {
+                    BaseAddress = new Uri(webAuthority),
+                });
+            await using var reverseProxy = await BrowserIntegrationReverseProxy.StartAsync(
+                _browserPort,
+                brokerProxy,
+                gateway.Client,
+                webClientProxy,
+                webCallback);
+            reverseProxy.UseIdentityProvider(fakeIdpProxy);
+
+            using var playwright = await Playwright.CreateAsync();
+            await using var browser = await playwright.Chromium.LaunchAsync(
+                new BrowserTypeLaunchOptions
+                {
+                    Headless = true,
+                    Args =
+                    [
+                        "--no-proxy-server",
+                        $"--host-resolver-rules={reverseProxy.HostResolverRules}",
+                    ],
+                });
+            var browserContext = await browser.NewContextAsync(
+                new BrowserNewContextOptions { IgnoreHTTPSErrors = true });
+            try
+            {
+                var page = await browserContext.NewPageAsync();
+                var browserTrace = new ConcurrentQueue<string>();
+                page.Console += (_, message) => browserTrace.Enqueue(
+                    $"console {message.Type}: {message.Text}");
+                page.PageError += (_, error) => browserTrace.Enqueue($"page error: {error}");
+                page.RequestFailed += (_, request) => browserTrace.Enqueue(
+                    $"request failed: {request.Method} {request.Url} ({request.Failure})");
+                await page.AddInitScriptAsync($$"""
+                    window.__AGENTWEAVER_CONFIG_BASE64__ = {
+                      GATEWAY_URL: btoa('/api/v1'),
+                      IDENTITY_BROKER_URL: btoa('{{brokerAuthority}}'),
+                      IDENTITY_BROKER_ISSUER: btoa('{{brokerIssuer}}'),
+                      OAUTH_CLIENT_ID: btoa('{{IdentityBrokerWebApplicationFactory.TestClientId}}'),
+                      OAUTH_REDIRECT_URI: btoa('{{browserRedirectUri}}'),
+                      OAUTH_SCOPES: btoa('{{scopes}}')
+                    };
+                    """);
+                await page.GotoAsync(
+                    $"{webAuthority}/projects/{Uri.EscapeDataString(project.ProjectId)}/knowledge" +
+                    $"?runId={Uri.EscapeDataString(runId)}&agentId={Uri.EscapeDataString(agentId)}",
+                    new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.Commit,
+                        Timeout = 15_000,
+                    });
+                var runSignIn = page.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Sign in for this project and run" });
+                try
+                {
+                    await page.GetByRole(
+                        AriaRole.Button,
+                        new() { Name = "Continue with Identity Broker" }).ClickAsync();
+                    await page.GetByRole(
+                        AriaRole.Heading,
+                        new() { Name = "Review access" }).WaitForAsync();
+                    await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
+                    await runSignIn.WaitForAsync();
+                }
+                catch (Exception exception)
+                {
+                    throw new InvalidOperationException(
+                        $"Browser sign-in did not establish the project session.{Environment.NewLine}" +
+                        $"Body:{Environment.NewLine}{await page.Locator("body").InnerTextAsync()}{Environment.NewLine}" +
+                        $"Bridge:{Environment.NewLine}{reverseProxy.RequestTrace}{Environment.NewLine}" +
+                        $"Browser:{Environment.NewLine}{string.Join(Environment.NewLine, browserTrace)}",
+                        exception);
+                }
+
+                var browserToken = reverseProxy.BrokerAccessToken
+                    ?? throw new InvalidOperationException("The browser did not redeem a Broker access token.");
+                Assert.Contains(
+                    reverseProxy.RequestTrace.Split(Environment.NewLine),
+                    request => request.StartsWith("200 ", StringComparison.Ordinal) &&
+                        request.EndsWith("/auth/callback", StringComparison.Ordinal));
+                Assert.Equal(
+                    browserOwnerSubject,
+                    SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(browserToken).Claims, "sub"));
+                await runSignIn.ClickAsync();
+                try
+                {
+                    await page.GetByText("Original browser memory").WaitForAsync();
+                }
+                catch (Exception exception)
+                {
+                    throw new InvalidOperationException(
+                        $"Run-bound Knowledge did not load.{Environment.NewLine}" +
+                        $"Body:{Environment.NewLine}{await page.Locator("body").InnerTextAsync()}{Environment.NewLine}" +
+                        $"Bridge:{Environment.NewLine}{reverseProxy.RequestTrace}{Environment.NewLine}" +
+                        $"Browser:{Environment.NewLine}{string.Join(Environment.NewLine, browserTrace)}",
+                        exception);
+                }
+                Assert.Equal(
+                    new Uri(reverseProxy.WebAuthority).Authority,
+                    new Uri(page.Url).Authority);
+                var runBoundToken = reverseProxy.BrokerAccessToken
+                    ?? throw new InvalidOperationException("The browser did not redeem the run-bound Broker token.");
+                var runBoundClaims = new JwtSecurityTokenHandler().ReadJwtToken(runBoundToken).Claims;
+                Assert.Equal(browserOwnerSubject, SingleClaim(runBoundClaims, "sub"));
+                Assert.Equal(project.ProjectId, SingleClaim(runBoundClaims, "project_id"));
+                Assert.Equal(runId, SingleClaim(runBoundClaims, "run_id"));
+
+                await page.GetByLabel("Type").FillAsync("preference");
+                await page.GetByLabel("Title").FillAsync("Browser created memory");
+                await page.GetByRole(AriaRole.Textbox, new() { Name = "Content", Exact = true })
+                    .FillAsync("Created through the browser");
+                await page.GetByLabel("Rationale").FillAsync("Integrated UI proof");
+                await page.GetByLabel("Tags (comma-separated)").FillAsync("browser,integrated");
+                await page.GetByRole(AriaRole.Button, new() { Name = "Create record" }).ClickAsync();
+                await page.GetByText(
+                    "Knowledge owner returned Created; persisted trust and revision state are shown after refresh.")
+                    .WaitForAsync();
+                await page.Locator("article.v1-record")
+                    .Filter(new() { HasText = "Created through the browser" })
+                    .WaitForAsync();
+                var createdRecord = Assert.Single(
+                    (await database.Provider.SearchAsync(
+                        new KnowledgeRecordQuery(project.ProjectId, agentId, IncludeInactive: true)))
+                    .Items,
+                    record => record.Content == "Created through the browser");
+                Assert.Equal(KnowledgeRecordState.Active, createdRecord.State);
+
+                var memoryCard = page.Locator("article.v1-record")
+                    .Filter(new() { HasText = "Original browser memory" });
+                await memoryCard.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Correct record" }).ClickAsync();
+                await page.GetByLabel("Correction content").FillAsync("Corrected browser memory");
+                await page.GetByLabel("Correction reason").FillAsync("Correcting the retained fact");
+                await page.GetByRole(AriaRole.Button, new() { Name = "Save correction" }).ClickAsync();
+                await page.GetByText(
+                    "Knowledge owner returned Updated; the corrected record is shown after refresh.")
+                    .WaitForAsync();
+                await page.Locator("article.v1-record")
+                    .Filter(new() { HasText = "Corrected browser memory" })
+                    .WaitForAsync();
+                var correctedMemory = Assert.IsType<KnowledgeRecord>(
+                    await database.Provider.ReadAsync(project.ProjectId, seededMemory.Record!.RecordId));
+                Assert.Equal(2, correctedMemory.Revision);
+                Assert.Equal("Corrected browser memory", correctedMemory.Content);
+
+                memoryCard = page.Locator("article.v1-record")
+                    .Filter(new() { HasText = "Corrected browser memory" });
+                await memoryCard.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "View revision history" }).ClickAsync();
+                await memoryCard.Locator("h5")
+                    .Filter(new() { HasText = "Revision 1" })
+                    .WaitForAsync();
+                await memoryCard.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Restore revision 1" }).ClickAsync();
+                try
+                {
+                    await page.GetByText(
+                            "Knowledge owner returned Updated; the restored revision is shown after refresh.")
+                        .WaitForAsync(new() { Timeout = 10_000 });
+                }
+                catch (Exception exception)
+                {
+                    throw new InvalidOperationException(
+                        $"Knowledge restore did not complete.{Environment.NewLine}" +
+                        $"Body:{Environment.NewLine}{await page.Locator("body").InnerTextAsync()}{Environment.NewLine}" +
+                        $"Bridge:{Environment.NewLine}{reverseProxy.RequestTrace}{Environment.NewLine}" +
+                        $"Browser:{Environment.NewLine}{string.Join(Environment.NewLine, browserTrace)}",
+                        exception);
+                }
+                var restoredMemory = Assert.IsType<KnowledgeRecord>(
+                    await database.Provider.ReadAsync(project.ProjectId, seededMemory.Record.RecordId));
+                Assert.Equal(3, restoredMemory.Revision);
+                Assert.Equal("Original browser memory", restoredMemory.Content);
+
+                memoryCard = page.Locator("article.v1-record")
+                    .Filter(new() { HasText = "Original browser memory" });
+                await memoryCard.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Archive record" }).ClickAsync();
+                await page.GetByText(
+                    "Knowledge owner returned Updated; the resulting record state is not inferred locally.")
+                    .WaitForAsync();
+                var archivedMemory = Assert.IsType<KnowledgeRecord>(
+                    await database.Provider.ReadAsync(project.ProjectId, seededMemory.Record.RecordId));
+                Assert.Equal(KnowledgeRecordState.Archived, archivedMemory.State);
+
+                var decisionCard = page.Locator("article.v1-record")
+                    .Filter(new() { HasText = "First decision content" });
+                await decisionCard.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Approve Decision" }).ClickAsync();
+                await page.GetByText(
+                    "Knowledge owner returned Updated; the Decision trust state is shown after refresh.")
+                    .WaitForAsync();
+                var approvedDecision = Assert.IsType<KnowledgeRecord>(
+                    await database.Provider.ReadAsync(project.ProjectId, firstDecision.RecordId));
+                Assert.Equal(KnowledgeTrustState.Approved, approvedDecision.TrustState);
+
+                decisionCard = page.Locator("article.v1-record")
+                    .Filter(new() { HasText = "First decision content" });
+                await decisionCard.GetByLabel("Replacement Decision for Browser decision to supersede")
+                    .SelectOptionAsync(replacementDecision.RecordId.ToString());
+                await decisionCard.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Supersede with selected Decision" }).ClickAsync();
+                await page.GetByText(
+                    "Knowledge owner returned Updated; the superseding Decision link is shown after refresh.")
+                    .WaitForAsync();
+                var supersededDecision = Assert.IsType<KnowledgeRecord>(
+                    await database.Provider.ReadAsync(project.ProjectId, firstDecision.RecordId));
+                Assert.Equal(KnowledgeRecordState.Superseded, supersededDecision.State);
+                Assert.Equal(replacementDecision.RecordId, supersededDecision.SupersededByRecordId);
+
+                await page.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Export scoped Knowledge" }).ClickAsync();
+                var exportedText = await page.GetByLabel("Exported Knowledge bundle").InputValueAsync();
+                var exportedBundle = JsonSerializer.Deserialize<KnowledgeRecordTransferBundle>(
+                    exportedText,
+                    AuthorizationJsonOptions)
+                    ?? throw new InvalidOperationException("The Knowledge UI exported no transfer bundle.");
+                Assert.Equal(project.ProjectId, exportedBundle.ProjectId);
+                Assert.Equal(agentId, exportedBundle.AgentId);
+                Assert.Equal(4, exportedBundle.Records.Length);
+
+                var importBundle = CloneKnowledgeTransferWithFreshIds(exportedBundle);
+                await page.GetByLabel("Versioned Knowledge bundle JSON").FillAsync(
+                    JsonSerializer.Serialize(importBundle, AuthorizationJsonOptions));
+                await page.GetByLabel(
+                    "I confirm this versioned bundle matches the current project and agent scope.")
+                    .CheckAsync();
+                await page.GetByRole(
+                    AriaRole.Button,
+                    new() { Name = "Import scoped Knowledge" }).ClickAsync();
+                await page.GetByText(
+                    $"Knowledge owner returned {importBundle.Records.Length} imported record(s)")
+                    .WaitForAsync();
+                var importedRecords = (await database.Provider.SearchAsync(
+                    new KnowledgeRecordQuery(project.ProjectId, agentId, IncludeInactive: true)))
+                    .Items
+                    .Where(record => importBundle.Records.Any(
+                        entry => entry.Record.RecordId == record.RecordId))
+                    .ToArray();
+                Assert.Equal(importBundle.Records.Length, importedRecords.Length);
+                Assert.All(importedRecords, record =>
+                {
+                    Assert.Equal(KnowledgeRecordState.Active, record.State);
+                    Assert.Equal(KnowledgeTrustState.Pending, record.TrustState);
+                    Assert.Equal(runId, record.SourceRunId);
+                });
+            }
+            finally
+            {
+                await browserContext.CloseAsync();
+            }
+        }
+        finally
+        {
+            await RemoveBrowserRedirectUriAsync(browserRedirectUri);
+            await StopWebClientAsync(webClient);
+        }
+    }
+
+    private static async Task<KnowledgeRecord> CreateKnowledgeDecisionAsync(
+        KnowledgeTestDatabase database,
+        string projectId,
+        string runId,
+        string agentId,
+        string actorFingerprint,
+        string title,
+        string content,
+        string idempotencyPrefix)
+    {
+        var proposal = await database.Provider.CreateAsync(
+            new KnowledgeRecordCreate(
+                projectId,
+                agentId,
+                KnowledgeRecordKind.Proposal,
+                "architecture",
+                title,
+                content,
+                null,
+                "medium",
+                ["browser"],
+                runId,
+                null,
+                actorFingerprint,
+                "browser test seed"),
+            $"{idempotencyPrefix}-proposal");
+        Assert.Equal(KnowledgeWriteStatus.Created, proposal.Status);
+        var promotion = await database.Provider.PromoteProposalAsync(
+            projectId,
+            runId,
+            proposal.Record!.RecordId,
+            1,
+            actorFingerprint,
+            new AcceptedEffectAuthorizationBounds(
+                "https://identity.test/",
+                "knowledge-browser-actor",
+                TenantId,
+                projectId,
+                runId,
+                ProjectAuthorityResourceType.Project,
+                projectId,
+                1,
+                1,
+                1,
+                1,
+                "knowledge-browser-context"),
+            $"{idempotencyPrefix}-promotion");
+        Assert.Equal(KnowledgeWriteStatus.Updated, promotion.Status);
+        return Assert.IsType<KnowledgeRecord>(promotion.Decision);
+    }
+
+    private static string FindRepositoryRootForWebHost()
+    {
+        foreach (var startingPath in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        {
+            for (var directory = new DirectoryInfo(startingPath); directory is not null; directory = directory.Parent)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "apps", "web", "package.json")))
+                    return directory.FullName;
+            }
+        }
+
+        throw new InvalidOperationException("Could not find the repository root for the Web host test.");
+    }
+
+    private static KnowledgeRecordTransferBundle CloneKnowledgeTransferWithFreshIds(
+        KnowledgeRecordTransferBundle bundle)
+    {
+        var recordIds = bundle.Records.ToDictionary(
+            entry => entry.Record.RecordId,
+            _ => Guid.NewGuid());
+        var revisionIds = bundle.Records
+            .SelectMany(entry => entry.Revisions)
+            .ToDictionary(revision => revision.RevisionId, _ => Guid.NewGuid());
+        Guid? MapRecordId(Guid? recordId) =>
+            recordId is Guid value && recordIds.TryGetValue(value, out var replacement)
+                ? replacement
+                : recordId;
+        Guid? MapRevisionId(Guid? revisionId) =>
+            revisionId is Guid value ? revisionIds[value] : null;
+
+        return bundle with
+        {
+            Records = bundle.Records.Select(entry =>
+            {
+                var record = entry.Record with
+                {
+                    RecordId = recordIds[entry.Record.RecordId],
+                    RevisionId = revisionIds[entry.Record.RevisionId],
+                    PreviousRevisionId = MapRevisionId(entry.Record.PreviousRevisionId),
+                    SupersededByRecordId = MapRecordId(entry.Record.SupersededByRecordId),
+                };
+                var revisions = entry.Revisions.Select(revision => revision with
+                {
+                    RecordId = recordIds[revision.RecordId],
+                    RevisionId = revisionIds[revision.RevisionId],
+                    PreviousRevisionId = MapRevisionId(revision.PreviousRevisionId),
+                    SupersededByRecordId = MapRecordId(revision.SupersededByRecordId),
+                }).ToImmutableArray();
+                return new KnowledgeRecordTransferEntry(record, revisions);
+            }).ToImmutableArray(),
+        };
     }
 
     private static async Task<ProjectSummary> CreateProjectsTestProjectAsync(
@@ -1418,12 +2030,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    private async Task CreateRunBindingGrantAsync(string subject, string projectId, string runId)
+    private async Task CreateRunBindingGrantAsync(
+        string subject,
+        string projectId,
+        string runId,
+        string? grantId = null)
     {
         using var scope = _brokerFactory.Services.CreateScope();
         var authority = scope.ServiceProvider.GetRequiredService<IdentityGrantAuthority>();
         var grant = new SecretRedemptionGrant(
-            $"projects-config:{runId}",
+            grantId ?? $"projects-config:{runId}",
             subject,
             projectId,
             runId,

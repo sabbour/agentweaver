@@ -68,7 +68,18 @@ public static class WorkflowScopeDiffer
         SameSet(left.AllowedIsolationChoices, right.AllowedIsolationChoices) &&
         SameSet(left.RequiredProviderCapabilities, right.RequiredProviderCapabilities) &&
         left.PlatformGate == right.PlatformGate &&
-        Equivalent(left.FixedWork, right.FixedWork);
+        Equivalent(left.FixedWork, right.FixedWork) &&
+        Equivalent(left.BuildTestCommand, right.BuildTestCommand);
+
+    private static bool Equivalent(WorkflowBuildTestCommand? left, WorkflowBuildTestCommand? right) =>
+        left is null
+            ? right is null
+            : right is not null &&
+              left.ExecutionProfileReference == right.ExecutionProfileReference &&
+              left.ExecutableReference == right.ExecutableReference &&
+              left.Arguments.SequenceEqual(right.Arguments, StringComparer.Ordinal) &&
+              left.WorkingDirectory == right.WorkingDirectory &&
+              left.Outputs.SequenceEqual(right.Outputs);
 
     private static bool Equivalent(FixedWorkSpecification? left, FixedWorkSpecification? right) =>
         left is null

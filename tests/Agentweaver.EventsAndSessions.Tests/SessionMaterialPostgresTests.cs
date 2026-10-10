@@ -49,6 +49,32 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
     [Theory]
     [InlineData(SessionMaterialKind.TurnContent)]
     [InlineData(SessionMaterialKind.SdkCache)]
+    public async Task NarrowedPromptCapacityPersistsExactlyAcrossMaterialReplayAndRestart(SessionMaterialKind kind)
+    {
+        var registration = _registration with
+        {
+            Binding = _registration.Binding with { MaxPromptTokens = 2048 }
+        };
+        var source = Source with { MaxPromptTokens = 1024 };
+        var input = Request(kind) with { MaxPromptTokens = source.MaxPromptTokens };
+        foreach (var changed in new[] { input with { MaxPromptTokens = null }, input with { MaxPromptTokens = 2048 } })
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                Store.WriteAsync(Principal, "session", changed, registration, source, Current, default));
+        Assert.Equal(0, _objects.Writes);
+        var recorded = await Store.WriteAsync(Principal, "session", input, registration, source, Current, default);
+        Assert.Equal(1024, recorded.Reference.Material!.MaxPromptTokens);
+        _journal = new(fixture.DataSource, _options);
+        Assert.Equal(recorded, await Store.WriteAsync(
+            Principal, "session", input, registration, source, Current, default));
+        var read = await Store.ReadAsync(Principal, "session", input.EventId, kind, Historical, default);
+        Assert.Equal(recorded, read.Material);
+        Assert.Equal(1024, read.Material.Reference.Material!.MaxPromptTokens);
+        Assert.Equal(1, _objects.Writes);
+    }
+
+    [Theory]
+    [InlineData(SessionMaterialKind.TurnContent)]
+    [InlineData(SessionMaterialKind.SdkCache)]
     public async Task ExactMaterialRetriesAndRestartReturnOriginalRecordedAcknowledgment(SessionMaterialKind kind)
     {
         var input = Request(kind);

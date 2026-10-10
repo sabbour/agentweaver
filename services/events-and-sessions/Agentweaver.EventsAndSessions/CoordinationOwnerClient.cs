@@ -45,6 +45,13 @@ public interface ICoordinationOwnerClient
         SessionIdentity identity,
         Guid receiptId,
         CancellationToken cancellationToken = default);
+
+    Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        string captureId,
+        CancellationToken cancellationToken = default,
+        bool notFoundIsMissing = false);
 }
 
 public sealed class CoordinationOwnerClientException(
@@ -187,13 +194,47 @@ public sealed class CoordinationOwnerClient(
                 "coordination_owner_receipt_admission_invalid", StatusCodes.Status502BadGateway);
     }
 
+    public async Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        string captureId,
+        CancellationToken cancellationToken = default,
+        bool notFoundIsMissing = false)
+    {
+        var proof = await SendAsync<ProducedRunCaptureProof>(
+            context,
+            HttpMethod.Get,
+            $"/internal/projects/{Uri.EscapeDataString(identity.ProjectId)}/runs/{Uri.EscapeDataString(identity.RunId)}/source-control/sessions/{Uri.EscapeDataString(identity.SessionId)}/output-captures/{Uri.EscapeDataString(captureId)}/proof",
+            content: null,
+            cancellationToken,
+            notFoundIsMissing: notFoundIsMissing).ConfigureAwait(false);
+        var tenant = ReadTenantSelector(context);
+        try
+        {
+            ProducedRunCaptureContractValidation.Validate(proof);
+            if (proof.Identity != identity ||
+                proof.CaptureId != captureId ||
+                tenant is not null && proof.TenantId != tenant)
+                throw new CoordinationOwnerClientException(
+                    "coordination_owner_capture_contract_invalid", StatusCodes.Status502BadGateway);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new CoordinationOwnerClientException(
+                "coordination_owner_capture_contract_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+
+        return proof;
+    }
+
     private async Task<T> SendAsync<T>(
         HttpContext context,
         HttpMethod method,
         string path,
         object? content,
         CancellationToken cancellationToken,
-        bool conflictIsDenied = false)
+        bool conflictIsDenied = false,
+        bool notFoundIsMissing = false)
     {
         ArgumentNullException.ThrowIfNull(context);
         var owner = RequireOwnerUri();
@@ -237,6 +278,9 @@ public sealed class CoordinationOwnerClient(
             if (conflictIsDenied && response.StatusCode == HttpStatusCode.Conflict)
                 throw new CoordinationOwnerClientException(
                     "coordination_owner_admission_denied", StatusCodes.Status409Conflict);
+            if (notFoundIsMissing && response.StatusCode == HttpStatusCode.NotFound)
+                throw new CoordinationOwnerClientException(
+                    "source_control_output_capture_not_found", StatusCodes.Status404NotFound);
             if (response.StatusCode != HttpStatusCode.OK ||
                 response.Headers.CacheControl?.NoStore != true)
                 throw new CoordinationOwnerClientException(

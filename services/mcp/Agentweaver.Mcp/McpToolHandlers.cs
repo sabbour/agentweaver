@@ -145,14 +145,14 @@ public sealed class McpToolHandlers(
         foreach (var parameter in operation.Parameters.Where(parameter => parameter.Location == "path"))
         {
             if (!arguments.TryGetValue(parameter.InputName, out var value) ||
-                value.ValueKind != JsonValueKind.String)
+                !TryGetScalar(value, out var pathValue))
                 return false;
             var placeholder = "{" + parameter.ApiName + "}";
             if (!path.Contains(placeholder, StringComparison.Ordinal))
                 return false;
             path = path.Replace(
                 placeholder,
-                Uri.EscapeDataString(value.GetString()!),
+                Uri.EscapeDataString(pathValue),
                 StringComparison.Ordinal);
         }
         if (path.Contains('{') || path.Contains('}'))

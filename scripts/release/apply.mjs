@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateManifest } from './validate.mjs';
+import { validateManifest, WEB_LOCK_PATH, WEB_PROJECT_PATH } from './validate.mjs';
 import { canonicalizeComponents, createPlan, planChecksum } from './plan.mjs';
 import { preparationFiles, verifyPreparation } from './preparation.mjs';
 
@@ -316,6 +316,16 @@ export function applyPlan(plan, manifestPath, {
     }
     const next = prepared.files.get(component.project);
     projectWrites.set(file, { original, next });
+    if (component.project === WEB_PROJECT_PATH) {
+      const lockFile = path.resolve(root, WEB_LOCK_PATH);
+      let lockOriginal;
+      try {
+        lockOriginal = readFile(lockFile, 'utf8');
+      } catch (error) {
+        fail(WEB_LOCK_PATH, `cannot read checked-in npm lockfile: ${error.message}`);
+      }
+      projectWrites.set(lockFile, { original: lockOriginal, next: prepared.files.get(WEB_LOCK_PATH) });
+    }
   }
   const manifestNext = prepared.manifestText;
   const changelogPath = path.join(root, 'releases', 'CHANGELOG.md');

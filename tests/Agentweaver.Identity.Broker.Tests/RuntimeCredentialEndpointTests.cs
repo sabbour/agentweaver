@@ -342,7 +342,7 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             failedInitialize.ConfigureAsync(configuration, failedBootstrap, Guid.NewGuid(), Guid.NewGuid(),
                 timeout.Token));
         Assert.Equal("runtime_sdk_effective_model_mismatch", modelFailure.Code);
-        Assert.Contains(mismatchedSdk.Requests, item => item.Method == "session.destroy");
+        Assert.Contains(mismatchedSdk.Requests, item => item.Method == "session.detach");
 
         var interruptedDelivery = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
             broker, broker.BaseAddress!, "/internal/runtime/bootstrap/request", actor,
@@ -365,7 +365,7 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             interruptedInitialize.ConfigureAsync(configuration, interruptedBootstrap, Guid.NewGuid(), Guid.NewGuid(),
                 timeout.Token));
         Assert.All(authorityLoss.InnerExceptions, error => Assert.IsType<RuntimeAuthorizationException>(error));
-        Assert.Contains(interruptedSdk.Requests, item => item.Method == "session.destroy");
+        Assert.Contains(interruptedSdk.Requests, item => item.Method == "session.detach");
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();

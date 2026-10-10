@@ -857,6 +857,8 @@ public sealed class AcceptedEffectRelayIntegrationTests(KnowledgePostgresFixture
                         [
                             new ProjectAuthorizationPermissionGrant(ProjectAuthorizationPermission.ReadProjects, 1),
                             new ProjectAuthorizationPermissionGrant(ProjectAuthorizationPermission.WriteProjects, 2),
+                            new ProjectAuthorizationPermissionGrant(
+                                ProjectAuthorizationPermission.AccessPrivateKnowledge, 2),
                             new ProjectAuthorizationPermissionGrant(ProjectAuthorizationPermission.ReadRunSelection, 1)
                         ])]),
                 "/api/projects/project-a/runs/run-a/selection" => new ProjectRunSelectionResponse(

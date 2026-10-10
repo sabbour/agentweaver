@@ -52,9 +52,17 @@ grant/receipt records. Non-empty or fixed-work plans require a server-registered
 Sandbox resource adapter; without one, the host fails closed with `503`. This source
 does not include a production Sandbox provisioner or the full dispatch engine, and
 the positive Events receipt consumer remains separate work. These services can be
-built and tested, but are not deployed or published; the source does not provision
-Azure resources. The unpublished [AgentHost candidate](docs/architecture/agenthost.md)
-adds authenticated runtime execution, not automatic scheduling or a deployed platform.
+built and tested, but are not deployed or published. The repository also contains
+the versioned Gateway/BFF and v1 browser client source; neither is deployed. The
+unpublished [AgentHost candidate](docs/architecture/agenthost.md) adds authenticated
+runtime execution, not automatic scheduling or a deployed platform. The source does
+not provision Azure resources or include the AgentHost scheduler or product MCP server.
+
+The separate [Environment BuildTest path](docs/architecture/environment-sandbox.md#buildtest-command-and-output-collection)
+resolves Core's immutable accepted checkpoint and persists its stable operation in existing owner-effects state.
+It uses gated offline command Pods and a separate pinned, read-only collector for required files.
+Core retains MAF checkpoint and run-state ownership.
+Configuration, contract, and collector-entry checks are not live provider or complete native accounting evidence.
 
 See the [Events & Sessions journal](docs/architecture/events-sessions.md) for its
 implemented contract, PostgreSQL ownership, provider pin, and current limits.
@@ -65,6 +73,9 @@ Cost selection. The source also connects authenticated native SDK observations
 to immutable Orchestrator receipts and reference-only Events accounting.
 The local harness covers current owner authority and exact Copilot AI-credit pricing.
 It does not prove deployment, paid model execution, or automatic AgentHost scheduling.
+Separate [P1 API/UI/MCP harness candidates](docs/guide/testing.md#p1-retained-surface-harness-candidates)
+retain current owner contracts and redacted evidence.
+Their controlled local tests are not deployed cross-surface acceptance.
 Application Hosting per-app selection remains subsequent work; callers
 receive an explicit error for unsupported single-provider resolution rather than a
 fallback. Resolving a descriptor produces a candidate, not a provisioned resource.
@@ -74,6 +85,25 @@ also requires the confirmed applied egress-intent generation.
 The P1 Orchestrator Core library adds pure, deterministic workflow-catalog and
 step-bound WorkPlan validation. It validates pinned run selections, output bounds,
 joins, snapshots, and scope diffs; it does not dispatch children or persist run state.
+It now also includes a migration-free, project-scoped backlog dependency graph and
+readiness evaluator. These pure contracts reject stale graph/task revisions, invalid
+or cyclic edges, and owner-projected prerequisite snapshots that are missing,
+incomplete, stale, or lack required verified output evidence. `Merged` is reserved
+for a validated Merge gate; a fully evidenced non-merge workflow uses a distinct
+`Completed` state, with captured outputs still verified and no-output completion
+backed by an explicit owner seal. They do not persist tasks,
+authorize callers, or produce/verify Source Control evidence. An Orchestrator owner
+candidate adds persisted task/dependency operations, a run-scoped atomic claim, and
+wired MAF owner-evidence reader/routes. At claim time it locks the current owner
+binding, enumerates and rereads all admitted captures for that root and selection,
+and rebuilds the witness from that inventory. Non-empty output requires exactly one
+capture matching the witness ID; no-output evidence includes actual captures so a
+late non-empty manifest blocks readiness. Migration 016 remains unregistered. The
+bounded C3/MAF source composition is admitted, but whole-producer runtime acceptance
+remains pending. The MAF 015 schema is packaged as an embedded resource and registered
+with the explicit migrator. This source change does not apply it to a shared or live
+database. This candidate is not deployable and does not authorize dispatch or verified
+outputs.
 
 The unpublished Source Control candidate adds an exclusive GitHub provider adapter,
 typed project repository and SecretRef settings, immutable accepted-run provider pins,
