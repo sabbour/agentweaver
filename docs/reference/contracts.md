@@ -284,6 +284,14 @@ authority and the accepted run selection; the caller's claims alone do not estab
 current permission. Internal Events calls use the configured Events audience and the
 same caller bearer.
 
+Reviewed remote tool contracts retain immutable snapshot data, exact call identity,
+canonical arguments, and matching result metadata. The internal snapshot store checks
+the full stored snapshot digest and rejects conflicting reuse of an ID. Its embedded
+018 SQL resource is tested directly but is not registered in the normal migration path.
+These data contracts do not resolve current Projects selection references, verify a
+current remote connection or per-call grant, or authorize credential use or native
+network requests.
+
 Typed action mutations use strict request contracts, expected state versions, and
 idempotency keys. Proposing or revising non-empty or fixed work requires the server's
 accepted Sandbox binding; a missing registered adapter or negotiation returns `503`.
