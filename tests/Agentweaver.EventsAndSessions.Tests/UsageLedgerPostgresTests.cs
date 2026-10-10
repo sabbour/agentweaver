@@ -45,6 +45,8 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var consumer = NativeConsumer();
         var first = await consumer.AppendAsync(receipt, _ => Task.CompletedTask, default);
         Assert.False(first.IsDuplicate);
+        Assert.Equal(receipt.ReceiptId, first.Accounting.SourceReceiptId);
+        Assert.Equal(1L, first.Accounting.AccountingCursor);
         Assert.Equal(0.00123456725m, first.Accounting.Amount);
         Assert.Equal(CostDisposition.Estimate, first.Accounting.Disposition);
         var restarted = NativeConsumer();
@@ -77,11 +79,18 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
                    (SELECT count(*) FROM "{_schema}".usage_run_cost_bindings),
                    (SELECT count(*) FROM "{_schema}".usage_source_receipts),
                    (SELECT count(*) FROM "{_schema}".consumer_inbox_receipts
-                    WHERE consumer_id = 'events.native-sdk-usage.v1')
+                    WHERE consumer_id = 'events.native-sdk-usage.v1'),
+                   (SELECT accounting_receipt_json::jsonb->>'sourceReceiptId'
+                    FROM "{_schema}".usage_source_receipts WHERE source_receipt_id = @receipt),
+                   (SELECT accounting_receipt_json::jsonb->>'accountingCursor'
+                    FROM "{_schema}".usage_source_receipts WHERE source_receipt_id = @receipt)
             """, connection);
+        counts.Parameters.AddWithValue("receipt", NpgsqlDbType.Uuid, receipt.ReceiptId);
         await using var reader = await counts.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.All(Enumerable.Range(0, 5), column => Assert.Equal(1L, reader.GetInt64(column)));
+        Assert.Equal(receipt.ReceiptId.ToString("D"), reader.GetString(5));
+        Assert.Equal("1", reader.GetString(6));
     }
 
     [Fact]
@@ -207,6 +216,199 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             UsageContractTests.Binding(), UsageContractTests.Price());
         await transaction.RollbackAsync();
         Assert.Equal(1, (await restarted.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
+    }
+
+    [Fact]
+    public async Task AccountingCursorIsRunWideMonotoneAcrossLateEventsAndReplay()
+    {
+        var firstUsage = UsageContractTests.Submission(
+            eventId: Guid.NewGuid()) with
+        {
+            OccurredAt = DateTimeOffset.Parse("2026-10-08T12:00:00Z")
+        };
+        var binding = UsageContractTests.Binding();
+        var price = UsageContractTests.Price();
+        var first = await _ledger.AppendAsync(firstUsage, binding, price);
+        var replay = await _ledger.AppendAsync(firstUsage, binding, price);
+        var lateUsage = firstUsage with
+        {
+            EventId = Guid.NewGuid(),
+            OccurredAt = firstUsage.OccurredAt.AddHours(-2),
+            ModelBinding = firstUsage.ModelBinding with { MeterSource = "meter-b" }
+        };
+        var unpriced = new CostPrice(
+            null, null, CostDisposition.Unpriced, null, "No pinned meter binding.");
+        var late = await _ledger.AppendAsync(lateUsage, binding: null, unpriced);
+
+        Assert.Equal(1L, first.Entry.AccountingRevision);
+        Assert.Equal(1L, first.Receipt.AccountingCursor);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(first.Entry.AccountingRevision, replay.Entry.AccountingRevision);
+        Assert.Equal(first.Receipt, replay.Receipt);
+        Assert.Equal(2L, late.Entry.AccountingRevision);
+        Assert.Equal(2L, late.Receipt.AccountingCursor);
+    }
+
+    [Fact]
+    public async Task RolledBackAppendDoesNotConsumeCommittedAccountingCursor()
+    {
+        var binding = UsageContractTests.Binding();
+        var price = UsageContractTests.Price();
+        var first = await _ledger.AppendAsync(
+            UsageContractTests.Submission(eventId: Guid.NewGuid()), binding, price);
+        Assert.Equal(1L, first.Entry.AccountingRevision);
+
+        await using (var connection = await _fixture.DataSource.OpenConnectionAsync())
+        await using (var transaction = await connection.BeginTransactionAsync())
+        {
+            var uncommitted = await _ledger.AppendWithinTransactionAsync(
+                connection,
+                transaction,
+                UsageContractTests.Submission(eventId: Guid.NewGuid()),
+                binding,
+                price);
+            Assert.Equal(2L, uncommitted.Entry.AccountingRevision);
+            await transaction.RollbackAsync();
+        }
+
+        var afterRollback = await _ledger.AppendAsync(
+            UsageContractTests.Submission(eventId: Guid.NewGuid()), binding, price);
+        Assert.Equal(2L, afterRollback.Entry.AccountingRevision);
+    }
+
+    [Fact]
+    public async Task EmptySourceCompletionConsumesRunCursorAndRejectsLateDispatchUsage()
+    {
+        var dispatchId = Guid.NewGuid().ToString("D");
+        await InsertSourceCompletionAsync(
+            UsageContractTests.Submission(eventId: Guid.NewGuid()),
+            dispatchId,
+            [],
+            accountingRevision: 1);
+
+        var lateDispatchUsage = UsageContractTests.Submission(eventId: Guid.NewGuid()) with
+        {
+            Attribution = UsageContractTests.Submission().Attribution with { DispatchId = dispatchId }
+        };
+        await Assert.ThrowsAsync<UsageLedgerConflictException>(() => _ledger.AppendAsync(
+            lateDispatchUsage, UsageContractTests.Binding(), UsageContractTests.Price()));
+
+        var legacyUsage = UsageContractTests.Submission(eventId: Guid.NewGuid());
+        var accepted = await _ledger.AppendAsync(
+            legacyUsage, UsageContractTests.Binding(), UsageContractTests.Price());
+        Assert.Null(legacyUsage.Attribution.DispatchId);
+        Assert.Equal(2L, accepted.Entry.AccountingRevision);
+    }
+
+    [Fact]
+    public async Task ExactDispatchReplayAfterSourceCompletionKeepsOriginalCursor()
+    {
+        var dispatchId = Guid.NewGuid().ToString("D");
+        var receipt = NativeReceipt();
+        var dispatchedUsage = receipt.Usage with
+        {
+            Attribution = receipt.Usage.Attribution with { DispatchId = dispatchId }
+        };
+        receipt = receipt with
+        {
+            Usage = dispatchedUsage,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(
+                receipt.Registration, dispatchedUsage)
+        };
+        var first = await NativeConsumer().AppendAsync(receipt, _ => Task.CompletedTask, default);
+        Assert.Equal(1L, first.Accounting.AccountingCursor);
+
+        await InsertSourceCompletionAsync(
+            receipt.Usage,
+            dispatchId,
+            [new(receipt.ReceiptId, receipt.Usage.EventId, receipt.CanonicalPayloadHash)],
+            accountingRevision: 2);
+
+        var replay = await NativeConsumer().AppendAsync(receipt, _ => Task.CompletedTask, default);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(receipt.ReceiptId, replay.Accounting.SourceReceiptId);
+        Assert.Equal(1L, replay.Accounting.AccountingCursor);
+
+        var later = NativeReceipt();
+        var laterUsage = later.Usage with
+        {
+            Attribution = later.Usage.Attribution with { DispatchId = dispatchId }
+        };
+        later = later with
+        {
+            Usage = laterUsage,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(later.Registration, laterUsage)
+        };
+        await Assert.ThrowsAsync<UsageLedgerConflictException>(() =>
+            NativeConsumer().AppendAsync(later, _ => Task.CompletedTask, default));
+    }
+
+    [Fact]
+    public async Task OwnerVerifiedDispatchCompletionJoinsExactReceiptsAndAppendsAccountingWatermark()
+    {
+        var dispatchId = Guid.NewGuid().ToString("D");
+        var receipt = NativeReceipt();
+        var usage = receipt.Usage with
+        {
+            Attribution = receipt.Usage.Attribution with { DispatchId = dispatchId }
+        };
+        receipt = receipt with
+        {
+            Usage = usage,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(receipt.Registration, usage)
+        };
+        await NativeConsumer().AppendAsync(receipt, _ => Task.CompletedTask, default);
+
+        var manifest = new UsageDispatchSourceCompletionManifest(
+            dispatchId,
+            usage.Attribution.TenantId,
+            usage.Attribution.ProjectId,
+            usage.Attribution.RunId,
+            usage.Attribution.SessionId,
+            receipt.Registration.RuntimeInstanceId,
+            receipt.Registration.Revision,
+            receipt.Registration.Binding.ExecutionFence,
+            [new(receipt.ReceiptId, usage.EventId, receipt.CanonicalPayloadHash)],
+            string.Empty,
+            Guid.NewGuid(),
+            1);
+        manifest = manifest with
+        {
+            ReceiptDigest = UsageDispatchSourceCompletionManifestContract.ComputeDigest(manifest)
+        };
+
+        var consumer = NativeConsumer();
+        var witness = await consumer.RecordDispatchSourceCompletionAsync(
+            manifest, [receipt], _ => Task.CompletedTask, default);
+
+        Assert.Equal(UsageDispatchAccountingStatus.SourceComplete, witness.Status);
+        Assert.Equal(2L, witness.AccountingWatermark);
+        Assert.Equal(manifest.CompletionReceiptId, witness.SourceCompletionReceiptId);
+        Assert.Equal(manifest.ReceiptDigest, witness.SourceCompletionDigest);
+        Assert.Equal(new UsageDispatchSourceReceiptIdentity(
+            receipt.ReceiptId, usage.EventId, receipt.CanonicalPayloadHash), Assert.Single(witness.Receipts));
+        Assert.Equal(1, witness.PricedReceiptCount);
+        Assert.Equal(0, witness.UnpricedReceiptCount);
+        Assert.Equal(0.00123456725m, witness.KnownPricedSubtotal);
+        Assert.NotNull(witness.RunTotals);
+
+        var replay = await consumer.RecordDispatchSourceCompletionAsync(
+            manifest, [receipt], _ => Task.CompletedTask, default);
+        Assert.Equal(witness.AccountingWatermark, replay.AccountingWatermark);
+        Assert.Equal(witness.ReceiptDigest, replay.ReceiptDigest);
+
+        var late = NativeReceipt();
+        var lateUsage = late.Usage with
+        {
+            Attribution = late.Usage.Attribution with { DispatchId = dispatchId }
+        };
+        late = late with
+        {
+            Usage = lateUsage,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(late.Registration, lateUsage)
+        };
+        await Assert.ThrowsAsync<UsageLedgerConflictException>(() =>
+            NativeConsumer().AppendAsync(late, _ => Task.CompletedTask, default));
     }
 
     [Fact]
@@ -461,6 +663,34 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HostedPricedUsageWithoutOptionalAccountingCountsAsFullyPriced()
+    {
+        var source = new SdkSessionFacts(
+            Guid.NewGuid(), "sdk-session-1", "sdk-v1", "runtime-v1", "model/ref", "model-1",
+            new string('c', 64), null, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
+            new string('d', 64), 1);
+        var card = UsageContractTests.Card() with { MeterSource = SdkMeterSources.CopilotNanoAiu };
+        var binding = UsageContractTests.Binding(card) with { MeterSource = SdkMeterSources.CopilotNanoAiu };
+        var usage = UsageContractTests.Submission(
+            model: new UsageModelBinding(
+                "model/ref", "model-1", SdkMeterSources.CopilotNanoAiu, "selection-1"),
+            measurement: new UsageMeasurement(10, 20, 3, 2, 1, 25m, "nano_aiu", 12.5m)) with
+        {
+            SdkSource = source
+        };
+        var price = UsageContractTests.Price(card);
+        await _ledger.AppendAsync(usage, binding, price);
+
+        var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        var agent = Assert.Single(totals.Agents);
+
+        Assert.True(totals.IsFullyPriced);
+        Assert.True(agent.IsFullyPriced);
+        Assert.Equal(price.Amount, Assert.Single(totals.Amounts).Amount);
+        Assert.Equal(price.Amount, Assert.Single(agent.Amounts).Amount);
+    }
+
+    [Fact]
     public async Task UsageMustReferenceAnExistingNativeSession()
     {
         var usage = UsageContractTests.Submission() with
@@ -541,6 +771,63 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         await _ledger.AppendAsync(usage, UsageContractTests.Binding(), price);
     }
 
+    private async Task InsertSourceCompletionAsync(
+        UsageSubmission lockScope,
+        string dispatchId,
+        ImmutableArray<UsageDispatchSourceReceiptIdentity> receipts,
+        long accountingRevision)
+    {
+        var manifest = new UsageDispatchSourceCompletionManifest(
+            dispatchId,
+            lockScope.Attribution.TenantId,
+            lockScope.Attribution.ProjectId,
+            lockScope.Attribution.RunId,
+            lockScope.Attribution.SessionId,
+            Guid.NewGuid(),
+            1,
+            1,
+            receipts,
+            string.Empty,
+            Guid.NewGuid(),
+            1);
+        manifest = manifest with
+        {
+            ReceiptDigest = UsageDispatchSourceCompletionManifestContract.ComputeDigest(manifest)
+        };
+        var canonical = UsageDispatchSourceCompletionManifestContract.SerializeCanonical(manifest);
+        var dispatchGuid = Guid.ParseExact(dispatchId, "D");
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await PostgresUsageLedger.AcquireRunAccountingLockAsync(
+            connection, transaction, lockScope, default);
+        await using var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".usage_dispatch_source_completions (
+                tenant_id, project_id, run_id, dispatch_id, session_id, runtime_instance_id,
+                registration_revision, execution_fence, completion_receipt_id, completion_revision,
+                accounting_revision, receipt_digest, canonical_manifest, manifest_json)
+            VALUES (
+                @tenant_id, @project_id, @run_id, @dispatch_id, @session_id, @runtime_instance_id,
+                @registration_revision, @execution_fence, @completion_receipt_id, @completion_revision,
+                @accounting_revision, @receipt_digest, @canonical_manifest, @manifest_json)
+            """, connection, transaction);
+        insert.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Varchar, manifest.TenantId);
+        insert.Parameters.AddWithValue("project_id", NpgsqlDbType.Varchar, manifest.ProjectId);
+        insert.Parameters.AddWithValue("run_id", NpgsqlDbType.Varchar, manifest.RunId);
+        insert.Parameters.AddWithValue("dispatch_id", NpgsqlDbType.Uuid, dispatchGuid);
+        insert.Parameters.AddWithValue("session_id", NpgsqlDbType.Varchar, manifest.SessionId);
+        insert.Parameters.AddWithValue("runtime_instance_id", NpgsqlDbType.Uuid, manifest.RuntimeInstanceId);
+        insert.Parameters.AddWithValue("registration_revision", NpgsqlDbType.Bigint, manifest.RegistrationRevision);
+        insert.Parameters.AddWithValue("execution_fence", NpgsqlDbType.Bigint, manifest.ExecutionFence);
+        insert.Parameters.AddWithValue("completion_receipt_id", NpgsqlDbType.Uuid, manifest.CompletionReceiptId);
+        insert.Parameters.AddWithValue("completion_revision", NpgsqlDbType.Bigint, manifest.CompletionRevision);
+        insert.Parameters.AddWithValue("accounting_revision", NpgsqlDbType.Bigint, accountingRevision);
+        insert.Parameters.AddWithValue("receipt_digest", NpgsqlDbType.Varchar, manifest.ReceiptDigest);
+        insert.Parameters.AddWithValue("canonical_manifest", NpgsqlDbType.Text, canonical);
+        insert.Parameters.AddWithValue("manifest_json", NpgsqlDbType.Jsonb, canonical);
+        await insert.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
+    }
+
     private NativeUsageReceiptConsumer NativeConsumer()
     {
         var options = new PostgresSessionsProviderOptions(
@@ -555,10 +842,18 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         Assert.True(catalog.IsSuccess, catalog.Error?.Message);
         var binder = new CopilotCostProviderBinder(
             provider, new(catalog.Value!), NullLogger<CopilotCostProviderBinder>.Instance);
-        return new(_fixture.DataSource, options, _ledger, provider, binder);
+        return new(
+            _fixture.DataSource,
+            options,
+            _ledger,
+            new Dictionary<string, ICostProvider>(StringComparer.Ordinal)
+            {
+                [CopilotCostProvider.MeterSource] = provider
+            },
+            binder);
     }
 
-    private static RuntimeUsageSourceReceipt NativeReceipt(
+    internal static RuntimeUsageSourceReceipt NativeReceipt(
         bool missingMeasurements = false, string modelId = "native-model")
     {
         var registration = new RuntimeRegistration(

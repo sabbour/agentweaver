@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -56,6 +57,8 @@ public sealed class PostgresUsageLedger : IUsageLedger
         if (transaction.Connection != connection)
             throw new ArgumentException("The usage transaction must belong to the supplied connection.");
         UsageLedgerValidation.Validate(submission, binding, price);
+        await AcquireRunAccountingLockAsync(
+            connection, transaction, submission, cancellationToken).ConfigureAwait(false);
         var canonical = UsageLedgerCanonicalizer.Serialize(submission, binding, price);
         var payloadHash = HashCanonicalInput(canonical);
         var payload = JsonSerializer.Serialize(
@@ -72,35 +75,52 @@ public sealed class PostgresUsageLedger : IUsageLedger
             return matchedExisting;
         }
 
+        if (submission.Attribution.DispatchId is not null &&
+            await IsDispatchSourceCompleteAsync(
+                connection, transaction, submission, cancellationToken).ConfigureAwait(false))
+            throw new UsageLedgerConflictException(
+                "New usage cannot be appended after the dispatch source set is complete.");
+
+        var accountingRevision = await AllocateNextAccountingRevisionAsync(
+            connection, transaction, submission, cancellationToken).ConfigureAwait(false);
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {_quotedSchema}.usage_ledger (
-                contract_version, tenant_id, project_id, run_id, session_id, event_id, occurred_at,
+                contract_version, tenant_id, project_id, run_id, session_id, event_id,
+                dispatch_id, accounting_revision, occurred_at,
                 agent_id, model_reference, model_id, meter_source, selection_revision,
                 input_tokens, output_tokens, cached_tokens, cache_write_tokens, reasoning_tokens, request_count,
                 provider_units, provider_unit, duration_milliseconds, price_disposition,
                 price_amount, price_unit, unpriced_reason, rate_card_id, rate_card_version, rate_card_unit,
                 cost_binding, canonical_input, canonical_input_hash, payload)
             VALUES (
-                @contract_version, @tenant_id, @project_id, @run_id, @session_id, @event_id, @occurred_at,
+                @contract_version, @tenant_id, @project_id, @run_id, @session_id, @event_id,
+                @dispatch_id, @accounting_revision, @occurred_at,
                 @agent_id, @model_reference, @model_id, @meter_source, @selection_revision,
                 @input_tokens, @output_tokens, @cached_tokens, @cache_write_tokens, @reasoning_tokens, @request_count,
                 @provider_units, @provider_unit, @duration_milliseconds, @price_disposition,
                 @price_amount, @price_unit, @unpriced_reason, @rate_card_id, @rate_card_version, @rate_card_unit,
                 @cost_binding, @canonical_input, @canonical_input_hash, @payload)
             ON CONFLICT (event_id) DO NOTHING
-            RETURNING recorded_at
+            RETURNING recorded_at, accounting_revision
             """, connection, transaction);
-        AddInsertParameters(insert, submission, binding, price, canonical, payload);
+        AddInsertParameters(insert, submission, binding, price, canonical, payload, accountingRevision);
         insert.Parameters.AddWithValue("canonical_input_hash", NpgsqlDbType.Varchar, payloadHash);
         DateTimeOffset? recordedAt = null;
+        long? committedRevision = null;
         await using (var reader = await insert.ExecuteReaderAsync(cancellationToken))
             if (await reader.ReadAsync(cancellationToken))
+            {
                 recordedAt = reader.GetFieldValue<DateTimeOffset>(0);
+                committedRevision = reader.GetInt64(1);
+            }
         if (recordedAt is not null)
         {
             return new UsageIngestionResult(
                 new UsageLedgerEntry(
-                    submission, binding, price, recordedAt.Value, payloadHash), IsDuplicate: false);
+                    submission, binding, price, recordedAt.Value, payloadHash)
+                {
+                    AccountingRevision = committedRevision
+                }, IsDuplicate: false);
         }
 
         existing = await ReadByEventIdAsync(
@@ -119,20 +139,77 @@ public sealed class PostgresUsageLedger : IUsageLedger
     {
         UsageLedgerValidation.ValidateRunScope(tenantId, projectId, runId);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        return await ReadRunTotalsAsync(
+            connection, null, tenantId, projectId, runId, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<UsageRunTotals> GetRunTotalsWithinSnapshotAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string tenantId,
+        string projectId,
+        string runId,
+        string meterSource,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (transaction.Connection != connection ||
+            transaction.IsolationLevel != System.Data.IsolationLevel.RepeatableRead)
+            throw new ArgumentException("A repeatable-read usage transaction is required.", nameof(transaction));
+        UsageLedgerValidation.ValidateRunScope(tenantId, projectId, runId);
+        RuntimeContractValidation.ValidateIdentifier(meterSource);
+        return await ReadRunTotalsAsync(
+            connection, transaction, tenantId, projectId, runId, meterSource, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal Task<UsageRunTotals> GetRunTotalsWhileRunLockedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string tenantId,
+        string projectId,
+        string runId,
+        string meterSource,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (transaction.Connection != connection ||
+            transaction.IsolationLevel != System.Data.IsolationLevel.ReadCommitted)
+            throw new ArgumentException("A read-committed usage transaction is required.", nameof(transaction));
+        UsageLedgerValidation.ValidateRunScope(tenantId, projectId, runId);
+        RuntimeContractValidation.ValidateIdentifier(meterSource);
+        return ReadRunTotalsAsync(
+            connection, transaction, tenantId, projectId, runId, meterSource, cancellationToken);
+    }
+
+    private async Task<UsageRunTotals> ReadRunTotalsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string tenantId,
+        string projectId,
+        string runId,
+        string? meterFilter,
+        CancellationToken cancellationToken)
+    {
         await using var command = new NpgsqlCommand($"""
             SELECT l.agent_id, l.meter_source, l.price_unit, r.unit,
                    l.input_tokens, l.output_tokens, l.cached_tokens, l.reasoning_tokens,
                    l.duration_milliseconds, l.request_count, l.price_amount, l.price_disposition,
-                   l.cache_write_tokens
+                   l.cache_write_tokens, (l.payload->'usage')::text
             FROM {_quotedSchema}.usage_ledger l
             LEFT JOIN {_quotedSchema}.usage_rate_cards r
                 ON r.card_id = l.rate_card_id AND r.version = l.rate_card_version
             WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id AND l.run_id = @run_id
+                AND (@meter_source IS NULL OR l.meter_source = @meter_source)
             ORDER BY l.agent_id, l.event_id
-            """, connection);
+            """, connection, transaction);
         command.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Varchar, tenantId);
         command.Parameters.AddWithValue("project_id", NpgsqlDbType.Varchar, projectId);
         command.Parameters.AddWithValue("run_id", NpgsqlDbType.Varchar, runId);
+        command.Parameters.AddWithValue(
+            "meter_source", NpgsqlDbType.Varchar, (object?)meterFilter ?? DBNull.Value);
 
         var agents = new Dictionary<string, AgentAccumulator>(StringComparer.Ordinal);
         var runAmounts = new Dictionary<(string MeterSource, string Unit), AmountAccumulator>();
@@ -153,7 +230,10 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 events = checked(events + 1);
                 var disposition = Enum.Parse<CostDisposition>(reader.GetString(11), ignoreCase: false);
                 var priced = disposition != CostDisposition.Unpriced;
-                fullyPriced &= priced;
+                var usage = JsonSerializer.Deserialize<UsageSubmission>(reader.GetString(13), JsonOptions)
+                    ?? throw new InvalidOperationException("A stored usage payload has no usage submission.");
+                var financiallyComplete = UsageLedgerValidation.IsFinanciallyComplete(usage, disposition);
+                fullyPriced &= financiallyComplete;
                 var meterSource = reader.GetString(1);
                 var unit = reader.IsDBNull(2)
                     ? reader.IsDBNull(3) ? null : reader.GetString(3)
@@ -168,7 +248,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
                     reader.IsDBNull(8) ? null : reader.GetDecimal(8),
                     reader.IsDBNull(9) ? null : reader.GetInt64(9),
                     reader.IsDBNull(12) ? null : reader.GetInt64(12),
-                    priced);
+                    financiallyComplete);
 
                 if (unit is not null)
                 {
@@ -248,7 +328,7 @@ public sealed class PostgresUsageLedger : IUsageLedger
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT canonical_input, payload, recorded_at, canonical_input_hash
+            SELECT canonical_input, payload, recorded_at, canonical_input_hash, accounting_revision
             FROM {_quotedSchema}.usage_ledger
             WHERE event_id = @event_id
             FOR UPDATE
@@ -275,7 +355,111 @@ public sealed class PostgresUsageLedger : IUsageLedger
         }
         return new StoredEntry(
             canonical,
-            new UsageLedgerEntry(payload.Usage, payload.CostBinding, payload.Price, recordedAt, payloadHash));
+            new UsageLedgerEntry(payload.Usage, payload.CostBinding, payload.Price, recordedAt, payloadHash)
+            {
+                AccountingRevision = reader.IsDBNull(4) ? null : reader.GetInt64(4)
+            });
+    }
+
+    internal static async Task AcquireRunAccountingLockAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        UsageSubmission submission,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(submission);
+        if (transaction.Connection != connection)
+            throw new ArgumentException("The usage transaction must belong to the supplied connection.");
+
+        await using (var eventLock = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('agentweaver.usage.event'), hashtext(@event_id))",
+            connection, transaction))
+        {
+            eventLock.Parameters.AddWithValue(
+                "event_id", NpgsqlDbType.Text, submission.EventId.ToString("D"));
+            await eventLock.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var scope = submission.Attribution;
+        await AcquireRunAccountingScopeLockAsync(
+            connection, transaction, scope.TenantId, scope.ProjectId, scope.RunId, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    internal static async Task AcquireRunAccountingScopeLockAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string tenantId,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (transaction.Connection != connection)
+            throw new ArgumentException("The usage transaction must belong to the supplied connection.");
+        UsageLedgerValidation.ValidateRunScope(tenantId, projectId, runId);
+        var canonicalRunScope = JsonSerializer.Serialize(new[] { tenantId, projectId, runId });
+        await using var runLock = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('agentweaver.usage.run'), hashtext(@scope))",
+            connection, transaction);
+        runLock.Parameters.AddWithValue("scope", NpgsqlDbType.Text, canonicalRunScope);
+        await runLock.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<bool> IsDispatchSourceCompleteAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        UsageSubmission submission,
+        CancellationToken cancellationToken)
+    {
+        var attribution = submission.Attribution;
+        if (!Guid.TryParseExact(attribution.DispatchId, "D", out var dispatchId))
+            throw new InvalidOperationException("A validated dispatch ID could not be parsed.");
+
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1
+                FROM {_quotedSchema}.usage_dispatch_source_completions
+                WHERE tenant_id = @tenant_id AND project_id = @project_id AND run_id = @run_id
+                    AND dispatch_id = @dispatch_id
+            )
+            """, connection, transaction);
+        command.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Varchar, attribution.TenantId);
+        command.Parameters.AddWithValue("project_id", NpgsqlDbType.Varchar, attribution.ProjectId);
+        command.Parameters.AddWithValue("run_id", NpgsqlDbType.Varchar, attribution.RunId);
+        command.Parameters.AddWithValue("dispatch_id", NpgsqlDbType.Uuid, dispatchId);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The dispatch completion check returned no value."));
+    }
+
+    private async Task<long> AllocateNextAccountingRevisionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        UsageSubmission submission,
+        CancellationToken cancellationToken)
+    {
+        var attribution = submission.Attribution;
+        await using var command = new NpgsqlCommand($"""
+            SELECT COALESCE(MAX(accounting_revision), 0)
+            FROM (
+                SELECT accounting_revision
+                FROM {_quotedSchema}.usage_ledger
+                WHERE tenant_id = @tenant_id AND project_id = @project_id AND run_id = @run_id
+                UNION ALL
+                SELECT accounting_revision
+                FROM {_quotedSchema}.usage_dispatch_source_completions
+                WHERE tenant_id = @tenant_id AND project_id = @project_id AND run_id = @run_id
+            ) revisions
+            """, connection, transaction);
+        command.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Varchar, attribution.TenantId);
+        command.Parameters.AddWithValue("project_id", NpgsqlDbType.Varchar, attribution.ProjectId);
+        command.Parameters.AddWithValue("run_id", NpgsqlDbType.Varchar, attribution.RunId);
+        var maximum = (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The accounting watermark query returned no value."));
+        return checked(maximum + 1);
     }
 
     private static UsageIngestionResult MatchDuplicate(StoredEntry existing, string canonical)
@@ -295,7 +479,8 @@ public sealed class PostgresUsageLedger : IUsageLedger
         CostBinding? binding,
         CostPrice price,
         string canonical,
-        string payload)
+        string payload,
+        long accountingRevision)
     {
         var attribution = submission.Attribution;
         var model = submission.ModelBinding;
@@ -307,6 +492,9 @@ public sealed class PostgresUsageLedger : IUsageLedger
         command.Parameters.AddWithValue("run_id", NpgsqlDbType.Varchar, attribution.RunId);
         command.Parameters.AddWithValue("session_id", NpgsqlDbType.Varchar, attribution.SessionId);
         command.Parameters.AddWithValue("event_id", NpgsqlDbType.Uuid, submission.EventId);
+        AddNullable(command, "dispatch_id", NpgsqlDbType.Uuid,
+            attribution.DispatchId is null ? null : Guid.ParseExact(attribution.DispatchId, "D"));
+        command.Parameters.AddWithValue("accounting_revision", NpgsqlDbType.Bigint, accountingRevision);
         command.Parameters.AddWithValue("occurred_at", NpgsqlDbType.TimestampTz, submission.OccurredAt);
         command.Parameters.AddWithValue("agent_id", NpgsqlDbType.Varchar, attribution.AgentId);
         command.Parameters.AddWithValue("model_reference", NpgsqlDbType.Varchar, model.ModelReference);
@@ -408,11 +596,11 @@ public sealed class PostgresUsageLedger : IUsageLedger
             decimal? duration,
             long? requestCount,
             long? cacheWriteTokens,
-            bool priced)
+            bool financiallyComplete)
         {
             _events = checked(_events + 1);
             _requestCount.Add(requestCount);
-            _fullyPriced &= priced;
+            _fullyPriced &= financiallyComplete;
             _inputTokens.Add(inputTokens);
             _outputTokens.Add(outputTokens);
             _cachedTokens.Add(cachedTokens);

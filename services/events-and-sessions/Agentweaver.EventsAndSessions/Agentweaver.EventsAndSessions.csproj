@@ -27,5 +27,6 @@
     <EmbeddedResource Include="Migrations\005_copilot_usage.sql" />
     <EmbeddedResource Include="Migrations\006_native_sdk_usage.sql" />
     <EmbeddedResource Include="Migrations\007_native_usage_receipts.sql" />
+    <EmbeddedResource Include="Migrations\008_dispatch_accounting_witness.sql" />
   </ItemGroup>
 </Project>

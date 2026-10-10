@@ -29,6 +29,11 @@ internal static class UsageLedgerValidation
         ValidateIdentifier(submission.Attribution.AgentId, nameof(submission), 256);
         if (submission.Attribution.TurnId is not null)
             ValidateIdentifier(submission.Attribution.TurnId, nameof(submission), 256);
+        if (submission.Attribution.DispatchId is not null &&
+            (!Guid.TryParseExact(submission.Attribution.DispatchId, "D", out var dispatchId) ||
+             dispatchId == Guid.Empty ||
+             dispatchId.ToString("D") != submission.Attribution.DispatchId))
+            throw new ArgumentException("The dispatch ID must be a non-empty canonical GUID.", nameof(submission));
         ValidateIdentifier(submission.ModelBinding.ModelReference, nameof(submission));
         ValidateIdentifier(submission.ModelBinding.ModelId, nameof(submission));
         ValidateIdentifier(submission.ModelBinding.MeterSource, nameof(submission), 256);
@@ -51,7 +56,6 @@ internal static class UsageLedgerValidation
         RequireNonNegative(price.Amount, nameof(price.Amount));
         if (price.Unit is not null)
             ValidateIdentifier(price.Unit, nameof(price.Unit), 128);
-
         if (binding is null)
         {
             if (price.Disposition != CostDisposition.Unpriced || price.RateCard is not null)
@@ -92,6 +96,39 @@ internal static class UsageLedgerValidation
     {
         ValidateIdentifier(tenantId, nameof(tenantId), 256);
         _ = new SessionIdentity(projectId, runId, "_");
+    }
+
+    internal static bool IsFinanciallyComplete(
+        UsageSubmission submission, CostDisposition disposition) =>
+        disposition != CostDisposition.Unpriced && HasCompleteSdkAccounting(submission);
+
+    internal static bool HasCompleteSdkAccounting(UsageSubmission submission)
+    {
+        ArgumentNullException.ThrowIfNull(submission);
+        if (submission.SdkSource is null)
+            return submission.SdkAccounting is null;
+        if (submission.ModelBinding.MeterSource != submission.SdkSource.MeterSource)
+            return false;
+
+        var accountingIdentity = submission.SdkAccounting?.Identity;
+        return submission.SdkSource.SourceMode switch
+        {
+            "byok" =>
+                submission.SdkSource.MeterSource == SdkMeterSources.ByokTokens &&
+                submission.Measurement.ProviderUnits is null &&
+                submission.Measurement.ProviderUnit == "tokens" &&
+                submission.Measurement.InputTokens is not null &&
+                submission.Measurement.OutputTokens is not null,
+            "hosted-copilot" =>
+                submission.SdkSource.MeterSource == SdkMeterSources.CopilotNanoAiu &&
+                submission.Measurement.ProviderUnits is not null &&
+                submission.Measurement.ProviderUnit == "nano_aiu" &&
+                (accountingIdentity is null ||
+                 accountingIdentity.SourceSessionId == submission.SdkSource.SdkSessionId &&
+                 accountingIdentity.Sequence > 0 &&
+                 !string.IsNullOrWhiteSpace(accountingIdentity.UsageId)),
+            _ => false
+        };
     }
 
     private static void ValidateBinding(CostBinding binding)
@@ -173,6 +210,8 @@ internal static class UsageLedgerCanonicalizer
             writer.WriteString("agentId", submission.Attribution.AgentId);
             if (submission.Attribution.TurnId is not null)
                 writer.WriteString("turnId", submission.Attribution.TurnId);
+            if (submission.Attribution.DispatchId is not null)
+                writer.WriteString("dispatchId", submission.Attribution.DispatchId);
             writer.WriteEndObject();
 
             writer.WritePropertyName("modelBinding");
@@ -204,6 +243,13 @@ internal static class UsageLedgerCanonicalizer
             }
             if (submission.SdkEventId is not null)
                 writer.WriteString("sdkEventId", submission.SdkEventId);
+            if (submission.A2AMessageId is not null)
+                writer.WriteString("a2AMessageId", submission.A2AMessageId.Value);
+            if (submission.SdkAccounting is not null)
+            {
+                writer.WritePropertyName("sdkAccounting");
+                JsonSerializer.Serialize(writer, submission.SdkAccounting);
+            }
 
             writer.WritePropertyName("costBinding");
             if (binding is null)

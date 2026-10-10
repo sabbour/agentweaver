@@ -82,11 +82,24 @@ tests remain unchanged.
 
 The Events & Sessions tests cover weighted nano-AIU pricing, unweighted quotes,
 missing measurements, immutable rate cards, and redacted binding diagnostics.
+`AzureCostProviderTests` cover model-scoped standard token arithmetic, explicit
+rate-card source/currency/version, missing or unsupported token measurements,
+changed pins, exact overflow behavior, no BYOK quote, and explicit PTU `Unpriced`.
+`MeterCostProviderBinderTests` cover Copilot-only, Azure-only, neither, both,
+unknown, and case-changed meter keys without fallback. These are pure local tests:
+they do not prove positive BYOK receipt ingestion, PTU share allocation, native
+PostgreSQL accounting, or live Azure pricing.
+`UsageContractTests` verify backward-compatible omission of optional A2A IDs and
+legacy witness totals, explicit preflight quote invariants, and hosted nano-AIU
+pricing without optional SDK identity or status. They also keep wrong source
+identity and unpriced usage incomplete. They do not prove PostgreSQL totals
+aggregation, trusted dispatch-source completeness, or Core budget retirement. The legacy
+usage-cost-reconciliation API remains advisory; its event count is not the cursor.
 The disposable-PostgreSQL tests cover concurrent duplicates, content conflicts,
 restart, immutable history, transaction rollback, and exact run/agent totals.
 Receipt tests read the committed hash and immutable price through a separate
 PostgreSQL connection. Duplicate retries return the identical receipt.
-Migration tests cover fresh Events version 7, admitted version-3 and version-4 upgrades,
+Migration tests cover fresh Events version 8, admitted version-3 and version-4 upgrades,
 the legacy version-2 project-fact layout, and rejected version gaps.
 Orchestrator migration tests upgrade admitted version 8 and native intermediate versions 9 and 10 to version 11.
 Repeated migration and startup checks preserve the original migration history.

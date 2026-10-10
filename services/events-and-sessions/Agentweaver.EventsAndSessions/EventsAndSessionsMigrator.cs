@@ -7,7 +7,7 @@ namespace Agentweaver.EventsAndSessions;
 
 public static class EventsAndSessionsMigrator
 {
-    private const int CurrentSchemaVersion = 7;
+    private const int CurrentSchemaVersion = 8;
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
 
@@ -111,6 +111,7 @@ public static class EventsAndSessionsMigrator
                 5 => "Agentweaver.EventsAndSessions.Migrations.005_copilot_usage.sql",
                 6 => "Agentweaver.EventsAndSessions.Migrations.006_native_sdk_usage.sql",
                 7 => "Agentweaver.EventsAndSessions.Migrations.007_native_usage_receipts.sql",
+                8 => "Agentweaver.EventsAndSessions.Migrations.008_dispatch_accounting_witness.sql",
                 _ => throw new InvalidOperationException("Unsupported Events & Sessions schema version.")
             };
             await using var resource = typeof(EventsAndSessionsMigrator).Assembly.GetManifestResourceStream(resourceName)

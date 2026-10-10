@@ -102,6 +102,12 @@ The ledger commits before returning this receipt. A retry returns the original
 receipt without repricing. This receipt does not authorize an SDK producer.
 `GetRunTotalsAsync` returns exact agent totals and separate meter-source/unit
 amounts. Unknown measurements stay null. Incomplete pricing remains explicit.
+For native SDK usage, `IsFullyPriced` requires a valid source mode, meter, and
+measurement for each priced entry. A hosted Copilot nano-AIU price does not
+require optional SDK identity or status data. The ledger retains supplied
+identity and status as metadata. BYOK usage still requires the `byok.tokens`
+meter, token units, and input/output token counts. An unpriced entry keeps run
+or agent pricing incomplete.
 Native submissions retain `TurnId`, `SdkEventId`, and the complete `SdkSource`
 snapshot. Cache-read and cache-write measurements remain separate. Native callbacks
 do not supply a request count, so `RequestCount` stays null.
@@ -109,8 +115,9 @@ do not supply a request count, so `RequestCount` stays null.
 `RuntimeUsageSourceReceipt` contains the immutable runtime registration, native
 usage submission, source hash, receipt ID, version, and recorded timestamp.
 `RuntimeUsageSourceReceiptContract` validates exact owner, SDK, model, catalog,
-event, turn, and accepted-selection pins. It rejects BYOK and changed hashes.
-This receipt proves a source observation, not a price or accounting acknowledgment.
+event, turn, and accepted-selection pins for Copilot or BYOK observations and rejects
+changed hashes. It validates a source observation, not host-drain completeness,
+a price, or an accounting acknowledgment.
 A stored source receipt remains readable after its original lease expires.
 That historical read does not authorize another observation.
 
@@ -123,10 +130,25 @@ These low-level contracts do not authenticate a remote writer.
 Migration `006_native_sdk_usage.sql` extends the service schema to version 6.
 It preserves existing history and adds cache-write values and nullable request counts.
 Migration `007_native_usage_receipts.sql` adds the reference consumer's immutable
-receipts and run Cost bindings in version 7.
+receipts and run Cost bindings in version 7. Migration
+`008_dispatch_accounting_witness.sql` adds optional dispatch/cursor fields and
+the immutable source-completion record in version 8. The cursor is a committed,
+run-wide order over usage entries and source-completion records; it does not
+backfill legacy rows or use occurrence timestamps. Source completeness is
+independent of price disposition: an `Unpriced` receipt is not zero cost, and
+Events source completeness alone cannot authorize Core budget retirement.
+`UsageRunTotals.Events` is a legacy/advisory event count, not the accounting
+cursor. New positive dispatch witnesses must include exact, authorized totals
+for the accepted Copilot/AIC root run from the same snapshot; the optional
+witness totals field is omitted only for legacy payload compatibility.
 The optional native HTTP routes separately authenticate the original bearer
 and require current Core authority. Source writes also require Identity's observe credential.
 Typed action grants and opaque model references cannot replace this producer boundary.
+The cost-preflight route reads the current registration/source pair; the legacy
+usage-cost-reconciliation route verifies exact Copilot receipt references and
+returns same-snapshot totals. Its accounting revision is the advisory event
+count, not the committed cursor or Core retirement proof. Neither route accepts
+a caller-supplied source-completion manifest.
 
 ## Orchestrator AGT Policy provider
 

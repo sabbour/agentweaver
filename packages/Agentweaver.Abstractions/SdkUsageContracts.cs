@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
@@ -35,7 +36,27 @@ public sealed record SdkUsageObservation(
     long? CacheWriteTokens,
     long? ReasoningTokens,
     decimal? TotalNanoAiu,
-    decimal? DurationMilliseconds);
+    decimal? DurationMilliseconds)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? A2AMessageId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SdkUsageAccountingObservation? Accounting { get; init; }
+}
+
+public enum SdkAiCreditsStatus
+{
+    Complete,
+    Partial,
+    Unavailable
+}
+
+public sealed record SdkUsageAccountingIdentity(string SourceSessionId, long Sequence, string UsageId);
+
+public sealed record SdkUsageAccountingObservation(
+    SdkUsageAccountingIdentity? Identity,
+    SdkAiCreditsStatus AiCreditsStatus,
+    bool AiCreditsStatusReported);
 
 public static class SdkUsageIdentity
 {

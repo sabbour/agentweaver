@@ -78,7 +78,10 @@ the session journal, addressed messages, project facts, and explicit session for
 The migration preserves admitted version-4 schemas and the earlier version-2 project-fact layout.
 Migration `006_native_sdk_usage.sql` adds cache-write values and permits unknown
 request counts. Migration `007_native_usage_receipts.sql` adds immutable source
-receipts and run-scoped Cost bindings. Ordinary startup requires version 7.
+receipts and run-scoped Cost bindings.
+Migration `008_dispatch_accounting_witness.sql` adds nullable dispatch and
+accounting-revision fields for legacy-compatible entries, plus an immutable
+source-completion record. Ordinary startup requires version 8.
 
 `PostgresUsageLedger` implements the low-level `IUsageLedger` storage contract.
 An entry records tenant, project, run, session, agent, model metadata, measurements,
@@ -102,10 +105,37 @@ Database triggers reject changes and truncation of history.
 Statement-level guards also reject `TRUNCATE`, including dependent and multi-table
 operations, on native source records, accounting receipts, and run-scoped Cost bindings.
 
+The run-wide accounting cursor is allocated under the shared transaction lock from
+the maximum committed revision across usage entries and source-completion records.
+It follows commit order, not provider occurrence time. Exact retries retain their
+original cursor, and rolled-back writes do not advance it. Legacy rows keep a null
+cursor; the migration does not invent historical order. A new usage entry for a
+dispatch with a stored source-completion record is rejected, while an exact event
+replay still returns its original receipt.
+`UsageRunTotals.Events` remains an event count, not an accounting cursor. A
+dispatch witness may omit its `RunTotals` only for legacy payload compatibility;
+every new positive witness must include the exact authorized, same-snapshot
+Copilot/AIC ROOT RUN totals, not a dispatch-only subtotal. This service does not
+yet expose a witness route.
+
+Source completeness describes whether the authenticated producer's exact receipt
+set is complete; it does not describe whether those receipts have a price. An
+honest `Unpriced` accounting acknowledgment is not a zero-cost result and can
+coexist with a complete source receipt set. Missing receipt or host-terminal/drain
+proof remains `Unknown` or `Partial`. Events source completeness is not Core
+retirement authority: Core must independently join the same dispatch's verified
+source completion with its current host-terminal/drain proof, exact meter/unit and
+rate coverage, represented charges, and a fresh compare-and-set before retiring
+priced hard-credit exposure. This checkout persists the completion record but
+does not expose a host-drain assertion or a source-completion ingestion route.
+
 Totals retain separate meter-source and unit groups. A missing measurement makes
 that measurement total unknown. An unpriced entry makes the run or agent pricing
-incomplete. Rate changes never reprice earlier entries. Exact totals that exceed
-the numeric range fail rather than round or wrap.
+incomplete. A valid hosted Copilot nano-AIU price counts as priced without optional
+SDK identity or status data. The ledger retains supplied identity and status as
+metadata. BYOK accounting still requires the `byok.tokens` meter, token units,
+and input/output token counts. Rate changes never reprice earlier entries. Exact
+totals that exceed the numeric range fail rather than round or wrap.
 
 `CopilotCostProvider` prices SDK-reported `nano_aiu` values in AI credits (`AIC`).
 One AIC contains `1_000_000_000` nano-AIU. Those reported units already include
@@ -113,12 +143,29 @@ model weighting. Only quotes with an explicit unweighted basis apply a model
 multiplier. The adapter requires an immutable rate card and exact provider,
 configuration, resource, and capability bindings.
 
+The optional `AzureCostProvider` uses an explicitly configured, versioned
+Azure Retail Prices rate card for model-scoped standard input/output token rates
+in the declared currency. It performs exact decimal arithmetic without currency
+rounding and does not fetch prices. Missing token/cache measurements, nonzero
+cache categories, unknown models, and changed bindings remain `Unpriced`.
+BYOK quotes are unsupported. Provisioned-throughput mode also remains `Unpriced`
+until trusted usage-share evidence supplies the resource and time-window denominator.
+The provider composition does not establish the positive BYOK receipt path; that
+requires genuine producer admission in [#1921](https://github.com/sabbour/agentweaver/issues/1921).
+
 `IUsageLedger.AppendAsync` remains a low-level storage contract without caller authorization.
-The optional HTTP consumer uses a different, reference-only admission path.
-`POST /internal/sessions/{sessionId}/usage-receipts` accepts only `receiptId`.
-Callers cannot supply a source URL, SDK measurements, price, rate card, or accepted marker.
+The optional HTTP consumer has separate append, source-preflight, and reconciliation paths.
+`POST /internal/sessions/{sessionId}/usage-receipts` accepts only `receiptId`;
+callers cannot supply a source URL, SDK measurements, price, rate card, or accepted marker.
 Events fetches the immutable receipt from its fixed HTTPS Orchestrator owner.
 The HTTP client rejects redirects and preserves the original validated bearer.
+`POST /internal/runtime/sources/{runtimeInstanceId}/cost-preflight` reads the
+current owner registration and SDK source receipt, then pins/verifies the run's
+cost binding and returns a quote result. This is not a dispatch source report.
+`POST /internal/projects/{projectId}/runs/{runId}/usage-cost-reconciliation`
+accepts exact Copilot receipt references and returns same-snapshot run totals.
+Its `AccountingRevision` remains the legacy event count; this advisory API is
+not the committed cursor or proof for Core budget retirement.
 
 The Orchestrator source writer requires that bearer and an independent observe credential.
 It checks the current registration, Core permission, accepted selection, active

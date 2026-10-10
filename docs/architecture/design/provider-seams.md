@@ -717,11 +717,16 @@ only to explicitly unweighted AI credits. Each entry retains an immutable rate-c
 version. Missing measurements or unsupported sources remain unpriced.
 The optional HTTP consumer accepts only immutable source receipt references.
 
-The Azure BYOK adapter uses deployment token rates from Azure Retail Prices, allocates
-provisioned-throughput capacity by usage share, and may reconcile estimates with Azure Cost Management
-exports filtered by resource tags. Other meter sources provide their own pricing; unknown sources remain
-`unpriced`, not zero-cost. Sandbox compute cost is a later meter source, not part of the 1.0 model-cost
-contract.
+The Azure BYOK candidate accepts an explicitly configured, versioned Azure Retail
+Prices card with model-scoped standard input/output token rates and an explicit
+currency. It does not fetch live prices. Missing token/cache measurements,
+unsupported cache categories, unknown models, and changed bindings remain
+`unpriced`, not zero-cost; it does not quote BYOK work. Provisioned-throughput
+capacity allocation remains `unpriced` until trusted resource- and
+time-window-level usage-share evidence supplies its denominator. Optional Azure
+Cost Management reconciliation is a reporting correction only and cannot rewrite
+usage or rates. Other meter sources provide their own pricing. Sandbox compute
+cost is a later meter source, not part of the 1.0 model-cost contract.
 
 ### Budgets and combined data flow
 
@@ -751,7 +756,7 @@ flowchart LR
         U["AgentHost turn usage"] --> D["Durable usage ledger"]
         D --> M["Meter source selection"]
         M --> F["Copilot credits"]
-        M --> A["Azure BYOK rates"]
+        M --> A["Azure standard token rates; PTU share pending"]
         F --> T["Versioned estimate"]
         A --> T
         T --> B["Workflow budget limits"]
