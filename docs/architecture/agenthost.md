@@ -338,7 +338,8 @@ Exact replay reads the stored cache again and repeats that check; it does not se
 
 An abort or idle acknowledgment is not a native completion receipt.
 Missing native completion, failed accounting, changed authority, or a missing cache prevents a successful response.
-New turns, content writes, and credential refresh remain blocked after suspension starts.
+New turns, content writes, ordinary cache writes, and credential refresh remain blocked after suspension starts.
+Only the internal suspend path can capture a cache with the required current-operation check.
 Disposal, credential revocation, and Sandbox abandonment do not produce this evidence.
 This endpoint supplies native evidence only, not a completed Core suspend or resume manifest.
 Core must also resolve its checkpoint and verified Workspace content.

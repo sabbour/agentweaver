@@ -24,6 +24,36 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class RuntimeAgentHostTests
 {
     [Fact]
+    public async Task OrdinarySessionCacheWritesCannotBypassTheGuardedSuspendPath()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var material = fixture.MaterialClient();
+        var source = fixture.SourceClient();
+        await using var session = await fixture.ConfigureSessionAsync(material, timeout.Token);
+        await session.RegisterUsageAsync(source, timeout.Token);
+        var proof = new RuntimeHostSessionProof(1, session.Registration, session.SourceGrant.GrantId,
+            session.SourceGrant.Revision, RuntimeCredentialPurpose.Observe);
+        await session.SendNativeTurnAsync(fixture.Message(proof), material, source, timeout.Token);
+        await session.CommitNativeCacheAsync(material, Guid.NewGuid(), timeout.Token);
+        Assert.Equal(2, fixture.Material.Count(item => item.Kind == SessionMaterialKind.SdkCache));
+        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var receipt = await session.SuspendAsync(
+            material, request, token => fixture.RequireCurrentSuspendAsync(request, token), timeout.Token);
+        Assert.Equal(3, fixture.Material.Count(item => item.Kind == SessionMaterialKind.SdkCache));
+        var writes = fixture.Material.Count;
+
+        Assert.Equal("runtime_session_suspended",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                session.CommitNativeCacheAsync(material, Guid.NewGuid(), timeout.Token))).Code);
+        Assert.Equal(writes, fixture.Material.Count);
+        Assert.Equal(receipt, await session.SuspendAsync(
+            material, request, token => fixture.RequireCurrentSuspendAsync(request, token), timeout.Token));
+        Assert.Equal(writes, fixture.Material.Count);
+        Assert.Single(fixture.Sdk.Requests, rpc => rpc.Method == "session.send");
+    }
+
+    [Fact]
     public async Task NativeSuspendWaitsForTheAdmittedTurnAndReplaysTheExactDurableCacheReceipt()
     {
         await using var fixture = new HostFixture(workflowBound: true);
@@ -882,6 +912,33 @@ public sealed class RuntimeAgentHostTests
         }
         public RuntimeHostSessionProof Proof(RuntimeHostReadinessReceipt ready) =>
             new(1, Configure.Registration, ready.SourceGrant.GrantId, ready.SourceGrant.Revision, RuntimeCredentialPurpose.Observe);
+        public RuntimeSessionMaterialHttpClient MaterialClient() => new(_http, new("https://events.test/"), Actor);
+        public RuntimeUsageSourceHttpClient SourceClient() => new(_http, new("https://orchestrator.test/"), Actor);
+        public async Task<AuthorizedRuntimeSession> ConfigureSessionAsync(
+            RuntimeSessionMaterialHttpClient material, CancellationToken token)
+        {
+            var credential = new SecretCredential(new string('c', 64), Configure.Registration.ExpiresAt, Time);
+            try
+            {
+                var owner = new RuntimeRegistrationHttpClient(_http, new("https://orchestrator.test/"));
+                var broker = new RuntimeBrokerCredentialClient(
+                    _http, new("https://broker.test/"), Configure.Registration.Binding.ActorIssuer, Actor, Time);
+                var bootstrap = new RuntimeSessionBootstrap(owner, broker, RuntimeCopilotSessionTests.Factory(Sdk),
+                    Actor, Time, Image, material, new(_http, new("https://orchestrator.test/"), Actor));
+                return await bootstrap.ConfigureAsync(Encoding.UTF8.GetBytes(Configure.Configuration.GetRawText()),
+                    new(_bootstrap, Configure.Registration.RuntimeInstanceId, 1, RuntimeCredentialPurpose.Configure,
+                        Configure.Registration.Binding.ConfigureEndpoint, _hash, credential),
+                    Configure.ConsumeOperationId, Configure.ExchangeOperationId, token);
+            }
+            finally
+            {
+                credential.Invalidate();
+            }
+        }
+        public async Task RequireCurrentSuspendAsync(RuntimeHostSuspendRequest request, CancellationToken token) =>
+            Assert.Equal(request, await RuntimeOwnerHttpTransport.SendAsync<RuntimeHostSuspendRequest>(
+                _http, new("https://orchestrator.test/"), "/internal/runtime/suspend/require-current",
+                Actor, request, token));
         public RuntimeA2ASendRequest Message(RuntimeHostSessionProof proof,
             AddressedMessageDeliveryMode mode = AddressedMessageDeliveryMode.Enqueue) =>
             new(new("message", Guid.NewGuid(), RuntimeContractValidation.NativeSessionId(proof.Registration.Binding),
