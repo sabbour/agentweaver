@@ -462,6 +462,79 @@ after fresh Projects/Core checks. It does not approve a merge or trigger an
 unauthorized effect. Direct unauthenticated GitHub delivery is denied until a
 trusted relay identity is separately deployed.
 
+## Reviewed remote tool data
+
+The Core contracts bind a reviewed remote tool to one project, agent, and node.
+The immutable snapshot retains connection, configuration, catalog, tool, schema,
+and permission values with their revisions and digests. It contains no credentials.
+Its snapshot digest covers these values, including the endpoint, resource URI,
+authentication mode, Identity reference, and transport profile.
+
+`ReviewedRemoteToolCall.Create` requires the exact reviewed agent, node, and tool.
+It combines the snapshot with the supplied runtime registration, actor, tenant,
+run, session, step, accepted-selection hash, and execution fence.
+It sorts JSON object properties and rejects duplicate property names.
+The event ID is stable for one project, run, session, step, and native call ID.
+The input hash also covers the full snapshot, execution binding, and arguments.
+Changing the input preserves the event ID but changes its input hash.
+
+The internal snapshot store persists and resolves exact snapshot references.
+It rejects conflicting reuse of a snapshot ID and checks the stored digest and
+identity fields on every read. The embedded 018 SQL resource rejects row updates
+and deletes. The normal owner migration path does not yet apply that resource.
+PostgreSQL tests apply it directly and check persistence, conflicts, corruption,
+and rejected row changes.
+
+The result envelope retains opaque content and matching execution metadata.
+Its constructor does not verify a current grant or a durable Events acknowledgment.
+This source does not add Projects configuration references, selection resolution,
+a current connection read, credential use, or native remote dispatch.
+Those checks must be integrated before any protected remote request can be sent.
+A matching data object is not permission to send a request.
+
+```mermaid
+classDiagram
+    class ReviewedRemoteToolSnapshot {
+        +ConnectionConfigurationAndReview
+        +SnapshotDigest
+    }
+    class ReviewedRemoteToolSnapshotReference {
+        +ProjectId
+        +SnapshotId
+        +SnapshotDigest
+        +AgentId
+        +NodeId
+    }
+    class ReviewedRemoteToolSnapshotStore {
+        +PersistImmutableSnapshot
+        +ResolveExactReference
+    }
+    class RemoteToolCallExecutionBinding {
+        +RuntimeActorAndRun
+        +AcceptedSelectionHash
+        +ExecutionFence
+    }
+    class ReviewedRemoteToolCall {
+        +EventId
+        +InputHash
+        +CanonicalArguments
+    }
+    class RemoteToolCallAuthorityBinding {
+        +ExecutionMetadata
+        +GrantIdAndRevision
+    }
+    class RemoteToolResultEnvelope {
+        +OperationId
+        +OpaqueContent
+    }
+    ReviewedRemoteToolSnapshot --> ReviewedRemoteToolSnapshotReference : exact identity
+    ReviewedRemoteToolSnapshotReference ..> ReviewedRemoteToolSnapshotStore : exact row lookup
+    ReviewedRemoteToolSnapshot --> ReviewedRemoteToolCall : reviewed input
+    RemoteToolCallExecutionBinding --> ReviewedRemoteToolCall : execution input
+    ReviewedRemoteToolCall --> RemoteToolResultEnvelope : result context
+    RemoteToolCallAuthorityBinding --> RemoteToolResultEnvelope : metadata match only
+```
+
 ## Rules in code
 
 The 0.x coordinator charter and runtime prompts mix enforceable procedure with

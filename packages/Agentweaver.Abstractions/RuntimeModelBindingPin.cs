@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Agentweaver.Abstractions;
 
 public sealed record RuntimeModelBindingPin(
@@ -6,4 +8,8 @@ public sealed record RuntimeModelBindingPin(
     string ModelId,
     ModelSourceMode SourceMode,
     string ConfigurationRevision,
-    string ConfigurationHash);
+    string ConfigurationHash)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ProviderType { get; init; }
+}

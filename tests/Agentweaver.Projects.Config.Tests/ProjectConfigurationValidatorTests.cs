@@ -73,6 +73,37 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void ByokBindingPinMustMatchTheAcceptedModelReferenceAndProvider()
+    {
+        var pin = new RuntimeModelBindingPin(1, "byok-model", "azure-deployment", ModelSourceMode.Byok,
+            "bindings-v1", new string('a', 64)) { ProviderType = "azure" };
+        var project = new ProjectConfiguration
+        {
+            ModelSelection = new("byok-model", new SecretRef("model-key", "version-1"), ModelSourceMode.Byok)
+            {
+                ModelBindingPin = pin
+            }
+        };
+        Assert.Equal(pin, ProjectConfigurationValidator.Validate(project).ModelSelection!.ModelBindingPin);
+        foreach (var changed in new[]
+        {
+            pin with { ModelSelectionReference = "foreign" },
+            pin with { SourceMode = ModelSourceMode.HostedCopilot },
+            pin with { ProviderType = null },
+            pin with { ConfigurationHash = "invalid" },
+            pin with { ConfigurationHash = new string('A', 64) },
+            pin with { ModelId = "invalid model" },
+            pin with { ConfigurationRevision = new string('a', 257) }
+        })
+            Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(project with
+            {
+                ModelSelection = project.ModelSelection! with { ModelBindingPin = changed }
+            }));
+        Assert.DoesNotContain("modelBindingPin", JsonSerializer.Serialize(
+            new ModelSelectionSettings("legacy"), new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    }
+
+    [Fact]
     public void NormalizesEgressAndAllowsOnlySubsetWithRequiredDestinations()
     {
         var baseline = ProjectConfigurationValidator.Validate(PlatformDefaults()).EgressBaseline;
@@ -269,6 +300,67 @@ public sealed class ProjectConfigurationValidatorTests
         Assert.DoesNotContain("\"authMode\"", json, StringComparison.Ordinal);
         Assert.DoesNotContain("\"identityConnectionId\"", json, StringComparison.Ordinal);
         Assert.DoesNotContain("tokenValue", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReviewedRemoteToolReferencesAreOptionalAndPreserveLegacyConfigurationJson()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var legacy = ProjectConfigurationValidator.Validate(new ProjectConfiguration());
+        var legacyJson = JsonSerializer.Serialize(legacy, options);
+        Assert.Equal(
+            """{"modelSelection":null,"providerOverrides":[],"orderedProviderOverrides":[],"agentCharters":[],"casting":[],"blueprintWorkflowReferences":[],"defaultWorkflowId":null,"skills":[],"egressNarrowing":null,"runLimits":{"maxModelTurns":null,"maxToolCalls":null,"maxChildren":null,"maxConcurrentChildren":null,"maxWallTimeSeconds":null,"maxPromptTokens":null}}""",
+            legacyJson);
+
+        var reference = new ReviewedRemoteToolSnapshotReference(
+            "project-1",
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            new string('a', 64),
+            "agent-1",
+            "node-1");
+        var configuration = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            ReviewedRemoteToolSnapshots = ImmutableArray.Create(reference),
+        });
+        var serialized = JsonSerializer.Serialize(configuration, options);
+        var restored = JsonSerializer.Deserialize<ProjectConfiguration>(serialized, options)!;
+        var restoredReference = Assert.Single(restored.ReviewedRemoteToolSnapshots!.Value);
+
+        Assert.Equal(reference.ProjectId, restoredReference.ProjectId);
+        Assert.Equal(reference.SnapshotId, restoredReference.SnapshotId);
+        Assert.Equal(reference.SnapshotDigest, restoredReference.SnapshotDigest);
+        Assert.Equal(reference.AgentId, restoredReference.AgentId);
+        Assert.Equal(reference.NodeId, restoredReference.NodeId);
+    }
+
+    [Fact]
+    public void ReviewedRemoteToolReferencesRejectDefaultNullAndDuplicateEntries()
+    {
+        var reference = new ReviewedRemoteToolSnapshotReference(
+            "project-1",
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            new string('a', 64),
+            "agent-1",
+            "node-1");
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(
+            new ProjectConfiguration
+            {
+                ReviewedRemoteToolSnapshots =
+                    (ImmutableArray<ReviewedRemoteToolSnapshotReference>?)default(
+                        ImmutableArray<ReviewedRemoteToolSnapshotReference>),
+            }));
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(
+            new ProjectConfiguration
+            {
+                ReviewedRemoteToolSnapshots =
+                    ImmutableArray.Create<ReviewedRemoteToolSnapshotReference>(
+                        new ReviewedRemoteToolSnapshotReference[] { null! }),
+            }));
+        Assert.Throws<ProjectConfigException>(() => ProjectConfigurationValidator.Validate(
+            new ProjectConfiguration
+            {
+                ReviewedRemoteToolSnapshots = ImmutableArray.Create(reference, reference),
+            }));
     }
 
     [Fact]

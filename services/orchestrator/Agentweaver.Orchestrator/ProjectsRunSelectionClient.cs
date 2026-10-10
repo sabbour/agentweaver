@@ -3,13 +3,15 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
 internal sealed class ProjectsRunSelectionClient(
     HttpClient httpClient,
-    OrchestratorOptions options)
+    OrchestratorOptions options,
+    IReviewedRemoteToolSnapshotResolver snapshotStore)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -123,6 +125,8 @@ internal sealed class ProjectsRunSelectionClient(
                 string.IsNullOrWhiteSpace(contextRevision.GetString()))
                 throw new CoordinationException(
                     "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+            await ResolveReviewedRemoteToolSnapshotsAsync(
+                root, projectId, cancellationToken).ConfigureAwait(false);
             if (refreshAuthority)
             {
                 authorization = await ReadAuthorizationAsync(owner, bearer, tenant, cancellationToken)
@@ -154,6 +158,69 @@ internal sealed class ProjectsRunSelectionClient(
                 authorization);
         }
     }
+
+    private async Task ResolveReviewedRemoteToolSnapshotsAsync(
+        JsonElement selection,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        if (!selection.TryGetProperty("projectConfiguration", out var projectConfiguration) ||
+            projectConfiguration.ValueKind == JsonValueKind.Null)
+            return;
+        if (projectConfiguration.ValueKind != JsonValueKind.Object)
+            throw InvalidReviewedRemoteToolSelection();
+        if (!projectConfiguration.TryGetProperty("reviewedRemoteToolSnapshots", out var references) ||
+            references.ValueKind == JsonValueKind.Null)
+            return;
+        if (references.ValueKind != JsonValueKind.Array)
+            throw InvalidReviewedRemoteToolSelection();
+
+        var seen = new HashSet<(string ProjectId, Guid SnapshotId)>();
+        foreach (var element in references.EnumerateArray())
+        {
+            if (element.ValueKind != JsonValueKind.Object)
+                throw InvalidReviewedRemoteToolSelection();
+
+            ReviewedRemoteToolSnapshotReference reference;
+            try
+            {
+                reference = JsonSerializer.Deserialize<ReviewedRemoteToolSnapshotReference>(
+                    element.GetRawText(), JsonOptions)
+                    ?? throw new JsonException();
+            }
+            catch (JsonException)
+            {
+                throw InvalidReviewedRemoteToolSelection();
+            }
+            catch (ArgumentException)
+            {
+                throw InvalidReviewedRemoteToolSelection();
+            }
+
+            if (reference.ProjectId != projectId ||
+                !seen.Add((reference.ProjectId, reference.SnapshotId)))
+                throw InvalidReviewedRemoteToolSelection();
+
+            ReviewedRemoteToolSnapshot? resolved;
+            try
+            {
+                resolved = await snapshotStore.ResolveAsync(reference, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                exception is InvalidOperationException or JsonException or ArgumentException)
+            {
+                throw new CoordinationException(
+                    "reviewed_remote_tool_snapshot_invalid", StatusCodes.Status502BadGateway);
+            }
+            if (resolved is null)
+                throw new CoordinationException(
+                    "reviewed_remote_tool_snapshot_unavailable", StatusCodes.Status409Conflict);
+        }
+    }
+
+    private static CoordinationException InvalidReviewedRemoteToolSelection() =>
+        new("projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
 
     private async Task<ProjectsAuthorizationContext> ReadAuthorizationAsync(
         Uri owner,

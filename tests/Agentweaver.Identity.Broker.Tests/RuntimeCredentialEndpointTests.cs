@@ -163,12 +163,19 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
         })
             Assert.DoesNotContain(secret, string.Join('\n', factory.LogMessages));
 
+        var byokModels = new RuntimeModelBindingsResolver("legacy-unversioned",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
+                    new RuntimeByokProvider("openai", new Uri("https://byok.test/v1"), "responses"))
+            });
         owner.Registration = owner.Registration with
         {
             Binding = owner.Registration.Binding with
             {
                 ModelSelectionReference = "accepted-model-reference",
                 ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = byokModels.Pin("accepted-model-reference", ModelSourceMode.Byok),
                 ModelCredentialReference = new SecretRef("model-api", "model-v1")
             }
         };
