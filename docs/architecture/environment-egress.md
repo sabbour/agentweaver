@@ -115,6 +115,9 @@ mediation for `PublicHttps` or `RemoteMcp`, so those requirements fail rather
 than becoming a blanket HTTPS rule. This slice contains no L7 adapter; if the
 immutable selection contains an L7 candidate, the operation also fails
 explicitly rather than silently ignoring or pinning an unapplied layer.
+The Environment connection and parser source boundary is described in
+[Remote MCP connections](remote-mcp-connections.md). It does not add L7
+mediation or prove a remote MCP request.
 
 The Cilium adapter assigns a hashed environment/owner selector and derives its
 resource name from the full owner tuple. It applies a positive policy generation

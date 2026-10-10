@@ -13,10 +13,18 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
     internal DbSet<EnvironmentOwnerEffectRow> OwnerEffects => Set<EnvironmentOwnerEffectRow>();
     internal DbSet<EnvironmentWorkspaceVolumeCleanupRow> WorkspaceVolumeCleanup =>
         Set<EnvironmentWorkspaceVolumeCleanupRow>();
+    internal DbSet<RemoteMcpConnectionRow> RemoteMcpConnections => Set<RemoteMcpConnectionRow>();
+    internal DbSet<RemoteMcpConnectionConfigurationRow> RemoteMcpConnectionConfigurations =>
+        Set<RemoteMcpConnectionConfigurationRow>();
+    internal DbSet<RemoteMcpCatalogSnapshotRow> RemoteMcpCatalogSnapshots =>
+        Set<RemoteMcpCatalogSnapshotRow>();
+    internal DbSet<RemoteMcpConnectionIdempotencyRow> RemoteMcpConnectionIdempotency =>
+        Set<RemoteMcpConnectionIdempotencyRow>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);
+        RemoteMcpConnectionModel.Configure(modelBuilder);
 
         modelBuilder.Entity<EnvironmentOwnerRow>(entity =>
         {

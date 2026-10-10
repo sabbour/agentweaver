@@ -84,6 +84,7 @@ builder.Services.AddDbContext<EnvironmentDbContext>((services, options) =>
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
 builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
+builder.Services.AddScoped<RemoteMcpConnectionStore>();
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
 builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
@@ -188,6 +189,7 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
     }
 });
 app.MapEnvironmentEndpoints();
+app.MapRemoteMcpConnectionEndpoints();
 app.Run();
 
 static CiliumEgressProviderOptions ReadCiliumOptions(IConfiguration configuration)
