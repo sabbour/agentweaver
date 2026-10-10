@@ -309,7 +309,9 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     private RuntimeUsageSourceStore SourceStore() => new(fixture.DataSource, _options, TimeProvider.System);
 
     private ExecutableActionGrantOwnerStore GrantStore() => new(
-        fixture.DataSource, _options, TimeProvider.System, new ProjectsRunSelectionClient(_projectsHttp, _options),
+        fixture.DataSource, _options, TimeProvider.System,
+        new ProjectsRunSelectionClient(
+            _projectsHttp, _options, new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema)),
         new HttpContextAccessor { HttpContext = _context });
 
     private Task<ExecutableActionGrantReference> IssueAsync(int index, RuntimeActionRequest request) =>

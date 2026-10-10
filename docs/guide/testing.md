@@ -127,6 +127,17 @@ dotnet test tests\Agentweaver.Knowledge.Tests\Agentweaver.Knowledge.Tests.csproj
 Do not set the opt-in flag until all instance, image, volume, endpoint, and ownership
 values are confirmed. The native filter is not part of offline test runs.
 
+## Reviewed remote-tool selection
+
+Reviewed remote-tool selection tests use the actual Projects selection reader with
+controlled owner responses and a controlled immutable-store resolver. They cover
+exact references, duplicate and foreign references, missing or changed snapshots,
+and authority loss after resolution. Project validators reject duplicate references
+and retain the omitted legacy field. The numeric-limit PostgreSQL tests use the
+concrete snapshot store and preserve existing grant and limit behavior.
+These checks do not prove production migration activation, current remote-connection
+authority, credential access, applied L7 enforcement, or a protected remote call.
+
 ## Meter-keyed Cost source selection
 
 Provider tests cover independent enabled selections, duplicate/disabled/wrong-seam

@@ -288,9 +288,12 @@ Reviewed remote tool contracts retain immutable snapshot data, exact call identi
 canonical arguments, and matching result metadata. The internal snapshot store checks
 the full stored snapshot digest and rejects conflicting reuse of an ID. Its embedded
 018 SQL resource is tested directly but is not registered in the normal migration path.
-These data contracts do not resolve current Projects selection references, verify a
-current remote connection or per-call grant, or authorize credential use or native
-network requests.
+The accepted Projects configuration may carry exact `reviewedRemoteToolSnapshots`
+references. Orchestrator resolves these references against the immutable store and
+checks the stored digest, project, and exact reference. It refreshes Projects authority
+after resolution and rejects missing, changed, duplicate, or foreign references.
+These checks do not verify a current remote connection or per-call grant.
+They do not authorize credential use or native network requests.
 
 Typed action mutations use strict request contracts, expected state versions, and
 idempotency keys. Proposing or revising non-empty or fixed work requires the server's
