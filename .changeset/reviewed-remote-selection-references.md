@@ -1,4 +1,7 @@
 ---
+"Agentweaver.Abstractions": minor
+"Agentweaver.Orchestrator": minor
+"Agentweaver.Projects.Config": minor
 ---
 
 Retain exact project-scoped remote-tool snapshot references in accepted run configuration.
