@@ -202,6 +202,83 @@ describe('Gateway API client', () => {
     ]);
   });
 
+  it('uses the public Skills and marketplace routes with owner-shaped requests', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(
+      async () => new Response('{}', { status: 200 }),
+    );
+    const client = new AgentweaverGatewayClient('https://gateway.example.test/api/v1', fetcher);
+    const candidate = { skillMarkdown: 'IyBUZXN0', resources: [] };
+
+    await client.listMarketplaceSources('token', 'project/1', 'tenant-1');
+    await client.createMarketplaceSource('token', 'project/1', {
+      repository: 'example/skills',
+      requestedRef: 'main',
+    }, 'tenant-1');
+    await client.updateMarketplaceSource('token', 'project/1', 'source/1', {
+      expectedRevision: 4,
+      repository: 'example/skills',
+    }, 'tenant-1');
+    await client.removeMarketplaceSource('token', 'project/1', 'source/1', 5, 'tenant-1');
+    await client.browseMarketplaceSource('token', 'project/1', 'source/1', {
+      expectedSourceRevision: 6,
+      query: 'skill author',
+      page: 2,
+      pageSize: 10,
+    }, 'tenant-1');
+    await client.previewSkillContent('token', candidate, 'tenant-1');
+    await client.importSkillContent('token', 'project/1', {
+      idempotencyKey: 'upload-intent',
+      expectedContentDigest: 'sha256:digest',
+      candidate,
+    }, 'tenant-1');
+    await client.updateSkillAssignment('token', 'project/1', 'skill/1', {
+      expectedProjectConfigurationRevision: 8,
+      revision: 3,
+      contentDigest: 'sha256:digest',
+      enabled: true,
+      order: 0,
+      agentIds: ['agent-1'],
+    }, 'tenant-1');
+
+    expect(fetcher.mock.calls.map(([url, init]) => [
+      String(url),
+      init?.method ?? 'GET',
+      init?.body ? JSON.parse(String(init.body)) : undefined,
+      new Headers(init?.headers).get('X-Agentweaver-Tenant'),
+      init?.cache,
+    ])).toEqual([
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skill-marketplaces/sources', 'GET', undefined, 'tenant-1', 'no-store'],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skill-marketplaces/sources', 'POST', {
+        repository: 'example/skills',
+        requestedRef: 'main',
+      }, 'tenant-1', 'no-store'],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skill-marketplaces/sources/source%2F1', 'PUT', {
+        expectedRevision: 4,
+        repository: 'example/skills',
+      }, 'tenant-1', 'no-store'],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skill-marketplaces/sources/source%2F1?expectedRevision=5', 'DELETE', undefined, 'tenant-1', 'no-store'],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skill-marketplaces/sources/source%2F1/browse?expectedSourceRevision=6&query=skill+author&page=2&pageSize=10', 'GET', undefined, 'tenant-1', 'no-store'],
+      ['https://gateway.example.test/api/v1/skills/preview', 'POST', { candidate }, 'tenant-1', 'no-store'],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skills/import', 'POST', {
+        idempotencyKey: 'upload-intent',
+        expectedContentDigest: 'sha256:digest',
+        candidate,
+      }, 'tenant-1', 'no-store'],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skills/skill%2F1/assignment', 'PUT', {
+        expectedProjectConfigurationRevision: 8,
+        revision: 3,
+        contentDigest: 'sha256:digest',
+        enabled: true,
+        order: 0,
+        agentIds: ['agent-1'],
+      }, 'tenant-1', 'no-store'],
+    ]);
+    for (const [, init] of fetcher.mock.calls) {
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer token');
+      expect(init?.credentials).toBe('omit');
+    }
+  });
+
   it('can replay a user intent with the same coordinator key', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(
       async () => new Response('{}', { status: 200 }),

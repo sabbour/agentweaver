@@ -22,6 +22,14 @@ internal static partial class GatewayOpenApi
             ["updateProject"] = C("UpdateProjectRequest", "ProjectSummary", "200"),
             ["getProjectConfiguration"] = C(null, "VersionedProjectConfiguration", "200"),
             ["updateProjectConfiguration"] = C("UpdateProjectConfigurationRequest", "VersionedProjectConfiguration", "200"),
+            ["listMarketplaceSources"] = C(null, "MarketplaceSourceList", "200"),
+            ["createMarketplaceSource"] = C("CreateMarketplaceSourceRequest", "MarketplaceSource", "201"),
+            ["updateMarketplaceSource"] = C("UpdateMarketplaceSourceRequest", "MarketplaceSource", "200"),
+            ["removeMarketplaceSource"] = C(null, "MarketplaceSource", "200"),
+            ["browseMarketplaceSource"] = C(null, "MarketplaceBrowsePage", "200"),
+            ["previewSkillContent"] = C("PreviewSkillContentRequest", "SkillContentPreview", "200"),
+            ["importProjectSkill"] = C("ImportSkillContentRequest", "SkillContentImportReceipt", "200"),
+            ["updateProjectSkillAssignment"] = C("UpdateSkillAssignmentRequest", "VersionedProjectConfiguration", "200"),
             ["getAuthorizationContext"] = C(null, "ProjectAuthorizationContext", "200"),
             ["acceptRunSelection"] = C("AcceptRunSelectionRequest", "EffectiveRunSelection", "200"),
             ["getRunSelection"] = C(null, "EffectiveRunSelection", "200"),
@@ -166,8 +174,8 @@ internal static partial class GatewayOpenApi
             {
                 name,
                 @in = "query",
-                required = false,
-                schema = QuerySchema(name),
+                required = IsRequiredQueryParameter(route.OperationId, name),
+                schema = QuerySchema(route.OperationId, name),
             }))
             .ToArray();
         if (route.ForwardTenantSelector || route.RequiresTenantSelector)
@@ -317,14 +325,25 @@ internal static partial class GatewayOpenApi
         _ => new { type = "string" },
     };
 
-    private static object QuerySchema(string name) => name switch
+    private static bool IsRequiredQueryParameter(string operationId, string name) =>
+        operationId == "removeMarketplaceSource" && name == "expectedRevision" ||
+        operationId == "browseMarketplaceSource" && name == "expectedSourceRevision";
+
+    private static object QuerySchema(string operationId, string name)
     {
-        "limit" or "page" or "pageSize" or "maxItems" or "maxTokens" or "maximumEvents" or
-            "maximumDurationSeconds" or "revision" => new { type = "integer" },
-        "includeInactive" => new { type = "boolean" },
-        "kind" => Enum("memory", "proposal", "decision", "sessionContext"),
-        _ => new { type = "string" },
-    };
+        if ((operationId == "removeMarketplaceSource" && name == "expectedRevision") ||
+            (operationId == "browseMarketplaceSource" && name == "expectedSourceRevision"))
+            return Int();
+
+        return name switch
+        {
+            "limit" or "page" or "pageSize" or "maxItems" or "maxTokens" or "maximumEvents" or
+                "maximumDurationSeconds" or "revision" => new { type = "integer" },
+            "includeInactive" => new { type = "boolean" },
+            "kind" => Enum("memory", "proposal", "decision", "sessionContext"),
+            _ => new { type = "string" },
+        };
+    }
 
     private static OperationContract GetContract(GatewayRoute route) =>
         OperationContracts.TryGetValue(route.OperationId, out var contract)
@@ -400,6 +419,53 @@ internal static partial class GatewayOpenApi
             ("updatedByActorId", Str()), ("createdAt", Date())),
         ["UpdateProjectConfigurationRequest"] = Obj(["expectedRevision", "configuration"],
             ("expectedRevision", Int()), ("configuration", Ref("ProjectConfiguration"))),
+        ["MarketplaceSource"] = Obj(
+            ["sourceId", "name", "repository", "requestedRef", "subpath", "revision", "state"],
+            ("sourceId", Uuid()), ("name", Str()), ("repository", Str()), ("requestedRef", Str()),
+            ("subpath", NullableStr()), ("revision", Int()), ("state", Enum("active", "removed"))),
+        ["MarketplaceSourceList"] = Arr(Ref("MarketplaceSource")),
+        ["CreateMarketplaceSourceRequest"] = StrictObj(["repository"],
+            ("name", NullableStr()), ("repository", Str()), ("requestedRef", NullableStr()),
+            ("subpath", NullableStr())),
+        ["UpdateMarketplaceSourceRequest"] = StrictObj(["expectedRevision", "repository"],
+            ("expectedRevision", Int()), ("name", NullableStr()), ("repository", Str()),
+            ("requestedRef", NullableStr()), ("subpath", NullableStr())),
+        ["MarketplaceBrowseCandidate"] = Obj(["location", "name", "description"],
+            ("location", Str()), ("name", Str()), ("description", NullableStr())),
+        ["MarketplaceBrowsePage"] = Obj(
+            ["sourceId", "sourceRevision", "requestedRef", "resolvedCommitSha", "candidates",
+                "total", "page", "pageSize", "hasMore"],
+            ("sourceId", Uuid()), ("sourceRevision", Int()), ("requestedRef", Str()),
+            ("resolvedCommitSha", Str()), ("candidates", Arr(Ref("MarketplaceBrowseCandidate"))),
+            ("total", Int()), ("page", Int()), ("pageSize", Int()), ("hasMore", Bool())),
+        ["SkillContentResourceRequest"] = StrictObj(["relativePath", "content"],
+            ("relativePath", Str()), ("content", Base64Bytes())),
+        ["SkillContentCandidateRequest"] = StrictObj(["skillMarkdown", "resources"],
+            ("skillMarkdown", Base64Bytes()),
+            ("resources", BoundedArray(Ref("SkillContentResourceRequest"), 0, 64))),
+        ["PreviewSkillContentRequest"] = StrictObj(["candidate"],
+            ("candidate", Ref("SkillContentCandidateRequest"))),
+        ["SkillContentPreview"] = Obj(
+            ["name", "description", "contentDigest", "resourceCount", "totalBytes"],
+            ("name", Str()), ("description", Str()), ("contentDigest", Str()),
+            ("resourceCount", Int()), ("totalBytes", Int())),
+        ["SkillContentSourceSelection"] = StrictObj(
+            ["sourceId", "sourceRevision", "requestedRef", "resolvedCommitSha", "selectedPath"],
+            ("sourceId", Str()), ("sourceRevision", Str()), ("requestedRef", Str()),
+            ("resolvedCommitSha", Str()), ("selectedPath", Str())),
+        ["ImportSkillContentRequest"] = StrictObj(
+            ["idempotencyKey", "expectedContentDigest", "candidate"],
+            ("idempotencyKey", Str()), ("expectedContentDigest", Str()), ("skillId", NullableStr()),
+            ("expectedRevision", NullableInt()), ("source", NullableRef("SkillContentSourceSelection")),
+            ("candidate", Ref("SkillContentCandidateRequest"))),
+        ["SkillContentImportReceipt"] = Obj(
+            ["skillId", "revision", "name", "description", "contentDigest", "resourceCount", "totalBytes"],
+            ("skillId", Str()), ("revision", Int()), ("name", Str()), ("description", Str()),
+            ("contentDigest", Str()), ("resourceCount", Int()), ("totalBytes", Int())),
+        ["UpdateSkillAssignmentRequest"] = StrictObj(
+            ["expectedProjectConfigurationRevision", "revision", "contentDigest", "enabled", "order", "agentIds"],
+            ("expectedProjectConfigurationRevision", Int()), ("revision", Int()), ("contentDigest", Str()),
+            ("enabled", Bool()), ("order", Int()), ("agentIds", Arr(Str()))),
         ["ProjectConfiguration"] = Obj([],
             ("modelSelection", NullableRef("ModelSelectionSettings")),
             ("providerOverrides", Arr(Ref("ProjectProviderOverride"))),
@@ -489,7 +555,8 @@ internal static partial class GatewayOpenApi
         ["BlueprintWorkflowReference"] = Obj(["blueprintId", "workflowId"],
             ("blueprintId", Str()), ("workflowId", Str())),
         ["SkillCatalogSetting"] = Obj(["skillId", "enabled", "order"],
-            ("skillId", Str()), ("enabled", Bool()), ("order", Int())),
+            ("skillId", Str()), ("enabled", Bool()), ("order", Int()), ("revision", NullableInt()),
+            ("contentDigest", NullableStr()), ("agentIds", Nullable(Arr(Str())))),
         ["CopilotRunLimitOverrides"] = Obj([],
             ("maxModelTurns", NullableInt()), ("maxToolCalls", NullableInt()), ("maxChildren", NullableInt()),
             ("maxConcurrentChildren", NullableInt()), ("maxWallTimeSeconds", NullableInt()),
@@ -887,6 +954,7 @@ internal static partial class GatewayOpenApi
     private static object Int() => new { type = "integer", format = "int64" };
     private static object Number() => new { type = "number" };
     private static object Bool() => new { type = "boolean" };
+    private static object Base64Bytes() => new { type = "string", contentEncoding = "base64" };
     private static object Uuid() => new { type = "string", format = "uuid" };
     private static object Date() => new { type = "string", format = "date-time" };
     private static object Enum(params string[] values) => new { type = "string", @enum = values };

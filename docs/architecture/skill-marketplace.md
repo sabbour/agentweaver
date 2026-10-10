@@ -116,10 +116,20 @@ already accepted bytes. The Projects source reader is implemented, while its
 preview/import route composition with the Skills service is still being
 integrated in this candidate.
 
-These Projects owner routes are an unpublished service candidate. Gateway,
-OpenAPI, first-party MCP, and retained-web consumer wiring is tracked by their
-owners; this source document is not evidence that the public journey or deployed
-runtime is available.
+The checked-in v1 Gateway catalog maps source list/create/update/tombstone,
+pinned browse, Skills preview/import, and project assignment to these Projects
+owner paths. Its OpenAPI contract includes the owner DTOs, exact required source
+revision query values, and 3 MiB limits for preview/import. The first-party MCP
+catalog is built from that same OpenAPI document.
+
+The retained Web project settings page uses those routes for source management
+and pinned browse. It supports local file preview/import and assignment to agents
+in the current project cast. Marketplace source import remains disabled because
+the public browse response does not include the selected manifest and resources.
+The API also has no actor-safe runtime-loaded status producer; the page reports
+that gap instead of inferring runtime use from an assignment or accepted run
+configuration. These checked-in sources do not establish that the services or
+the complete journey have been published or deployed.
 
 ## Validation
 
