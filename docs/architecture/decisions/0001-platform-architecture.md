@@ -46,6 +46,8 @@ than moving those cross-module dependencies between processes.
   Microsoft Agent Framework (MAF) workflows validate and execute its plans.
 - Unify live previews, durable previews, and published applications, and
   introduce typed surfaces within Agentweaver's own user experience.
+- Host portable installed agent applications through existing owners, with
+  verified bundles, immutable configuration, and explicit lifecycle operations.
 - Track 0.x capabilities through an auditable parity map while 0.x stays active.
 
 **Non-goals**
@@ -74,7 +76,8 @@ than moving those cross-module dependencies between processes.
 | UX | Keep Agentweaver's run page, topology, approvals, and chat; add a canvas-like surface panel without adopting the Copilot app's UI. |
 | Orchestration | Require step catalogs and step-snapped WorkPlans; typed coordinator proposals undergo schema, policy, and workflow validation. |
 | Applications | One application model has `live`, `preview`, and `published` stages; Application Hosting serves durable stages. |
-| Surfaces | Render application, Agent-to-User Interface (A2UI), MCP App, and built-in surfaces; agents use typed `surface_*` tools. |
+| Installed agent applications | Planned post-core extension: distribute digest-pinned OCI bundles and bind them through existing owners. Installation references are not resource-bound run pins. No new service or provider seam. |
+| Surfaces | Render application, Agent-to-User Interface (A2UI), MCP App, and built-in surfaces. Proposed `ICanvasProvider` with native/MCP Apps adapters implements typed `surface_*` actions inside existing owners, not a sixteenth infrastructure seam. |
 | Neutrality | Use Agentweaver vocabulary in contracts. Include a concept only when two providers need it; Azure is a default, not a contractual assumption. |
 | Services and release | Use roughly ten coarse services, owned Postgres schemas, gRPC/HTTP, and an outbox. Release per-service semver versions as one tested manifest with N-1 compatibility (the preceding contract version). |
 
@@ -209,7 +212,8 @@ cardinality, contracts, pinning, conformance, and enforcement in detail.
 | [Provider seams](../design/provider-seams.md) | Provider contracts, 15 seams, adapter selection, capabilities, security invariants, and conformance. |
 | [Sessions and coordination](../design/sessions-and-coordination.md) | Journal and Copilot session state, suspend/resume consistency, nested sessions, messages, and knowledge records. |
 | [Orchestration](../design/orchestration.md) | Thin coordinator, typed decisions, step catalogs, step-snapped plans, and deterministic MAF gates. |
-| [Applications and surfaces](../design/applications-and-surfaces.md) | The `live`/`preview`/`published` application lifecycle, hosting, and surface panel. |
+| [Applications and surfaces](../design/applications-and-surfaces.md) | The `live`/`preview`/`published` application lifecycle, hosting, Canvas provider contract and concrete adapter targets, surface panel, and P2 delivery slices. |
+| [Installed agent applications](../design/agent-application-bundles.md) | Proposed portable bundles, project installations, activation, real-run binding, upgrade/uninstall, OCI distribution, and post-core acceptance. |
 | [Services and release](../design/services-and-release.md) | Control/data-plane decomposition, owned schemas, versioning, manifests, and delivery. |
 
 ## Delivery strategy
@@ -352,6 +356,43 @@ Run-grant redemption composition (#1783) and Azure proof (#1790) remain separate
   Agent Substrate, Cosmos memory, agentsessions, filesystem providers for agents,
   agentgateway, Azure Container Apps hosting, and Agentweaver surfaces exposed
   as MCP Apps. None of these optional adapters blocks cutover.
+
+### Installed agent applications - planned post-core extension
+
+Agentweaver will also host [installed agent applications](../design/agent-application-bundles.md),
+not only individually configured agents/workflows or generated application outputs.
+The specification defines the portable bundle and existing-owner host boundary.
+It does not describe an implemented installer or deployed capability.
+
+This extension follows the applicable core prerequisites.
+It leaves the nineteen-item P1 scope, acceptance criteria, counts, and completion gates unchanged.
+It does not widen #1848 or #1851, or add a cutover prerequisite.
+Tool/canvas profiles also wait for the applicable P2 gateway and surface enforcement.
+Tracking issue [#1878](https://github.com/sabbour/agentweaver/issues/1878)
+places this extension in `v1.0.0` P2, not the current P1 epic.
+Its [Canvas provider plan](../design/applications-and-surfaces.md#canvas-provider-contract-and-adapters)
+uses a surface adapter boundary without changing the fifteen infrastructure seams.
+Native Agentweaver and MCP Apps adapters are concrete implementation targets, not implemented packages.
+
+| Slice | Existing owners and prerequisites | Acceptance gate |
+| --- | --- | --- |
+| B1 — Contract and inert validation | Projects, Orchestrator, trusted catalog composition. Existing configuration, provider selection, workflow validation, and outbox foundations. | Versioned manifest, exact digests, dependency lock, trust/schema/archive checks, explicit incompatibility, and no install-time execution or fabricated resource pins |
+| B2 — Durable installation and activation | Projects authority/active head, Orchestrator operations, Object Store callers. Completed typed gates and current authorization. | Missing-input states, denied activation, idempotency/conflicts, restart/reconciliation, fenced concurrency, isolated staging, and active-head CAS |
+| B3 — Accepted runs and components | Orchestrator, AgentHost, Environment, Policy/Identity, Tool & MCP gateway. Real grants, content delivery, and negotiation. | Actual host-readable content, genuine run/resource pins, unavailable producers, first-use gates, current revocation, credential redaction, and canvas isolation |
+| B4 — Upgrade, rollback, uninstall | Projects, Orchestrator, Environment, Identity, retention owners. B2/B3 and exact owner receipts. | Old-run affinity, fresh new-run authority, pending-gate continuity, honest migration/rollback limits, drain, user-data retention, and exact cleanup or pending state |
+| B5 — Interoperability and approved live acceptance | Registry/release configuration, Gateway/MCP/web, acceptance coordinator. Separate target-specific authority. | OCI referrers/fallback, tag mutation, evidence/copy/auth failures, and exact-SHA Azure API/UI/MCP lifecycle journeys |
+
+Installation preserves bundle/configuration/selected-provider references without provisioning Sandbox, Network, or Storage for compatibility.
+Accepted runs negotiate real resources and persist their own immutable pins through existing owners.
+The [specification's integration matrix](../design/agent-application-bundles.md#required-integration-scenarios)
+defines lifecycle, failure, authorization, version-affinity, and owned-cleanup evidence.
+Future issue decomposition follows these owners separately from the current P1 ledger.
+The [C1-C5 Canvas slices and milestone snapshot](../design/applications-and-surfaces.md#canvas-provider-delivery-and-milestone-placement)
+separate architecture planning from actual GitHub issue assignment.
+They cover owner state, native rendering, MCP Apps, bundled content, and integrated acceptance.
+The tracking issue covers bundle B1-B5 and Canvas C1-C5.
+Separate implementation children and an execution schedule remain pending.
+The release assignment does not change P1 scope or cutover admission.
 
 ## Risk register
 

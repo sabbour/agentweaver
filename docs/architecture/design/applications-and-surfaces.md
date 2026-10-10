@@ -18,6 +18,8 @@
   Model Context Protocol (MCP) Apps, and built-in views.
 - Agents control surfaces through Agentweaver-defined `surface_*` MCP tools. A2UI and MCP Apps
   supply rendering protocols, not a copied canvas API or a new provider seam.
+- A proposed `ICanvasProvider` surface contract separates native rendering from MCP Apps integration.
+  Its concrete adapters remain inside existing owners, not a sixteenth infrastructure seam.
 
 ## Today in 0.x
 
@@ -36,6 +38,23 @@ hosting ([#667](https://github.com/sabbour/agentweaver/issues/667)), isolated im
 ([#761](https://github.com/sabbour/agentweaver/issues/761)), and project-owned preview deployments
 ([#1494](https://github.com/sabbour/agentweaver/issues/1494)) have explicit 1.0 owners. These are
 roadmap requirements, not claims that every capability already ships in 0.x.
+
+## Installed agent applications
+
+An installed agent application bundles agents, tools, skills, restrictive policies,
+canvases, workflows, and required assets.
+Its project installation and activated revision are separate from the generated
+application outputs described here.
+The [installed-agent-application specification](agent-application-bundles.md)
+defines distribution, configuration binding, activation, upgrade, and uninstall through existing owners.
+
+An installed application can start an authorized run that produces a generated application.
+That output still follows `live`, `preview`, and `published` deployment stages.
+Installation does not publish an output, select a hosting provider by package claim,
+or create a resource-bound run pin.
+This planned extension adds no service or provider seam.
+Bundled Canvas declarations bind to the [Canvas provider contract](#canvas-provider-contract-and-adapters).
+The package includes schemas, content, assets, and action references, not trusted adapter registrations.
 
 ## One application, three stages
 
@@ -264,6 +283,158 @@ These are standards where standards exist. Surface instances, input and action s
 `surface_*` tools remain Agentweaver-defined. Renderers and component catalogs are configuration and
 protocol implementations, not provider seams.
 
+### Canvas provider contract and adapters
+
+**Status:** Proposed for P2. No product `ICanvasProvider`, Canvas adapter, or `surface_*` implementation exists at the reviewed source baseline.
+The existing `ProviderSeam` enum contains fifteen infrastructure seams and no `Canvas` member.
+Application Hosting has generic descriptor metadata, not an implemented Canvas contract.
+The repository's [workflow Canvas extension](../../../.github/extensions/agentweaver-workflow-canvas/README.md)
+is Copilot development tooling under the Squad milestone, not the Agentweaver product runtime.
+
+The requested provider architecture uses a narrow surface adapter contract in `Agentweaver.Abstractions`.
+It does not add a service, model harness, separate permission store, or generic plug-in framework.
+The infrastructure catalog, run resolver, and fifteen seam cardinalities remain unchanged.
+Native and MCP Apps adapters implement the same discovery, instance, state, and action boundary.
+A2UI and MCP Apps remain protocols used behind that boundary, not competing authorization systems.
+
+#### Proposed interface
+
+This sketch describes a future .NET contract, not a compiled API:
+
+```csharp
+public interface ICanvasProvider
+{
+    Task<IReadOnlyList<CanvasTypeDescriptor>> ListTypesAsync(
+        CanvasReadContext context, CancellationToken cancellationToken);
+    Task<CanvasOpenResult> OpenAsync(
+        CanvasOpenRequest request, CancellationToken cancellationToken);
+    Task<CanvasDescription> DescribeAsync(
+        CanvasReadRequest request, CancellationToken cancellationToken);
+    Task<CanvasActionReceipt> InvokeActionAsync(
+        CanvasActionRequest request, CancellationToken cancellationToken);
+    Task<CanvasCloseReceipt> CloseAsync(
+        CanvasCloseRequest request, CancellationToken cancellationToken);
+}
+```
+
+The proposed records have these bounds:
+
+| Record | Required contract |
+| --- | --- |
+| `CanvasTypeDescriptor` | Effective type ID, descriptor revision, profile, open-input schema, action input/output schemas, and bounded content requirements. Schema/catalog versions and digests are explicit. |
+| `CanvasReadContext` / `CanvasReadRequest` | Core-validated project/session scope and current read authority. A read request identifies an existing instance. No caller-supplied tenant or permission flag establishes authority. |
+| `CanvasOpenRequest` | Exact accepted type/content/configuration references, host-issued provider selection, scoped instance ID, and idempotency key. No arbitrary executable, registry URL, or browser token. |
+| `CanvasOpenResult` / `CanvasDescription` | Instance identity, immutable adapter/type/content binding, state revision, renderer descriptor, readiness/failure, and replay cursor. A result distinguishes pending from ready. |
+| `CanvasActionRequest` | Existing instance, declared action, bounded validated input, expected state revision, idempotency key, and exact core action binding. Current gates/fences apply when the action has effects. |
+| `CanvasActionReceipt` | Action identity, bounded schema-valid result or explicit error, resulting state revision, and effect/operation receipt when applicable. It never turns a browser acknowledgment into an approval. |
+| `CanvasCloseRequest` / `CanvasCloseReceipt` | Scoped instance and expected revision, idempotent closed/pending/failed result, and owned view/subscription cleanup status. Closing does not delete artifacts or cancel a run. |
+
+Only the core constructs admitted requests after current authentication, Projects authority, and applicable Policy checks.
+Providers cannot grant authority or interpret package declarations as permission.
+The provider calls existing domain commands through the core action dispatcher.
+Approval, publish, tool, workflow, and artifact actions retain their original owner and exact request/revision checks.
+Local focus, selection, and layout actions do not need a model turn.
+An artifact edit creates a new content revision through its owner.
+It does not modify verified bundle bytes or an accepted application revision.
+
+#### Selection, state, and lifecycle
+
+Trusted composition registers versioned adapters and supported profiles through .NET DI and the existing surface catalog.
+This is a surface catalog entry, not a fabricated `ProviderRegistration` under another seam.
+Each adapter has a stable ID, exact adapter/options-schema versions, an immutable options revision, and supported catalog/protocol versions.
+Projects can select only a platform-enabled, permitted profile.
+The package declares a required profile and capabilities, never its own provider registration.
+Unknown profiles or unsupported schema/capability combinations fail explicitly.
+
+One adapter is selected for each surface instance.
+Several instances can coexist, including different adapters and installed revisions.
+The core preserves a `CanvasInstanceBinding` with the provider/type/schema/catalog/content/configuration revisions.
+It is not `PinnedProviderBinding`, does not require a fake `runId`, and does not provision an environment.
+An actual session-facing view can exist without starting an agent run.
+Resource-bearing effects still use genuine bindings from their existing owners.
+
+The Orchestrator's existing session-facing surface module owns durable instance revisions and action receipts.
+Projects owns installed declarations and configuration references.
+Events & Sessions supplies ordered events and authorized reconnect cursors.
+Gateway/BFF and MCP expose projections and commands, not another surface state store.
+The browser owns panel placement, focus, and reversible presentation state, not accepted backend state.
+
+Reopening the same scoped instance with identical accepted input focuses it.
+Conflicting input requires an explicit new instance or revision.
+Browser reload or reconnect describes the existing instance and resumes its cursor without another run or effect.
+Concurrent state mutations use expected revisions; duplicate action keys replay the original receipt.
+Reusing a key with different input conflicts.
+Dispatch to an effect owner carries the same operation identity.
+Response loss is reconciled against that owner, not retried as a new action.
+An unreconciled outcome reports pending or unknown, not success.
+Closing releases only view-owned resources.
+Reopening retained content requires a new authorized instance; it does not resurrect a retired binding.
+
+Current authorization applies to reads, subscriptions, actions, and reconnect.
+Revocation stops further access even when a descriptor or instance remains pinned.
+Upgrade leaves existing instances on their accepted revisions; new instances use the newly accepted declaration.
+Uninstall stops new opens and follows the bundle's drain and retention rules.
+An open panel is not an ownership claim over user data.
+
+#### Concrete implementations to deliver
+
+These are named implementation targets, not existing packages:
+
+| Adapter | Concrete implementation plan | Explicit limit |
+| --- | --- | --- |
+| `NativeCanvasProvider` (`Agentweaver.Providers.Canvas.Native`) | In-process .NET adapter plus retained Agentweaver web components. First deliver built-in artifact/progress views and one typed form/action; add the pinned A2UI renderer/catalog through the same interface. Persist state/receipts in the existing owner. | No arbitrary browser script, separate agent server, copied Copilot UI, or native Office automation. Built-in action bindings remain host-owned. |
+| `McpAppsCanvasProvider` (`Agentweaver.Providers.Canvas.McpApps`) | In-process .NET adapter plus the existing planned Tool & MCP gateway and web host bridge. Resolve an approved connection's `ui://` resource and resource revision, then render it in an isolated iframe. Validate bridge messages and route declared tool calls through current core enforcement. | No package-created MCP connection, ambient browser bearer, direct outbound fetch, or unvalidated remote renderer. Unsupported protocol/resource profiles fail rather than falling back to native execution. |
+
+An application view reuses Application Hosting or Sandbox endpoint descriptors.
+The Canvas adapter embeds an authorized view; it does not deploy or publish an application.
+The native adapter can serve verified static bundle assets through the authenticated edge under an isolated web profile.
+Dynamic generated application servers still belong to Application Hosting.
+MCP resources are supported only when their approved source supplies an enforceable exact resource revision.
+An unversioned remote resource cannot satisfy an immutable-content requirement.
+
+The trusted renderer validates complete messages before applying them.
+Partial streamed JSON cannot invoke an action.
+Web resources use isolated origins, restrictive iframe/CSP, and origin/instance-checked bridge messages.
+No renderer receives an AgentHost, platform, registry, or model credential.
+Cookie-originated commands require existing CSRF protections; bearer commands require the correct audience.
+Executable, skill, policy, and canvas bundle content remains read-only and byte-verified at its actual host.
+Mutable artifact/workspace data lives separately.
+Renderer failure leaves a safe shell, explicit status, retained artifact links, and bounded retry.
+Keyboard navigation, focus restoration, labels, and status announcements are acceptance requirements.
+
+```mermaid
+flowchart LR
+    Clients["Agent, web, or MCP caller"] --> Core["Existing core surface commands"]
+    Core --> Auth["Current Projects, Identity, and Policy checks"]
+    Core --> State["Session-owned instances and action receipts"]
+    Core --> Contract["ICanvasProvider"]
+    Contract --> Native["NativeCanvasProvider"]
+    Contract --> Mcp["McpAppsCanvasProvider"]
+    Native --> Shell["Retained web components and pinned A2UI catalog"]
+    Mcp --> Bridge["Approved MCP gateway and isolated UI bridge"]
+    Core --> Actions["Existing workflow, tool, approval, and artifact owners"]
+    State --> Journal["Events and Sessions replay"]
+```
+
+#### Reference evidence and limits
+
+The original Copilot App reverse-engineering artifact is unavailable in the current verified context.
+It is not a prerequisite, and this plan does not claim to have recovered it.
+The public [Copilot SDK Canvas contract](https://github.com/github/copilot-sdk/blob/2023ed29af3cae890b26f9e2a269a04d8ac7ba60/nodejs/src/canvas.ts)
+and the repository extension independently demonstrate declarations, open schemas, typed actions, instance IDs, and lifecycle callbacks.
+The SDK contract is explicitly experimental.
+Agentweaver borrows those separation patterns, not proprietary host behavior or a stable vendor wire API.
+Its durable receipts and authorization remain Agentweaver contracts.
+
+[Crew Studio](https://docs-platform.crewai.com/platform/en/features/crew-studio) has a visual workflow-authoring canvas.
+It is not evidence of an interchangeable runtime Canvas provider.
+CrewAI's [versioned frontend guide](https://docs.crewai.com/v1.15.23/en/guides/frontend/overview)
+separates the agent server, CopilotKit runtime, and React frontend through AG-UI.
+That supports separating rendering and actions from agent execution.
+AG-UI event transport, A2UI descriptions, MCP Apps resources, and Canvas lifecycle remain distinct.
+CrewAI documentation does not authorize importing its managed Studio or replacing Agentweaver's Copilot SDK harness.
+A CrewAI runtime adapter is not included in this plan.
+
 ## Ownership
 
 | Component | Responsibility |
@@ -274,6 +445,7 @@ protocol implementations, not provider seams.
 | Web frontend | Agentweaver surface panel, A2UI renderer, MCP Apps host bridge, stage and revision presentation. |
 | First-party MCP server | Surface discovery and `surface_*` tools, subject to the same core authorization. |
 | Events & Sessions | Durable journal, audit linkage, and typed session messages for surface actions. |
+| Orchestrator surface module and trusted composition | Canvas instance/action state and `ICanvasProvider` dispatch to registered native/MCP Apps adapters. No new service or independent authority store. |
 
 See [Services and release](services-and-release.md) for control-plane and data-plane placement.
 Hosting the application outside AgentHost is the key separation: publication cannot require a live
@@ -292,6 +464,11 @@ agent environment.
 
 ## Phasing
 
+Installed agent applications follow a separate
+[planned post-core extension](../decisions/0001-platform-architecture.md#installed-agent-applications---planned-post-core-extension).
+They do not change the existing P1 scope or cutover gate.
+The [Canvas delivery slices](#canvas-provider-delivery-and-milestone-placement) belong in P2, after the relevant P1 foundations.
+
 - **P0 — foundation:** Define versioned application, revision, deployment, hosting capability, and
   surface contracts alongside the platform's identity, secrets, and provider catalog. Establish the
   outbox and artifact records used for durable handoff.
@@ -309,6 +486,38 @@ agent environment.
   before the parity cut line; otherwise track them in the 1.0 backlog.
 - **P3 — after cutover:** Evaluate Azure Container Apps under the same hosting contract and expose
   first-party Agentweaver surfaces as MCP Apps resources for external hosts.
+
+### Canvas provider delivery and milestone placement
+
+**Release plan:** [#1878](https://github.com/sabbour/agentweaver/issues/1878)
+tracks this work in `v1.0.0` as P2, not the active P1 epic [#1841](https://github.com/sabbour/agentweaver/issues/1841).
+P1 already owns the service, session, authorization, web, and MCP foundations.
+Its nineteen accepted child scopes exclude applications, surfaces, and the P2 Tool & MCP gateway.
+Canvas work consumes those foundations; adding it to P1 would widen the agreed core gate.
+
+At the planning check on 2026-10-07 UTC, `v1.0.0` is milestone 18.
+The user-directed tracking issue covers the bundle lifecycle and Canvas providers.
+The related [#665](https://github.com/sabbour/agentweaver/issues/665) remains open in `v0.35.0`.
+The completed [#1751](https://github.com/sabbour/agentweaver/issues/1751) belongs to Squad development tooling.
+Neither substitutes for a v1 product delivery issue.
+P2 is an architecture phase, not a separate existing GitHub milestone.
+
+The tracking issue contains the following planned slices.
+Separate child issues and an execution schedule remain pending:
+
+| Slice | Owner and prerequisite | Required completion evidence |
+| --- | --- | --- |
+| C1: Canvas contract and owner state | Orchestrator, Projects, Events & Sessions, trusted composition. Current session/authority/outbox foundations. | Versioned records, DI adapter boundary, type/profile validation, exact instance bindings, idempotency/CAS, restart, revoked reads/actions, and no fabricated run/resource pins |
+| C2: Native Canvas provider and retained web panel | Web, Gateway/BFF, Orchestrator, first-party MCP. C1 and P1 web/MCP paths. | Agent/web/MCP discovery/open/describe/action/close, built-in artifact and typed form, pinned A2UI catalog, refresh/reconnect, truthful readiness/failure, and keyboard/accessibility checks |
+| C3: MCP Apps Canvas provider | Tool & MCP gateway, web bridge, Identity/Policy, Orchestrator. C1 and P2 approved MCP connection/enforcement. | Exact `ui://` revision, sandbox/CSP/origin checks, schema-valid bridge, no credential leakage or direct provider effects, stale/revoked connection rejection, and explicit unsupported-resource errors |
+| C4: Bundled Canvas lifecycle | Bundle B1-B4 owners and selected C2/C3 profile. Verified content delivery and fresh action authority. | Inventory/schema/reference validation, immutable host bytes, no adapter registration or implicit execution, effective-ID isolation, old-instance affinity, upgrade, drain, and retention-safe uninstall |
+| C5: Integrated P2 acceptance | Acceptance coordinator with the C1-C4 source and approved deployment authority. | One exact-SHA AKS API/UI/MCP journey for native and MCP Apps profiles, browser restart, action response loss, revocation, renderer failure, bundle upgrade, and owned cleanup |
+
+C1-C3 elaborate the already planned P2 surface capability.
+C4 is the installed-bundle extension and does not silently become another cutover prerequisite.
+Unshipped 0.x features retain the existing parity/backlog rule.
+The user requested the tracking issue and its `v1.0.0` assignment.
+That planning decision does not authorize runtime implementation, deployment, or live grants.
 
 ## Related risks
 
