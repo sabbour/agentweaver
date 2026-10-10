@@ -271,7 +271,8 @@ if (identityOptions.RemoteMcpOAuth is { } remoteMcpOAuthOptions)
         provider.GetRequiredService<IdentityBrokerDbContext>(),
         remoteMcpOAuthOptions,
         provider.GetRequiredService<IHttpClientFactory>().CreateClient("RemoteMcpOAuthProjects"),
-        provider.GetRequiredService<TimeProvider>()));
+        provider.GetRequiredService<TimeProvider>(),
+        provider.GetRequiredService<ISecretVersionWriter>()));
 }
 
 // The broker's own signing/encryption credential. Production composition mounts a real

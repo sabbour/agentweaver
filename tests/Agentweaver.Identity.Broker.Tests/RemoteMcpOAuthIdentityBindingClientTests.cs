@@ -16,7 +16,7 @@ public sealed class RemoteMcpOAuthIdentityBindingClientTests
     {
         var projectId = "project-1";
         var connectionId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
-        var operationId = Guid.Parse("11111111-2222-3333-4444-555555555555");
+        var operationId = "identity-bind-operation-1";
         var reference = Guid.Parse("bbbbbbbb-cccc-dddd-eeee-ffffffffffff").ToString("N");
         var input = new LinkRemoteMcpIdentityBindingRequest(4, new string('a', 64), reference, operationId);
         var receipt = new RemoteMcpIdentityBindingReceipt(
@@ -117,7 +117,7 @@ public sealed class RemoteMcpOAuthIdentityBindingClientTests
     private static LinkRemoteMcpIdentityBindingRequest Input() =>
         new(4, new string('a', 64),
             Guid.Parse("bbbbbbbb-cccc-dddd-eeee-ffffffffffff").ToString("N"),
-            Guid.Parse("11111111-2222-3333-4444-555555555555"));
+            "identity-bind-operation-1");
 
     private static RemoteMcpIdentityBindingReceipt Receipt() =>
         new("project-1", ConnectionId(), Input().OperationId, 5, new string('b', 64),

@@ -25,6 +25,7 @@ public sealed record RemoteMcpOAuthDisconnectRequest(
     long ExpectedConfigurationRevision,
     Guid IdempotencyKey);
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record RemoteMcpOAuthConsentPreparationRequest(
     long ExpectedConnectionRevision,
     long ExpectedCredentialRevision,
@@ -212,7 +213,7 @@ internal sealed class RemoteMcpOAuthManagementService(
                     row.ConfigurationRevision,
                     row.EnvironmentConfigurationHash,
                     reference,
-                    operationId),
+                    operationId.ToString("N")),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (RemoteMcpOAuthEnvironmentException error)
@@ -412,9 +413,12 @@ internal sealed class RemoteMcpOAuthManagementService(
         if (snapshot is null)
             return null;
         if (snapshot.Head is null || snapshot.Head.Connection is null || snapshot.Configuration is null ||
+            snapshot.Configuration.Connection is null ||
             snapshot.Head.RowRevision <= 0 || snapshot.Head.CurrentConfigurationRevision <= 0 ||
             snapshot.Head.Connection.ConnectionId != row.ConnectionId ||
             snapshot.Head.Connection.ProjectId != row.ProjectId ||
+            snapshot.Configuration.Connection.ConnectionId != row.ConnectionId ||
+            snapshot.Configuration.Connection.ProjectId != row.ProjectId ||
             snapshot.Configuration.ConfigurationRevision != snapshot.Head.CurrentConfigurationRevision)
             throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
 
@@ -425,6 +429,9 @@ internal sealed class RemoteMcpOAuthManagementService(
         if (configuration is null)
             return null;
         if (configuration.ConfigurationRevision != snapshot.Head.CurrentConfigurationRevision ||
+            configuration.Connection is null ||
+            configuration.Connection.ConnectionId != row.ConnectionId ||
+            configuration.Connection.ProjectId != row.ProjectId ||
             !SameConfiguration(snapshot.Configuration, configuration) ||
             !IsLowerHexHash(configuration.ConfigurationSha256) ||
             !IsCanonicalHttpsUri(configuration.EndpointUri) ||
@@ -451,6 +458,8 @@ internal sealed class RemoteMcpOAuthManagementService(
         EnvironmentConfiguration left,
         EnvironmentConfiguration right) =>
         left.ConfigurationRevision == right.ConfigurationRevision &&
+        left.Connection?.ProjectId == right.Connection?.ProjectId &&
+        left.Connection?.ConnectionId == right.Connection?.ConnectionId &&
         left.ConfigurationSha256 == right.ConfigurationSha256 &&
         left.EndpointUri == right.EndpointUri &&
         left.ResourceUri == right.ResourceUri &&
@@ -463,6 +472,8 @@ internal sealed class RemoteMcpOAuthManagementService(
         RemoteMcpOAuthConnectionRecord row,
         CurrentConfiguration? configuration) =>
         configuration is not null &&
+        IsKnownEnvironmentConnectionState(configuration.ConnectionState) &&
+        !configuration.ConnectionState.Equals("Removed", StringComparison.Ordinal) &&
         configuration.Revision == row.ConfigurationRevision &&
         configuration.Hash == row.EnvironmentConfigurationHash &&
         configuration.EndpointUri == row.EndpointUri &&
@@ -526,10 +537,14 @@ internal sealed class RemoteMcpOAuthManagementService(
 
     private static bool IsCanonicalHttpsUri(string? value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        value.Length <= 2048 &&
         uri.Scheme == Uri.UriSchemeHttps &&
         string.IsNullOrEmpty(uri.UserInfo) &&
         string.IsNullOrEmpty(uri.Fragment) &&
         uri.AbsoluteUri == value;
+
+    private static bool IsKnownEnvironmentConnectionState(string value) =>
+        value is "Draft" or "Enabled" or "Disabled" or "Removed";
 
     private static bool IsExpectedPreLinkOrReplayConfiguration(
         RemoteMcpOAuthConnectionRecord row,
@@ -542,7 +557,8 @@ internal sealed class RemoteMcpOAuthManagementService(
         var isReplay =
             configuration.Revision > row.ConfigurationRevision &&
             configuration.IdentityBindingReference == row.IdentityBindingReference;
-        return configuration.ConnectionState.Equals("active", StringComparison.OrdinalIgnoreCase) &&
+        return IsKnownEnvironmentConnectionState(configuration.ConnectionState) &&
+            !configuration.ConnectionState.Equals("Removed", StringComparison.Ordinal) &&
             configuration.EndpointUri == row.EndpointUri &&
             configuration.ResourceUri == row.ResourceUri &&
             configuration.AuthenticationMode == OAuthAuthenticationMode &&
@@ -555,7 +571,7 @@ internal sealed class RemoteMcpOAuthManagementService(
         RemoteMcpOAuthConnectionRecord row,
         CurrentConfiguration configuration,
         RemoteMcpIdentityBindingReceipt receipt) =>
-        configuration.ConnectionState.Equals("active", StringComparison.OrdinalIgnoreCase) &&
+        configuration.ConnectionState.Equals("Draft", StringComparison.Ordinal) &&
         configuration.Revision == receipt.FinalConfigurationRevision &&
         configuration.Hash == receipt.FinalConfigurationSha256 &&
         configuration.IdentityBindingReference == receipt.IdentityBindingReference &&
@@ -566,6 +582,7 @@ internal sealed class RemoteMcpOAuthManagementService(
         row.TransportProfile == RemoteMcpOAuthConnectionBinding.SupportedTransportProfile &&
         receipt.ProjectId == row.ProjectId &&
         receipt.ConnectionId == row.ConnectionId &&
+        receipt.OperationId == row.IdentityBindingReference &&
         receipt.IdentityBindingReference == row.IdentityBindingReference;
 
     private static RemoteMcpOAuthConnectionBinding CreateLinkedBinding(
@@ -632,6 +649,7 @@ internal sealed class RemoteMcpOAuthManagementService(
     private sealed record EnvironmentConnectionReference(string ProjectId, Guid ConnectionId);
 
     private sealed record EnvironmentConfiguration(
+        EnvironmentConnectionReference? Connection,
         long ConfigurationRevision,
         string ConfigurationSha256,
         string EndpointUri,

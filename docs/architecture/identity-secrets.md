@@ -64,13 +64,17 @@ The lifecycle state transitions cover single-use callback claiming and
 completion, binding and expiry checks, refresh-attempt and credential-revision
 compare-and-swap outcomes, and disconnect/revocation state. These are source
 contracts and transition helpers, not a wired provider protocol. The Broker
-currently exposes only bearer-authenticated, no-store status and disconnect
-management routes. They recheck the owner's current Projects authorization and
-the current Environment configuration. Status redacts credential references
-and always reports credential use unavailable. Disconnect requires the
-expected connection, credential, and configuration revisions; it clears the
-stored references through a revision-guarded update, but does not delete secret
-versions or revoke tokens at the provider.
+exposes bearer-authenticated, no-store status, consent preparation, and
+disconnect management routes. They recheck the owner's current Projects
+authorization and the current Environment configuration. Consent preparation
+links Identity's opaque reference to the exact Environment revision and digest,
+re-reads that pin, then stores only a protected verifier reference and
+correlation state. It does not discover provider metadata or redirect a browser.
+Status redacts credential references and always reports credential use
+unavailable. Disconnect requires the expected connection, credential, and
+configuration revisions; it clears the stored references through a
+revision-guarded update, but does not delete secret versions or revoke tokens at
+the provider.
 
 The Identity package also validates supplied protected-resource and
 authorization-server metadata against the bound resource, issuer, requested
@@ -93,20 +97,26 @@ sequenceDiagram
     participant Broker as Identity Broker
     participant Projects as Projects authorization owner
     participant Environment as Environment configuration owner
-    Human->>Broker: GET status or POST disconnect
+    Human->>Broker: GET status or POST consent/disconnect
     Broker->>Broker: Resolve connection owned by authenticated subject
-    Broker->>Projects: Recheck current ReadProjects authorization
+    Broker->>Projects: Recheck current ReadProjects or WriteProjects authority
     Projects-->>Broker: Current project authority
     Broker->>Environment: Read current connection snapshot and immutable configuration
     Environment-->>Broker: Current configuration revision and pins
-    Broker->>Broker: Compare owner, project, connection, and configuration bindings
-    alt Disconnect with expected revisions
+    alt Consent preparation
+        Broker->>Environment: Link opaque Identity reference with revision and digest CAS
+        Environment-->>Broker: Final immutable revision, digest, and receipt
+        Broker->>Environment: Re-read final revision and current head
+        Environment-->>Broker: Confirmed binding pins
+        Broker->>Broker: Write protected verifier; persist state hash and SecretRef by CAS
+        Broker-->>Human: Short-lived state and PKCE challenge; no provider URL
+    else Disconnect with expected revisions
         Broker->>Broker: CAS connection and credential revisions; clear SecretRefs
         Broker-->>Human: Disconnected status; no credential-use authority
     else Status
         Broker-->>Human: Redacted status; credential use unavailable
     end
-    Note over Broker,Environment: No provider OAuth exchange or MCP credential delivery occurs here
+    Note over Broker,Environment: No provider OAuth exchange, token revocation, or MCP credential delivery occurs here
 ```
 
 ## GitHub connections are separate integrations

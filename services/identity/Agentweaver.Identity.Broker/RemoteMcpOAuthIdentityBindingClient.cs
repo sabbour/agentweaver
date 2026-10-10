@@ -11,12 +11,12 @@ public sealed record LinkRemoteMcpIdentityBindingRequest(
     long ExpectedConfigurationRevision,
     string ExpectedConfigurationSha256,
     string IdentityBindingReference,
-    Guid OperationId);
+    string OperationId);
 
 public sealed record RemoteMcpIdentityBindingReceipt(
     string ProjectId,
     Guid ConnectionId,
-    Guid OperationId,
+    string OperationId,
     long FinalConfigurationRevision,
     string FinalConfigurationSha256,
     string IdentityBindingReference);
@@ -78,7 +78,8 @@ internal sealed class RemoteMcpOAuthIdentityBindingClient : IDisposable
             !Guid.TryParseExact(input.IdentityBindingReference, "N", out var reference) ||
             reference == Guid.Empty ||
             !string.Equals(reference.ToString("N"), input.IdentityBindingReference, StringComparison.Ordinal) ||
-            input.OperationId == Guid.Empty)
+            string.IsNullOrWhiteSpace(input.OperationId) || input.OperationId.Length > 128 ||
+            input.OperationId.Any(char.IsControl))
             throw InvalidRequest();
         if (!actor.Bearer.IsUsable())
             throw Denied();

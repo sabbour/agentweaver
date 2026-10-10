@@ -305,7 +305,7 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                 Assert.Equal(InitialConfigurationHash, input.ExpectedConfigurationSha256);
                 Assert.Equal(1, input.ExpectedConfigurationRevision);
                 Assert.Equal(identityBindingReference, input.IdentityBindingReference);
-                Assert.Equal(Guid.ParseExact(identityBindingReference, "N"), input.OperationId);
+                Assert.Equal(identityBindingReference, input.OperationId);
                 _linked = true;
                 return Json(request, new RemoteMcpIdentityBindingReceipt(
                     ProjectId, ConnectionId, input.OperationId, 2,
@@ -330,7 +330,7 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                     rowRevision = revision,
                     currentConfigurationRevision = revision,
                     currentDiscoveryRevision = (long?)null,
-                    state = "active"
+                    state = "Draft"
                 },
                 configuration = Configuration()
             };
@@ -341,6 +341,11 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             var revision = _linked ? 2 : 1;
             return new
             {
+                connection = new
+                {
+                    projectId = ProjectId,
+                    connectionId = ConnectionId
+                },
                 configurationRevision = revision,
                 configurationSha256 = _linked
                     ? driftAfterLink ? ChangedConfigurationHash : FinalConfigurationHash

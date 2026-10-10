@@ -100,7 +100,7 @@ namespace Agentweaver.Identity.Broker.Migrations
                         column: x => x.connection_record_id,
                         principalSchema: "identity_broker",
                         principalTable: "remote_mcp_oauth_connections",
-                        principalColumn: "Id",
+                        principalColumn: "id",
                         onDelete: ReferentialAction.Restrict);
                 });
 

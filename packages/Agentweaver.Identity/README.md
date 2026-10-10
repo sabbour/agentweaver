@@ -115,8 +115,11 @@ and
 for the Identity trust boundary this composes into.
 
 The separate Broker source candidate also contains owner-bound Remote MCP OAuth
-lifecycle records and state transitions, plus redacted status and disconnect
-management. It does not yet wire provider discovery, authorization initiation,
+lifecycle records and state transitions, plus authenticated redacted status,
+consent preparation, and disconnect management. Consent preparation links the
+Identity reference to the current immutable Environment configuration, rechecks
+the returned pins, and stores the verifier only through the protected-secret
+writer. It does not yet wire provider discovery, browser authorization or
 callback exchange, token refresh or recovery transport, provider revocation, or
 purpose-bound credential use by MCP requests. Its status reports credential use
 as unavailable. The Identity package also has pure metadata validation and

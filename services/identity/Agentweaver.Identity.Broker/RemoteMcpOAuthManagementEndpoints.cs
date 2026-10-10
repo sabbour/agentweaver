@@ -24,6 +24,11 @@ public static class RemoteMcpOAuthManagementEndpoints
                 ExecuteAsync(context, (service, actor, issuer, actorId) =>
                     service.DisconnectAsync(actor, issuer, actorId, connectionId, input,
                         context.RequestAborted)));
+        routes.MapPost("/{connectionId:guid}/consent",
+            (HttpContext context, Guid connectionId, RemoteMcpOAuthConsentPreparationRequest input) =>
+                ExecuteAsync(context, (service, actor, issuer, actorId) =>
+                    service.PrepareConsentAsync(actor, issuer, actorId, connectionId, input,
+                        context.RequestAborted)));
     }
 
     private static async Task ExecuteAsync<T>(

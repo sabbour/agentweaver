@@ -17,7 +17,10 @@ public sealed class RemoteMcpOAuthManagementTests
             row.ResourceUri,
             "delegatedOAuth",
             "streamableHttp20250618",
-            row.IdentityBindingReference);
+            row.IdentityBindingReference)
+        {
+            ConnectionState = "Draft"
+        };
 
         var status = RemoteMcpOAuthManagementService.ToStatus(row, configuration);
 
@@ -41,12 +44,19 @@ public sealed class RemoteMcpOAuthManagementTests
             row.ResourceUri,
             "delegatedOAuth",
             "streamableHttp20250618",
-            row.IdentityBindingReference);
+            row.IdentityBindingReference)
+        {
+            ConnectionState = "Draft"
+        };
 
         Assert.False(RemoteMcpOAuthManagementService.IsCurrentConfiguration(
             row, current with { IdentityBindingReference = null }));
         Assert.False(RemoteMcpOAuthManagementService.IsCurrentConfiguration(
             row, current with { IdentityBindingReference = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }));
+        Assert.False(RemoteMcpOAuthManagementService.IsCurrentConfiguration(
+            row, current with { ConnectionState = "Removed" }));
+        Assert.False(RemoteMcpOAuthManagementService.IsCurrentConfiguration(
+            row, current with { ConnectionState = "unknown" }));
     }
 
     private static RemoteMcpOAuthConnectionRecord Connection() =>
