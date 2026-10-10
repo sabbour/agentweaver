@@ -924,6 +924,7 @@ public sealed class RuntimeAgentHostTests
                 var broker = new RuntimeBrokerCredentialClient(
                     _http, new("https://broker.test/"), Configure.Registration.Binding.ActorIssuer, Actor, Time);
                 var bootstrap = new RuntimeSessionBootstrap(owner, broker, RuntimeCopilotSessionTests.Factory(Sdk),
+                    RuntimeSkillContentTests.Client(Configure.Registration, Actor),
                     Actor, Time, Image, material, new(_http, new("https://orchestrator.test/"), Actor));
                 return await bootstrap.ConfigureAsync(Encoding.UTF8.GetBytes(Configure.Configuration.GetRawText()),
                     new(_bootstrap, Configure.Registration.RuntimeInstanceId, 1, RuntimeCredentialPurpose.Configure,
@@ -985,7 +986,11 @@ public sealed class RuntimeAgentHostTests
                 return Response(request, new { }, HttpStatusCode.Forbidden);
             var path = request.RequestUri!.AbsolutePath;
             if (path.StartsWith("/internal/runtime/registrations/", StringComparison.Ordinal))
+            {
+                if (path.EndsWith("/skills", StringComparison.Ordinal))
+                    return Response(request, RuntimeSkillContentTests.EmptyProjection(Registration));
                 return Response(request, Registration);
+            }
             if (path.EndsWith("/readiness", StringComparison.Ordinal))
                 return Response(request, Readiness);
             if (path == "/internal/runtime/suspend/require-current")
