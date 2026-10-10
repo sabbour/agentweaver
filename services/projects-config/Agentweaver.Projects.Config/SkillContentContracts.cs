@@ -46,9 +46,50 @@ public sealed record SkillContentImportReceipt(
     int ResourceCount,
     long TotalBytes);
 
+public sealed record SkillContentRevisionSummary(
+    string SkillId,
+    long Revision,
+    string Name,
+    string Description,
+    string ContentDigest,
+    int ResourceCount,
+    long TotalBytes,
+    string CreatedByActorId,
+    DateTimeOffset CreatedAt,
+    string? SourceId,
+    string? SourceRevision,
+    string? RequestedRef,
+    string? ResolvedCommitSha,
+    string? SelectedPath,
+    bool IsRevoked,
+    string? RevokedByActorId,
+    DateTimeOffset? RevokedAt);
+
+public sealed record SkillContentAssignmentSummary(
+    string SkillId,
+    bool Enabled,
+    int Order,
+    long? Revision,
+    string? ContentDigest,
+    ImmutableArray<string>? AgentIds);
+
+public sealed record SkillContentInventoryPage(
+    long ConfigurationRevision,
+    ImmutableArray<SkillContentAssignmentSummary> Assignments,
+    ImmutableArray<SkillContentRevisionSummary> Revisions,
+    int PageSize,
+    string? NextCursor);
+
 public interface ISkillContentService
 {
     SkillContentPreview Preview(SkillContentCandidate candidate);
+
+    Task<SkillContentInventoryPage> ListInventoryAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string? cursor,
+        int pageSize,
+        CancellationToken cancellationToken);
 
     Task<SkillContentImportReceipt> ImportAsync(
         ProjectAuthorizationContext caller,
