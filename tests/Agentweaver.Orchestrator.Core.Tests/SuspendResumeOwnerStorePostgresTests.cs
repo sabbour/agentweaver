@@ -318,55 +318,62 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task TerminalManifestMustUseTheReservedOperationManifestId()
+    public async Task TerminalManifestMustUseItsOwnOperationsReservedManifestId()
     {
-        var seeded = await InsertFencedSuspendOperationAsync("manifest-id-mismatch");
-        var wrongManifestId = Guid.NewGuid();
-        var manifest = new SessionSuspendResumeManifest(
-            SessionSuspendResumeContractVersions.CurrentManifestVersion,
-            wrongManifestId,
-            _identity,
-            SessionSuspendResumeManifestState.Interrupted,
-            EnvironmentFence: null,
-            CoreExecutionFence: null,
-            CacheAcknowledgment: null,
-            Checkpoint: null,
-            FlushedJournalPosition: null,
-            WorkspaceVolume: null,
-            WorkspaceResource: null,
-            WorkspaceDataGeneration: null,
-            WorkspaceTreeSha256: null,
-            WorkspaceProviderCheckpointId: null,
-            GuestSnapshotResource: null,
-            GuestSnapshotLifecycleGeneration: null,
-            NetworkIntentGeneration: null,
-            ImmutableArray.Create("workspace_flush_unavailable"));
-        var manifestJson = JsonSerializer.Serialize(manifest, JsonOptions);
-        var manifestHash = Convert.ToHexStringLower(
-            SHA256.HashData(Encoding.UTF8.GetBytes(manifestJson)));
+        var operationA = await InsertFencedSuspendOperationAsync("manifest-id-mismatch-a");
+        var operationB = await InsertFencedSuspendOperationAsync("manifest-id-mismatch-b");
 
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using var insertManifest = new NpgsqlCommand($"""
-            INSERT INTO "{_schema}".session_consistency_manifests
-                (project_id, run_id, session_id, operation_id, manifest_id, contract_version,
-                 owner_execution_fence, claimed_execution_fence, manifest_state, manifest_hash, manifest)
-            VALUES
-                (@project, @run, @session, @operation, @manifestId, @contractVersion,
-                 @ownerFence, NULL, 'interrupted', @hash, @manifest)
-            """, connection);
-        insertManifest.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _identity.ProjectId);
-        insertManifest.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _identity.RunId);
-        insertManifest.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _identity.SessionId);
-        insertManifest.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, seeded.OperationId);
-        insertManifest.Parameters.AddWithValue("manifestId", NpgsqlDbType.Uuid, wrongManifestId);
-        insertManifest.Parameters.AddWithValue(
-            "contractVersion", NpgsqlDbType.Integer, SessionSuspendResumeContractVersions.CurrentManifestVersion);
-        insertManifest.Parameters.AddWithValue("ownerFence", NpgsqlDbType.Bigint, seeded.ExecutionFence);
-        insertManifest.Parameters.AddWithValue("hash", NpgsqlDbType.Char, manifestHash);
-        insertManifest.Parameters.AddWithValue("manifest", NpgsqlDbType.Jsonb, manifestJson);
+        async Task InsertManifestAsync(Guid operationId, Guid manifestId)
+        {
+            var manifest = new SessionSuspendResumeManifest(
+                SessionSuspendResumeContractVersions.CurrentManifestVersion,
+                manifestId,
+                _identity,
+                SessionSuspendResumeManifestState.Interrupted,
+                EnvironmentFence: null,
+                CoreExecutionFence: null,
+                CacheAcknowledgment: null,
+                Checkpoint: null,
+                FlushedJournalPosition: null,
+                WorkspaceVolume: null,
+                WorkspaceResource: null,
+                WorkspaceDataGeneration: null,
+                WorkspaceTreeSha256: null,
+                WorkspaceProviderCheckpointId: null,
+                GuestSnapshotResource: null,
+                GuestSnapshotLifecycleGeneration: null,
+                NetworkIntentGeneration: null,
+                ImmutableArray.Create("workspace_flush_unavailable"));
+            var manifestJson = JsonSerializer.Serialize(manifest, JsonOptions);
+            var manifestHash = Convert.ToHexStringLower(
+                SHA256.HashData(Encoding.UTF8.GetBytes(manifestJson)));
+            await using var insertManifest = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".session_consistency_manifests
+                    (project_id, run_id, session_id, operation_id, manifest_id, contract_version,
+                     owner_execution_fence, claimed_execution_fence, manifest_state, manifest_hash, manifest)
+                VALUES
+                    (@project, @run, @session, @operation, @manifestId, @contractVersion,
+                     @ownerFence, NULL, 'interrupted', @hash, @manifest)
+                """, connection);
+            insertManifest.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _identity.ProjectId);
+            insertManifest.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _identity.RunId);
+            insertManifest.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _identity.SessionId);
+            insertManifest.Parameters.AddWithValue("operation", NpgsqlDbType.Uuid, operationId);
+            insertManifest.Parameters.AddWithValue("manifestId", NpgsqlDbType.Uuid, manifestId);
+            insertManifest.Parameters.AddWithValue(
+                "contractVersion", NpgsqlDbType.Integer, SessionSuspendResumeContractVersions.CurrentManifestVersion);
+            insertManifest.Parameters.AddWithValue("ownerFence", NpgsqlDbType.Bigint, operationA.ExecutionFence);
+            insertManifest.Parameters.AddWithValue("hash", NpgsqlDbType.Char, manifestHash);
+            insertManifest.Parameters.AddWithValue("manifest", NpgsqlDbType.Jsonb, manifestJson);
+            await insertManifest.ExecuteNonQueryAsync();
+        }
+
         var exception = await Assert.ThrowsAsync<PostgresException>(
-            () => insertManifest.ExecuteNonQueryAsync());
+            () => InsertManifestAsync(operationA.OperationId, operationB.ManifestId));
         Assert.Equal(PostgresErrorCodes.ForeignKeyViolation, exception.SqlState);
+
+        await InsertManifestAsync(operationA.OperationId, operationA.ManifestId);
     }
 
     [Fact]

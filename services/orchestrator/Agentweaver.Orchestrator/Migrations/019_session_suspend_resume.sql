@@ -38,7 +38,9 @@ ALTER TABLE {schema}.coordination_execution_operations
             request_hash ~ '^[0-9a-f]{64}$'
         ),
     ADD CONSTRAINT uq_coordination_execution_operations_session_operation
-        UNIQUE (project_id, run_id, session_id, operation_id);
+        UNIQUE (project_id, run_id, session_id, operation_id),
+    ADD CONSTRAINT uq_coordination_execution_operations_session_manifest
+        UNIQUE (project_id, run_id, session_id, operation_id, reserved_manifest_id);
 
 CREATE TABLE {schema}.session_consistency_manifests (
     project_id varchar(256) NOT NULL,
@@ -59,11 +61,9 @@ CREATE TABLE {schema}.session_consistency_manifests (
     UNIQUE (project_id, manifest_id),
     FOREIGN KEY (project_id, run_id, session_id)
         REFERENCES {schema}.coordination_sessions(project_id, run_id, session_id),
-    FOREIGN KEY (project_id, run_id, session_id, operation_id)
+    FOREIGN KEY (project_id, run_id, session_id, operation_id, manifest_id)
         REFERENCES {schema}.coordination_execution_operations(
-            project_id, run_id, session_id, operation_id),
-    FOREIGN KEY (project_id, manifest_id)
-        REFERENCES {schema}.coordination_execution_operations(project_id, reserved_manifest_id),
+            project_id, run_id, session_id, operation_id, reserved_manifest_id),
     CHECK ((manifest->>'contractVersion')::integer = contract_version),
     CHECK (manifest->>'manifestId' = manifest_id::text),
     CHECK (manifest->'identity'->>'projectId' = project_id),
