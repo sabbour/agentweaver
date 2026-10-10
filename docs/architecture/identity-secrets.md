@@ -63,11 +63,12 @@ secret references and provider expiry metadata.
 
 The lifecycle state transitions cover single-use callback claiming and
 completion, binding and expiry checks, refresh-attempt and credential-revision
-compare-and-swap outcomes, and disconnect/revocation state. These are source
-contracts and transition helpers, not a wired provider protocol. The Broker
-exposes bearer-authenticated, no-store status, consent preparation, and
-disconnect management routes. They recheck the owner's current Projects
-authorization and the current Environment configuration. Consent preparation
+compare-and-swap outcomes, and disconnect/revocation state. The Broker source
+implements these transitions through its bearer-authenticated, no-store
+status, consent-preparation, callback, refresh, and disconnect paths; this does
+not establish deployment or a project-settings consent-start flow. These paths
+recheck the owner's current Projects authorization and the current Environment
+configuration. Consent preparation
 links Identity's opaque reference to the exact Environment revision and digest,
 re-reads that pin, then fetches metadata only for the exact configured resource
 and issuer. It rejects redirects, bounds metadata responses, and validates the
