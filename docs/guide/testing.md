@@ -53,6 +53,9 @@ Controlled TCP tests separately exercise the actual SDK permission notification,
 Prompt tests check actual catalog/provider wire fields, missing-capacity denial, accepted narrowing, immutable source pins, and cached resume under increased or decreased capacity.
 Capability-wire tests do not prove live token enforcement or truncation.
 
+The positive Broker fixture prepares its guarded native turn through the current Orchestrator owner and persisted MAF checkpoint.
+One real Events host provides pricing, accounting, and session material; the controlled SDK supplies native completion evidence, not a paid model call.
+
 Ordinary v1 PR CI runs these PostgreSQL suites through `npm run coverage:dotnet` on its existing Linux runner.
 Each suite retains standard TRX results beside Cobertura coverage and `source.json`.
 The TRX logger can copy a collector report into its attachment directory.

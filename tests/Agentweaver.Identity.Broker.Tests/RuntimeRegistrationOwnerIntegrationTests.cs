@@ -14,8 +14,10 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
 using EnvironmentService::Agentweaver.Environment;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -138,7 +140,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
             registration, signingKey, runToken, routes, failures, projects, events.Schema, ownerSchema,
             revokeSourceBeforeSdk, sourceLoss, environment, copilotConnection,
-            connectionOwnerToken, setHistoricalReadAuthority);
+            connectionOwnerToken, setHistoricalReadAuthority, factory.Services);
         TraceNativeStage(failures, "Runtime exercise and explicit cleanup completed.");
     }
 
@@ -147,7 +149,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Dictionary<string, Func<HttpMessageHandler>> routes, ConcurrentQueue<string> failures,
         ProjectsConfigResourceServer projects, string eventsSchema, string ownerSchema, bool revokeSourceBeforeSdk,
         string? sourceLoss, RuntimePlacementTestServer environment, ControlledCopilotConnection copilotConnection,
-        string connectionOwnerToken, Func<bool, Task> setHistoricalReadAuthority)
+        string connectionOwnerToken, Func<bool, Task> setHistoricalReadAuthority,
+        IServiceProvider orchestratorServices)
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         var expiryTimeProvider = sourceLoss == "sdk-preparation-expiry"
@@ -499,28 +502,31 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 $"/coordination/sessions/{registration.Binding.SessionId}/usage-receipts/{accepted.ReceiptId:D}",
                 actor, null, timeout.Token);
             Assert.Equal(accepted, fetched);
-            await VerifyNativeSessionMaterialAsync(session, signingKey, runToken, actor,
-                projects, routes, failures, eventsSchema, sdk, async () =>
-                {
-                    using var currentConnection = await SendAsync(broker, HttpMethod.Get,
-                        $"/internal/connections/copilot-user/{registration.Binding.ModelConnectionId:D}",
-                        connectionOwnerToken, [registration.Binding.TenantId]);
-                    await AssertStatusAsync(currentConnection, HttpStatusCode.OK);
-                    var current = await currentConnection.Content.ReadFromJsonAsync<CopilotConnectionReceipt>(
-                        CoordinationJsonOptions);
-                    Assert.NotNull(current);
-                    using var disconnected = await SendJsonAsync(broker, HttpMethod.Post,
-                        "/internal/connections/copilot-user/revoke", connectionOwnerToken,
-                        new ChangeCopilotConnectionRequest(current.ConnectionId, current.Revision));
-                    await AssertStatusAsync(disconnected, HttpStatusCode.OK);
-                    environment.ExpireCurrentLease();
-                    await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
-                        currentOwner.ReadCurrentAsync(registration.RuntimeInstanceId, actor, timeout.Token));
-                }, setHistoricalReadAuthority, timeout.Token);
-            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.DisposeAsync().AsTask());
-            Assert.Equal(RuntimeBootstrapReceiverState.Disposed, receiver.State);
             await VerifyNativeUsageAccountingAsync(
-                accepted, signingKey, runToken, projects, routes, failures, eventsSchema);
+                accepted, signingKey, runToken, projects, routes, failures, eventsSchema, async (materialClient, objects) =>
+                {
+                    await VerifyNativeSessionMaterialAsync(session, runToken, actor,
+                        projects, failures, sdk, async () =>
+                        {
+                            using var currentConnection = await SendAsync(broker, HttpMethod.Get,
+                                $"/internal/connections/copilot-user/{registration.Binding.ModelConnectionId:D}",
+                                connectionOwnerToken, [registration.Binding.TenantId]);
+                            await AssertStatusAsync(currentConnection, HttpStatusCode.OK);
+                            var current = await currentConnection.Content.ReadFromJsonAsync<CopilotConnectionReceipt>(
+                                CoordinationJsonOptions);
+                            Assert.NotNull(current);
+                            using var disconnected = await SendJsonAsync(broker, HttpMethod.Post,
+                                "/internal/connections/copilot-user/revoke", connectionOwnerToken,
+                                new ChangeCopilotConnectionRequest(current.ConnectionId, current.Revision));
+                            await AssertStatusAsync(disconnected, HttpStatusCode.OK);
+                            environment.ExpireCurrentLease();
+                            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                                currentOwner.ReadCurrentAsync(registration.RuntimeInstanceId, actor, timeout.Token));
+                        }, setHistoricalReadAuthority, sourceClient, orchestratorServices, ownerSchema,
+                        materialClient, objects, timeout.Token);
+                    await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.DisposeAsync().AsTask());
+                    Assert.Equal(RuntimeBootstrapReceiverState.Disposed, receiver.State);
+                });
             output.WriteLine($"After actual Events priced ACK: {elapsed.Elapsed}");
         });
         TraceNativeStage(failures, $"Primary exercise completed: {primaryFailure?.ToString() ?? "success"}");
@@ -546,10 +552,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     }
 
     private async Task VerifyNativeSessionMaterialAsync(
-        AuthorizedRuntimeSession session, SecurityKey signingKey, string runToken, RuntimeActorAuthorization actor,
-        ProjectsConfigResourceServer projects, Dictionary<string, Func<HttpMessageHandler>> routes,
-        ConcurrentQueue<string> failures, string eventsSchema, ControlledCopilotRuntime sdk,
+        AuthorizedRuntimeSession session, string runToken, RuntimeActorAuthorization actor,
+        ProjectsConfigResourceServer projects, ConcurrentQueue<string> failures, ControlledCopilotRuntime sdk,
         Func<Task> endRuntimeAuthority, Func<bool, Task> setHistoricalReadAuthority,
+        RuntimeUsageSourceHttpClient sourceClient, IServiceProvider orchestratorServices, string ownerSchema,
+        HttpClient client, RuntimeMaterialObjects objects,
         CancellationToken cancellationToken)
     {
         var refreshOperation = Guid.NewGuid();
@@ -559,12 +566,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.False(previousSource.Credential.IsUsable());
         Assert.Equal(refreshed,
             await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken));
-        var objects = new RuntimeMaterialObjects();
-        await using var factory = new EventsIntegrationFactory(
-            _connectionString, eventsSchema, signingKey, projects.CreateHandler,
-            () => new RuntimeServiceRouter(routes, failures), sessionMaterialObjects: objects);
-        using var client = factory.CreateDefaultClient(
-            new Uri("https://events.test/"), new MaterialResponseTraceHandler(failures));
         var material = new RuntimeSessionMaterialHttpClient(client, client.BaseAddress!, actor);
         var eventId = Guid.NewGuid();
         const string userContent = "Run the accepted bounded turn.";
@@ -597,8 +598,88 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(1, objects.Writes);
         Assert.True(staleFence.Headers.CacheControl?.NoStore);
         TraceNativeStage(failures, "Guarded actual model turn and native cache begin.");
-        var answer = await session.SendTurnAsync("A bounded user request.", material, cancellationToken);
+        var sendCount = sdk.Requests.Count(request => request.Method == "session.send");
+        var legacyFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            session.SendTurnAsync("A bounded user request.", material, cancellationToken));
+        Assert.Equal("runtime_native_turn_admission_required", legacyFailure.Code);
+        Assert.Equal(sendCount, sdk.Requests.Count(request => request.Method == "session.send"));
+        var binding = session.Registration.Binding;
+        string rootSessionId;
+        string associationId;
+        await using (var dataSource = NpgsqlDataSource.Create(_connectionString))
+        await using (var connection = await dataSource.OpenConnectionAsync(cancellationToken))
+        await using (var command = new NpgsqlCommand($"""
+            SELECT root_session_id, work_plan_item_id
+            FROM "{ownerSchema}".coordination_sessions
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", binding.ProjectId);
+            command.Parameters.AddWithValue("run", binding.RunId);
+            command.Parameters.AddWithValue("session", binding.SessionId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            Assert.True(await reader.ReadAsync(cancellationToken));
+            rootSessionId = reader.GetString(0);
+            associationId = reader.GetString(1);
+        }
+        await using var ownerScope = orchestratorServices.CreateAsyncScope();
+        var context = new DefaultHttpContext { RequestServices = ownerScope.ServiceProvider };
+        context.Request.Headers.Authorization = $"Bearer {runToken}";
+        context.Request.Headers["X-Agentweaver-Tenant"] = binding.TenantId;
+        var authentication = await context.AuthenticateAsync();
+        Assert.True(authentication.Succeeded);
+        context.User = Assert.IsAssignableFrom<System.Security.Claims.ClaimsPrincipal>(authentication.Principal);
+        var ownerActor = new CoordinationActor(binding.ActorIssuer, binding.ActorId);
+        var rootIdentity = new SessionIdentity(binding.ProjectId, binding.RunId, rootSessionId);
+        var selection = await ownerScope.ServiceProvider.GetRequiredService<ProjectsRunSelectionClient>()
+            .ReadAcceptedSelectionWithAuthorityAsync(context, binding.ProjectId, binding.RunId, cancellationToken);
+        var decisions = ownerScope.ServiceProvider.GetRequiredService<CoordinatorDecisionOwnerStore>();
+        var decision = await decisions.ReadCurrentAsync(ownerActor, rootIdentity, selection, cancellationToken);
+        var plan = decision.State.ConfirmedWorkPlan;
+        Assert.NotNull(plan);
+        Assert.True(decision.State.CanDispatch);
+        Assert.Equal(binding.WorkflowStepId, Assert.Single(plan.Plan.Items, item => item.Id == associationId).WorkflowStepId);
+        var selectionContext = await ownerScope.ServiceProvider.GetRequiredService<CoordinatorRunSelectionContextStore>()
+            .ReadAsync(selection.Selection, decision.State.Fence, cancellationToken)
+            ?? CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Selection.Snapshot);
+        var execution = new MafExecutionCheckpointStore(
+            ownerScope.ServiceProvider.GetRequiredService<PostgresMafCheckpointStore>(),
+            new(rootIdentity, ownerActor, binding.ExecutionFence, MafExecutionCheckpointStore.CurrentSdkVersion,
+                binding.ModelSelectionReference!, null, MafExecutionCheckpointContract.StoreName));
+        var latest = await execution.ReadLatestAsync(cancellationToken);
+        var intent = new MafExecutionDispatchIntent(associationId, binding.SessionId, Guid.NewGuid(),
+            RuntimeContractValidation.Hash("A bounded user request."u8));
+        var progress = latest?.State.Progress ?? MafExecutionProgress.Empty;
+        var state = new MafExecutionCheckpoint((latest?.State.Revision ?? 0) + 1, plan.Plan.Id, decision.StateVersion,
+            progress with { WorkItems = progress.WorkItems.SetItem(associationId, MafExecutionTaskStatus.Running) })
+        {
+            PendingDispatches = (latest?.State.PendingDispatches
+                ?? ImmutableDictionary<string, MafExecutionDispatchIntent>.Empty).SetItem(associationId, intent)
+        };
+        var checkpoint = await execution.AppendAsync(Guid.NewGuid().ToString("N"), latest?.Info, state, cancellationToken);
+        var message = new RuntimeA2ASendRequest(new("message", intent.MessageId, session.Facts.SdkSessionId, "user",
+            [new("text", "A bounded user request.")], new(new(1, session.Registration, session.SourceGrant.GrantId,
+                session.SourceGrant.Revision, RuntimeCredentialPurpose.Observe), AddressedMessageDeliveryMode.Enqueue)));
+        Task RequireCurrentOwner(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken token) =>
+            decisions.RequireCurrentDispatchStateInTransactionAsync(connection, transaction, ownerActor, rootIdentity,
+                selection, selectionContext, decision.StateVersion, binding.ExecutionFence, plan.Plan.Id, token);
+        var nativeOwner = ownerScope.ServiceProvider.GetRequiredService<RuntimeUsageSourceOwner>();
+        await nativeOwner.PrepareNativeTurnAsync(context, session.Registration, rootIdentity, checkpoint, intent,
+            message, RequireCurrentOwner, cancellationToken);
+        sdk.EmitNativeCompletionReceipt = true;
+        var (answer, recorded) = await session.SendNativeTurnAsync(message, material, sourceClient, cancellationToken);
         Assert.Equal(sdk.AssistantResponse, answer);
+        RuntimeNativeTurnContract.ValidateRecorded(recorded);
+        Assert.Equal(intent.MessageId, recorded.Admission.MessageId);
+        Assert.Equal(sdk.NativeMessageId.ToString("D"), recorded.Observation.NativeMessageId);
+        Assert.Equal(sdk.NativeCompletionReceiptEventId, recorded.Observation.NativeCompletionReceiptEventId);
+        Assert.Empty(recorded.Observation.UsageEventIds);
+        var accounted = await sourceClient.CompleteNativeTurnAsync(session, recorded, [], cancellationToken);
+        RuntimeNativeTurnContract.ValidateAccounted(accounted, recorded, []);
+        Assert.Equal(0.00123456725m, Assert.Single(accounted.Snapshot.CopilotTotals.Amounts).Amount);
+        await nativeOwner.RequireNativeTurnAccountedAsync(context, session.Registration, message, answer,
+            RequireCurrentOwner, cancellationToken);
+        Assert.Equal(sendCount + 1, sdk.Requests.Count(request => request.Method == "session.send"));
         Assert.Equal(4, objects.Writes);
         var recovery = await material.ReadRecoveryAsync(session.Registration, cancellationToken);
         Assert.NotNull(recovery.Cache);
@@ -722,12 +803,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     private async Task VerifyNativeUsageAccountingAsync(
         RuntimeUsageSourceReceipt sourceReceipt, SecurityKey signingKey, string runToken,
         ProjectsConfigResourceServer projects, Dictionary<string, Func<HttpMessageHandler>> routes,
-        ConcurrentQueue<string> failures, string eventsSchema)
+        ConcurrentQueue<string> failures, string eventsSchema,
+        Func<HttpClient, RuntimeMaterialObjects, Task> verifyMaterial)
     {
         var binding = sourceReceipt.Registration.Binding;
+        var sdkSource = sourceReceipt.Usage.SdkSource;
+        Assert.NotNull(sdkSource);
         using var configuration = new TemporaryEnvironment(new Dictionary<string, string?>
         {
             ["EventsAndSessions__RuntimeUsage__Enabled"] = "true",
+            ["AgentHost__ModelBindingsRevision"] = "native-model-bindings-v1",
+            [$"AgentHost__ModelBindings__{sdkSource.ModelSelectionReference}__ModelId"] = sdkSource.ModelId,
+            [$"AgentHost__ModelBindings__{sdkSource.ModelSelectionReference}__SourceMode"] = "HostedCopilot",
             ["EventsAndSessions__Cost__Copilot__ResourceId"] = "native-copilot-cost",
             ["EventsAndSessions__Cost__Copilot__ResourceGeneration"] = "1",
             ["EventsAndSessions__Cost__Copilot__OptionsRevision"] = "native-cost-v1",
@@ -739,14 +826,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["EventsAndSessions__Cost__Copilot__RateCard__NanoUnitsPerUnit"] = "1000000000",
             ["EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__controlled-model"] = "2.5"
         });
+        var objects = new RuntimeMaterialObjects();
         await using var factory = new EventsIntegrationFactory(
             _connectionString, eventsSchema, signingKey, projects.CreateHandler,
             () => new RuntimeServiceRouter(routes, failures),
-            nativeUsageHandler: () => new RuntimeServiceRouter(routes, failures));
-        using var client = factory.CreateClient(new()
-        {
-            AllowAutoRedirect = false, BaseAddress = new Uri("https://events.test/")
-        });
+            nativeUsageHandler: () => new RuntimeServiceRouter(routes, failures), sessionMaterialObjects: objects);
+        using var client = factory.CreateDefaultClient(
+            new Uri("https://events.test/"), new MaterialResponseTraceHandler(failures));
+        var modelPin = factory.Services.GetRequiredService<RuntimeModelBindingsResolver>()
+            .Pin(sdkSource.ModelSelectionReference, ModelSourceMode.HostedCopilot);
+        Assert.Equal(sdkSource.ModelId, modelPin.ModelId);
         var path = $"/internal/sessions/{binding.SessionId}/usage-receipts";
         using var forged = await SendJsonAsync(client, HttpMethod.Post, path, runToken,
             new { sourceReceipt.ReceiptId, ProviderUnits = 1, Price = 100 });
@@ -800,6 +889,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using var reader = await check.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.All(Enumerable.Range(0, 5), column => Assert.Equal(1L, reader.GetInt64(column)));
+        routes.Add("events.test", () => factory.Server.CreateHandler());
+        try
+        {
+            await verifyMaterial(client, objects);
+        }
+        finally
+        {
+            routes.Remove("events.test");
+        }
     }
 
     private sealed class RuntimeServiceRouter(
