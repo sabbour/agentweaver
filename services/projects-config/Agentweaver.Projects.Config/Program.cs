@@ -52,6 +52,11 @@ builder.Services.AddDbContextFactory<ProjectsConfigDbContext>((provider, options
             "__ef_migrations_history", ProjectsConfigDbContext.Schema));
 });
 builder.Services.AddScoped<ProjectsConfigService>();
+builder.Services.AddScoped<MarketplaceSourceStore>();
+builder.Services.AddScoped<IProjectMarketplaceSourceStore>(
+    provider => provider.GetRequiredService<MarketplaceSourceStore>());
+builder.Services.AddScoped<ProjectMarketplaceSourceService>();
+builder.Services.AddHttpClient<SkillMarketplaceBrowseService>();
 var skillContentContainer = builder.Configuration["ProjectsConfig:SkillContent:ContainerUri"];
 if (skillContentContainer is not null)
 {
@@ -123,6 +128,7 @@ app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapProjectConfigEndpoints();
+app.MapSkillMarketplaceEndpoints();
 app.MapSkillContentEndpoints();
 app.Run();
 
