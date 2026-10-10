@@ -308,6 +308,13 @@ Adding a provider interface would duplicate a boundary without a second viable i
 | State Store | Azure Database for PostgreSQL is fixed. Relational transactions, fencing, and the outbox are required; tests can use disposable Postgres containers. Large bytes go to Object Store. |
 | Surfaces | Core owns surface identity, lifecycle, and action authority. Canvas is the separate renderer seam; MCP Apps remains an open protocol, not another seam. |
 
+The Orchestrator accepted-run skill reader forwards the original bearer and tenant selector to Projects.
+It requires current `readRunSelection` permission and an exact runtime registration/selection match.
+It reads the accepted agent's ordered skill revisions, verifies content and resource hashes, and checks
+current permission again after the content read. Enabled legacy skills without imported pins are denied.
+This reader is source-only until the skill owner, runtime route, and SDK loader are wired together.
+It does not establish deployed skill loading or complete the skill-import workflow.
+
 ## Sessions
 
 **Owner:** Events & Sessions. **Cardinality:** exclusive authority, with an optional capture-only
