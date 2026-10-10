@@ -586,6 +586,15 @@ These routes require the existing validated Broker audience and return
 runtime nonce. Current owner authority, exact registration, purpose, audience,
 configuration hash, revision, expiry, and cryptographic verifier must match.
 
+These source contracts can deliver a model credential to the current guest
+AgentHost; they do not implement credential-less execution. The
+[proposed contract changes](../architecture/identity-secrets.md#minimal-contract-changes-and-admission)
+bind an explicit mode and supported gateway/runtime profile to existing
+registration, action, provider and ready-check surfaces. In that proposed mode,
+raw redemption/exchange routes accept trusted external consumers only; a guest
+gateway proof cannot redeem an upstream credential. The proposed L7 operation
+endpoint is not a currently mapped Broker or Gateway/BFF route.
+
 | Method and path | Contract |
 | --- | --- |
 | `POST /internal/runtime/bootstrap/request` | Current-registration delivery receipt; no credential in the receipt. |
