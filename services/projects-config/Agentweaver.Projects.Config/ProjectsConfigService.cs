@@ -1080,14 +1080,6 @@ public sealed partial class ProjectsConfigService
     private static bool IsUniqueViolation(DbUpdateException exception) =>
         exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
 
-    private static bool IsSerializationFailure(Exception exception)
-    {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-            if (current is PostgresException { SqlState: "40001" })
-                return true;
-        return false;
-    }
-
     private async Task EnsurePlatformAdminAsync(
         ProjectAuthorizationContext caller,
         CancellationToken cancellationToken)
