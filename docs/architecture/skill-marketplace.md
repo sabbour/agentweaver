@@ -29,6 +29,8 @@ sequenceDiagram
     participant P as Projects & Config
     participant DB as projects_config
     participant GH as Public GitHub
+    participant S as Skills content service
+    participant O as Immutable content store
     C->>P: Browse source ID + expected source revision + query/page
     P->>DB: Recheck current read role; read active source revision
     DB-->>P: Repository, requested ref, source revision
@@ -39,10 +41,27 @@ sequenceDiagram
     P->>P: Discover paths, sort, filter, then paginate
     P->>GH: Fetch SKILL.md only for current-page candidates
     GH-->>P: Page manifest bytes
-    P->>DB: Recheck source revision
-    P->>P: Recheck current caller authority
+    P->>DB: Recheck current caller authority and source revision
     P-->>C: Page, requested ref, source revision, resolved commit SHA
-    Note over P,GH: Browse does not fetch candidate resource files or assign/run a skill.
+    C->>P: Preview/import source revision + resolved commit SHA + selected path
+    P->>DB: Recheck current read/write role and read active source revision
+    DB-->>P: Current source configuration
+    P->>GH: Read selected manifest and bounded resources at the same commit
+    GH-->>P: Exact selected bytes
+    P->>DB: Recheck actor, project authority, and source revision
+    alt Preview
+        P->>S: Validate selected bytes and calculate content digest
+        S-->>P: Preview metadata and digest
+        P-->>C: Preview
+    else Import
+        P->>S: Import bytes with expected digest, idempotency key, and source provenance
+        S->>O: Store immutable content revision
+        O-->>S: Stored digest
+        S-->>P: Import receipt
+        P-->>C: Receipt
+    end
+    Note over P,GH: Browse fetches only current-page manifests. Preview/import reads stay pinned to the selected commit.
+    Note over S,O: Skills owns content validation, immutable revisions, idempotency, and assignment.
 ```
 
 | Route | Operation |
@@ -52,6 +71,8 @@ sequenceDiagram
 | `PUT /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}` | Replace source settings using `expectedRevision`. |
 | `DELETE /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}?expectedRevision={n}` | Tombstone a source using `expectedRevision`; returns the removed source at its incremented revision. |
 | `GET /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/browse?expectedSourceRevision={n}&query={text}&page={n}&pageSize={n}` | Browse a pinned source revision. `query`, `page`, and `pageSize` are optional. |
+| `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview` | Preview selected bytes from `expectedSourceRevision`, `resolvedCommitSha`, and `selectedPath`. |
+| `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import` | Import selected bytes with the previewed `expectedContentDigest`, an `idempotencyKey`, and optional `skillId` plus `expectedRevision`. |
 
 Create accepts `{ "name": "Team skills", "repository": "owner/repository",
 "requestedRef": "main", "subpath": "skills" }`; `name`, `requestedRef`, and
@@ -108,18 +129,49 @@ validator remains responsible for the 256 KiB instruction-body limit and
 deterministic content digest.
 
 The source-backed preview/import adapter passes only server-fetched candidate
-bytes to the sole Skills content service. Import must preserve that exact commit,
+bytes to the sole Skills content service. Import must preserve the exact commit,
 path, source revision, content identity, operation ID, and expected skill
-revision; accepted content receipts and runtime assignment remain owned by the
-Skills service. A moving branch/tag or later source removal must not replace
-already accepted bytes. The Projects source reader is implemented, while its
-preview/import route composition with the Skills service is still being
-integrated in this candidate.
+revision. The Skills service owns accepted content receipts and runtime
+assignment. The source-selected preview/import adapter is implemented in this
+Projects owner candidate. It uses the existing content services and does not add
+a second loader or catalog. A moving branch/tag or later source removal must
+not replace already accepted bytes. Assignment still uses the existing Skills
+assignment service.
 
-These Projects owner routes are an unpublished service candidate. Gateway,
-OpenAPI, first-party MCP, and retained-web consumer wiring is tracked by their
-owners; this source document is not evidence that the public journey or deployed
-runtime is available.
+Preview requires current project read authority. Import also requires
+`projects.admin` and current project write authority. Both routes re-resolve the
+caller after upstream I/O. They require the same actor and membership revision.
+They also recheck the active source revision before they return or import
+content.
+Requests reject query parameters and responses use `Cache-Control: no-store`.
+Errors use Problem Details with a stable `code`:
+
+| Status | Error |
+| --- | --- |
+| `400` | Invalid request or skill content. |
+| `403` | Authority failure. |
+| `404` | Source not found. |
+| `409` | Stale source or skill revision, digest mismatch, or conflicting idempotency key. |
+| `422` | Source data exceeds the size limit. |
+| `500` | Content-store integrity error. |
+| `502` | Upstream data is malformed. |
+| `503` | Upstream service or content storage is unavailable. |
+| `504` | Request timed out. |
+
+The checked-in v1 Gateway catalog maps source list/create/update/tombstone,
+pinned browse, Skills preview/import, and project assignment to these Projects
+owner paths. Its OpenAPI contract includes the owner DTOs, exact required source
+revision query values, and 3 MiB limits for preview/import. The first-party MCP
+catalog is built from that same OpenAPI document.
+
+The retained Web project settings page uses those routes for source management
+and pinned browse. It supports local file preview/import and assignment to agents
+in the current project cast. Marketplace source import remains disabled because
+the public browse response does not include the selected manifest and resources.
+The API also has no actor-safe runtime-loaded status producer. The page reports
+that gap instead of inferring runtime use from an assignment or accepted run
+configuration. These checked-in sources do not establish that the services or
+the complete journey have been published or deployed.
 
 ## Validation
 

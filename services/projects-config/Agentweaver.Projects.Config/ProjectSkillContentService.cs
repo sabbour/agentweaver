@@ -574,14 +574,17 @@ public sealed class SkillContentService(
         if (source.ResolvedCommitSha is not { Length: 40 or 64 } commit ||
             commit.Any(character => !Uri.IsHexDigit(character)))
             throw SkillContentServiceException.Invalid("A resolved source commit SHA is required.");
-        try
+        if (source.SelectedPath != string.Empty)
         {
-            if (SkillRuntimeContentContract.NormalizeResourcePath(source.SelectedPath) != source.SelectedPath)
-                throw SkillContentServiceException.Invalid("The selected source path is not normalized.");
-        }
-        catch (ArgumentException exception)
-        {
-            throw SkillContentServiceException.Invalid(exception.Message);
+            try
+            {
+                if (SkillRuntimeContentContract.NormalizeResourcePath(source.SelectedPath) != source.SelectedPath)
+                    throw SkillContentServiceException.Invalid("The selected source path is not normalized.");
+            }
+            catch (ArgumentException exception)
+            {
+                throw SkillContentServiceException.Invalid(exception.Message);
+            }
         }
     }
 
