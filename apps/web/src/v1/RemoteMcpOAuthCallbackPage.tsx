@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   parseRemoteMcpOAuthCallbackParameters,
 } from './remoteMcpOAuthCallback';
 
 export function RemoteMcpOAuthPopupCallbackPage() {
-  const callback = useMemo(() => window.location.hash
+  const [callback] = useState(() => window.location.hash
     ? null
-    : parseRemoteMcpOAuthCallbackParameters(window.location.search), []);
-  const opener = useMemo(() => {
+    : parseRemoteMcpOAuthCallbackParameters(window.location.search));
+  const [opener] = useState(() => {
     const value = window.opener;
     return value && value !== window ? value : null;
-  }, []);
+  });
   const message = !callback
     ? 'The response was invalid. Close this window and try again.'
     : opener
