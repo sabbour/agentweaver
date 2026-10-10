@@ -19,6 +19,16 @@ configured audience before forwarding the original bearer token to the owning AP
 validation; it is not an identity or role claim. The owner remains authoritative for
 current project membership, role, binding, and operation-specific checks.
 
+The Skills and marketplace routes use that same Projects & Config forwarder:
+source list/create/update/tombstone, pinned source browse, Skills preview and
+project import, and project skill assignment. The Gateway preserves the owner's
+status and JSON body and forwards the bearer and optional tenant selector. Preview
+and import bodies are each limited to 3 MiB. Marketplace browse requires the
+`expectedSourceRevision` query value; source tombstone requires `expectedRevision`.
+These are the only required query values added by these routes. The current public
+contract does not provide runtime-loaded status or a Marketplace selected-content
+preview that returns the pinned manifest and resources.
+
 ### Browser CORS
 
 Set the required `Gateway:WebOrigin` to the Web application's exact HTTPS origin,
