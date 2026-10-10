@@ -193,7 +193,7 @@
     {
       "type": "note",
       "over": ["caller", "api", "postgres"],
-      "label": "Guarded turns/tools; native idle priority; actual content + compatible cache. Journal rebuild: no effect replay. Accounting ACK before turn ACK."
+      "label": "Turns: accounting before answer.\nSuspend: Core operation/version checks before stopping turns and cache ACK.\nMissing Workspace proof blocks completion."
     },
     {
       "type": "note",

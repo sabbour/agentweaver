@@ -205,6 +205,9 @@ The native SDK session store and ambient configuration discovery remain disabled
 The custom filesystem captures opaque native cache bytes and restores the same logical session through the actual SDK resume call.
 Missing, incompatible, or corrupt caches rebuild context from journal content without a model-turn replay.
 The guarded positive scenario records the actual user and assistant content, the Policy receipt, and the native cache reference.
+Separate controlled Host tests require Core's exact current-operation echo before stopping turns and around native cache writes.
+They reject changed operation identity, phase version, or authority, and missing replay cache.
+They do not prove a persisted Core suspend operation or PostgreSQL suspend success.
 It rotates the genuine source grant before the protected turn and checks refresh replay.
 Native cancellation tests hold the actual abort idle event before they admit another turn.
 Failed aborts and missing idle events reject later turns and cache capture.
