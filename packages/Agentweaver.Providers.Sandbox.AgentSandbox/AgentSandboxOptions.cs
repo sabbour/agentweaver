@@ -26,6 +26,9 @@ public sealed record AgentSandboxOptions(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AgentSandboxAgentHostProfile? AgentHost { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxBuildTestAcceptedExecutionOptions? AcceptedBuildTestProfile { get; init; }
+
     private static readonly Regex CpuQuantity = new(
         "^(?:[1-9][0-9]*m|[1-9][0-9]*(?:\\.[0-9]+)?)$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -75,6 +78,8 @@ public sealed record AgentSandboxOptions(
             ValidateDnsSubdomain(host.ConfigurationMapName, nameof(host.ConfigurationMapName));
             ValidateDnsSubdomain(host.TlsSecretName, nameof(host.TlsSecretName));
         }
+        if (AcceptedBuildTestProfile is { } buildTest)
+            _ = buildTest.Validate();
         return this;
     }
 
@@ -159,6 +164,9 @@ public static class AgentSandboxProviderMetadata
         bool enabled = true)
     {
         options.Validate();
+        var capabilities = options.AcceptedBuildTestProfile is null
+            ? Capabilities
+            : Capabilities.Add(SandboxCapabilities.BuildTestCommandPod);
         return new ProviderRegistration(
             new ProviderDescriptor(
                 ProviderSeam.Sandbox,
@@ -166,7 +174,7 @@ public static class AgentSandboxProviderMetadata
                 AdapterVersion,
                 AgentSandboxOptions.CurrentOptionsSchemaVersion,
                 ProviderHostingPattern.KubernetesController,
-                Capabilities),
+                capabilities),
             enabled,
             options.OptionsRevision,
             options.OptionsSchemaVersion);

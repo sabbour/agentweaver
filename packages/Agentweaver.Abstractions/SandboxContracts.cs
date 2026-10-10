@@ -12,6 +12,7 @@ public static class SandboxCapabilities
     public const string VmIsolation = "sandbox.isolation.vm";
     public const string WorkspacePersistentVolumeClaim = "sandbox.workspace.pvc";
     public const string VerifiedNetworkPolicy = "sandbox.network-policy.verified";
+    public const string BuildTestCommandPod = "sandbox.command.build-test-pod";
 }
 
 public static class SandboxResourceIdentity
