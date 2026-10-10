@@ -729,10 +729,16 @@ only to explicitly unweighted AI credits. Each entry retains an immutable rate-c
 version. Missing measurements or unsupported sources remain unpriced.
 The optional HTTP consumer accepts only immutable source receipt references.
 
-The Azure BYOK adapter uses deployment token rates from Azure Retail Prices, allocates
-provisioned-throughput capacity by usage share, and may reconcile estimates with Azure Cost Management
-exports filtered by resource tags. Other meter sources provide their own pricing; unknown sources remain
-`unpriced`, not zero-cost. Sandbox compute cost is a later meter source, not part of the 1.0 model-cost
+The standalone Azure BYOK cost adapter accepts an explicitly configured, versioned
+Azure Retail Prices card with model-scoped standard input/output token rates and a
+declared currency. It does not fetch live prices or quote BYOK work. Missing token
+counts, unsupported cache categories, unknown models, and changed bindings remain
+`unpriced`, not zero-cost. Its receipt-consumer integration must also verify trusted
+Azure provider and deployment facts bound to the accepted runtime model pin; until
+that source contract is admitted, Events must keep BYOK usage unpriced. Provisioned
+throughput remains `unpriced` until trusted resource- and time-window-level usage
+share supplies its denominator. Other meter sources provide their own pricing.
+Sandbox compute cost is a later meter source, not part of the 1.0 model-cost
 contract.
 
 ### Budgets and combined data flow

@@ -151,6 +151,11 @@ tests remain unchanged.
 
 The Events & Sessions tests cover weighted nano-AIU pricing, unweighted quotes,
 missing measurements, immutable rate cards, and redacted binding diagnostics.
+`AzureCostProviderTests` cover model-scoped standard token arithmetic, explicit
+rate-card source/currency/version, missing or unsupported token measurements,
+changed pins, overflow, unsupported BYOK quotes, and provisioned-throughput
+`Unpriced` behavior. These are pure local provider tests; they do not prove
+trusted BYOK receipt pricing, PostgreSQL integration, or Azure price retrieval.
 Hosted usage contract tests accept priced nano-AIU without optional SDK accounting metadata.
 They still reject wrong source identities, meter shapes, and unpriced entries.
 Cost snapshot contract tests distinguish valid zero-work quotes from unavailable pricing.
