@@ -16,6 +16,24 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
     private readonly Dictionary<string, NativeFile> _files = new(StringComparer.Ordinal);
     private readonly HashSet<string> _directories = new(StringComparer.Ordinal) { "" };
 
+    internal void InstallSkillResources(SkillRuntimeContentProjectionV1 projection)
+    {
+        SkillRuntimeContentContract.ValidateProjection(projection);
+        lock (_gate)
+        {
+            foreach (var skill in projection.Skills)
+            {
+                var directory = RuntimeAcceptedSkillProvider.ResourceDirectory(
+                    RuntimeAcceptedSkillProvider.RuntimeName(skill.SkillId));
+                foreach (var resource in skill.Resources)
+                {
+                    var path = $"workspace/{directory}/{resource.RelativePath}";
+                    Write(path, Utf8.GetString(resource.Content.AsSpan()), append: false);
+                }
+            }
+        }
+    }
+
     internal byte[] Capture()
     {
         lock (_gate)

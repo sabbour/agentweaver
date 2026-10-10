@@ -53,6 +53,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/platform/runtime-defaults` | Append platform defaults using an expected revision. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
+| `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
@@ -140,3 +141,58 @@ dotnet test tests/Agentweaver.Projects.Config.Tests/Agentweaver.Projects.Config.
 ```
 
 The PostgreSQL tests use Testcontainers. They verify tenant-scoped run selection, revision and idempotency behavior, model fail-closed semantics, provider candidate metadata, SELECT-only runtime authority grants, CAS revocation and audit retention, the last-Owner invariant, and database append-only triggers.
+
+## Skill content and assignment
+
+`POST /api/skills/preview` validates a `SKILL.md` document and its text resources
+and returns a digest without storing the content. Project import requires current
+project write authority, that exact digest, and an idempotency key. Each successful
+import creates an immutable revision with source provenance. Reusing the key for a
+different request or importing against a stale revision returns a conflict.
+
+`PUT /api/projects/{projectId}/skills/{skillId}/assignment` writes an ordinary
+configuration revision. An enabled assignment pins an imported content revision
+and digest and names one or more active agents in the project casting. Configuration
+validation rejects missing, mismatched, revoked, or inactive-agent pins. New or
+changed enabled skill entries must have these pins. An unchanged legacy entry
+can remain during an unrelated configuration edit, but it is never returned
+as accepted runtime content.
+
+`GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` rechecks
+current Orchestrator authority and the accepted project/run binding. It returns
+only content pinned by that run's accepted configuration for the requested active
+agent. Unassigned, inactive, stale, revoked, missing, or corrupt content fails
+closed.
+
+Content objects use immutable keys in a dedicated Azure Blob container. Set
+`ProjectsConfig:SkillContent:ContainerUri` to one HTTPS container URI. The Projects
+Config workload identity needs **Storage Blob Data Contributor** on that container
+only. Preview does not need Blob storage; imports and content reads fail closed
+when the container is not configured. The separate `--migrate` command does not
+need Blob configuration.
+
+The runtime does not read current mutable project settings for skills. Orchestrator
+checks the registration against the accepted run selection, asks Projects for that
+agent's pinned revisions, and checks current permission again after the content
+read. AgentHost verifies the registration binding and content digests before it
+starts a native session.
+
+```mermaid
+sequenceDiagram
+    participant H as AgentHost
+    participant O as Orchestrator
+    participant P as Projects & Config
+    participant B as Blob storage
+    H->>O: Read skills for runtime registration ID
+    O->>O: Recheck registration and current read permission
+    O->>P: Read accepted run selection
+    P-->>O: Accepted configuration and active agent
+    O->>P: Read skills assigned to that agent
+    P->>B: Read exact pinned content and resources
+    B-->>P: Verify immutable objects and digests
+    P-->>O: Ordered accepted skill revisions and bytes
+    O->>P: Recheck current permission
+    O-->>H: Return registration-bound content without caching
+    H->>H: Verify pins and install only accepted content
+    H-->>H: Start native session with the accepted skill provider
+```
