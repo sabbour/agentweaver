@@ -141,6 +141,16 @@ Each policy binds the stable operation ID, role, owner, and current Sandbox/Work
 Environment persists the policy binding and checks its UID and specification before it releases the corresponding Pod scheduling gate.
 This is policy-object evidence, not proof that a deployed Cilium datapath enforced the policy.
 
+The [credential-less sandbox proposal](identity-secrets.md#network-tls-and-hostile-input)
+extends this layered design with a required trusted L7 gateway for that mode,
+not a new credential-sourcing provider. L3/L4 enforcement must force protected
+traffic through it and deny guest credential acquisition and direct bypass.
+The gateway independently validates current action/resource authority before
+trusted-side credential injection. Proxy environment variables and static
+allowlists are insufficient. The current Cilium-only candidate has no L7
+adapter and cannot report credential-less readiness; existing generation,
+owner fences, and explicit unsupported behavior remain unchanged.
+
 ```mermaid
 sequenceDiagram
     participant E as Environment manager
