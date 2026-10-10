@@ -1047,7 +1047,7 @@ internal static class AgentApplicationManifestValidator
         return basename.Length == 4 &&
                (basename.StartsWith("COM", StringComparison.OrdinalIgnoreCase) ||
                 basename.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)) &&
-               basename[3] is >= '1' and <= '9';
+               basename[3] is >= '1' and <= '9' or '\u00B9' or '\u00B2' or '\u00B3';
     }
 
     private static void ValidateJsonProperties(

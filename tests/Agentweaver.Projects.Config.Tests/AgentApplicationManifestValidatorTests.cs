@@ -99,6 +99,39 @@ public sealed class AgentApplicationManifestValidatorTests
     }
 
     [Fact]
+    public void Rejects_superscript_windows_device_names_in_declared_and_supplied_paths()
+    {
+        foreach (var prefix in new[] { "COM", "LPT" })
+        foreach (var suffix in new[] { '\u00B9', '\u00B2', '\u00B3' })
+        foreach (var path in new[]
+                 {
+                     $"agents/{prefix}{suffix}.json",
+                     $"agents/{prefix}{suffix}/child.json",
+                 })
+        {
+            var manifest = CreateManifest();
+            ((JsonObject)((JsonArray)manifest["files"]!)[0]!)["path"] = path;
+            AssertIssue(Validate(Serialize(manifest)), "invalid_package_path");
+
+            AssertIssue(
+                Validate(Serialize(CreateManifest()), [new(path, 7, ContentDigest)]),
+                "invalid_package_path");
+        }
+    }
+
+    [Fact]
+    public void Allows_ordinary_unicode_in_package_paths()
+    {
+        const string path = "agents/analyst-\u00E9.json";
+        var manifest = CreateManifest();
+        ((JsonObject)((JsonArray)manifest["files"]!)[0]!)["path"] = path;
+
+        var result = Validate(Serialize(manifest), [new(path, 7, ContentDigest)]);
+
+        Assert.True(result.IsValid, string.Join(Environment.NewLine, result.Issues));
+    }
+
+    [Fact]
     public void Rejects_inventory_over_documented_file_count()
     {
         var manifest = CreateManifest();
