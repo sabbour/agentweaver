@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -146,6 +147,223 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
                     freshRunId,
                     RunRequest(configuration.Revision, platform.Revision)))).ToLowerInvariant(),
             fresh.RequestFingerprint);
+    }
+
+    [Fact]
+    public async Task ImportsPinnedSkillContentAndReadsOnlyForItsAcceptedActiveAgent()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var configurations = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "skill-tenant-" + suffix;
+        var owner = await SeedCallerAsync(
+            db, authorityStore, "skill-owner-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Tenant,
+            tenantId, ProjectAuthorityRole.TenantAdmin);
+        var platformAdmin = await SeedCallerAsync(
+            db, authorityStore, "skill-platform-admin-" + suffix, tenantId,
+            ["api.read", "projects.admin"], ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId, ProjectAuthorityRole.PlatformAdmin);
+        var defaultsHead = await configurations.GetPlatformRuntimeDefaultsAsync(
+            platformAdmin, CancellationToken.None);
+        var defaults = await configurations.UpdatePlatformRuntimeDefaultsAsync(
+            platformAdmin, defaultsHead.Revision, PlatformDefaults(), CancellationToken.None);
+        var project = await configurations.CreateProjectAsync(owner, "Pinned skills", CancellationToken.None);
+        var configuration = await configurations.UpdateProjectConfigurationAsync(
+            owner,
+            project.ProjectId,
+            project.ConfigurationRevision,
+            ProjectSettings() with
+            {
+                AgentCharters =
+                [
+                    new ProjectAgentCharter("agent-one", "Agent One", "assistant", "Agent one test charter."),
+                    new ProjectAgentCharter("agent-two", "Agent Two", "assistant", "Agent two test charter."),
+                ],
+                Casting =
+                [
+                    new ProjectAgentCast("agent-one", "assistant", 0),
+                    new ProjectAgentCast("agent-two", "assistant", 1),
+                ],
+            },
+            CancellationToken.None);
+        var contentService = new SkillContentService(
+            db,
+            new SkillContentObjectStore(new SkillTestObjectStore()),
+            configurations,
+            TimeProvider.System);
+
+        var firstCandidate = SkillCandidate(
+            "Follow the initial approved instructions.",
+            "# Initial reference\n");
+        var firstPreview = contentService.Preview(firstCandidate);
+        var firstImport = new SkillContentImportRequest(
+            "skill-import-" + suffix,
+            firstPreview.ContentDigest,
+            null,
+            null,
+            new SkillContentSourceSelection(
+                "github", "v1", "main", new string('a', 40), "skills/pinned"),
+            firstCandidate);
+        var firstReceipt = await contentService.ImportAsync(
+            owner, project.ProjectId, firstImport, CancellationToken.None);
+        Assert.Equal(1, firstReceipt.Revision);
+        Assert.Equal(firstPreview.ContentDigest, firstReceipt.ContentDigest);
+        Assert.Equal(firstReceipt, await contentService.ImportAsync(
+            owner, project.ProjectId, firstImport, CancellationToken.None));
+
+        var secondCandidate = SkillCandidate(
+            "Follow the updated instructions.",
+            "# Updated reference\n");
+        var secondPreview = contentService.Preview(secondCandidate);
+        var idempotencyConflict = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            contentService.ImportAsync(
+                owner,
+                project.ProjectId,
+                firstImport with
+                {
+                    ExpectedContentDigest = secondPreview.ContentDigest,
+                    Candidate = secondCandidate,
+                },
+                CancellationToken.None));
+        Assert.Equal("skill_import_idempotency_conflict", idempotencyConflict.Code);
+
+        var secondReceipt = await contentService.ImportAsync(
+            owner,
+            project.ProjectId,
+            new SkillContentImportRequest(
+                "skill-import-v2-" + suffix,
+                secondPreview.ContentDigest,
+                firstReceipt.SkillId,
+                firstReceipt.Revision,
+                new SkillContentSourceSelection(
+                    "github", "v2", "main", new string('b', 40), "skills/pinned"),
+                secondCandidate),
+            CancellationToken.None);
+        Assert.Equal(firstReceipt.Revision + 1, secondReceipt.Revision);
+
+        var staleRevision = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            contentService.ImportAsync(
+                owner,
+                project.ProjectId,
+                new SkillContentImportRequest(
+                    "skill-import-stale-" + suffix,
+                    firstPreview.ContentDigest,
+                    firstReceipt.SkillId,
+                    firstReceipt.Revision,
+                    new SkillContentSourceSelection(
+                        "github", "stale", "main", new string('c', 40), "skills/pinned"),
+                    firstCandidate),
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, staleRevision.StatusCode);
+
+        var inactiveAssignment = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            contentService.UpdateAsync(
+                owner,
+                project.ProjectId,
+                new SkillAssignmentUpdateRequest(
+                    configuration.Revision,
+                    firstReceipt.SkillId,
+                    firstReceipt.Revision,
+                    firstReceipt.ContentDigest,
+                    Enabled: true,
+                    Order: 0,
+                    ["inactive-agent"]),
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status400BadRequest, inactiveAssignment.StatusCode);
+
+        var assigned = await contentService.UpdateAsync(
+            owner,
+            project.ProjectId,
+            new SkillAssignmentUpdateRequest(
+                configuration.Revision,
+                firstReceipt.SkillId,
+                firstReceipt.Revision,
+                firstReceipt.ContentDigest,
+                Enabled: true,
+                Order: 0,
+                ["agent-one"]),
+            CancellationToken.None);
+        var membership = await SeedMembershipAsync(
+            authorityStore, "skill-orchestrator-" + suffix, tenantId);
+        await authorityStore.AssignRoleAsync(
+            membership,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator,
+            "fixture");
+        var runId = "skill-run-" + suffix;
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "skill-orchestrator-" + suffix),
+            new Claim("scope", "api.read projects.orchestrator"),
+            new Claim("project_id", project.ProjectId),
+            new Claim("run_id", runId),
+        ], "test"));
+        var runCaller = await new ProjectAuthorizationOwner(
+                db, new ProjectsConfigIdentityOptions(TestIssuer))
+            .ResolveAsync(principal, [tenantId], CancellationToken.None);
+        await configurations.AcceptRunSelectionAsync(
+            runCaller,
+            project.ProjectId,
+            runId,
+            RunRequest(assigned.Revision, defaults.Revision),
+            CancellationToken.None);
+
+        _ = await contentService.UpdateAsync(
+            owner,
+            project.ProjectId,
+            new SkillAssignmentUpdateRequest(
+                assigned.Revision,
+                firstReceipt.SkillId,
+                secondReceipt.Revision,
+                secondReceipt.ContentDigest,
+                Enabled: true,
+                Order: 0,
+                ["agent-one"]),
+            CancellationToken.None);
+        var assignedSkills = await contentService.ReadAcceptedRunSkillsAsync(
+            runCaller, project.ProjectId, runId, "agent-one", CancellationToken.None);
+        var skill = Assert.Single(assignedSkills);
+        Assert.Equal(firstReceipt.SkillId, skill.SkillId);
+        Assert.Equal(firstReceipt.Revision, skill.Revision);
+        Assert.Equal(firstReceipt.ContentDigest, skill.ContentDigest);
+        Assert.Equal("Follow the initial approved instructions.", skill.Instructions);
+        var resource = Assert.Single(skill.Resources);
+        Assert.Equal("docs/reference.md", resource.RelativePath);
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("# Initial reference\n"),
+            resource.Content.ToArray());
+        Assert.Empty(await contentService.ReadAcceptedRunSkillsAsync(
+            runCaller, project.ProjectId, runId, "agent-two", CancellationToken.None));
+        var inactiveAgent = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            contentService.ReadAcceptedRunSkillsAsync(
+                runCaller, project.ProjectId, runId, "inactive-agent", CancellationToken.None));
+        Assert.Equal(StatusCodes.Status404NotFound, inactiveAgent.StatusCode);
+
+        var staleRunPrincipal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", "skill-orchestrator-" + suffix),
+            new Claim("scope", "api.read projects.orchestrator"),
+            new Claim("project_id", project.ProjectId),
+            new Claim("run_id", "stale-" + runId),
+        ], "test"));
+        var staleRunCaller = await new ProjectAuthorizationOwner(
+                db, new ProjectsConfigIdentityOptions(TestIssuer))
+            .ResolveAsync(staleRunPrincipal, [tenantId], CancellationToken.None);
+        var staleBinding = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            contentService.ReadAcceptedRunSkillsAsync(
+                staleRunCaller, project.ProjectId, runId, "agent-one", CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, staleBinding.StatusCode);
+
+        await contentService.RevokeAsync(
+            owner, project.ProjectId, firstReceipt.SkillId, firstReceipt.Revision,
+            "The pinned revision was withdrawn.", CancellationToken.None);
+        var revoked = await Assert.ThrowsAsync<SkillContentServiceException>(() =>
+            contentService.ReadAcceptedRunSkillsAsync(
+                runCaller, project.ProjectId, runId, "agent-one", CancellationToken.None));
+        Assert.Equal(StatusCodes.Status409Conflict, revoked.StatusCode);
     }
 
     [Fact]
@@ -1581,6 +1799,57 @@ public sealed class ProjectsConfigPostgresTests(ProjectsConfigPostgresFixture fi
         AssignmentInsert,
         AssignmentUpdate,
         MembershipUpdate,
+    }
+
+    private static SkillContentCandidate SkillCandidate(string instructions, string referenceText) =>
+        new(
+            Encoding.UTF8.GetBytes($$"""
+                ---
+                name: pinned-skill
+                description: A revision-pinned integration test skill.
+                ---
+                {{instructions}}
+                """),
+            [
+                new SkillContentResourceInput(
+                    "docs/reference.md",
+                    Encoding.UTF8.GetBytes(referenceText)),
+            ]);
+
+    private sealed class SkillTestObjectStore : IObjectStore
+    {
+        private readonly ConcurrentDictionary<string, byte[]> _objects = new(StringComparer.Ordinal);
+
+        public Task WriteAsync(
+            ObjectKey key,
+            Stream content,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using var buffer = new MemoryStream();
+            content.CopyTo(buffer);
+            if (!_objects.TryAdd(key.Value, buffer.ToArray()))
+                throw new InvalidOperationException("The immutable test object already exists.");
+            return Task.CompletedTask;
+        }
+
+        public Task<ObjectRead?> ReadAsync(
+            ObjectKey key,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<ObjectRead?>(_objects.TryGetValue(key.Value, out var bytes)
+                ? new ObjectRead(new MemoryStream(bytes, writable: false), bytes.LongLength, static () => { })
+                : null);
+        }
+
+        public Task<bool> DeleteAsync(
+            ObjectKey key,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(_objects.TryRemove(key.Value, out _));
+        }
     }
 
     private async Task AssertImmutableAsync(string sql, (string Name, object Value)? parameter = null)

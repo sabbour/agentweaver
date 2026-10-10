@@ -140,3 +140,29 @@ dotnet test tests/Agentweaver.Projects.Config.Tests/Agentweaver.Projects.Config.
 ```
 
 The PostgreSQL tests use Testcontainers. They verify tenant-scoped run selection, revision and idempotency behavior, model fail-closed semantics, provider candidate metadata, SELECT-only runtime authority grants, CAS revocation and audit retention, the last-Owner invariant, and database append-only triggers.
+
+## Skill content and assignment
+
+`POST /api/skills/preview` validates a `SKILL.md` document and its text resources
+and returns a digest without storing the content. Project import requires current
+project write authority, that exact digest, and an idempotency key. Each successful
+import creates an immutable revision with source provenance. Reusing the key for a
+different request or importing against a stale revision returns a conflict.
+
+`PUT /api/projects/{projectId}/skills/{skillId}/assignment` writes an ordinary
+configuration revision. An enabled assignment pins an imported content revision
+and digest and names one or more active agents in the project casting. Configuration
+validation rejects missing, mismatched, revoked, or inactive-agent pins.
+
+`GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` rechecks
+current Orchestrator authority and the accepted project/run binding. It returns
+only content pinned by that run's accepted configuration for the requested active
+agent. Unassigned, inactive, stale, revoked, missing, or corrupt content fails
+closed.
+
+Content objects use immutable keys in a dedicated Azure Blob container. Set
+`ProjectsConfig:SkillContent:ContainerUri` to one HTTPS container URI. The Projects
+Config workload identity needs **Storage Blob Data Contributor** on that container
+only. Preview does not need Blob storage; imports and content reads fail closed
+when the container is not configured. The separate `--migrate` command does not
+need Blob configuration.

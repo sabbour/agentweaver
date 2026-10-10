@@ -149,6 +149,48 @@ public sealed class ProjectCastingProposalRecord
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
+public sealed class ProjectSkillContentRevisionRecord
+{
+    public required string ProjectId { get; set; }
+    public required string SkillId { get; set; }
+    public long Revision { get; set; }
+    public required string Name { get; set; }
+    public required string Description { get; set; }
+    public required string ContentDigest { get; set; }
+    public required string ObjectKey { get; set; }
+    public int ResourceCount { get; set; }
+    public long TotalBytes { get; set; }
+    public required string CreatedByActorId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public string? SourceId { get; set; }
+    public string? SourceRevision { get; set; }
+    public string? RequestedRef { get; set; }
+    public string? ResolvedCommitSha { get; set; }
+    public string? SelectedPath { get; set; }
+}
+
+public sealed class ProjectSkillImportIdempotencyRecord
+{
+    public required string ProjectId { get; set; }
+    public required string ScopeDigest { get; set; }
+    public required string ActorIssuer { get; set; }
+    public required string ActorId { get; set; }
+    public required string IdempotencyKey { get; set; }
+    public required string RequestDigest { get; set; }
+    public required string ReceiptJson { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+public sealed class ProjectSkillContentRevocationRecord
+{
+    public required string ProjectId { get; set; }
+    public required string SkillId { get; set; }
+    public long Revision { get; set; }
+    public required string RevokedByActorId { get; set; }
+    public required string Reason { get; set; }
+    public DateTimeOffset RevokedAt { get; set; }
+}
+
 public sealed class ProjectConfigException(
     string code,
     string message,

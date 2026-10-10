@@ -250,6 +250,8 @@ public sealed partial class ProjectsConfigService
                 (int)HttpStatusCode.BadRequest);
         if (project.State != ProjectLifecycleState.Active)
             throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
+        await SkillContentService.ValidateConfigurationAsync(
+            db, project.ProjectId, normalized, cancellationToken).ConfigureAwait(false);
         if (project.ConfigurationRevision != expectedRevision)
             throw ProjectConfigException.Conflict("The project configuration revision has changed.");
 
@@ -368,7 +370,10 @@ public sealed partial class ProjectsConfigService
             .SingleAsync(item => item.ProjectId == project.ProjectId &&
                 item.Revision == project.ConfigurationRevision, cancellationToken)
             .ConfigureAwait(false);
-        var projectConfiguration = Deserialize<ProjectConfiguration>(projectVersion.ConfigurationJson);
+        var projectConfiguration = ProjectConfigurationValidator.Validate(
+            Deserialize<ProjectConfiguration>(projectVersion.ConfigurationJson));
+        await SkillContentService.ValidateConfigurationAsync(
+            db, project.ProjectId, projectConfiguration, cancellationToken).ConfigureAwait(false);
 
         var platformHead = await GetPlatformHeadAsync(cancellationToken).ConfigureAwait(false);
         if (platformHead.CurrentRevision == 0)

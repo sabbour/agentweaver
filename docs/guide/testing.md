@@ -394,3 +394,9 @@ Pure parser tests cover exact Registry versions, static HTTPS endpoints, duplica
 JSON fields, tool names, schema shapes, and byte limits.
 These tests do not prove live discovery, OAuth credential use, applied L7 policy,
 or a protected remote request.
+
+Project skill content has pure tests for manifest/resource validation, normalized
+path collisions, digest stability, immutable object writes, and missing or corrupt
+objects. The Projects Config PostgreSQL test verifies idempotent imports, revision
+conflicts, assignment to active agents, and reads of the exact accepted revision
+and resources. It requires the repository's Testcontainers PostgreSQL fixture.
