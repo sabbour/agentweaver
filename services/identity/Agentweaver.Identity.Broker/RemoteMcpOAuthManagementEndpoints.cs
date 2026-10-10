@@ -16,6 +16,11 @@ public static class RemoteMcpOAuthManagementEndpoints
             {
                 AuthenticationSchemes = OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme
             });
+        routes.MapPost("/register",
+            (HttpContext context, RemoteMcpOAuthConnectionRegistrationRequest input) =>
+                ExecuteAsync(context, (service, actor, issuer, actorId) =>
+                    service.RegisterConnectionAsync(actor, issuer, actorId, input,
+                        context.RequestAborted)));
         routes.MapGet("/{connectionId:guid}", (HttpContext context, Guid connectionId) =>
             ExecuteAsync(context, (service, actor, issuer, actorId) =>
                 service.ReadStatusAsync(actor, issuer, actorId, connectionId, context.RequestAborted)));
@@ -28,6 +33,16 @@ public static class RemoteMcpOAuthManagementEndpoints
             (HttpContext context, Guid connectionId, RemoteMcpOAuthConsentPreparationRequest input) =>
                 ExecuteAsync(context, (service, actor, issuer, actorId) =>
                     service.PrepareConsentAsync(actor, issuer, actorId, connectionId, input,
+                        context.RequestAborted)));
+        routes.MapPost("/{connectionId:guid}/refresh",
+            (HttpContext context, Guid connectionId, RemoteMcpOAuthRefreshRequest input) =>
+                ExecuteAsync(context, (service, actor, issuer, actorId) =>
+                    service.RefreshAsync(actor, issuer, actorId, connectionId, input,
+                        context.RequestAborted)));
+        routes.MapPost("/callback",
+            (HttpContext context, RemoteMcpOAuthCallbackRequest input) =>
+                ExecuteAsync(context, (service, actor, issuer, actorId) =>
+                    service.CompleteCallbackAsync(actor, issuer, actorId, input,
                         context.RequestAborted)));
     }
 

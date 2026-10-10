@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   binding: null as { projectId: string; runId: string } | null,
   authProvider: vi.fn(),
   tenantSelector: 'tenant-1',
+  completeRemoteMcpOAuthCallback: vi.fn(),
   listProjects: vi.fn(),
   getProject: vi.fn(),
   getProjectConfiguration: vi.fn(),
@@ -41,6 +42,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('./api', () => ({
   gatewayClient: {
+    completeRemoteMcpOAuthCallback: mocks.completeRemoteMcpOAuthCallback,
     listProjects: mocks.listProjects,
     getProject: mocks.getProject,
     getProjectConfiguration: mocks.getProjectConfiguration,
@@ -338,6 +340,7 @@ describe('v1 web project scoping', () => {
     mocks.authProvider.mockClear();
     mocks.binding = null;
     mocks.tenantSelector = 'tenant-1';
+    mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
     mocks.listProjects.mockReset().mockResolvedValue([]);
     mocks.getProject.mockReset();
     mocks.getProjectConfiguration.mockReset();
@@ -416,6 +419,68 @@ describe('v1 web project scoping', () => {
         Reflect.deleteProperty(window, 'opener');
       window.__AGENTWEAVER_COPILOT_CALLBACK__ = undefined;
     }
+  });
+
+  it('relays only code and state from the Remote MCP OAuth callback', async () => {
+    const previousOpener = Object.getOwnPropertyDescriptor(window, 'opener');
+    const opener = { postMessage: vi.fn() } as unknown as Window;
+    Object.defineProperty(window, 'opener', { configurable: true, value: opener });
+    const close = vi.spyOn(window, 'close').mockImplementation(() => {});
+    const state = 'A'.repeat(43);
+    window.history.replaceState(
+      {},
+      '',
+      `/auth/remote-mcp/oauth/callback?state=${state}&code=provider-code`,
+    );
+    try {
+      render(<App />);
+      await waitFor(() => expect(opener.postMessage).toHaveBeenCalledWith(
+        {
+          type: 'agentweaver.remote-mcp.oauth.callback',
+          state,
+          code: 'provider-code',
+        },
+        window.location.origin,
+      ));
+      expect(window.location.search).toBe('');
+      expect(mocks.authProvider).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      close.mockRestore();
+      if (previousOpener)
+        Object.defineProperty(window, 'opener', previousOpener);
+      else
+        Reflect.deleteProperty(window, 'opener');
+    }
+  });
+
+  it('submits same-origin Remote MCP popup messages using the current bearer session', async () => {
+    const popup = { closed: false } as unknown as Window;
+    const state = 'B'.repeat(43);
+    render(<App />);
+
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: window.location.origin,
+      source: popup,
+      data: {
+        type: 'agentweaver.remote-mcp.oauth.callback',
+        state,
+        code: 'provider-code',
+      },
+    }));
+
+    await waitFor(() => expect(mocks.completeRemoteMcpOAuthCallback).toHaveBeenCalledWith(
+      'broker-token',
+      {
+        type: 'agentweaver.remote-mcp.oauth.callback',
+        state,
+        code: 'provider-code',
+      },
+      'tenant-1',
+    ));
+    expect(await screen.findByText(
+      'The Remote MCP authorization was received by Identity.',
+    )).toBeDefined();
   });
 
   it('relays only identity callbacks from the configured Broker issuer', async () => {

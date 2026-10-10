@@ -366,6 +366,7 @@ public sealed class RemoteMcpOAuthLifecycleTests
             configurationRevision, environmentConfigurationHash, identityBindingReference,
             endpoint ?? new Uri("https://mcp.example.test/"), resource ?? new Uri("https://mcp.example.test/resource"),
             issuer ?? new Uri("https://issuer.example.test/"),
+            "registered-client",
             redirectUri ?? new Uri("https://identity.example.test/oauth/callback"),
             transportProfile,
             scopes ?? ["tools.list", "tools.read"]);

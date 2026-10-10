@@ -24,6 +24,8 @@ public sealed class RemoteMcpOAuthProtocolTests
         Assert.Equal(AuthorizationEndpoint, metadata.AuthorizationEndpoint);
         Assert.Equal(TokenEndpoint, metadata.TokenEndpoint);
         Assert.Equal(["tools.list", "tools.read"], metadata.ScopesSupported);
+        Assert.True(metadata.SupportsRefreshToken);
+        Assert.False(Validate(binding, grantTypes: ["authorization_code"]).SupportsRefreshToken);
 
         Assert.Equal("remote_mcp_metadata_binding_mismatch", Assert.Throws<RemoteMcpOAuthProtocolException>(
             () => Validate(binding, resource: "https://mcp.example.test/other")).Code);
@@ -95,6 +97,18 @@ public sealed class RemoteMcpOAuthProtocolTests
     }
 
     [Fact]
+    public void MetadataDiscoveryUrisKeepTheExactResourceAndIssuerPaths()
+    {
+        Assert.Equal(
+            "https://mcp.example.test/.well-known/oauth-protected-resource/resource",
+            RemoteMcpOAuthProtocol.GetProtectedResourceMetadataUri(Resource).AbsoluteUri);
+        Assert.Equal(
+            "https://issuer.example.test/.well-known/oauth-authorization-server/tenant/",
+            RemoteMcpOAuthProtocol.GetAuthorizationServerMetadataUri(
+                new Uri("https://issuer.example.test/tenant/")).AbsoluteUri);
+    }
+
+    [Fact]
     public void AuthorizationRequestRejectsStaleBindingAndParameterCollision()
     {
         var binding = Binding();
@@ -129,12 +143,13 @@ public sealed class RemoteMcpOAuthProtocolTests
         string[]? responseTypes = null,
         string[]? challengeMethods = null,
         string[]? serverScopes = null,
-        string[]? approvedOAuthEndpoints = null) =>
+        string[]? approvedOAuthEndpoints = null,
+        string[]? grantTypes = null) =>
         RemoteMcpOAuthProtocol.ValidateMetadata(
             binding,
             ResourceJson(resource),
             AuthorizationServerJson(
-                issuer, authorizationEndpoint, responseTypes, challengeMethods, serverScopes),
+                issuer, authorizationEndpoint, responseTypes, challengeMethods, serverScopes, grantTypes),
             (approvedOAuthEndpoints ?? [AuthorizationEndpoint.AbsoluteUri, TokenEndpoint.AbsoluteUri])
                 .Select(value => new Uri(value)));
 
@@ -151,7 +166,8 @@ public sealed class RemoteMcpOAuthProtocolTests
         string? authorizationEndpoint = null,
         string[]? responseTypes = null,
         string[]? challengeMethods = null,
-        string[]? scopesSupported = null)
+        string[]? scopesSupported = null,
+        string[]? grantTypes = null)
     {
         var metadata = new Dictionary<string, object?>
         {
@@ -160,7 +176,7 @@ public sealed class RemoteMcpOAuthProtocolTests
             ["token_endpoint"] = TokenEndpoint.AbsoluteUri,
             ["response_types_supported"] = responseTypes ?? ["code"],
             ["code_challenge_methods_supported"] = challengeMethods ?? ["S256"],
-            ["grant_types_supported"] = new[] { "authorization_code", "refresh_token" }
+            ["grant_types_supported"] = grantTypes ?? ["authorization_code", "refresh_token"]
         };
         if (scopesSupported is not null)
             metadata["scopes_supported"] = scopesSupported;
@@ -179,6 +195,7 @@ public sealed class RemoteMcpOAuthProtocolTests
         new("human-1", "tenant-1", projectId, Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
             7, new string('a', 64), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             new Uri("https://mcp.example.test/"), Resource, Issuer,
+            "registered-client",
             new Uri("https://identity.example.test/oauth/callback"),
             RemoteMcpOAuthConnectionBinding.SupportedTransportProfile,
             ["tools.read", "tools.list"]);

@@ -11,7 +11,8 @@ public sealed class RemoteMcpOAuthServerMetadata
         Uri issuer,
         Uri authorizationEndpoint,
         Uri tokenEndpoint,
-        IReadOnlyList<string>? scopesSupported)
+        IReadOnlyList<string>? scopesSupported,
+        bool supportsRefreshToken)
     {
         BindingHash = bindingHash;
         Resource = resource;
@@ -19,6 +20,7 @@ public sealed class RemoteMcpOAuthServerMetadata
         AuthorizationEndpoint = authorizationEndpoint;
         TokenEndpoint = tokenEndpoint;
         ScopesSupported = scopesSupported;
+        SupportsRefreshToken = supportsRefreshToken;
     }
 
     public string BindingHash { get; }
@@ -27,6 +29,7 @@ public sealed class RemoteMcpOAuthServerMetadata
     public Uri AuthorizationEndpoint { get; }
     public Uri TokenEndpoint { get; }
     public IReadOnlyList<string>? ScopesSupported { get; }
+    public bool SupportsRefreshToken { get; }
 }
 
 public sealed class RemoteMcpOAuthProtocolException(string code) : Exception(code)
@@ -42,6 +45,39 @@ public static class RemoteMcpOAuthProtocol
     private const string UnsupportedProfile = "remote_mcp_metadata_profile_unsupported";
     private const string UnapprovedEndpoint = "remote_mcp_metadata_endpoint_unapproved";
     private const string InvalidAuthorizationRequest = "remote_mcp_authorization_request_invalid";
+
+    public static Uri GetProtectedResourceMetadataUri(Uri resource)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        if (!IsCanonicalHttpsUri(resource.OriginalString, out var canonical) ||
+            canonical != resource)
+            throw new RemoteMcpOAuthProtocolException(InvalidMetadata);
+
+        var path = canonical.AbsolutePath == "/" ? string.Empty : canonical.AbsolutePath;
+        return new UriBuilder(canonical)
+        {
+            Path = "/.well-known/oauth-protected-resource" + path,
+            Query = string.Empty,
+            Fragment = string.Empty
+        }.Uri;
+    }
+
+    public static Uri GetAuthorizationServerMetadataUri(Uri issuer)
+    {
+        ArgumentNullException.ThrowIfNull(issuer);
+        if (!IsCanonicalHttpsUri(issuer.OriginalString, out var canonical) ||
+            canonical != issuer ||
+            canonical.Query.Length != 0)
+            throw new RemoteMcpOAuthProtocolException(InvalidMetadata);
+
+        var path = canonical.AbsolutePath == "/" ? string.Empty : canonical.AbsolutePath;
+        return new UriBuilder(canonical)
+        {
+            Path = "/.well-known/oauth-authorization-server" + path,
+            Query = string.Empty,
+            Fragment = string.Empty
+        }.Uri;
+    }
 
     public static RemoteMcpOAuthServerMetadata ValidateMetadata(
         RemoteMcpOAuthConnectionBinding binding,
@@ -113,7 +149,8 @@ public static class RemoteMcpOAuthProtocol
             issuer,
             authorizationEndpoint,
             tokenEndpoint,
-            supportedScopes is null ? null : Array.AsReadOnly(supportedScopes));
+            supportedScopes is null ? null : Array.AsReadOnly(supportedScopes),
+            grantTypes?.Contains("refresh_token", StringComparer.Ordinal) == true);
     }
 
     public static Uri BuildAuthorizationRequestUri(
@@ -129,7 +166,9 @@ public static class RemoteMcpOAuthProtocol
             metadata.Resource != binding.Resource ||
             metadata.Issuer != binding.Issuer ||
             string.IsNullOrWhiteSpace(clientId) || clientId.Length > 256 ||
-            clientId.Any(char.IsControl) || !material.IsFor(binding))
+            clientId.Any(char.IsControl) ||
+            !string.Equals(clientId, binding.ClientId, StringComparison.Ordinal) ||
+            !material.IsFor(binding))
             throw new RemoteMcpOAuthProtocolException(InvalidAuthorizationRequest);
 
         var parameters = new[]

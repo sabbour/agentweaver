@@ -7,9 +7,11 @@ using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
+using Agentweaver.Secrets.AzureKeyVault;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using System.Reflection;
 using Xunit;
 
 namespace Agentweaver.Identity.Broker.Tests;
@@ -45,8 +47,10 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
             using var projects = new HttpClient(projectsHandler);
             using var environment = new HttpClient(environmentHandler);
+            var metadataHandler = new MetadataProviderHandler();
+            using var provider = new HttpClient(metadataHandler);
             var secrets = new ControlledSecretWriter();
-            var service = CreateService(db, projects, environment, secrets);
+            var service = CreateService(db, projects, environment, provider, secrets);
 
             var result = await service.PrepareConsentAsync(
                 Actor(), Issuer, ActorId, ConnectionId, Request(), CancellationToken.None);
@@ -56,6 +60,16 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             Assert.Equal(2, result.ConfigurationRevision);
             Assert.Equal(FinalConfigurationHash, result.ConfigurationSha256);
             Assert.Equal(2, result.ConnectionRevision);
+            Assert.Equal("https://issuer.example.test/authorize", result.AuthorizationUri.GetLeftPart(UriPartial.Path));
+            Assert.Equal("registered-client", ParseQuery(result.AuthorizationUri)["client_id"]);
+            Assert.Collection(
+                metadataHandler.Requests,
+                uri => Assert.Equal(
+                    "https://mcp.example.test/.well-known/oauth-protected-resource/resource",
+                    uri.AbsoluteUri),
+                uri => Assert.Equal(
+                    "https://issuer.example.test/.well-known/oauth-authorization-server",
+                    uri.AbsoluteUri));
             Assert.Equal("remote-mcp-" + ConnectionId.ToString("N") + "-verifier",
                 Assert.Single(secrets.SecretIds));
             Assert.Equal(1, environmentHandler.LinkRequests);
@@ -92,17 +106,506 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
     }
 
     [Fact]
+    public async Task CallbackExchangesCodeAndPersistsOnlyProtectedTokenReferences()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            var providerHandler = new MetadataProviderHandler();
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            var service = CreateService(db, projects, environment, provider, secrets, secrets);
+
+            var preparation = await service.PrepareConsentAsync(
+                Actor(), Issuer, ActorId, ConnectionId, Request(), CancellationToken.None);
+            var status = await service.CompleteCallbackAsync(
+                Actor(), Issuer, ActorId,
+                new RemoteMcpOAuthCallbackRequest(preparation.State, "authorization-code", null),
+                CancellationToken.None);
+
+            Assert.Equal(RemoteMcpOAuthConnectionState.Authorized.ToString(), status.State);
+            Assert.Collection(
+                providerHandler.Requests,
+                uri => Assert.Equal(
+                    "https://mcp.example.test/.well-known/oauth-protected-resource/resource",
+                    uri.AbsoluteUri),
+                uri => Assert.Equal(
+                    "https://issuer.example.test/.well-known/oauth-authorization-server",
+                    uri.AbsoluteUri),
+                uri => Assert.Equal(
+                    "https://mcp.example.test/.well-known/oauth-protected-resource/resource",
+                    uri.AbsoluteUri),
+                uri => Assert.Equal(
+                    "https://issuer.example.test/.well-known/oauth-authorization-server",
+                    uri.AbsoluteUri),
+                uri => Assert.Equal("https://issuer.example.test/token", uri.AbsoluteUri));
+            Assert.Equal(
+                ["remote-mcp-" + ConnectionId.ToString("N") + "-verifier",
+                    "remote-mcp-" + ConnectionId.ToString("N") + "-access",
+                    "remote-mcp-" + ConnectionId.ToString("N") + "-refresh"],
+                secrets.SecretIds);
+
+            var savedConnection = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            var savedConsent = await db.RemoteMcpOAuthConsents.AsNoTracking()
+                .SingleAsync(item => item.ConnectionRecordId == row.Id);
+            Assert.Equal(RemoteMcpOAuthConnectionState.Authorized, savedConnection.State);
+            Assert.Equal(secrets.References[1].Id, savedConnection.AccessTokenSecretId);
+            Assert.Equal(secrets.References[1].Version, savedConnection.AccessTokenSecretVersion);
+            Assert.Equal(secrets.References[2].Id, savedConnection.RefreshTokenSecretId);
+            Assert.Equal(secrets.References[2].Version, savedConnection.RefreshTokenSecretVersion);
+            Assert.Equal(RemoteMcpOAuthConsentState.Consumed, savedConsent.State);
+            Assert.Null(savedConsent.ClaimAttemptId);
+
+            var persisted = JsonSerializer.Serialize(new { savedConnection, savedConsent });
+            Assert.DoesNotContain("access-token-value", persisted, StringComparison.Ordinal);
+            Assert.DoesNotContain("refresh-token-value", persisted, StringComparison.Ordinal);
+
+            var replay = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.CompleteCallbackAsync(
+                    Actor(), Issuer, ActorId,
+                    new RemoteMcpOAuthCallbackRequest(preparation.State, "authorization-code", null),
+                    CancellationToken.None));
+            Assert.Equal("remote_mcp_connection_revision_conflict", replay.Code);
+            Assert.Single(providerHandler.TokenGrantTypes);
+        }
+    }
+
+    [Fact]
+    public async Task CallbackStateCannotBeResolvedByAnotherHuman()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedConnectionAsync(db);
+            using var projects = new HttpClient(new ProjectsOwnerHandler());
+            using var environment = new HttpClient(new EnvironmentOwnerHandler(row.IdentityBindingReference));
+            var providerHandler = new MetadataProviderHandler();
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            var service = CreateService(db, projects, environment, provider, secrets, secrets);
+            var preparation = await service.PrepareConsentAsync(
+                Actor(), Issuer, ActorId, ConnectionId, Request(), CancellationToken.None);
+            var requestsBeforeCallback = providerHandler.Requests.Count;
+
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.CompleteCallbackAsync(
+                    Actor(), Issuer, "another-human",
+                    new RemoteMcpOAuthCallbackRequest(preparation.State, "authorization-code", null),
+                    CancellationToken.None));
+
+            Assert.Equal("remote_mcp_connection_not_found", error.Code);
+            Assert.Equal(requestsBeforeCallback, providerHandler.Requests.Count);
+            var savedConsent = await db.RemoteMcpOAuthConsents.AsNoTracking()
+                .SingleAsync(item => item.ConnectionRecordId == row.Id);
+            Assert.Equal(RemoteMcpOAuthConsentState.Pending, savedConsent.State);
+        }
+    }
+
+    [Fact]
+    public async Task UncertainTokenExchangeTimeoutConsumesClaimAndClosesPendingConnection()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            var providerHandler = new MetadataProviderHandler(failTokenExchange: true);
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            var service = CreateService(db, projects, environment, provider, secrets, secrets);
+
+            var preparation = await service.PrepareConsentAsync(
+                Actor(), Issuer, ActorId, ConnectionId, Request(), CancellationToken.None);
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.CompleteCallbackAsync(
+                    Actor(), Issuer, ActorId,
+                    new RemoteMcpOAuthCallbackRequest(preparation.State, "authorization-code", null),
+                    CancellationToken.None));
+
+            Assert.Equal("remote_mcp_oauth_exchange_uncertain", error.Code);
+            var savedConnection = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            var savedConsent = await db.RemoteMcpOAuthConsents.AsNoTracking()
+                .SingleAsync(item => item.ConnectionRecordId == row.Id);
+            Assert.Equal(RemoteMcpOAuthConnectionState.NotConnected, savedConnection.State);
+            Assert.Equal(RemoteMcpOAuthConsentState.Consumed, savedConsent.State);
+            Assert.Null(savedConsent.ClaimAttemptId);
+        }
+    }
+
+    [Fact]
+    public async Task TokenSecretWriteFailureConsumesCallbackAfterProviderMayHaveIssuedTokens()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            var providerHandler = new MetadataProviderHandler();
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter
+            {
+                WriteFailure = CreateSecretStoreFailure()
+            };
+            var service = CreateService(db, projects, environment, provider, secrets, secrets);
+
+            var preparation = await service.PrepareConsentAsync(
+                Actor(), Issuer, ActorId, ConnectionId, Request(), CancellationToken.None);
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.CompleteCallbackAsync(
+                    Actor(), Issuer, ActorId,
+                    new RemoteMcpOAuthCallbackRequest(preparation.State, "authorization-code", null),
+                    CancellationToken.None));
+
+            Assert.Equal("remote_mcp_secret_store_unavailable", error.Code);
+            Assert.Equal("https://issuer.example.test/token", providerHandler.Requests[^1].AbsoluteUri);
+            var savedConnection = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            var savedConsent = await db.RemoteMcpOAuthConsents.AsNoTracking()
+                .SingleAsync(item => item.ConnectionRecordId == row.Id);
+            Assert.Equal(RemoteMcpOAuthConnectionState.NotConnected, savedConnection.State);
+            Assert.Equal(row.ConnectionRevision + 2, savedConnection.ConnectionRevision);
+            Assert.Equal(row.CredentialRevision + 2, savedConnection.CredentialRevision);
+            Assert.Null(savedConnection.AccessTokenSecretId);
+            Assert.Null(savedConnection.AccessTokenSecretVersion);
+            Assert.Null(savedConnection.AccessTokenExpiresAt);
+            Assert.Null(savedConnection.RefreshTokenSecretId);
+            Assert.Null(savedConnection.RefreshTokenSecretVersion);
+            Assert.Null(savedConnection.RefreshTokenExpiresAt);
+            Assert.Equal(RemoteMcpOAuthConsentState.Consumed, savedConsent.State);
+            Assert.Null(savedConsent.ClaimAttemptId);
+            Assert.DoesNotContain("access-token-value", secrets.Values);
+            Assert.DoesNotContain("refresh-token-value", secrets.Values);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshRotatesOnlyUnderTheCurrentDurableBindingAndCredentialRevision()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedAuthorizedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(
+                row.IdentityBindingReference, linked: true);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            var providerHandler = new MetadataProviderHandler();
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-access",
+                "version-1", "stored-access-token");
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-refresh",
+                "version-1", "stored-refresh-token");
+            var service = CreateService(db, projects, environment, provider, secrets, secrets);
+
+            var status = await service.RefreshAsync(
+                Actor(), Issuer, ActorId, ConnectionId,
+                new RemoteMcpOAuthRefreshRequest(
+                    row.ConnectionRevision, row.CredentialRevision, row.ConfigurationRevision),
+                CancellationToken.None);
+
+            var saved = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            Assert.Equal(RemoteMcpOAuthConnectionState.Authorized.ToString(), status.State);
+            Assert.Equal(row.ConnectionRevision + 2, saved.ConnectionRevision);
+            Assert.Equal(row.CredentialRevision + 1, saved.CredentialRevision);
+            Assert.Equal("version-2", saved.AccessTokenSecretVersion);
+            Assert.Equal("version-2", saved.RefreshTokenSecretVersion);
+            Assert.Equal(["refresh_token"], providerHandler.TokenGrantTypes);
+            Assert.Contains("stored-refresh-token", secrets.Values);
+            Assert.DoesNotContain("access-token-value", JsonSerializer.Serialize(saved));
+            Assert.DoesNotContain("refresh-token-value", JsonSerializer.Serialize(saved));
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentRefreshRequestsShareOneDurableLeaseAndOneProviderExchange()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        await using (var secondDb = CreateDatabaseContext(dataSource))
+        {
+            var row = await SeedAuthorizedConnectionAsync(db);
+            using var projects1 = new HttpClient(new ProjectsOwnerHandler());
+            using var projects2 = new HttpClient(new ProjectsOwnerHandler());
+            using var environment1 = new HttpClient(new EnvironmentOwnerHandler(
+                row.IdentityBindingReference, linked: true));
+            using var environment2 = new HttpClient(new EnvironmentOwnerHandler(
+                row.IdentityBindingReference, linked: true));
+            var providerHandler = new MetadataProviderHandler(synchronizeMetadata: true);
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-access",
+                "version-1", "stored-access-token");
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-refresh",
+                "version-1", "stored-refresh-token");
+            var firstService = CreateService(db, projects1, environment1, provider, secrets, secrets);
+            var secondService = CreateService(secondDb, projects2, environment2, provider, secrets, secrets);
+            var request = new RemoteMcpOAuthRefreshRequest(
+                row.ConnectionRevision, row.CredentialRevision, row.ConfigurationRevision);
+
+            var first = firstService.RefreshAsync(
+                Actor(), Issuer, ActorId, ConnectionId, request, CancellationToken.None);
+            var second = secondService.RefreshAsync(
+                Actor(), Issuer, ActorId, ConnectionId, request, CancellationToken.None);
+            var successful = 0;
+            var conflicted = 0;
+            foreach (var task in new[] { first, second })
+            {
+                try
+                {
+                    await task;
+                    successful++;
+                }
+                catch (RemoteMcpOAuthManagementException error)
+                    when (error.Code == "remote_mcp_connection_revision_conflict")
+                {
+                    conflicted++;
+                }
+            }
+
+            Assert.Equal(1, successful);
+            Assert.Equal(1, conflicted);
+            Assert.Equal(["refresh_token"], providerHandler.TokenGrantTypes);
+            var saved = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            Assert.Equal(RemoteMcpOAuthConnectionState.Authorized, saved.State);
+            Assert.Equal(row.ConnectionRevision + 2, saved.ConnectionRevision);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshResponseLossBecomesIndeterminateAndCannotBeRetried()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedAuthorizedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(
+                row.IdentityBindingReference, linked: true);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            var providerHandler = new MetadataProviderHandler(failRefreshTokenExchange: true);
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-access",
+                "version-1", "stored-access-token");
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-refresh",
+                "version-1", "stored-refresh-token");
+            var service = CreateService(db, projects, environment, provider, secrets, secrets);
+            var request = new RemoteMcpOAuthRefreshRequest(
+                row.ConnectionRevision, row.CredentialRevision, row.ConfigurationRevision);
+
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.RefreshAsync(Actor(), Issuer, ActorId, ConnectionId, request, CancellationToken.None));
+
+            var saved = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            Assert.Equal("remote_mcp_oauth_refresh_uncertain", error.Code);
+            Assert.Equal(RemoteMcpOAuthConnectionState.RefreshIndeterminate, saved.State);
+            Assert.Equal(row.CredentialRevision, saved.CredentialRevision);
+            Assert.Equal("version-1", saved.RefreshTokenSecretVersion);
+            Assert.Single(providerHandler.TokenGrantTypes);
+            await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.RefreshAsync(Actor(), Issuer, ActorId, ConnectionId, request, CancellationToken.None));
+            Assert.Single(providerHandler.TokenGrantTypes);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshSecretWriteFailureAfterProviderSuccessLeavesCredentialIndeterminate()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedAuthorizedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(
+                row.IdentityBindingReference, linked: true);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            var providerHandler = new MetadataProviderHandler();
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter
+            {
+                WriteFailure = CreateSecretStoreFailure()
+            };
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-access",
+                "version-1", "stored-access-token");
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-refresh",
+                "version-1", "stored-refresh-token");
+            var service = CreateService(db, projects, environment, provider, secrets, secrets);
+            var request = new RemoteMcpOAuthRefreshRequest(
+                row.ConnectionRevision, row.CredentialRevision, row.ConfigurationRevision);
+
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.RefreshAsync(Actor(), Issuer, ActorId, ConnectionId, request, CancellationToken.None));
+
+            var saved = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            Assert.Equal("remote_mcp_secret_store_unavailable", error.Code);
+            Assert.Equal(RemoteMcpOAuthConnectionState.RefreshIndeterminate, saved.State);
+            Assert.Equal(row.ConnectionRevision + 2, saved.ConnectionRevision);
+            Assert.Equal(row.CredentialRevision, saved.CredentialRevision);
+            Assert.Equal(row.AccessTokenSecretVersion, saved.AccessTokenSecretVersion);
+            Assert.Equal(row.RefreshTokenSecretVersion, saved.RefreshTokenSecretVersion);
+            Assert.NotNull(saved.RefreshAttemptId);
+            Assert.Single(providerHandler.TokenGrantTypes);
+            Assert.DoesNotContain("access-token-value", secrets.Values);
+            Assert.DoesNotContain("refresh-token-value", secrets.Values);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshInvalidGrantRevokesAndClearsCurrentCredentialReferences()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedAuthorizedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(
+                row.IdentityBindingReference, linked: true);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            var providerHandler = new MetadataProviderHandler(rejectRefreshTokenExchange: true);
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-access",
+                "version-1", "stored-access-token");
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-refresh",
+                "version-1", "stored-refresh-token");
+            var service = CreateService(db, projects, environment, provider, secrets, secrets);
+
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.RefreshAsync(
+                    Actor(), Issuer, ActorId, ConnectionId,
+                    new RemoteMcpOAuthRefreshRequest(
+                        row.ConnectionRevision, row.CredentialRevision, row.ConfigurationRevision),
+                    CancellationToken.None));
+
+            var saved = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            Assert.Equal("remote_mcp_oauth_refresh_rejected", error.Code);
+            Assert.Equal(RemoteMcpOAuthConnectionState.Revoked, saved.State);
+            Assert.Null(saved.AccessTokenSecretId);
+            Assert.Null(saved.RefreshTokenSecretId);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshAuthorityLossAfterProviderWaitLeavesTheCredentialIndeterminate()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedAuthorizedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler(denyWriteOnCheck: 4);
+            var environmentHandler = new EnvironmentOwnerHandler(
+                row.IdentityBindingReference, linked: true);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            var providerHandler = new MetadataProviderHandler();
+            using var provider = new HttpClient(providerHandler);
+            var secrets = new ControlledSecretWriter();
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-access",
+                "version-1", "stored-access-token");
+            secrets.AddSecret("remote-mcp-" + ConnectionId.ToString("N") + "-refresh",
+                "version-1", "stored-refresh-token");
+            var service = CreateService(db, projects, environment, provider, secrets, secrets);
+
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.RefreshAsync(
+                    Actor(), Issuer, ActorId, ConnectionId,
+                    new RemoteMcpOAuthRefreshRequest(
+                        row.ConnectionRevision, row.CredentialRevision, row.ConfigurationRevision),
+                    CancellationToken.None));
+            Assert.Equal("remote_mcp_owner_denied", error.Code);
+            Assert.Equal(StatusCodes.Status403Forbidden, error.StatusCode);
+
+            var saved = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            Assert.Equal(RemoteMcpOAuthConnectionState.RefreshIndeterminate, saved.State);
+            Assert.Equal("version-1", saved.AccessTokenSecretVersion);
+            Assert.Equal("version-1", saved.RefreshTokenSecretVersion);
+            Assert.Equal(["refresh_token"], providerHandler.TokenGrantTypes);
+            Assert.DoesNotContain("access-token-value", secrets.Values);
+        }
+    }
+
+    [Fact]
+    public async Task StatusRecoversAStaleRefreshLeaseAsIndeterminateAfterRestart()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedAuthorizedConnectionAsync(db);
+            row.State = RemoteMcpOAuthConnectionState.RefreshInProgress;
+            row.ConnectionRevision++;
+            row.RefreshAttemptId = Guid.NewGuid();
+            row.RefreshStartedAt = Now.AddMinutes(-3);
+            await db.SaveChangesAsync();
+
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(
+                row.IdentityBindingReference, linked: true);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(new MetadataProviderHandler());
+            var service = CreateService(db, projects, environment, provider, null);
+
+            var status = await service.ReadStatusAsync(
+                Actor(), Issuer, ActorId, ConnectionId, CancellationToken.None);
+
+            var saved = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            Assert.Equal(RemoteMcpOAuthConnectionState.RefreshIndeterminate.ToString(), status.State);
+            Assert.Equal(RemoteMcpOAuthConnectionState.RefreshIndeterminate, saved.State);
+            Assert.NotNull(saved.RefreshAttemptId);
+            Assert.Equal(row.CredentialRevision, saved.CredentialRevision);
+        }
+    }
+
+    [Fact]
     public async Task MissingWriterFailsBeforeAnyOwnerRequestOrEnvironmentLink()
     {
         var (db, dataSource) = await CreateDatabaseAsync();
         await using (dataSource)
         await using (db)
         {
+            await SeedConnectionOwnerAsync(db);
             var projectsHandler = new ProjectsOwnerHandler();
             var environmentHandler = new EnvironmentOwnerHandler(Guid.NewGuid().ToString("N"));
             using var projects = new HttpClient(projectsHandler);
             using var environment = new HttpClient(environmentHandler);
-            var service = CreateService(db, projects, environment, secretWriter: null);
+            using var provider = new HttpClient(new MetadataProviderHandler());
+            var service = CreateService(db, projects, environment, provider, secretWriter: null);
 
             var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
                 service.PrepareConsentAsync(
@@ -112,6 +615,116 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             Assert.Equal(StatusCodes.Status503ServiceUnavailable, error.StatusCode);
             Assert.Empty(projectsHandler.Requests);
             Assert.Empty(environmentHandler.Requests);
+        }
+    }
+
+    [Fact]
+    public async Task RegistrationBindsTheAuthenticatedHumanProjectAndCurrentEnvironmentConfiguration()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            await SeedConnectionOwnerAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(Guid.NewGuid().ToString("N"));
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(new MetadataProviderHandler());
+            var service = CreateService(db, projects, environment, provider, new ControlledSecretWriter());
+
+            var result = await service.RegisterConnectionAsync(
+                Actor(), Issuer, ActorId, RegistrationRequest(), CancellationToken.None);
+
+            Assert.Equal(ConnectionId, result.ConnectionId);
+            Assert.Equal(ProjectId, result.ProjectId);
+            Assert.Equal(1, result.ConnectionRevision);
+            Assert.Equal(0, result.CredentialRevision);
+            Assert.Equal(RemoteMcpOAuthConnectionState.NotConnected.ToString(), result.State);
+            Assert.False(result.CurrentConfigurationMatches);
+            var owner = await db.Users.AsNoTracking().SingleAsync(user => user.Subject == ActorId);
+            var saved = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(row => row.ConnectionId == ConnectionId);
+            Assert.Equal(owner.Id, saved.OwnerId);
+            Assert.Equal(Issuer, saved.OwnerIssuer);
+            Assert.Equal(ActorId, saved.OwnerActorId);
+            Assert.Equal(TenantId, saved.TenantId);
+            Assert.Equal(ProjectId, saved.ProjectId);
+            Assert.Equal(1, saved.ConfigurationRevision);
+            Assert.Equal(InitialConfigurationHash, saved.EnvironmentConfigurationHash);
+            Assert.Equal("https://mcp.example.test/resource", saved.ResourceUri);
+            Assert.Equal("https://issuer.example.test/", saved.IssuerUri);
+            Assert.Equal("registered-client", saved.ClientId);
+            Assert.Equal("https://web.example.test/auth/remote-mcp/oauth/callback", saved.RedirectUri);
+            Assert.Equal("[\"tools.read\"]", saved.ScopesJson);
+            Assert.Equal(RemoteMcpOAuthConnectionState.NotConnected, saved.State);
+            Assert.Equal(
+                new RemoteMcpOAuthConnectionBinding(
+                    owner.Id.ToString("D"), TenantId, ProjectId, ConnectionId,
+                    1, InitialConfigurationHash, saved.IdentityBindingReference,
+                    new Uri(saved.EndpointUri), new Uri(saved.ResourceUri), new Uri(saved.IssuerUri),
+                    saved.ClientId, new Uri(saved.RedirectUri), saved.TransportProfile, ["tools.read"])
+                    .BindingHash,
+                saved.BindingHash);
+        }
+    }
+
+    [Fact]
+    public async Task RegistrationRejectsUnapprovedScopesAndStaleEnvironmentConfiguration()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            await SeedConnectionOwnerAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(Guid.NewGuid().ToString("N"));
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(new MetadataProviderHandler());
+            var service = CreateService(db, projects, environment, provider, new ControlledSecretWriter());
+
+            var scopeError = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.RegisterConnectionAsync(
+                    Actor(), Issuer, ActorId, RegistrationRequest(["tools.write"]), CancellationToken.None));
+            Assert.Equal("remote_mcp_oauth_scope_unapproved", scopeError.Code);
+            Assert.Empty(projectsHandler.Requests);
+            Assert.Empty(environmentHandler.Requests);
+
+            environmentHandler.DriftCurrentConfiguration();
+            var configError = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.RegisterConnectionAsync(
+                    Actor(), Issuer, ActorId, RegistrationRequest(), CancellationToken.None));
+            Assert.Equal("remote_mcp_connection_revision_conflict", configError.Code);
+            Assert.Empty(await db.RemoteMcpOAuthConnections.AsNoTracking().ToListAsync());
+        }
+    }
+
+    [Fact]
+    public async Task RegistrationRejectsAResourceOutsideTheProviderAllowList()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            await SeedConnectionOwnerAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(Guid.NewGuid().ToString("N"));
+            var metadataHandler = new MetadataProviderHandler();
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(metadataHandler);
+            var service = CreateService(
+                db, projects, environment, provider, new ControlledSecretWriter(),
+                approvedResources: ["https://other.example.test/resource"]);
+
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
+                service.RegisterConnectionAsync(
+                    Actor(), Issuer, ActorId, RegistrationRequest(), CancellationToken.None));
+
+            Assert.Equal("remote_mcp_oauth_resource_unapproved", error.Code);
+            Assert.Empty(metadataHandler.Requests);
+            Assert.Empty(await db.RemoteMcpOAuthConnections.AsNoTracking().ToListAsync());
         }
     }
 
@@ -127,8 +740,9 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
             using var projects = new HttpClient(projectsHandler);
             using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(new MetadataProviderHandler());
             var secrets = new ControlledSecretWriter();
-            var service = CreateService(db, projects, environment, secrets);
+            var service = CreateService(db, projects, environment, provider, secrets);
 
             var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
                 service.PrepareConsentAsync(
@@ -158,8 +772,9 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                 row.IdentityBindingReference, driftAfterLink: true);
             using var projects = new HttpClient(projectsHandler);
             using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(new MetadataProviderHandler());
             var secrets = new ControlledSecretWriter();
-            var service = CreateService(db, projects, environment, secrets);
+            var service = CreateService(db, projects, environment, provider, secrets);
 
             var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
                 service.PrepareConsentAsync(
@@ -189,8 +804,9 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
             using var projects = new HttpClient(projectsHandler);
             using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(new MetadataProviderHandler());
             var secrets = new ControlledSecretWriter();
-            var service = CreateService(db, projects, environment, secrets);
+            var service = CreateService(db, projects, environment, provider, secrets);
 
             await using var lockConnection = await dataSource.OpenConnectionAsync();
             await using var lockTransaction = await lockConnection.BeginTransactionAsync();
@@ -232,22 +848,26 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
     {
         var connectionString = await postgres.CreateMigratedDatabaseAsync();
         var dataSource = NpgsqlDataSource.Create(connectionString);
+        return (CreateDatabaseContext(dataSource), dataSource);
+    }
+
+    private static IdentityBrokerDbContext CreateDatabaseContext(NpgsqlDataSource dataSource)
+    {
         var options = new DbContextOptionsBuilder<IdentityBrokerDbContext>()
             .UseNpgsql(dataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", IdentityBrokerDbContext.Schema))
             .Options;
-        return (new IdentityBrokerDbContext(options), dataSource);
+        return new IdentityBrokerDbContext(options);
     }
 
     private static async Task<RemoteMcpOAuthConnectionRecord> SeedConnectionAsync(
         IdentityBrokerDbContext db)
     {
-        var now = Now;
-        var ownerId = Guid.NewGuid();
+        await SeedConnectionOwnerAsync(db);
         var connection = new RemoteMcpOAuthConnectionRecord
         {
             Id = Guid.NewGuid(),
-            OwnerId = ownerId,
+            OwnerId = (await db.Users.AsNoTracking().SingleAsync(user => user.Subject == ActorId)).Id,
             OwnerIssuer = Issuer,
             OwnerActorId = ActorId,
             TenantId = TenantId,
@@ -259,38 +879,107 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             EndpointUri = "https://mcp.example.test/",
             ResourceUri = "https://mcp.example.test/resource",
             IssuerUri = "https://issuer.example.test/",
-            RedirectUri = "https://identity.example.test/oauth/callback",
+            ClientId = "registered-client",
+            RedirectUri = "https://web.example.test/auth/remote-mcp/oauth/callback",
             TransportProfile = RemoteMcpOAuthConnectionBinding.SupportedTransportProfile,
             ScopesJson = "[\"tools.read\"]",
             BindingHash = new string('c', 64),
             ConnectionRevision = 1,
             CredentialRevision = 0,
             State = RemoteMcpOAuthConnectionState.NotConnected,
-            CreatedAt = now,
-            UpdatedAt = now
+            CreatedAt = Now,
+            UpdatedAt = Now
         };
+        db.RemoteMcpOAuthConnections.Add(connection);
+        await db.SaveChangesAsync();
+        return connection;
+    }
+
+    private static async Task<RemoteMcpOAuthConnectionRecord> SeedAuthorizedConnectionAsync(
+        IdentityBrokerDbContext db)
+    {
+        var row = await SeedConnectionAsync(db);
+        var binding = new RemoteMcpOAuthConnectionBinding(
+            row.OwnerId.ToString("D"),
+            TenantId,
+            ProjectId,
+            ConnectionId,
+            2,
+            FinalConfigurationHash,
+            row.IdentityBindingReference,
+            new Uri("https://mcp.example.test/"),
+            new Uri("https://mcp.example.test/resource"),
+            new Uri("https://issuer.example.test/"),
+            "registered-client",
+            new Uri("https://web.example.test/auth/remote-mcp/oauth/callback"),
+            RemoteMcpOAuthConnectionBinding.SupportedTransportProfile,
+            ["tools.read"]);
+        row.ConfigurationRevision = 2;
+        row.EnvironmentConfigurationHash = FinalConfigurationHash;
+        row.BindingHash = binding.BindingHash;
+        row.ConnectionRevision = 4;
+        row.CredentialRevision = 2;
+        row.State = RemoteMcpOAuthConnectionState.Authorized;
+        row.AccessTokenSecretId = "remote-mcp-" + ConnectionId.ToString("N") + "-access";
+        row.AccessTokenSecretVersion = "version-1";
+        row.AccessTokenExpiresAt = Now.AddMinutes(10);
+        row.RefreshTokenSecretId = "remote-mcp-" + ConnectionId.ToString("N") + "-refresh";
+        row.RefreshTokenSecretVersion = "version-1";
+        row.RefreshTokenExpiresAt = Now.AddDays(1);
+        await db.SaveChangesAsync();
+        return row;
+    }
+
+    private static async Task SeedConnectionOwnerAsync(IdentityBrokerDbContext db)
+    {
+        var now = Now;
         db.Users.Add(new BrokerUser
         {
-            Id = ownerId,
+            Id = Guid.NewGuid(),
             Issuer = Issuer,
             Subject = ActorId,
             CreatedAt = now
         });
-        db.RemoteMcpOAuthConnections.Add(connection);
         await db.SaveChangesAsync();
-        return connection;
     }
 
     private static RemoteMcpOAuthManagementService CreateService(
         IdentityBrokerDbContext db,
         HttpClient projects,
         HttpClient environment,
-        ISecretVersionWriter? secretWriter) =>
+        HttpClient provider,
+        ISecretVersionWriter? secretWriter,
+        ISecretRedemption? secretRedemption = null,
+        IReadOnlyList<string>? approvedResources = null) =>
         new(db, new RemoteMcpOAuthOptions
         {
             ProjectsOwnerAddress = ProjectsOwnerAddress,
-            EnvironmentOwnerAddress = EnvironmentOwnerAddress
-        }, projects, environment, new FrozenTimeProvider(Now), secretWriter);
+            EnvironmentOwnerAddress = EnvironmentOwnerAddress,
+            Providers =
+            [
+                new RemoteMcpOAuthProviderOptions
+                {
+                    IssuerUri = "https://issuer.example.test/",
+                    ApprovedResources = approvedResources ?? ["https://mcp.example.test/resource"],
+                    ClientId = "registered-client",
+                    RedirectUri = "https://web.example.test/auth/remote-mcp/oauth/callback",
+                    ApprovedOAuthEndpoints =
+                    [
+                        "https://issuer.example.test/authorize",
+                        "https://issuer.example.test/token"
+                    ],
+                    ApprovedScopes = ["tools.read"]
+                }
+            ]
+        }, projects, environment, provider, new FrozenTimeProvider(Now), secretWriter, secretRedemption);
+
+    private static Dictionary<string, string> ParseQuery(Uri uri) =>
+        uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => part.Split('=', 2))
+            .ToDictionary(
+                parts => Uri.UnescapeDataString(parts[0].Replace('+', ' ')),
+                parts => Uri.UnescapeDataString(parts[1].Replace('+', ' ')),
+                StringComparer.Ordinal);
 
     private static async Task WaitForConsentPublicationWaitAsync(
         NpgsqlDataSource dataSource,
@@ -320,6 +1009,11 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
     private static RemoteMcpOAuthConsentPreparationRequest Request() =>
         new(1, 0, 1, InitialConfigurationHash);
 
+    private static RemoteMcpOAuthConnectionRegistrationRequest RegistrationRequest(
+        string[]? scopes = null) =>
+        new(ProjectId, ConnectionId, 1, InitialConfigurationHash,
+            "https://issuer.example.test/", scopes ?? ["tools.read"]);
+
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes(value))).ToLowerInvariant();
 
@@ -332,22 +1026,62 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    private sealed class ControlledSecretWriter : ISecretVersionWriter
+    private sealed class ControlledSecretWriter : ISecretVersionWriter, ISecretRedemption
     {
+        private readonly Dictionary<(string Id, string Version), string> _values = [];
+
         public List<string> SecretIds { get; } = [];
         public List<string> Values { get; } = [];
         public List<SecretRef> References { get; } = [];
+        public Exception? WriteFailure { get; init; }
+
+        public void AddSecret(string id, string version, string value)
+        {
+            _values.Add((id, version), value);
+            SecretIds.Add(id);
+            Values.Add(value);
+            References.Add(new SecretRef(id, version));
+        }
 
         public Task<SecretRef> WriteVersionAsync(
             string secretId, SecretCredential credential, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (WriteFailure is not null && secretId.EndsWith("-access", StringComparison.Ordinal))
+                throw WriteFailure;
+            var version = $"version-{References.Count(reference => reference.Id == secretId) + 1}";
+            var value = credential.GetValue();
             SecretIds.Add(secretId);
-            Values.Add(credential.GetValue());
-            var reference = new SecretRef(secretId, "version-1");
+            Values.Add(value);
+            var reference = new SecretRef(secretId, version);
             References.Add(reference);
+            _values.Add((reference.Id, reference.Version), value);
             return Task.FromResult(reference);
         }
+
+        public Task<SecretCredential> RedeemAsync(
+            SecretRedemptionRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Contains(request.Purpose,
+                new[] { "remote-mcp-oauth-verifier", "remote-mcp-oauth-refresh-token" });
+            var value = _values.GetValueOrDefault((request.Secret.Id, request.Secret.Version));
+            Assert.NotNull(value);
+            return Task.FromResult(new SecretCredential(
+                value, Now.AddHours(1), new FrozenTimeProvider(Now)));
+        }
+    }
+
+    private static AzureKeyVaultSecretException CreateSecretStoreFailure()
+    {
+        var constructor = typeof(AzureKeyVaultSecretException).GetConstructor(
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null,
+            [typeof(AzureKeyVaultSecretFailure), typeof(int)],
+            modifiers: null);
+        Assert.NotNull(constructor);
+        return (AzureKeyVaultSecretException)constructor.Invoke(
+            [AzureKeyVaultSecretFailure.ServiceFailure, 503]);
     }
 
     private sealed class ProjectsOwnerHandler(
@@ -393,10 +1127,12 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                 ImmutableArray.Create(new EffectiveProjectAuthorization(
                     ProjectAuthorityResourceType.Project,
                     ProjectId,
-                    ImmutableArray.Create(new ProjectAuthorizationPermissionGrant(
-                        grantWrite ? ProjectAuthorizationPermission.WriteProjects :
-                            ProjectAuthorizationPermission.ReadProjects,
-                        1)))));
+                    grantWrite
+                        ? ImmutableArray.Create(
+                            new ProjectAuthorizationPermissionGrant(ProjectAuthorizationPermission.ReadProjects, 1),
+                            new ProjectAuthorizationPermissionGrant(ProjectAuthorizationPermission.WriteProjects, 1))
+                        : ImmutableArray.Create(
+                            new ProjectAuthorizationPermissionGrant(ProjectAuthorizationPermission.ReadProjects, 1)))));
     }
 
     private static HttpResponseMessage Json<T>(HttpRequestMessage request, T body) =>
@@ -409,9 +1145,10 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
 
     private sealed class EnvironmentOwnerHandler(
         string identityBindingReference,
-        bool driftAfterLink = false) : HttpMessageHandler
+        bool driftAfterLink = false,
+        bool linked = false) : HttpMessageHandler
     {
-        private bool _linked;
+        private bool _linked = linked;
         private volatile bool _configurationDrift;
 
         public List<HttpRequestMessage> Requests { get; } = [];
@@ -488,9 +1225,11 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                     connectionId = ConnectionId
                 },
                 configurationRevision = revision,
-                configurationSha256 = _linked
-                    ? driftAfterLink || _configurationDrift ? ChangedConfigurationHash : FinalConfigurationHash
-                    : InitialConfigurationHash,
+                configurationSha256 = _configurationDrift
+                    ? ChangedConfigurationHash
+                    : _linked
+                        ? driftAfterLink ? ChangedConfigurationHash : FinalConfigurationHash
+                        : InitialConfigurationHash,
                 endpointUri = "https://mcp.example.test/",
                 resourceUri = "https://mcp.example.test/resource",
                 authenticationMode = "delegatedOAuth",
@@ -506,5 +1245,93 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                 Content = JsonContent.Create(body),
                 Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
             };
+    }
+
+    private sealed class MetadataProviderHandler(
+        bool failTokenExchange = false,
+        bool failRefreshTokenExchange = false,
+        bool rejectRefreshTokenExchange = false,
+        bool synchronizeMetadata = false) : HttpMessageHandler
+    {
+        private readonly object _sync = new();
+        private readonly TaskCompletionSource<bool> _metadataGate =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _authorizationServerMetadataResponses;
+
+        public List<Uri> Requests { get; } = [];
+        public List<string> TokenGrantTypes { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_sync)
+                Requests.Add(request.RequestUri!);
+            Assert.Null(request.Headers.Authorization);
+            if (request.RequestUri!.AbsolutePath == "/token")
+            {
+                Assert.Equal(HttpMethod.Post, request.Method);
+                var formBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+                var fields = formBody.Split('&', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(part => part.Split('=', 2))
+                    .ToDictionary(
+                        parts => Uri.UnescapeDataString(parts[0]),
+                        parts => Uri.UnescapeDataString(parts[1]),
+                        StringComparer.Ordinal);
+                var grantType = fields["grant_type"];
+                lock (_sync)
+                    TokenGrantTypes.Add(grantType);
+                if (grantType == "authorization_code" && failTokenExchange ||
+                    grantType == "refresh_token" && failRefreshTokenExchange)
+                    throw new TaskCanceledException("Simulated provider timeout.");
+                if (grantType == "refresh_token" && rejectRefreshTokenExchange)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.BadRequest)
+                    {
+                        RequestMessage = request,
+                        Content = JsonContent.Create(new { error = "invalid_grant" })
+                    };
+                }
+                return Json(request, new
+                {
+                    access_token = "access-token-value",
+                    token_type = "Bearer",
+                    expires_in = 3600,
+                    refresh_token = "refresh-token-value",
+                    refresh_token_expires_in = 86400,
+                    scope = "tools.read"
+                });
+            }
+
+            if (synchronizeMetadata &&
+                request.RequestUri.AbsolutePath == "/.well-known/oauth-authorization-server" &&
+                Interlocked.Increment(ref _authorizationServerMetadataResponses) == 2)
+                _metadataGate.TrySetResult(true);
+            if (synchronizeMetadata &&
+                request.RequestUri.AbsolutePath == "/.well-known/oauth-authorization-server")
+                await _metadataGate.Task.WaitAsync(cancellationToken);
+
+            object body = request.RequestUri!.AbsolutePath switch
+            {
+                "/.well-known/oauth-protected-resource/resource" => new
+                {
+                    resource = "https://mcp.example.test/resource",
+                    authorization_servers = new[] { "https://issuer.example.test/" },
+                    scopes_supported = new[] { "tools.read" }
+                },
+                "/.well-known/oauth-authorization-server" => new Dictionary<string, object>
+                {
+                    ["issuer"] = "https://issuer.example.test/",
+                    ["authorization_endpoint"] = "https://issuer.example.test/authorize",
+                    ["token_endpoint"] = "https://issuer.example.test/token",
+                    ["response_types_supported"] = new[] { "code" },
+                    ["code_challenge_methods_supported"] = new[] { "S256" },
+                    ["grant_types_supported"] = new[] { "authorization_code", "refresh_token" }
+                },
+                _ => throw new Xunit.Sdk.XunitException(
+                    $"Unexpected OAuth metadata request: {request.RequestUri}")
+            };
+            return Json(request, body);
+        }
     }
 }

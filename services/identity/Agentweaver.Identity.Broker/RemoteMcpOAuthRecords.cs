@@ -18,6 +18,7 @@ public sealed class RemoteMcpOAuthConnectionRecord
     public required string EndpointUri { get; set; }
     public required string ResourceUri { get; set; }
     public required string IssuerUri { get; set; }
+    public required string ClientId { get; set; }
     public required string RedirectUri { get; set; }
     public required string TransportProfile { get; set; }
     public required string ScopesJson { get; set; }
@@ -51,6 +52,8 @@ public sealed class RemoteMcpOAuthConsentRecord
     public required string PkceChallenge { get; set; }
     public required string VerifierSecretId { get; set; }
     public required string VerifierSecretVersion { get; set; }
+    public required string AuthorizationEndpointUri { get; set; }
+    public required string TokenEndpointUri { get; set; }
     public required long Revision { get; set; }
     public required RemoteMcpOAuthConsentState State { get; set; }
     public Guid? ClaimAttemptId { get; set; }
@@ -111,6 +114,7 @@ internal static class RemoteMcpOAuthModel
             entity.Property(row => row.EndpointUri).HasColumnName("endpoint_uri").HasMaxLength(2048).IsRequired();
             entity.Property(row => row.ResourceUri).HasColumnName("resource_uri").HasMaxLength(2048).IsRequired();
             entity.Property(row => row.IssuerUri).HasColumnName("issuer_uri").HasMaxLength(2048).IsRequired();
+            entity.Property(row => row.ClientId).HasColumnName("client_id").HasMaxLength(256).IsRequired();
             entity.Property(row => row.RedirectUri).HasColumnName("redirect_uri").HasMaxLength(2048).IsRequired();
             entity.Property(row => row.TransportProfile).HasColumnName("transport_profile").HasMaxLength(256).IsRequired();
             entity.Property(row => row.ScopesJson).HasColumnName("scopes_json").HasMaxLength(4096).IsRequired();
@@ -179,6 +183,10 @@ internal static class RemoteMcpOAuthModel
                 .HasColumnName("verifier_secret_id").HasMaxLength(256).IsRequired();
             entity.Property(row => row.VerifierSecretVersion)
                 .HasColumnName("verifier_secret_version").HasMaxLength(256).IsRequired();
+            entity.Property(row => row.AuthorizationEndpointUri)
+                .HasColumnName("authorization_endpoint_uri").HasMaxLength(2048).IsRequired();
+            entity.Property(row => row.TokenEndpointUri)
+                .HasColumnName("token_endpoint_uri").HasMaxLength(2048).IsRequired();
             entity.Property(row => row.Revision).HasColumnName("revision");
             entity.Property(row => row.State).HasColumnName("state").HasConversion<int>();
             entity.Property(row => row.ClaimAttemptId).HasColumnName("claim_attempt_id");

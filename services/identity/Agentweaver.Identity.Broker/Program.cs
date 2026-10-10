@@ -90,6 +90,9 @@ var webOrigin = ParseWebOrigin(identityOptions.WebOrigin);
 if (identityOptions.GitHubRepoApp is not null && webOrigin is null)
     throw new InvalidOperationException(
         "IdentityBroker:WebOrigin is required when GitHub Repo App is configured.");
+if (identityOptions.RemoteMcpOAuth is not null && webOrigin is null)
+    throw new InvalidOperationException(
+        "IdentityBroker:WebOrigin is required when Remote MCP OAuth is configured.");
 Validator.ValidateObject(identityOptions.Signing, new ValidationContext(identityOptions.Signing), validateAllProperties: true);
 Validator.ValidateObject(identityOptions.ExternalProvider, new ValidationContext(identityOptions.ExternalProvider), validateAllProperties: true);
 Validator.ValidateObject(identityOptions.SecretRedemption, new ValidationContext(identityOptions.SecretRedemption), validateAllProperties: true);
@@ -265,6 +268,29 @@ if (identityOptions.RemoteMcpOAuth is { } remoteMcpOAuthOptions)
 {
     Validator.ValidateObject(
         remoteMcpOAuthOptions, new ValidationContext(remoteMcpOAuthOptions), validateAllProperties: true);
+    var providerIssuers = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var provider in remoteMcpOAuthOptions.Providers)
+    {
+        if (provider is null)
+            throw new InvalidOperationException("Remote MCP OAuth provider configuration is invalid.");
+        Validator.ValidateObject(provider, new ValidationContext(provider), validateAllProperties: true);
+        if (!IsCanonicalRemoteUri(provider.IssuerUri) ||
+            new Uri(provider.IssuerUri).Query.Length != 0 ||
+            !IsCanonicalRemoteUri(provider.RedirectUri) ||
+            new Uri(provider.RedirectUri) != new Uri(webOrigin!, IdentityBrokerOptions.RemoteMcpOAuthCallbackPath) ||
+            provider.ClientId.Length > 256 || provider.ClientId.Any(char.IsControl) ||
+            !providerIssuers.Add(provider.IssuerUri) ||
+            provider.ApprovedResources.Distinct(StringComparer.Ordinal).Count() !=
+                provider.ApprovedResources.Count ||
+            provider.ApprovedResources.Any(resource => !IsCanonicalRemoteUri(resource)) ||
+            provider.ApprovedOAuthEndpoints.Distinct(StringComparer.Ordinal).Count() !=
+                provider.ApprovedOAuthEndpoints.Count ||
+            provider.ApprovedOAuthEndpoints.Any(endpoint => !IsCanonicalRemoteUri(endpoint)) ||
+            provider.ApprovedScopes.Distinct(StringComparer.Ordinal).Count() != provider.ApprovedScopes.Count ||
+            provider.ApprovedScopes.Any(scope => string.IsNullOrEmpty(scope) ||
+                scope.Any(character => character is < '\x21' or > '\x7e' or '"' or '\\')))
+            throw new InvalidOperationException("Remote MCP OAuth provider configuration is invalid.");
+    }
     if (!Uri.TryCreate(remoteMcpOAuthOptions.ProjectsOwnerAddress, UriKind.Absolute, out var projectsOwnerAddress) ||
         !Uri.TryCreate(remoteMcpOAuthOptions.EnvironmentOwnerAddress, UriKind.Absolute, out var environmentOwnerAddress))
         throw new InvalidOperationException(
@@ -276,13 +302,17 @@ if (identityOptions.RemoteMcpOAuth is { } remoteMcpOAuthOptions)
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
     builder.Services.AddHttpClient("RemoteMcpOAuthEnvironment")
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    builder.Services.AddHttpClient("RemoteMcpOAuthProvider")
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
     builder.Services.AddScoped(provider => new RemoteMcpOAuthManagementService(
         provider.GetRequiredService<IdentityBrokerDbContext>(),
         remoteMcpOAuthOptions,
         provider.GetRequiredService<IHttpClientFactory>().CreateClient("RemoteMcpOAuthProjects"),
         provider.GetRequiredService<IHttpClientFactory>().CreateClient("RemoteMcpOAuthEnvironment"),
+        provider.GetRequiredService<IHttpClientFactory>().CreateClient("RemoteMcpOAuthProvider"),
         provider.GetRequiredService<TimeProvider>(),
-        provider.GetRequiredService<ISecretVersionWriter>()));
+        provider.GetRequiredService<ISecretVersionWriter>(),
+        provider.GetRequiredService<ISecretRedemption>()));
 }
 
 // The broker's own signing/encryption credential. Production composition mounts a real
@@ -470,6 +500,13 @@ static Uri? ParseWebOrigin(string? value)
     }.Uri.GetLeftPart(UriPartial.Authority);
     return new Uri(normalizedOrigin, UriKind.Absolute);
 }
+
+static bool IsCanonicalRemoteUri(string value) =>
+    Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+    uri.Scheme == Uri.UriSchemeHttps &&
+    string.IsNullOrEmpty(uri.UserInfo) &&
+    string.IsNullOrEmpty(uri.Fragment) &&
+    string.Equals(uri.OriginalString, uri.AbsoluteUri, StringComparison.Ordinal);
 
 /// <summary>Exposed so WebApplicationFactory-based tests can bootstrap this host.</summary>
 public partial class Program;

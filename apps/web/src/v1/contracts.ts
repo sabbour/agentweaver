@@ -158,6 +158,144 @@ export interface CopilotConnectionMutation {
   expectedRevision: number;
 }
 
+export type RemoteMcpOAuthConnectionState =
+  | 'NotConnected'
+  | 'PendingConsent'
+  | 'Authorized'
+  | 'RefreshInProgress'
+  | 'RefreshIndeterminate'
+  | 'Disconnected'
+  | 'Revoked';
+
+export interface RemoteMcpOAuthManagementStatus {
+  connectionId: string;
+  projectId: string;
+  connectionRevision: number;
+  credentialRevision: number;
+  state: RemoteMcpOAuthConnectionState;
+  storedConfigurationRevision: number;
+  currentConfigurationRevision: number | null;
+  currentConfigurationMatches: boolean;
+  credentialUseAvailable: boolean;
+}
+
+export interface RemoteMcpOAuthConnectionRegistration {
+  projectId: string;
+  connectionId: string;
+  expectedConfigurationRevision: number;
+  expectedConfigurationSha256: string;
+  issuerUri: string;
+  scopes: string[];
+}
+
+export interface RemoteMcpOAuthConsentPreparation {
+  correlationId: string;
+  state: string;
+  pkceChallenge: string;
+  authorizationUri: string;
+  expiresAt: string;
+  connectionRevision: number;
+  configurationRevision: number;
+  configurationSha256: string;
+}
+
+export interface RemoteMcpOAuthCallbackRequest {
+  state: string;
+  code: string;
+}
+
+export interface RemoteMcpOAuthDisconnectRequest {
+  expectedConnectionRevision: number;
+  expectedCredentialRevision: number;
+  expectedConfigurationRevision: number;
+  idempotencyKey: string;
+}
+
+export interface RemoteMcpOAuthRefreshRequest {
+  expectedConnectionRevision: number;
+  expectedCredentialRevision: number;
+  expectedConfigurationRevision: number;
+}
+
+export interface RemoteMcpOAuthConsentRequest {
+  expectedConnectionRevision: number;
+  expectedCredentialRevision: number;
+  expectedConfigurationRevision: number;
+  expectedConfigurationSha256: string;
+}
+
+export function isRemoteMcpOAuthManagementStatus(
+  value: unknown,
+): value is RemoteMcpOAuthManagementStatus {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const status = value as Record<string, unknown>;
+  return hasExactKeys(status, [
+    'connectionId',
+    'projectId',
+    'connectionRevision',
+    'credentialRevision',
+    'state',
+    'storedConfigurationRevision',
+    'currentConfigurationRevision',
+    'currentConfigurationMatches',
+    'credentialUseAvailable',
+  ]) &&
+    typeof status.connectionId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(status.connectionId) &&
+    isNonEmptyString(status.projectId) &&
+    Number.isSafeInteger(status.connectionRevision) &&
+    (status.connectionRevision as number) > 0 &&
+    Number.isSafeInteger(status.credentialRevision) &&
+    (status.credentialRevision as number) >= 0 &&
+    [
+      'NotConnected',
+      'PendingConsent',
+      'Authorized',
+      'RefreshInProgress',
+      'RefreshIndeterminate',
+      'Disconnected',
+      'Revoked',
+    ].includes(String(status.state)) &&
+    Number.isSafeInteger(status.storedConfigurationRevision) &&
+    (status.storedConfigurationRevision as number) > 0 &&
+    (status.currentConfigurationRevision === null ||
+      Number.isSafeInteger(status.currentConfigurationRevision)) &&
+    typeof status.currentConfigurationMatches === 'boolean' &&
+    typeof status.credentialUseAvailable === 'boolean';
+}
+
+export function isRemoteMcpOAuthConsentPreparation(
+  value: unknown,
+): value is RemoteMcpOAuthConsentPreparation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const preparation = value as Record<string, unknown>;
+  return hasExactKeys(preparation, [
+    'correlationId',
+    'state',
+    'pkceChallenge',
+    'authorizationUri',
+    'expiresAt',
+    'connectionRevision',
+    'configurationRevision',
+    'configurationSha256',
+  ]) &&
+    typeof preparation.correlationId === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(preparation.correlationId) &&
+    typeof preparation.state === 'string' &&
+    /^[A-Za-z0-9_-]{43}$/.test(preparation.state) &&
+    typeof preparation.pkceChallenge === 'string' &&
+    /^[A-Za-z0-9_-]{43}$/.test(preparation.pkceChallenge) &&
+    typeof preparation.authorizationUri === 'string' &&
+    typeof preparation.expiresAt === 'string' &&
+    Number.isFinite(Date.parse(preparation.expiresAt)) &&
+    Number.isSafeInteger(preparation.connectionRevision) &&
+    (preparation.connectionRevision as number) > 0 &&
+    Number.isSafeInteger(preparation.configurationRevision) &&
+    (preparation.configurationRevision as number) > 0 &&
+    typeof preparation.configurationSha256 === 'string' &&
+    /^[0-9a-f]{64}$/.test(preparation.configurationSha256);
+}
+
 export function isCopilotConnectionReceipt(value: unknown): value is CopilotConnectionReceipt {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const receipt = value as Record<string, unknown>;

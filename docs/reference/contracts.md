@@ -103,6 +103,11 @@ single-use `{ "selectionCode", "expiresAt" }`.
 | `GET /auth/github/repo-app/callback` | Bearerless OAuth callback; only `code`, `state`, and `error` are forwarded with the exact transaction cookie. |
 | `GET /auth/github/repo-app/installation/callback` | Bearerless installation callback; only `installation_id`, `setup_action`, and `state` are forwarded with the exact transaction cookie. |
 | `POST /api/connections/copilot-user/v1/{begin,complete,refresh,revoke}` / `GET /api/connections/copilot-user/v1/{connectionId}` | Copilot user-connection lifecycle; forwards the unchanged bearer and optional explicit tenant selector, and complete forwards only the exact `__Host-agentweaver-copilot-link` cookie. |
+| `POST /api/connections/remote-mcp/v1/register` / `GET /api/connections/remote-mcp/v1/{connectionId}` | Register a Remote MCP OAuth binding or read its redacted status; forwards the current bearer and optional explicit tenant selector. |
+| `POST /api/connections/remote-mcp/v1/{connectionId}/consent` | Prepare metadata-checked consent and return the provider authorization URI. The current source has no project settings flow that starts this request. |
+| `POST /api/connections/remote-mcp/v1/callback` | Resolve the pending connection from callback `state`, then forward only `state` and `code` with the current bearer; token values are never returned to Web. |
+| `POST /api/connections/remote-mcp/v1/{connectionId}/refresh` | Refresh an authorized connection using expected connection, credential, and configuration revisions; an uncertain provider result returns `503 remote_mcp_oauth_refresh_uncertain`, becomes indeterminate, and cannot be retried blindly. |
+| `POST /api/connections/remote-mcp/v1/{connectionId}/disconnect` | Clear Identity's protected token references after current binding and revision checks; provider revocation is not yet wired. |
 
 The OAuth and installation callbacks preserve the owner's `Location` and every
 `Set-Cookie` header. Their host-only cookies are
@@ -507,6 +512,12 @@ These routes belong to the unpublished Identity broker candidate. They are servi
 | `POST /connect/token` | Form-encoded authorization-code or refresh exchange. |
 | `GET /diagnostics/whoami` | Bearer validation diagnostic. It is not an audience acceptance test. |
 | `POST /secrets/redeem` | Validated bearer and exact secret ID, version, purpose, and run ID. |
+| `POST /internal/connections/remote-mcp/register` | Bind the authenticated human, tenant, project, current Environment connection revision/resource, configured issuer/client/callback, and operator-approved scopes. |
+| `GET /internal/connections/remote-mcp/{connectionId}` | Read owner-authorized, no-store status without exposing token references or values. |
+| `POST /internal/connections/remote-mcp/{connectionId}/consent` | Link the exact Environment revision, validate resource and issuer metadata, persist a short-lived state/PKCE correlation and protected verifier reference, then return an authorization URI. This route does not redirect the browser or exchange a callback. |
+| `POST /internal/connections/remote-mcp/callback` | Resolve the pending connection from the hashed callback state for the current owner, accept only the state and authorization code, recheck the current owner and Environment binding, claim once, exchange the code, and persist only protected token `SecretRef`s. |
+| `POST /internal/connections/remote-mcp/{connectionId}/refresh` | Claim the exact authorized credential revision, redeem its protected refresh-token reference, recheck current authority and Environment binding, and persist rotated token references with compare-and-swap. Stale claims and uncertain provider outcomes become indeterminate and are not retried. |
+| `POST /internal/connections/remote-mcp/{connectionId}/disconnect` | Revision-check and clear local credential references; provider revocation is not yet wired. |
 | `GET /health/live` | Process liveness. |
 | `GET /health/ready` | PostgreSQL connectivity. |
 | `GET /auth/github/repo-app/csrf` | Return no-store `{"csrf_token":"…"}` and set the antiforgery cookie for local-cookie Repo App routes. JSON POSTs send the token in `X-CSRF-TOKEN` with credentials included; same-origin form POSTs use the default `__RequestVerificationToken` field. |
@@ -842,6 +853,7 @@ current event-delivery boundaries.
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTokenFilePath` | Absolute projected token-file path. |
 | `IdentityBroker:RemoteMcpOAuth:ProjectsOwnerAddress` | Fixed absolute HTTPS root for current Projects authorization and project status. |
 | `IdentityBroker:RemoteMcpOAuth:EnvironmentOwnerAddress` | Fixed absolute HTTPS root for Environment connection configuration reads and identity-binding updates. Both Remote MCP owner addresses are required when this section is configured. |
+| `IdentityBroker:RemoteMcpOAuth:Providers[n]` | Each fixed provider has exact `IssuerUri`, `ClientId`, `RedirectUri`, and nonempty `ApprovedResources`, `ApprovedOAuthEndpoints`, and `ApprovedScopes`. Consent metadata reads use only the exact approved resource and issuer URLs, reject redirects, and accept discovered authorization/token endpoints only when they exactly match `ApprovedOAuthEndpoints`. |
 | `IdentityBroker:GitHubRepoApp:OAuthClientId` / `OAuthClientSecret` | Registered GitHub OAuth client used only for the Repo App user connection; the secret is deployment configuration, not a database value. |
 | `IdentityBroker:GitHubRepoApp:CallbackUri` | Absolute HTTPS `/auth/github/repo-app/callback` URI with no query, user info, or fragment. |
 | `IdentityBroker:GitHubRepoApp:AppId` / `AppSlug` | Exact configured GitHub App identity and install URL slug. |

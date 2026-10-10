@@ -12,6 +12,7 @@ public sealed class IdentityBrokerOptions
 {
     public const string SectionName = "IdentityBroker";
     internal const string WebCorsPolicyName = "identity-broker-web";
+    internal const string RemoteMcpOAuthCallbackPath = "/auth/remote-mcp/oauth/callback";
 
     /// <summary>The broker's own absolute, HTTPS (or explicit loopback-for-tests) issuer URI.</summary>
     [Required]
@@ -48,6 +49,30 @@ public sealed class RemoteMcpOAuthOptions
 
     [Required]
     public required string EnvironmentOwnerAddress { get; set; }
+
+    [Required, MinLength(1)]
+    public required IReadOnlyList<RemoteMcpOAuthProviderOptions> Providers { get; set; }
+}
+
+public sealed class RemoteMcpOAuthProviderOptions
+{
+    [Required]
+    public required string IssuerUri { get; set; }
+
+    [Required, MinLength(1)]
+    public required IReadOnlyList<string> ApprovedResources { get; set; }
+
+    [Required]
+    public required string ClientId { get; set; }
+
+    [Required]
+    public required string RedirectUri { get; set; }
+
+    [Required, MinLength(2)]
+    public required IReadOnlyList<string> ApprovedOAuthEndpoints { get; set; }
+
+    [Required, MinLength(1)]
+    public required IReadOnlyList<string> ApprovedScopes { get; set; }
 }
 
 public sealed class GitHubRepoAppOptions

@@ -75,6 +75,7 @@ public sealed class RemoteMcpOAuthManagementTests
             EndpointUri = "https://mcp.example.test/",
             ResourceUri = "https://mcp.example.test/resource",
             IssuerUri = "https://issuer.example.test/",
+            ClientId = "registered-client",
             RedirectUri = "https://identity.example.test/oauth/callback",
             TransportProfile = RemoteMcpOAuthConnectionBinding.SupportedTransportProfile,
             ScopesJson = "[\"tools.read\"]",

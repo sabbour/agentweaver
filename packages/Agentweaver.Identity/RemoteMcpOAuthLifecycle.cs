@@ -21,6 +21,7 @@ public sealed class RemoteMcpOAuthConnectionBinding
         Uri endpoint,
         Uri resource,
         Uri issuer,
+        string clientId,
         Uri redirectUri,
         string transportProfile,
         IEnumerable<string> scopes)
@@ -44,6 +45,10 @@ public sealed class RemoteMcpOAuthConnectionBinding
         Endpoint = ValidateHttpsUri(endpoint, nameof(endpoint));
         Resource = ValidateHttpsUri(resource, nameof(resource));
         Issuer = ValidateHttpsUri(issuer, nameof(issuer));
+        if (string.IsNullOrWhiteSpace(clientId) || clientId.Length > 256 ||
+            clientId.Any(char.IsControl))
+            throw new ArgumentException("Expected a configured OAuth client identifier.", nameof(clientId));
+        ClientId = clientId;
         RedirectUri = ValidateHttpsUri(redirectUri, nameof(redirectUri));
         if (transportProfile != SupportedTransportProfile)
             throw new ArgumentException("Only the installed MCP 2025-06-18 transport profile is supported.", nameof(transportProfile));
@@ -68,6 +73,7 @@ public sealed class RemoteMcpOAuthConnectionBinding
             Endpoint = Endpoint.AbsoluteUri,
             Resource = Resource.AbsoluteUri,
             Issuer = Issuer.AbsoluteUri,
+            ClientId,
             RedirectUri = RedirectUri.AbsoluteUri,
             TransportProfile,
             Scopes
@@ -84,6 +90,7 @@ public sealed class RemoteMcpOAuthConnectionBinding
     public Uri Endpoint { get; }
     public Uri Resource { get; }
     public Uri Issuer { get; }
+    public string ClientId { get; }
     public Uri RedirectUri { get; }
     public string TransportProfile { get; }
     public IReadOnlyList<string> Scopes { get; }
@@ -456,7 +463,8 @@ public static class RemoteMcpOAuthLifecycle
         SecretRef accessTokenReference,
         SecretRef? refreshTokenReference,
         DateTimeOffset accessTokenExpiresAt,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        DateTimeOffset? refreshTokenExpiresAt = null)
     {
         ArgumentNullException.ThrowIfNull(consent);
         ArgumentNullException.ThrowIfNull(connection);
@@ -473,7 +481,7 @@ public static class RemoteMcpOAuthLifecycle
         var authorized = new RemoteMcpOAuthConnection(
             currentBinding, checked(connection.Revision + 1), checked(connection.CredentialRevision + 1),
             RemoteMcpOAuthConnectionState.Authorized, accessTokenReference, refreshTokenReference,
-            accessTokenExpiresAt);
+            accessTokenExpiresAt, refreshTokenExpiresAt: refreshTokenExpiresAt);
         return new RemoteMcpOAuthCallbackCompletion(
             authorized,
             NewConsentRevision(consent, RemoteMcpOAuthConsentState.Consumed, null));
@@ -501,6 +509,28 @@ public static class RemoteMcpOAuthLifecycle
         if (failure == RemoteMcpOAuthRequestFailure.ProviderRejected)
             return NewConsentRevision(consent, RemoteMcpOAuthConsentState.Denied, null);
         return NewConsentRevision(consent, RemoteMcpOAuthConsentState.Consumed, null);
+    }
+
+    public static RemoteMcpOAuthConnection? TryCloseFailedConsent(
+        RemoteMcpOAuthPendingConsent consent,
+        RemoteMcpOAuthConnection connection,
+        RemoteMcpOAuthConnectionBinding currentBinding)
+    {
+        ArgumentNullException.ThrowIfNull(consent);
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(currentBinding);
+        if (consent.State is RemoteMcpOAuthConsentState.Pending or
+                RemoteMcpOAuthConsentState.CallbackClaimed ||
+            connection.Revision != consent.ConnectionRevision ||
+            connection.State != RemoteMcpOAuthConnectionState.PendingConsent ||
+            !BindingMatches(consent.BindingHash, connection, currentBinding))
+            return null;
+
+        return new RemoteMcpOAuthConnection(
+            currentBinding,
+            checked(connection.Revision + 1),
+            checked(connection.CredentialRevision + 1),
+            RemoteMcpOAuthConnectionState.NotConnected);
     }
 
     public static RemoteMcpOAuthRefreshClaim? TryBeginRefresh(
