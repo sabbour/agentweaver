@@ -73,6 +73,39 @@ public sealed class SkillMarketplaceBrowseServiceTests
     }
 
     [Fact]
+    public async Task Browse_indexes_a_root_skill_manifest()
+    {
+        var source = CreateSource() with { Subpath = null };
+        using var client = CreateClient(new ConcurrentQueue<string>(), request =>
+        {
+            var uri = request.RequestUri!;
+            if (uri.Host == "api.github.com" && uri.AbsolutePath.Contains("/commits/", StringComparison.Ordinal))
+                return JsonResponse($$"""{"sha":"{{CommitSha}}"}""");
+            if (uri.Host == "api.github.com" && uri.AbsolutePath.Contains("/git/trees/", StringComparison.Ordinal))
+                return JsonResponse("""{"truncated":false,"tree":[{"path":"SKILL.md","type":"blob"}]}""");
+            if (uri.Host == "raw.githubusercontent.com")
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("---\ndescription: root skill\n---\n")
+                };
+            throw new InvalidOperationException($"Unexpected request: {uri}");
+        });
+        var service = new SkillMarketplaceBrowseService(client, new FakeSourceStore(source));
+
+        var page = await service.BrowseAsync(
+            source.ProjectId,
+            source,
+            new MarketplaceBrowseRequest { ExpectedSourceRevision = source.Revision },
+            _ => Task.CompletedTask,
+            CancellationToken.None);
+
+        var candidate = Assert.Single(page.Candidates);
+        Assert.Equal(string.Empty, candidate.Location);
+        Assert.Equal("root", candidate.Name);
+        Assert.Equal("root skill", candidate.Description);
+    }
+
+    [Fact]
     public async Task Read_selected_skill_files_uses_exact_commit_and_excludes_nested_skill_trees()
     {
         var requests = new ConcurrentQueue<string>();
@@ -120,9 +153,42 @@ public sealed class SkillMarketplaceBrowseServiceTests
         var importedResource = Assert.Single(result.Resources);
         Assert.Equal("references/api.md", importedResource.RelativePath);
         Assert.Equal(resource, importedResource.Content.ToArray());
-        Assert.Equal(2, authorityChecks);
+        Assert.Equal(3, authorityChecks);
         Assert.DoesNotContain(requests, request => request.Contains("/commits/", StringComparison.Ordinal));
         Assert.All(requests, request => Assert.Contains(CommitSha, request, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Read_selected_root_skill_files_reads_root_manifest()
+    {
+        var requests = new ConcurrentQueue<string>();
+        var markdown = Encoding.UTF8.GetBytes("---\nname: root\n---\nInstructions");
+        using var client = CreateClient(requests, request =>
+        {
+            var uri = request.RequestUri!;
+            if (uri.Host == "api.github.com" && uri.AbsolutePath.Contains("/git/trees/", StringComparison.Ordinal))
+                return JsonResponse(JsonTree(
+                    [new TestTreeEntry("SKILL.md", "blob", "100644", markdown.Length)]));
+            if (uri.Host == "raw.githubusercontent.com" &&
+                uri.AbsolutePath.EndsWith($"/{CommitSha}/SKILL.md", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(markdown) };
+            throw new InvalidOperationException($"Unexpected request: {uri}");
+        });
+        var source = CreateSource() with { Subpath = null };
+        var service = new SkillMarketplaceBrowseService(client, new FakeSourceStore(source));
+
+        var result = await service.ReadSelectedSkillFilesAsync(
+            source.ProjectId,
+            source,
+            source.Revision,
+            CommitSha,
+            string.Empty,
+            _ => Task.CompletedTask,
+            CancellationToken.None);
+
+        Assert.Equal(markdown, result.SkillMarkdown.ToArray());
+        Assert.Empty(result.Resources);
+        Assert.Contains(requests, request => request.EndsWith($"/{CommitSha}/SKILL.md", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -403,14 +469,108 @@ public sealed class SkillMarketplaceBrowseServiceTests
                 _ =>
                 {
                     calls++;
-                    return calls == 1
+                    return calls < 3
                         ? Task.CompletedTask
                         : Task.FromException(MarketplaceSourceException.Forbidden());
                 },
                 CancellationToken.None));
 
         Assert.Equal("forbidden", exception.Code);
-        Assert.Equal(2, calls);
+        Assert.Equal(3, calls);
+    }
+
+    [Fact]
+    public async Task Browse_rechecks_actor_authority_after_a_blocking_source_read()
+    {
+        var source = CreateSource();
+        var store = new FakeSourceStore(source);
+        var getStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var continueGet = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.BeforeGetAsync = async cancellationToken =>
+        {
+            getStarted.TrySetResult(true);
+            await continueGet.Task.WaitAsync(cancellationToken);
+        };
+        using var client = CreateClient(new ConcurrentQueue<string>(), request =>
+        {
+            var uri = request.RequestUri!;
+            if (uri.AbsolutePath.Contains("/commits/", StringComparison.Ordinal))
+                return JsonResponse($$"""{"sha":"{{CommitSha}}"}""");
+            if (uri.AbsolutePath.Contains("/git/trees/", StringComparison.Ordinal))
+                return JsonResponse("""{"truncated":false,"tree":[{"path":"skills/one/SKILL.md","type":"blob"}]}""");
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("---\n---\n") };
+        });
+        var service = new SkillMarketplaceBrowseService(client, store);
+        var authorityRevoked = false;
+        var calls = 0;
+        var browseTask = service.BrowseAsync(
+            source.ProjectId,
+            source,
+            new MarketplaceBrowseRequest { ExpectedSourceRevision = source.Revision },
+            _ =>
+            {
+                calls++;
+                return authorityRevoked
+                    ? Task.FromException(MarketplaceSourceException.Forbidden())
+                    : Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        await getStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        authorityRevoked = true;
+        continueGet.TrySetResult(true);
+        var exception = await Assert.ThrowsAsync<MarketplaceSourceException>(() => browseTask);
+
+        Assert.Equal("forbidden", exception.Code);
+        Assert.Equal(3, calls);
+    }
+
+    [Fact]
+    public async Task Read_selected_skill_files_rechecks_actor_authority_after_a_blocking_source_read()
+    {
+        var source = CreateSource();
+        var markdown = Encoding.UTF8.GetBytes("---\nname: one\n---\nInstructions");
+        var store = new FakeSourceStore(source);
+        var getStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var continueGet = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.BeforeGetAsync = async cancellationToken =>
+        {
+            getStarted.TrySetResult(true);
+            await continueGet.Task.WaitAsync(cancellationToken);
+        };
+        using var client = CreateClient(new ConcurrentQueue<string>(), request =>
+        {
+            var uri = request.RequestUri!;
+            if (uri.AbsolutePath.Contains("/git/trees/", StringComparison.Ordinal))
+                return JsonResponse(JsonTree(
+                    [new TestTreeEntry("skills/one/SKILL.md", "blob", "100644", markdown.Length)]));
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(markdown) };
+        });
+        var service = new SkillMarketplaceBrowseService(client, store);
+        var authorityRevoked = false;
+        var calls = 0;
+        var readTask = service.ReadSelectedSkillFilesAsync(
+            source.ProjectId,
+            source,
+            source.Revision,
+            CommitSha,
+            "skills/one",
+            _ =>
+            {
+                calls++;
+                return authorityRevoked
+                    ? Task.FromException(MarketplaceSourceException.Forbidden())
+                    : Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        await getStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        authorityRevoked = true;
+        continueGet.TrySetResult(true);
+        var exception = await Assert.ThrowsAsync<MarketplaceSourceException>(() => readTask);
+
+        Assert.Equal("forbidden", exception.Code);
+        Assert.Equal(3, calls);
     }
 
     [Theory]
@@ -545,6 +705,7 @@ public sealed class SkillMarketplaceBrowseServiceTests
         IProjectMarketplaceSourceStore
     {
         public ProjectMarketplaceSourceRecord Current { get; set; } = source;
+        public Func<CancellationToken, Task>? BeforeGetAsync { get; set; }
 
         public Task<IReadOnlyList<ProjectMarketplaceSourceRecord>> ListByProjectAsync(
             string projectId,
@@ -559,15 +720,17 @@ public sealed class SkillMarketplaceBrowseServiceTests
             return Task.FromResult(result);
         }
 
-        public Task<ProjectMarketplaceSourceRecord?> GetAsync(
+        public async Task<ProjectMarketplaceSourceRecord?> GetAsync(
             string projectId,
             Guid sourceId,
             CancellationToken cancellationToken)
         {
+            if (BeforeGetAsync is not null)
+                await BeforeGetAsync(cancellationToken);
             var result = Current.ProjectId == projectId && Current.SourceId == sourceId
                 ? Current
                 : null;
-            return Task.FromResult(result);
+            return result;
         }
 
         public Task<ProjectMarketplaceSourceRecord> CreateAsync(

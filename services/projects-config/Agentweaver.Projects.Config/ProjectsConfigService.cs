@@ -76,6 +76,115 @@ public sealed class ProjectsConfigService(
         return project;
     }
 
+    internal async Task<T> ExecuteMarketplaceWriteAsync<T>(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        Func<ProjectRecord, Task<T>> writeAsync,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(writeAsync);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        caller.RequireResourceBinding(projectId);
+
+        await using var transaction = await db.Database
+            .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
+            .ConfigureAwait(false);
+        try
+        {
+            await LockMarketplaceWriteInputsAsync(caller, projectId, cancellationToken)
+                .ConfigureAwait(false);
+            var project = await FindProjectAsync(
+                    caller, projectId, ProjectAccess.Write, cancellationToken)
+                .ConfigureAwait(false);
+            if (project.State != ProjectLifecycleState.Active)
+                throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
+
+            var result = await writeAsync(project).ConfigureAwait(false);
+
+            project = await FindProjectAsync(
+                    caller, projectId, ProjectAccess.Write, cancellationToken)
+                .ConfigureAwait(false);
+            if (project.State != ProjectLifecycleState.Active)
+                throw ProjectConfigException.Conflict("Archived projects cannot be reconfigured.");
+
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return result;
+        }
+        catch (Exception exception) when (IsSerializationFailure(exception))
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            await transaction.DisposeAsync().ConfigureAwait(false);
+            db.ChangeTracker.Clear();
+            _ = await GetMarketplaceProjectAsync(
+                    caller, projectId, requireWrite: true, cancellationToken)
+                .ConfigureAwait(false);
+            throw MarketplaceSourceException.RevisionConflict();
+        }
+    }
+
+    private async Task LockMarketplaceWriteInputsAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+
+        await using (var membershipLock = new NpgsqlCommand(
+            """
+            SELECT membership_id
+            FROM projects_config.tenant_memberships
+            WHERE membership_id = @membership_id
+            FOR SHARE
+            """,
+            connection,
+            transaction))
+        {
+            membershipLock.Parameters.AddWithValue("membership_id", caller.MembershipId);
+            await membershipLock.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var projectLock = new NpgsqlCommand(
+            """
+            SELECT project_id
+            FROM projects_config.projects
+            WHERE project_id = @project_id
+              AND tenant_id = @tenant_id
+            FOR SHARE
+            """,
+            connection,
+            transaction))
+        {
+            projectLock.Parameters.AddWithValue("project_id", projectId);
+            projectLock.Parameters.AddWithValue("tenant_id", caller.TenantId);
+            await projectLock.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var roleLock = new NpgsqlCommand(
+            """
+            SELECT assignment_id
+            FROM projects_config.project_role_assignments
+            WHERE membership_id = @membership_id
+              AND state = 'Active'
+              AND (
+                (resource_type = 'Tenant' AND resource_id = @tenant_id AND role = 'TenantAdmin')
+                OR
+                (resource_type = 'Project' AND resource_id = @project_id AND role = 'Owner')
+              )
+            FOR SHARE
+            """,
+            connection,
+            transaction);
+        roleLock.Parameters.AddWithValue("membership_id", caller.MembershipId);
+        roleLock.Parameters.AddWithValue("tenant_id", caller.TenantId);
+        roleLock.Parameters.AddWithValue("project_id", projectId);
+        await using var roleReader = await roleLock.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await roleReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+        }
+    }
+
     public async Task<ProjectSummary> CreateProjectAsync(
         ProjectAuthorizationContext caller,
         string name,
@@ -950,6 +1059,14 @@ public sealed class ProjectsConfigService(
 
     private static bool IsUniqueViolation(DbUpdateException exception) =>
         exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
+
+    private static bool IsSerializationFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+            if (current is PostgresException { SqlState: "40001" })
+                return true;
+        return false;
+    }
 
     private async Task EnsurePlatformAdminAsync(
         ProjectAuthorizationContext caller,

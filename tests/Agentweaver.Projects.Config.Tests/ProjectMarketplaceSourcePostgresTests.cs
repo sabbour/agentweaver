@@ -201,6 +201,68 @@ public sealed class ProjectMarketplaceSourcePostgresTests(ProjectsConfigPostgres
         Assert.NotEqual(Guid.Empty, source.SourceId);
     }
 
+    [Fact]
+    public async Task Source_write_holds_authority_through_commit_and_denies_a_revoked_membership()
+    {
+        await using var db = CreateDbContext();
+        var authority = new ProjectsConfigPrivilegedAuthorityStore(CreateDbContextOptions(), TimeProvider.System);
+        var projectId = Guid.NewGuid().ToString("N");
+        var (caller, tenantId) = await SeedProjectAndOwnerAsync(db, authority, projectId);
+        var replacement = await authority.GrantMembershipAsync(
+            TestIssuer, "replacement-owner-" + Guid.NewGuid().ToString("N"), tenantId, "fixture");
+        await authority.AssignRoleAsync(
+            replacement.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            projectId,
+            ProjectAuthorityRole.Owner,
+            "fixture");
+
+        var createStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var continueCreate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = new BlockingMarketplaceSourceStore(
+            new MarketplaceSourceStore(db), createStarted, continueCreate);
+        var service = CreateService(db, store);
+        var createTask = service.CreateAsync(
+            caller,
+            projectId,
+            new CreateMarketplaceSourceRequest { Repository = "contoso/skills" },
+            CancellationToken.None);
+
+        await createStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var revokeStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var revokeTask = Task.Run(async () =>
+        {
+            revokeStarted.TrySetResult(true);
+            await authority.RevokeMembershipAsync(
+                caller.MembershipId, caller.MembershipRevision, "fixture");
+        });
+        await revokeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var revokeOrTimeout = await Task.WhenAny(revokeTask, Task.Delay(TimeSpan.FromMilliseconds(200)));
+        Assert.NotSame(revokeTask, revokeOrTimeout);
+
+        continueCreate.TrySetResult(true);
+        var created = await createTask.WaitAsync(TimeSpan.FromSeconds(5));
+        await revokeTask.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var denied = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            service.UpdateAsync(
+                caller,
+                projectId,
+                created.SourceId,
+                new UpdateMarketplaceSourceRequest
+                {
+                    ExpectedRevision = created.Revision,
+                    Repository = "contoso/changed",
+                },
+                CancellationToken.None));
+        Assert.Equal(StatusCodes.Status403Forbidden, denied.StatusCode);
+
+        var stored = await db.MarketplaceSources.AsNoTracking()
+            .SingleAsync(source => source.SourceId == created.SourceId);
+        Assert.Equal(created.Revision, stored.Revision);
+        Assert.Equal("contoso/skills", stored.Repository);
+    }
+
     private static async Task<string> CaptureOutcomeAsync(
         Func<Task<ProjectMarketplaceSourceRecord>> operation)
     {
@@ -260,13 +322,62 @@ public sealed class ProjectMarketplaceSourcePostgresTests(ProjectsConfigPostgres
             .ResolveAsync(principal, [tenantId], CancellationToken.None);
     }
 
-    private ProjectMarketplaceSourceService CreateService(ProjectsConfigDbContext db)
+    private ProjectMarketplaceSourceService CreateService(
+        ProjectsConfigDbContext db,
+        IProjectMarketplaceSourceStore? sourceStore = null)
     {
         var projects = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
         return new ProjectMarketplaceSourceService(
-            new MarketplaceSourceStore(db),
+            sourceStore ?? new MarketplaceSourceStore(db),
             projects,
             TimeProvider.System);
+    }
+
+    private sealed class BlockingMarketplaceSourceStore(
+        IProjectMarketplaceSourceStore inner,
+        TaskCompletionSource<bool> createStarted,
+        TaskCompletionSource<bool> continueCreate) : IProjectMarketplaceSourceStore
+    {
+        public Task<IReadOnlyList<ProjectMarketplaceSourceRecord>> ListByProjectAsync(
+            string projectId,
+            bool includeRemoved,
+            CancellationToken cancellationToken) =>
+            inner.ListByProjectAsync(projectId, includeRemoved, cancellationToken);
+
+        public Task<ProjectMarketplaceSourceRecord?> GetAsync(
+            string projectId,
+            Guid sourceId,
+            CancellationToken cancellationToken) =>
+            inner.GetAsync(projectId, sourceId, cancellationToken);
+
+        public async Task<ProjectMarketplaceSourceRecord> CreateAsync(
+            ProjectMarketplaceSourceRecord source,
+            CancellationToken cancellationToken)
+        {
+            createStarted.TrySetResult(true);
+            await continueCreate.Task.WaitAsync(cancellationToken);
+            return await inner.CreateAsync(source, cancellationToken);
+        }
+
+        public Task<ProjectMarketplaceSourceRecord> UpdateAsync(
+            string projectId,
+            Guid sourceId,
+            long expectedRevision,
+            ProjectMarketplaceSourceDefinition definition,
+            string actorId,
+            DateTimeOffset updatedAt,
+            CancellationToken cancellationToken) =>
+            inner.UpdateAsync(
+                projectId, sourceId, expectedRevision, definition, actorId, updatedAt, cancellationToken);
+
+        public Task<ProjectMarketplaceSourceRecord> RemoveAsync(
+            string projectId,
+            Guid sourceId,
+            long expectedRevision,
+            string actorId,
+            DateTimeOffset updatedAt,
+            CancellationToken cancellationToken) =>
+            inner.RemoveAsync(projectId, sourceId, expectedRevision, actorId, updatedAt, cancellationToken);
     }
 
     private ProjectsConfigDbContext CreateDbContext() =>

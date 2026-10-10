@@ -89,6 +89,7 @@ public sealed class SkillMarketplaceBrowseService
             await verifyCurrentReadAuthorityAsync(cancellationToken).ConfigureAwait(false);
             var currentSource = await _sources.GetAsync(projectId, source.SourceId, cancellationToken)
                 .ConfigureAwait(false);
+            await verifyCurrentReadAuthorityAsync(cancellationToken).ConfigureAwait(false);
             if (currentSource != source)
                 throw MarketplaceSourceException.RevisionConflict();
 
@@ -202,6 +203,7 @@ public sealed class SkillMarketplaceBrowseService
             await verifyCurrentReadAuthorityAsync(cancellationToken).ConfigureAwait(false);
             var currentSource = await _sources.GetAsync(projectId, source.SourceId, cancellationToken)
                 .ConfigureAwait(false);
+            await verifyCurrentReadAuthorityAsync(cancellationToken).ConfigureAwait(false);
             if (currentSource != source)
                 throw MarketplaceSourceException.RevisionConflict();
 
@@ -355,9 +357,9 @@ public sealed class SkillMarketplaceBrowseService
                 continue;
             if (!seen.Add(path))
                 throw MarketplaceSourceException.InvalidUpstream("GitHub returned a duplicate skill manifest path.");
-            var location = path[..^"/SKILL.md".Length];
-            if (string.Equals(path, "SKILL.md", StringComparison.Ordinal))
-                location = string.Empty;
+            var location = string.Equals(path, "SKILL.md", StringComparison.Ordinal)
+                ? string.Empty
+                : path[..^"/SKILL.md".Length];
             var name = location.Length == 0
                 ? "root"
                 : location[(location.LastIndexOf('/') + 1)..];
