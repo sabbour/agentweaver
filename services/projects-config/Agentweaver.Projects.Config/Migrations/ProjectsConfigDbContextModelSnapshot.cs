@@ -296,6 +296,96 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.ToTable("project_configuration_revisions", "projects_config");
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectMarketplaceSourceRecord", b =>
+                {
+                    b.Property<Guid>("SourceId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("created_by_actor_id");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("normalized_name");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("Repository")
+                        .IsRequired()
+                        .HasMaxLength(201)
+                        .HasColumnType("character varying(201)")
+                        .HasColumnName("repository");
+
+                    b.Property<string>("RequestedRef")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)")
+                        .HasColumnName("requested_ref");
+
+                    b.Property<long>("Revision")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("state");
+
+                    b.Property<string>("Subpath")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("subpath");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("UpdatedByActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("updated_by_actor_id");
+
+                    b.HasKey("SourceId");
+
+                    b.HasIndex("ProjectId", "NormalizedName")
+                        .IsUnique()
+                        .HasDatabaseName("ux_marketplace_sources_project_name_active")
+                        .HasFilter("\"state\" = 'Active'");
+
+                    b.HasIndex("ProjectId", "State");
+
+                    b.ToTable("marketplace_sources", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_marketplace_sources_revision", "revision > 0");
+
+                            t.HasCheckConstraint("ck_marketplace_sources_state", "state IN ('Active', 'Removed')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectRecord", b =>
                 {
                     b.Property<string>("ProjectId")
@@ -492,6 +582,193 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.ToTable("project_run_selections", "projects_config");
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillContentRevisionRecord", b =>
+                {
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("SkillId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("skill_id");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("ContentDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("content_digest");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedByActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("created_by_actor_id");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("ObjectKey")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("object_key");
+
+                    b.Property<string>("RequestedRef")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("requested_ref");
+
+                    b.Property<string>("ResolvedCommitSha")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("resolved_commit_sha");
+
+                    b.Property<int>("ResourceCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("resource_count");
+
+                    b.Property<string>("SelectedPath")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)")
+                        .HasColumnName("selected_path");
+
+                    b.Property<string>("SourceId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("source_id");
+
+                    b.Property<string>("SourceRevision")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("source_revision");
+
+                    b.Property<long>("TotalBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("total_bytes");
+
+                    b.HasKey("ProjectId", "SkillId", "Revision");
+
+                    b.ToTable("project_skill_content_revisions", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_project_skill_digest", "content_digest ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_project_skill_resource_count", "resource_count BETWEEN 0 AND 64");
+
+                            t.HasCheckConstraint("ck_project_skill_revision", "revision > 0");
+
+                            t.HasCheckConstraint("ck_project_skill_total_bytes", "total_bytes >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillContentRevocationRecord", b =>
+                {
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("SkillId")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("skill_id");
+
+                    b.Property<long>("Revision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("revision");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("reason");
+
+                    b.Property<DateTimeOffset>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<string>("RevokedByActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("revoked_by_actor_id");
+
+                    b.HasKey("ProjectId", "SkillId", "Revision");
+
+                    b.ToTable("project_skill_content_revocations", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_project_skill_revocation_revision", "revision > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillImportIdempotencyRecord", b =>
+                {
+                    b.Property<string>("ProjectId")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<string>("ScopeDigest")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("scope_digest");
+
+                    b.Property<string>("ActorId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("actor_id");
+
+                    b.Property<string>("ActorIssuer")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("actor_issuer");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("idempotency_key");
+
+                    b.Property<string>("ReceiptJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("receipt");
+
+                    b.Property<string>("RequestDigest")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("request_digest");
+
+                    b.HasKey("ProjectId", "ScopeDigest");
+
+                    b.ToTable("project_skill_import_idempotency", "projects_config");
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectTenantMembershipRecord", b =>
                 {
                     b.Property<Guid>("MembershipId")
@@ -590,6 +867,15 @@ namespace Agentweaver.Projects.Config.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectMarketplaceSourceRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectRoleAssignmentRecord", b =>
                 {
                     b.HasOne("Agentweaver.Projects.Config.ProjectTenantMembershipRecord", null)
@@ -600,6 +886,33 @@ namespace Agentweaver.Projects.Config.Migrations
                 });
 
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectRunSelectionRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillContentRevisionRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillContentRevocationRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectSkillContentRevisionRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId", "SkillId", "Revision")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillImportIdempotencyRecord", b =>
                 {
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
                         .WithMany()

@@ -32,6 +32,34 @@ Orchestrator reserves model sends and registered tool invocations through existi
 AgentHost narrows prompt capacity through the actual SDK configuration.
 These boundaries do not count the SDK's internal model API calls.
 
+Before native session creation, AgentHost reads skills through the current runtime
+registration. Orchestrator checks the accepted run selection and current read
+permission; Projects returns only imported revisions assigned to the active agent.
+AgentHost checks the registration binding and content digests, exposes those
+instructions through the SDK skill provider, and places the exact resource bytes
+in the native session filesystem. It repeats the content read during current
+authority checks. Missing, changed, revoked, unassigned, or legacy unpinned content
+denies session creation or continued use.
+
+```mermaid
+sequenceDiagram
+    participant H as AgentHost
+    participant O as Orchestrator
+    participant P as Projects & Config
+    participant B as Blob storage
+    participant S as Copilot SDK
+    H->>O: Read skills by runtime registration ID
+    O->>P: Check accepted selection and current permission
+    P->>B: Read the accepted agent's pinned revisions
+    B-->>P: Return verified instructions and resource bytes
+    P-->>O: Return ordered skills for the active agent
+    O->>P: Check current permission again
+    O-->>H: Return content bound to this registration
+    H->>H: Check content and resource digests
+    H->>S: Start with accepted skills and resource files
+    Note over H,O: Repeat the registration and content checks before protected runtime work.
+```
+
 | Route | Source contract |
 | --- | --- |
 | `POST /runtime/v1/configure` | Authenticated delivery of the pending, purpose-bound configure nonce. No model session starts on delivery alone. |

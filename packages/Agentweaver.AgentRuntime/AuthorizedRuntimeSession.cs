@@ -24,6 +24,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     private readonly TimeProvider _timeProvider;
     private readonly RuntimeActionHttpClient? _actions;
     private readonly Func<RuntimeRegistration, CancellationToken, Task>? _requireReadiness;
+    private readonly Func<CancellationToken, Task>? _requireSkillContent;
     private readonly SemaphoreSlim _executionGate = new(1, 1);
     private readonly SemaphoreSlim _authorityGate = new(1, 1);
     private RuntimeSessionRefreshReceipt? _refreshReplay;
@@ -38,7 +39,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         RuntimeCopilotSession session, RuntimeModelCredential modelCredential, IRuntimeRegistrationOwner owner,
         RuntimeBrokerCredentialClient broker, RuntimeActorAuthorization actor, TimeProvider timeProvider,
         RuntimeActionHttpClient? actions = null,
-        Func<RuntimeRegistration, CancellationToken, Task>? requireReadiness = null)
+        Func<RuntimeRegistration, CancellationToken, Task>? requireReadiness = null,
+        Func<CancellationToken, Task>? requireSkillContent = null)
     {
         Registration = registration;
         _source = new(sourceGrant, sourceCredential, isReplay: false);
@@ -51,6 +53,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         _timeProvider = timeProvider;
         _actions = actions;
         _requireReadiness = requireReadiness;
+        _requireSkillContent = requireSkillContent;
     }
 
     public RuntimeRegistration Registration { get; }
@@ -180,6 +183,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         await _broker.VerifySourceAsync(Proof(), cancellationToken).ConfigureAwait(false);
         await _broker.VerifyModelCredentialAsync(_modelAuthorization, cancellationToken).ConfigureAwait(false);
         RuntimeSessionBootstrap.RequireCurrent(current, _actor, _timeProvider);
+        if (_requireSkillContent is not null)
+            await _requireSkillContent(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<RuntimeSessionRefreshReceipt> RefreshAsync(

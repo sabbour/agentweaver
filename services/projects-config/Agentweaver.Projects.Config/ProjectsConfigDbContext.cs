@@ -15,7 +15,13 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     public DbSet<PlatformRuntimeHeadRecord> PlatformRuntimeHeads => Set<PlatformRuntimeHeadRecord>();
     public DbSet<PlatformRuntimeRevisionRecord> PlatformRuntimeRevisions => Set<PlatformRuntimeRevisionRecord>();
     public DbSet<ProjectRunSelectionRecord> RunSelections => Set<ProjectRunSelectionRecord>();
+    public DbSet<ProjectMarketplaceSourceRecord> MarketplaceSources => Set<ProjectMarketplaceSourceRecord>();
     public DbSet<ProjectCastingProposalRecord> CastingProposals => Set<ProjectCastingProposalRecord>();
+    public DbSet<ProjectSkillContentRevisionRecord> SkillContentRevisions => Set<ProjectSkillContentRevisionRecord>();
+    public DbSet<ProjectSkillImportIdempotencyRecord> SkillImportIdempotency =>
+        Set<ProjectSkillImportIdempotencyRecord>();
+    public DbSet<ProjectSkillContentRevocationRecord> SkillContentRevocations =>
+        Set<ProjectSkillContentRevocationRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -212,6 +218,43 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.HasIndex(selection => new { selection.ProjectId, selection.RunId }).IsUnique();
         });
 
+        modelBuilder.Entity<ProjectMarketplaceSourceRecord>(entity =>
+        {
+            entity.ToTable("marketplace_sources", table =>
+            {
+                table.HasCheckConstraint("ck_marketplace_sources_revision", "revision > 0");
+                table.HasCheckConstraint(
+                    "ck_marketplace_sources_state",
+                    "state IN ('Active', 'Removed')");
+            });
+            entity.HasKey(source => source.SourceId);
+            entity.Property(source => source.SourceId).HasColumnName("source_id");
+            entity.Property(source => source.ProjectId).HasColumnName("project_id").HasMaxLength(32).IsRequired();
+            entity.Property(source => source.Name).HasColumnName("name").HasMaxLength(64).IsRequired();
+            entity.Property(source => source.NormalizedName)
+                .HasColumnName("normalized_name").HasMaxLength(64).IsRequired();
+            entity.Property(source => source.Repository).HasColumnName("repository").HasMaxLength(201).IsRequired();
+            entity.Property(source => source.RequestedRef).HasColumnName("requested_ref").HasMaxLength(255).IsRequired();
+            entity.Property(source => source.Subpath).HasColumnName("subpath").HasMaxLength(1024);
+            entity.Property(source => source.Revision).HasColumnName("revision").IsConcurrencyToken();
+            entity.Property(source => source.State).HasColumnName("state").HasConversion<string>().HasMaxLength(16);
+            entity.Property(source => source.CreatedByActorId)
+                .HasColumnName("created_by_actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(source => source.UpdatedByActorId)
+                .HasColumnName("updated_by_actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(source => source.CreatedAt).HasColumnName("created_at");
+            entity.Property(source => source.UpdatedAt).HasColumnName("updated_at");
+            entity.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(source => source.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(source => new { source.ProjectId, source.NormalizedName })
+                .IsUnique()
+                .HasDatabaseName("ux_marketplace_sources_project_name_active")
+                .HasFilter("\"state\" = 'Active'");
+            entity.HasIndex(source => new { source.ProjectId, source.State });
+        });
+
         modelBuilder.Entity<ProjectCastingProposalRecord>(entity =>
         {
             entity.ToTable("project_casting_proposals", table =>
@@ -264,6 +307,87 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasForeignKey(proposal => proposal.ProjectId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(proposal => new { proposal.ProjectId, proposal.CreatedAt });
+        });
+
+        modelBuilder.Entity<ProjectSkillContentRevisionRecord>(entity =>
+        {
+            entity.ToTable("project_skill_content_revisions", table =>
+            {
+                table.HasCheckConstraint("ck_project_skill_revision", "revision > 0");
+                table.HasCheckConstraint("ck_project_skill_resource_count", "resource_count BETWEEN 0 AND 64");
+                table.HasCheckConstraint("ck_project_skill_total_bytes", "total_bytes >= 0");
+                table.HasCheckConstraint(
+                    "ck_project_skill_digest",
+                    "content_digest ~ '^[0-9a-f]{64}$'");
+            });
+            entity.HasKey(revision => new { revision.ProjectId, revision.SkillId, revision.Revision });
+            entity.Property(revision => revision.ProjectId).HasColumnName("project_id").HasMaxLength(32);
+            entity.Property(revision => revision.SkillId).HasColumnName("skill_id").HasMaxLength(256);
+            entity.Property(revision => revision.Revision).HasColumnName("revision");
+            entity.Property(revision => revision.Name).HasColumnName("name").HasMaxLength(64).IsRequired();
+            entity.Property(revision => revision.Description).HasColumnName("description").HasMaxLength(1024).IsRequired();
+            entity.Property(revision => revision.ContentDigest).HasColumnName("content_digest").HasMaxLength(64).IsRequired();
+            entity.Property(revision => revision.ObjectKey).HasColumnName("object_key").HasMaxLength(512).IsRequired();
+            entity.Property(revision => revision.ResourceCount).HasColumnName("resource_count");
+            entity.Property(revision => revision.TotalBytes).HasColumnName("total_bytes");
+            entity.Property(revision => revision.CreatedByActorId).HasColumnName("created_by_actor_id")
+                .HasMaxLength(256).IsRequired();
+            entity.Property(revision => revision.CreatedAt).HasColumnName("created_at");
+            entity.Property(revision => revision.SourceId).HasColumnName("source_id").HasMaxLength(256);
+            entity.Property(revision => revision.SourceRevision).HasColumnName("source_revision").HasMaxLength(256);
+            entity.Property(revision => revision.RequestedRef).HasColumnName("requested_ref").HasMaxLength(256);
+            entity.Property(revision => revision.ResolvedCommitSha).HasColumnName("resolved_commit_sha").HasMaxLength(64);
+            entity.Property(revision => revision.SelectedPath).HasColumnName("selected_path").HasMaxLength(1024);
+            entity.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(revision => revision.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ProjectSkillImportIdempotencyRecord>(entity =>
+        {
+            entity.ToTable("project_skill_import_idempotency");
+            entity.HasKey(operation => new { operation.ProjectId, operation.ScopeDigest });
+            entity.Property(operation => operation.ProjectId).HasColumnName("project_id").HasMaxLength(32);
+            entity.Property(operation => operation.ScopeDigest).HasColumnName("scope_digest").HasMaxLength(64);
+            entity.Property(operation => operation.ActorIssuer).HasColumnName("actor_issuer").HasMaxLength(512);
+            entity.Property(operation => operation.ActorId).HasColumnName("actor_id").HasMaxLength(256);
+            entity.Property(operation => operation.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
+            entity.Property(operation => operation.RequestDigest).HasColumnName("request_digest").HasMaxLength(64).IsRequired();
+            entity.Property(operation => operation.ReceiptJson).HasColumnName("receipt").HasColumnType("jsonb").IsRequired();
+            entity.Property(operation => operation.CreatedAt).HasColumnName("created_at");
+            entity.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(operation => operation.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ProjectSkillContentRevocationRecord>(entity =>
+        {
+            entity.ToTable("project_skill_content_revocations", table =>
+                table.HasCheckConstraint("ck_project_skill_revocation_revision", "revision > 0"));
+            entity.HasKey(revocation => new
+            {
+                revocation.ProjectId,
+                revocation.SkillId,
+                revocation.Revision,
+            });
+            entity.Property(revocation => revocation.ProjectId).HasColumnName("project_id").HasMaxLength(32);
+            entity.Property(revocation => revocation.SkillId).HasColumnName("skill_id").HasMaxLength(256);
+            entity.Property(revocation => revocation.Revision).HasColumnName("revision");
+            entity.Property(revocation => revocation.RevokedByActorId).HasColumnName("revoked_by_actor_id")
+                .HasMaxLength(256).IsRequired();
+            entity.Property(revocation => revocation.Reason).HasColumnName("reason").HasMaxLength(2000).IsRequired();
+            entity.Property(revocation => revocation.RevokedAt).HasColumnName("revoked_at");
+            entity.HasOne<ProjectSkillContentRevisionRecord>()
+                .WithMany()
+                .HasForeignKey(revocation => new
+                {
+                    revocation.ProjectId,
+                    revocation.SkillId,
+                    revocation.Revision,
+                })
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }
