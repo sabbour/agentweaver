@@ -55,6 +55,15 @@ the positive Events receipt consumer remains separate work. These services can b
 built and tested, but are not deployed or published; the source does not provision
 Azure resources. The unpublished [AgentHost candidate](docs/architecture/agenthost.md)
 adds authenticated runtime execution, not automatic scheduling or a deployed platform.
+Environment also has owner-locked provider-lifecycle report persistence bound to exact
+Sandbox leases. Its authenticated HTTP route remains fail-closed until a provider
+identity and the existing Core interruption command are admitted; this is not an
+end-to-end suspend, relocation, or resume implementation.
+The separate BuildTest command path resolves an authenticated MAF checkpoint to
+Core's immutable accepted command, then persists its operation in the existing
+owner-effects ledger. It uses gated offline Pods and a separate pinned, read-only
+collector for required files; this does not add a second owner for MAF checkpoint
+or run state.
 
 See the [Events & Sessions journal](docs/architecture/events-sessions.md) for its
 implemented contract, PostgreSQL ownership, provider pin, and current limits.

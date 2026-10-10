@@ -120,6 +120,34 @@ It reuses the canonical manager's retained lease callback for current owner cont
 and the registered profile. This read does not grant configure or delivery authority.
 Identity's separate pending nonce still protects delivery.
 
+Environment's provider-lifecycle report store is a separate, owner-locked source
+candidate. It binds report reservations to the exact active Sandbox lease, provider,
+resource, Environment lifecycle generation, lease revision, provider/current fence, and
+provider-reported timestamp; identical event retries retain the same pending operation
+key and report time, while conflicting or stale bindings fail. The Core execution fence
+remains null unless supplied by an admitted Core owner response. No provider identity producer or Core interruption
+command is currently admitted, so the protected HTTP route returns unavailable without
+calling the store or Core. These records do not establish a flushed workspace, mutate
+workspace or network generations, release placement, or make a run resume-ready.
+
+Environment's BuildTest command operation is separate from that lifecycle-report
+candidate. It accepts a checkpoint reference and exact current binding, resolves the
+immutable command from authenticated Core, and stores the command fingerprint and
+accepted specification in the existing `owner_effects` row. Mutable attempts, Pod
+references, terminal evidence, and bounded output remain in its provider-binding JSON.
+The operation rechecks Core acceptance, Projects authority, and the exact Sandbox,
+Workspace, and network generations before each protected effect. An uncertain create
+is reconciled by the same operation and is never recreated from absence alone.
+
+The command runs in a gated Pod under an operation-scoped deny-all egress policy.
+Required file outputs use a second pinned collector Pod with a read-only workspace
+mount. The collector opens each path component without following symlinks, requires
+`statx` mount and inode metadata, and returns size/hash evidence bound to its Pod UID
+and container. A timeout, cancellation, or output limit is `Interrupted`; a missing
+required file or nonzero command/collector exit is `Failed`. Core remains the owner of
+the accepted checkpoint, execution fence, and MAF run state; Environment does not
+create a second run-state owner or imply suspend/resume readiness.
+
 Child registration can bind a confirmed WorkPlan item. The owner transaction
 checks its current decision version, selection hash, and fence before storing
 that association. Unmapped legacy children remain usable for existing operations
@@ -281,7 +309,8 @@ stateDiagram-v2
     Reconciling --> Interrupted: consistency not established
     Fenced --> Draining: reject new turns
     Draining --> Saving: drain or cancel active turn
-    Saving --> StorageBound: cache and checkpoint saved, journal flushed
+    Saving --> StorageBound: cache acknowledged, checkpoint and drain resolved, journal and workspace evidence complete
+    Saving --> Interrupted: required evidence missing or ambiguous
     StorageBound --> Capturing: snapshot capability available
     StorageBound --> Committed: no guest snapshot, commit manifest
     Capturing --> Committed: capture reference and commit manifest
@@ -298,15 +327,16 @@ stateDiagram-v2
 
 | Entry | Why resume validates it |
 | --- | --- |
-| Run and session identity; manifest identity | Prevent another run or child session from taking ownership of this state |
-| Copilot-cache reference, SDK version, and pinned model binding | Use only a compatible cache; otherwise rebuild conversation context from the journal |
-| MAF checkpoint reference and workflow position | Continue at the recorded step, child join, or gate |
-| Flushed journal position | Establish which turns and decisions are durable before recovery |
-| Pinned workspace resource generation and provider reference | Identify the exact backing volume independently of guest snapshots |
-| Flushed workspace data generation and tree hash, or a provider checkpoint identifier | Pair durable workspace contents with the recorded run state |
-| Optional explicit guest snapshot reference and lifecycle generation | Restore only the intended environment version, not a latest-looking template |
-| Network-intent generation | Reapply and verify the intended egress rules before dispatch |
-| Fencing generation and lifecycle state | Reject an obsolete worker or provider lifecycle report |
+| Owner session identity and manifest identity/version | Prevent another run or child session from taking ownership of this state |
+| Existing `SessionMaterialAcknowledgment` for the SDK cache, including its nested SDK/model binding | Validate the exact acknowledged cache material; do not duplicate SDK or model claims in the manifest |
+| Owner-scoped MAF checkpoint reference (`coordinator-execution` store, checkpoint ID, revision, WorkPlanId, and DecisionStateVersion) | Core resolves and revalidates the immutable checkpoint and actual drain at commit/resume; the manifest does not copy workflow position or progress |
+| Nullable flushed journal position | A missing position remains null; zero is a valid position |
+| Workspace volume reference and Storage provider resource at the same positive generation | Identify the exact backing volume independently of guest snapshots |
+| Workspace data generation and exactly one tree SHA-256 or provider checkpoint identifier | Pair durable workspace contents with the recorded run state |
+| Optional guest snapshot resource and lifecycle-generation pair | Restore only the intended environment version, not a latest-looking template; this generation is distinct from the environment fence |
+| Network-intent generation and Core execution fence | A suspended manifest requires positive values; interrupted evidence gaps may leave them absent before egress is verified for dispatch |
+| Nullable environment-generation fence | A missing fence is incomplete evidence; a suspended manifest requires the exact positive fence |
+| Immutable missing-evidence gaps | An interrupted manifest records nonempty gaps; a suspended manifest has no gaps |
 
 The [Storage](provider-seams.md#storage) and [Snapshots](provider-seams.md#snapshots)
 seams remain distinct: the latter preserves guest state when available, not the
@@ -341,6 +371,11 @@ versions cannot be established, the run remains interrupted until an explicit
 recovery path passes manifest validation. The status snapshot exposes which records
 are preserved and which in-flight action might repeat. It does not infer safety from
 pod state or treat a message acknowledgment as a completed command.
+
+The current Environment report source is only the durable reservation portion of this
+protocol. It stores exact lease-bound reports as `Pending`; without a verified Core
+command/actor/fence, it cannot mark them `Interrupted` or `Reconciled`, release a
+placement, or authorize recovery. The public source route currently fails closed.
 
 A guest-snapshot adapter is enabled only after a public-preview Azure Blob capture and
 restore, warm-pool claim restore, and startup-budget checks. It is not a 1.0 cutover

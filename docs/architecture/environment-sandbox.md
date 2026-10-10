@@ -7,11 +7,19 @@ tested.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before dispatch. It records an owner-fenced lease and immutable provider request, then provisions and observes the exact agent-sandbox resources. ReadyForDispatch requires the same verified network generation and actual Pod, PVC, and isolation evidence. A differing provider result that arrives after release is stored separately and reclaimed by fenced reconciliation without changing terminal lease evidence. Workspace retention is unchanged." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before dispatch. It records an owner-fenced lease and immutable provider request, then provisions and observes the exact agent-sandbox resources. ReadyForDispatch requires the same verified network generation and actual Pod, PVC, and isolation evidence. A differing provider result after release is reclaimed with its original provider fence without changing terminal lease evidence. Workspace retention is unchanged." />
   </a>
   <figcaption>Environment Sandbox lease and recovery sequence. A ready lease requires exact Workspace and network observations; retirement releases Sandbox placement only, not the Environment or its Workspace data. Late differing provider results use a separate durable cleanup record.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.drawio'">Open editable draw.io source</a></p>
+
+<figure class="aw-diagram" tabindex="0">
+  <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'">
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'" alt="Environment resolves Core's immutable accepted BuildTest command and persists its stable operation before provider effects. It rechecks current authorization and exact Sandbox, Workspace, and Cilium bindings. A gated command Pod uses an offline policy; a separate read-only collector Pod starts only after verified command success and returns a bounded no-follow file receipt tied to its UID and the request fingerprint. Uncertain effects reconcile the same operation, while Core retains MAF state." />
+  </a>
+  <figcaption>BuildTest command and output evidence sequence. Required outputs come from a separate pinned collector on the exact Workspace PVC; command logs are not file evidence, and Core retains MAF checkpoint and run-state ownership.</figcaption>
+</figure>
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.drawio'">Open editable draw.io source</a></p>
 
 ## Ownership and admission
 
@@ -66,6 +74,11 @@ continues to enforce the configured Environment audience for both routes.
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Return the same projection to a run-bound caller with exact project/run bindings and `ReadRunSelection`; no run selection is fetched and no provider effect occurs. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/abandon` | Explicitly abandon one current resource generation and provider fence. The request is not itself proof of ownership; fresh Projects authorization and the durable owner CAS are required. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource. A network-policy generation may be supplied to verify readiness. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/binding-preparation` | Validate the current Sandbox profile binding for a session without starting a command. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands` | Resolve the accepted Core checkpoint, reserve its immutable command intent, and execute or reconcile the stable BuildTest operation. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}` | Read the exact persisted operation under the current owner and Sandbox binding. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}/reconcile` | Resume reconciliation of the same operation and immutable intent; it does not create a replacement operation. |
+| `POST /internal/provider-lifecycle/reports` | Provider report route. It fails closed until provider identity authentication and Core interruption acknowledgement are admitted. |
 
 Both v1 placement routes use the owner-scoped `ISandboxLeaseStore.GetCurrentAsync`
 callback overload under the exact active Environment owner fence. The public
@@ -186,6 +199,37 @@ reconciler stops; receipt persistence verifies the current lifecycle fence,
 claim token, and unexpired persisted claim atomically. A matching duplicate
 receipt remains idempotent after completion. Provider failures remain visible
 and leave the cleanup available for retry.
+
+## BuildTest and provider lifecycle reports
+
+BuildTest is a distinct command operation on the current Sandbox lease. The
+caller supplies a checkpoint reference and expected binding, not a command,
+image, argument list, or authority grant. Environment resolves the complete
+checkpoint with Core under current authorization; Core returns the immutable
+accepted command, execution options, selection hash, and stable operation ID.
+The manager records that intent and its request fingerprint in the existing
+owner-effects state before provider effects. Attempts, pod references, and
+results reconcile against the same operation. An uncertain create remains
+`ReconciliationRequired`; it is not permission to create another Pod.
+
+Before each effect, Environment rechecks the current owner, accepted command,
+Sandbox lease, Workspace generation, and Cilium binding. The command Pod uses
+the exact verified writable Workspace PVC and an operation/role-scoped offline
+deny-all policy. Only verified terminal success with exit code zero can start
+the separate required-output collector. The collector uses the pinned image
+and executable with a read-only Workspace mount. It opens accepted paths
+without following symlinks, verifies regular files and mount identity, and
+returns a bounded receipt bound to the collector Pod UID, container, and
+request fingerprint. Missing required files are `Failed`; collector timeout,
+cancellation, or limits are `Interrupted`. Logs are bounded command output,
+not file evidence.
+
+BuildTest does not own or advance MAF checkpoints, turns, or run status. Core
+retains that state and its interruption acknowledgement. Provider lifecycle
+reports have a durable idempotent contract and lease/fence reconciliation, but
+the mapped report route currently returns unavailable until provider identity
+authentication and the Core interruption command are admitted. This source
+does not claim end-to-end suspend, relocation, or resume.
 
 ## Retirement and storage retention
 

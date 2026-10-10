@@ -371,10 +371,17 @@ selector. The immutable run selection must contain exactly one matching Sandbox 
 adapter version, schema, options revision, and capabilities must match the configured adapter. Missing or
 mismatched selection is denied without fallback.
 
-The adapter does not implement suspend/resume, provider lifecycle events, or automatic model dispatch.
-The separate [AgentHost candidate](../agenthost.md) implements authenticated configuration and A2A source routes.
-Environment owns registered endpoint/profile and placement evidence; Orchestrator owns runtime registration and accepted run bindings.
-No provider can weaken VM isolation when the selection requires it.
+Environment now persists provider lifecycle reports and reconciles them against
+the exact lease and provider fence. The report route remains unavailable until
+provider identity authentication and the Core interruption command are
+admitted, so this is not end-to-end suspend, relocation, or resume. The Sandbox
+provider also runs only the immutable BuildTest command accepted by Core; it
+does not own MAF checkpoint or run state, or provide automatic model dispatch.
+The separate [AgentHost candidate](../agenthost.md) implements authenticated
+configuration and A2A source routes. Environment owns registered
+endpoint/profile and placement evidence; Orchestrator owns runtime registration
+and accepted run bindings. No provider can weaken VM isolation when the
+selection requires it.
 
 The current lease source stores the full Environment owner tuple, lifecycle generation,
 resource generation, provider/current fencing generations, lease revision, and expiry.
@@ -668,8 +675,10 @@ consistency manifest.
 The unpublished `Agentweaver.Environment` candidate compiles typed purpose-grouped rules from the
 platform/project/run intersection, rechecks Projects & Config authorization on each operation, and uses
 Kubernetes resource-version and intent-generation fences before pinning the verified L3/L4 binding. Its
-readback proves the exact Cilium policy object only, not enforcement in the datapath. It does not yet wire
-selector labels into Sandbox claims/templates or include deployed Kubernetes identity/RBAC. See
+readback proves the exact Cilium policy object only, not enforcement in the datapath. Environment propagates
+the verified selectors into Sandbox templates and validates them on the actual Pod. BuildTest adds separate
+operation- and role-scoped deny-all policies for command and collector Pods. These source paths do not
+include deployed Kubernetes identity/RBAC or prove datapath enforcement. See
 [Environment egress](../environment-egress.md) for the source and test boundary.
 
 The platform's own **Tool & MCP gateway** fills the default L7 data-plane slot at cutover. It handles

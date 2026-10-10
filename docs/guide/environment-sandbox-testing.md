@@ -8,6 +8,22 @@ dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.cs
   --configuration Release --no-restore --verbosity quiet
 ```
 
+BuildTest contracts, accepted-checkpoint verification, and the fail-closed
+provider-report route have a separate non-container test selection:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --filter "FullyQualifiedName~SandboxBuildTestCommandContractTests|FullyQualifiedName~EnvironmentSandboxBuildTestAcceptedCommandVerifierTests|FullyQualifiedName~EnvironmentProviderLifecycleReportEndpointTests" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+These tests cover immutable accepted intent, output-receipt validation,
+timeout/cancellation classification, required-output failure, and route
+availability when no provider authenticator is admitted. They do not test the
+durable provider-report store, which uses the disposable PostgreSQL fixture
+below, or prove a live provider identity, Core interruption acknowledgement,
+Kubernetes, or Cilium datapath.
+
 The lease tests use the test project's disposable PostgreSQL 16 container. They
 cover per-Environment capacity, idempotent reservation, owner lifecycle fencing,
 explicit abandonment, supported terminal evidence, exact release receipts,

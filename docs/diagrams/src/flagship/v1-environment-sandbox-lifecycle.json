@@ -1,8 +1,8 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Environment Sandbox lease, readiness, recovery, and late-resource cleanup",
-  "alt": "Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before dispatch. It records an owner-fenced lease and immutable provider request, then provisions and observes the exact agent-sandbox resources. ReadyForDispatch requires the same verified network generation and actual Pod/PVC/isolation evidence. A different provider result after release is stored in a separate durable cleanup record and released with its original provider fence without changing terminal lease evidence. Workspace retention is unchanged.",
+  "title": "Environment Sandbox lease, readiness, and recovery",
+  "alt": "Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before provisioning an owner-fenced Sandbox lease. ReadyForDispatch requires the same verified network generation and actual Pod, PVC, and isolation evidence. A different provider result after release is stored in a separate durable cleanup record and reclaimed with its original provider fence without changing terminal lease evidence. Workspace retention is unchanged.",
   "autonumber": true,
   "participants": [
     {
@@ -143,7 +143,7 @@
     {
       "type": "note",
       "over": ["environment", "provider-api"],
-      "label": "Dispatch readiness requires the exact PVC, VM isolation, and policy generation. This slice has no AgentHost configure handshake or Core run pin."
+      "label": "Dispatch readiness requires the exact PVC, VM isolation, and policy generation. Workspace retention is unchanged."
     },
     {
       "type": "fragment",

@@ -36,6 +36,14 @@ The separate read-only path uses current `ReadRunSelection` without new roles or
 The local combined harness exercises SDK source persistence and reference-only accounting.
 It does not prove deployed AgentHost scheduling or paid model execution.
 
+Environment's separate BuildTest path resolves only Core's immutable accepted
+checkpoint, persists one stable operation in existing owner-effects state, and
+uses gated offline command and read-only output-collector Pods. Core remains the
+owner of MAF checkpoint and run state. Provider lifecycle reports reconcile
+against the current lease and fence, while the HTTP report route stays
+fail-closed until provider identity and Core interruption acknowledgement are
+admitted.
+
 ## Canonical component overview
 
 <figure class="aw-diagram" tabindex="0">
