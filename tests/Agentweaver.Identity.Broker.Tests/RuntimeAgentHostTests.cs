@@ -23,6 +23,34 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RuntimeAgentHostTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MaterialAcknowledgmentMustRetainTheActualNarrowedPromptCapacity(bool changed)
+    {
+        await using var fixture = new HostFixture(maxPromptTokens: 2048)
+        {
+            MaterialPromptCapacityChanged = changed
+        };
+        fixture.Sdk.MaxPromptTokens = 1024;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        var send = fixture.Host.SendAsync(fixture.Message(fixture.Proof(ready)), fixture.Actor, timeout.Token);
+        if (changed)
+        {
+            Assert.Equal("runtime_material_receipt_invalid",
+                (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => send)).Code);
+            Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        }
+        else
+        {
+            Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single((await send).Parts).Text);
+            Assert.Contains(fixture.Material, request => request.Kind == SessionMaterialKind.SdkCache);
+        }
+        Assert.NotEmpty(fixture.Material);
+        Assert.All(fixture.Material, request => Assert.Equal(1024, request.MaxPromptTokens));
+    }
+
     [Fact]
     public async Task ConfigureAndRefreshReplaysKeepOneNativeSessionAndRejectChangedAuthority()
     {
@@ -139,9 +167,12 @@ public sealed class RuntimeAgentHostTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task NativeUsageMustReachTheAccountingAcknowledgmentBeforeTheTurnSucceeds(bool failAccounting)
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task NativeUsageMustReachTheAccountingAcknowledgmentBeforeTheTurnSucceeds(
+        bool failAccounting, bool workflowBound = false)
     {
-        await using var fixture = new HostFixture();
+        await using var fixture = new HostFixture(workflowBound: workflowBound);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var ready = await fixture.ConfigureAsync(timeout.Token);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -167,6 +198,128 @@ public sealed class RuntimeAgentHostTests
             Assert.Equal(1234567.25m, fixture.Usage.Single().Usage.Measurement.ProviderUnits);
             Assert.Equal(1, fixture.Accounted);
         }
+    }
+
+    [Theory]
+    [InlineData("denied", "runtime_owner_denied")]
+    [InlineData("message", "runtime_native_turn_admission_invalid")]
+    [InlineData("prompt", "runtime_native_turn_admission_invalid")]
+    [InlineData("revision", "runtime_native_turn_admission_invalid")]
+    [InlineData("stale", "runtime_registration_stale")]
+    public async Task WorkflowTurnRequiresExactDurableAdmissionAndCurrentAuthorityBeforeNativeSend(
+        string fault, string expectedCode)
+    {
+        await using var fixture = new HostFixture(workflowBound: true) { NativeAdmissionFault = fault };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var message = fixture.Message(fixture.Proof(await fixture.ConfigureAsync(timeout.Token)));
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+
+        Assert.Equal(expectedCode, failure.Code);
+        Assert.Single(fixture.NativeAdmissions);
+        Assert.Empty(fixture.Material);
+        Assert.Empty(fixture.NativeObservations);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkflowNativeOutputReturnsAfterObservedAccountingAndReplaysWithoutResending(
+        bool emitsUsage)
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        if (emitsUsage)
+            fixture.Sdk.BeforeTurnResponse = _ => fixture.Sdk.EmitUsageAsync(fixture.Sdk.UsageData());
+        var message = fixture.Message(fixture.Proof(await fixture.ConfigureAsync(timeout.Token)));
+
+        var response = await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
+        Assert.Equal(response, await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        var admission = Assert.Single(fixture.NativeAdmissions);
+        Assert.Equal(RuntimeNativeTurnContract.RequestHash(message),
+            RuntimeNativeTurnContract.RequestHash(admission.Message));
+        var observation = Assert.Single(fixture.NativeObservations);
+        Assert.Equal(message.Message.MessageId, observation.Admission.MessageId);
+        Assert.Equal(fixture.Sdk.NativeMessageId.ToString("D"), observation.Observation.NativeMessageId);
+        Assert.Equal(fixture.Sdk.NativeCompletionReceiptEventId,
+            observation.Observation.NativeCompletionReceiptEventId);
+        Assert.NotEqual(message.Message.MessageId, fixture.Sdk.NativeMessageId);
+        Assert.Null(observation.Observation.AccountingCheckpoint);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Single(fixture.Material, request => request.Role == "user");
+        Assert.Single(fixture.Material, request => request.Role == "assistant");
+        Assert.Single(fixture.Material, request => request.Kind == SessionMaterialKind.SdkCache);
+        Assert.Equal(emitsUsage ? 1 : 0, fixture.Accounted);
+        Assert.Equal(emitsUsage ? 1 : 0, fixture.Usage.Count);
+        var accounted = Assert.Single(fixture.NativeAccounting);
+        Assert.Equal(observation.Admission.MessageId, accounted.Recorded.Admission.MessageId);
+        Assert.Equal(emitsUsage ? 1 : 0, accounted.RequiredReceipts.Length);
+        Assert.All(accounted.RequiredReceipts, reference =>
+            Assert.Equal(CostDisposition.Unpriced, reference.Accounting.Disposition));
+    }
+
+    [Theory]
+    [InlineData("unavailable", "runtime_owner_unavailable")]
+    [InlineData("missing", "runtime_usage_cost_snapshot_invalid")]
+    [InlineData("changed", "runtime_usage_cost_snapshot_invalid")]
+    [InlineData("revision", "runtime_native_turn_accounting_invalid")]
+    public async Task FailedDurableObservedJoinCannotReturnAnAnswerOrResend(string fault, string expectedCode)
+    {
+        await using var fixture = new HostFixture(workflowBound: true) { NativeAccountingFault = fault };
+        fixture.Sdk.BeforeTurnResponse = _ => fixture.Sdk.EmitUsageAsync(fixture.Sdk.UsageData());
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var message = fixture.Message(fixture.Proof(await fixture.ConfigureAsync(timeout.Token)));
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        Assert.Equal(expectedCode, failure.Code);
+        Assert.Same(failure, await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token)));
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Single(fixture.NativeAccounting);
+        Assert.Equal(1, fixture.Accounted);
+    }
+
+    [Fact]
+    public async Task LaterUsageIsAccountedWithoutInventingMembershipInsideTheNativeCompletionRange()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        fixture.Sdk.AfterNativeCompletionReceipt = _ => fixture.Sdk.EmitUsageAsync(fixture.Sdk.UsageData());
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var message = fixture.Message(fixture.Proof(await fixture.ConfigureAsync(timeout.Token)));
+        var response = await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
+        Assert.Equal(1, fixture.Accounted);
+        Assert.Single(fixture.Usage);
+        Assert.Empty(Assert.Single(fixture.NativeObservations).Observation.UsageEventIds);
+        Assert.Empty(Assert.Single(fixture.NativeAccounting).RequiredReceipts);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Theory]
+    [InlineData("missing", "runtime_native_turn_receipt_unavailable")]
+    [InlineData("unavailable", "runtime_owner_unavailable")]
+    [InlineData("mismatch", "runtime_native_turn_receipt_invalid")]
+    public async Task WorkflowMissingNativeProofOrFailedRecordCannotReturnAnAnswerOrResend(
+        string fault, string expectedCode)
+    {
+        await using var fixture = new HostFixture(workflowBound: true) { NativeRecordFault = fault };
+        fixture.Sdk.EmitNativeCompletionReceipt = fault != "missing";
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var message = fixture.Message(fixture.Proof(await fixture.ConfigureAsync(timeout.Token)));
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        Assert.Equal(expectedCode, failure.Code);
+        Assert.Same(failure, await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token)));
+        Assert.Single(fixture.NativeAdmissions);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.DoesNotContain(fixture.Material, request =>
+            request.Role == "assistant" || request.Kind == SessionMaterialKind.SdkCache);
+        Assert.Equal(fault == "missing" ? 0 : 1, fixture.NativeObservations.Count);
     }
 
     [Fact]
@@ -338,7 +491,7 @@ public sealed class RuntimeAgentHostTests
         private long _sourceRevision = 1;
         private int _position;
         private readonly ConcurrentDictionary<Guid, SessionMaterialReadResult> _material = new();
-        public HostFixture()
+        public HostFixture(bool workflowBound = false, int? maxPromptTokens = null)
         {
             Time = new() { Now = DateTimeOffset.UtcNow };
             Token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
@@ -355,17 +508,26 @@ public sealed class RuntimeAgentHostTests
                     ConfigureEndpoint = new("https://runtime.test/runtime/v1/configure"),
                     PlacementProviderId = "sandbox-test", EnvironmentLifecycleGeneration = 1,
                     EnvironmentLeaseRevision = 1, Image = Image, ModelConnectionId = Guid.NewGuid(),
-                    ModelConnectionScope = ProjectAuthorityResourceType.Project
+                    ModelConnectionScope = ProjectAuthorityResourceType.Project,
+                    WorkflowStepId = workflowBound ? "implement" : null, MaxPromptTokens = maxPromptTokens
                 }
             };
-            Sdk = new() { EmitUsageAfterCreate = false, ExpectedAvailableToolsCount = 7, PersistNativeSessionState = true };
+            Sdk = new()
+            {
+                EmitUsageAfterCreate = false, ExpectedAvailableToolsCount = 7, PersistNativeSessionState = true,
+                EmitNativeCompletionReceipt = workflowBound
+            };
             var factory = RuntimeCopilotSessionTests.Factory(Sdk);
             var b = Registration.Binding;
             var owner = new RuntimeOwnerContext(1, b.ActorIssuer, b.ActorId, b.TenantId, b.ProjectId, b.RunId,
                 b.SessionId, b.AgentId, b.ModelSelectionReference!, b.TurnId, b.ProjectRevision,
                 b.ProjectConfigurationRevision, b.PlatformRuntimeRevision, b.ContextRevision,
                 b.AcceptedSelectionHash, b.ExecutionFence, 1, 1, 1)
-            { ModelSourceMode = b.ModelSourceMode, ModelConnectionId = b.ModelConnectionId, ModelConnectionScope = b.ModelConnectionScope };
+            {
+                ModelSourceMode = b.ModelSourceMode, ModelConnectionId = b.ModelConnectionId,
+                ModelConnectionScope = b.ModelConnectionScope, WorkflowStepId = b.WorkflowStepId,
+                MaxPromptTokens = b.MaxPromptTokens
+            };
             var placement = new EnvironmentRuntimeBootstrapContext(1, b.TenantId, b.ProjectId, b.RunId, b.EnvironmentId,
                 1, b.EnvironmentCurrentFencingGeneration, b.EnvironmentProviderFencingGeneration, 1, Registration.ExpiresAt,
                 new(ProviderSeam.Sandbox, b.PlacementProviderId!, b.PlacementUid, b.PlacementGeneration),
@@ -394,9 +556,16 @@ public sealed class RuntimeAgentHostTests
         public ControlledCopilotRuntime Sdk { get; }
         public ConcurrentQueue<SessionMaterialWriteRequest> Material { get; } = new();
         public ConcurrentQueue<RuntimeUsageSourceReceipt> Usage { get; } = new();
+        public ConcurrentQueue<RuntimeNativeTurnBeginRequest> NativeAdmissions { get; } = new();
+        public ConcurrentQueue<RuntimeNativeTurnObservationRequest> NativeObservations { get; } = new();
+        public ConcurrentQueue<RuntimeNativeTurnAccountingRequest> NativeAccounting { get; } = new();
+        public string? NativeAccountingFault { get; set; }
+        public string? NativeAdmissionFault { get; set; }
+        public string? NativeRecordFault { get; set; }
         public TaskCompletionSource AccountingReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Func<CancellationToken, Task>? BeforeAccounting { get; set; }
         public bool FailAccounting { get; set; }
+        public bool MaterialPromptCapacityChanged { get; set; }
         public int Accounted { get; private set; }
         public int Rotations { get; private set; }
 
@@ -509,6 +678,40 @@ public sealed class RuntimeAgentHostTests
                     Configure.Registration.Revision, _source, _facts,
                     RuntimeUsageSourceReceiptContract.HashSource(Configure.Registration, _facts), Time.GetUtcNow()));
             }
+            if (path == "/internal/runtime/turns/begin")
+            {
+                Assert.DoesNotContain(Sdk.Requests, request => request.Method == "session.send");
+                var begin = await ReadAsync<RuntimeNativeTurnBeginRequest>(request, token);
+                NativeAdmissions.Enqueue(begin);
+                if (NativeAdmissionFault == "denied")
+                    return Response(request, new { }, HttpStatusCode.Forbidden);
+                var admission = new RuntimeNativeTurnAdmissionReceipt(Configure.Registration, _facts!,
+                    begin.Message.Message.MessageId,
+                    RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(begin.Message.Message.Parts[0].Text)),
+                    RuntimeNativeTurnContract.RequestHash(begin.Message), 2);
+                admission = NativeAdmissionFault switch
+                {
+                    "message" => admission with { MessageId = Guid.NewGuid() },
+                    "prompt" => admission with { PromptHash = new string('e', 64) },
+                    "revision" => admission with { OwnerRevision = 1 },
+                    _ => admission
+                };
+                if (NativeAdmissionFault == "stale")
+                    Registration = Registration with { Revision = 2 };
+                return Response(request, admission);
+            }
+            if (path == "/internal/runtime/turns/observations")
+            {
+                var observed = await ReadAsync<RuntimeNativeTurnObservationRequest>(request, token);
+                NativeObservations.Enqueue(observed);
+                RuntimeNativeTurnContract.ValidateObservation(observed.Admission, observed.Observation);
+                if (NativeRecordFault == "unavailable")
+                    return Response(request, new { }, HttpStatusCode.ServiceUnavailable);
+                return Response(request, new RuntimeNativeTurnRecordedReceipt(
+                    observed.Admission, observed.Observation,
+                    NativeRecordFault == "mismatch" ? new string('e', 64) :
+                        RuntimeNativeTurnContract.ObservationHash(observed.Observation), 3));
+            }
             if (path == "/internal/runtime/observations")
             {
                 var observation = await ReadAsync<RuntimeUsageObservationRequest>(request, token);
@@ -517,6 +720,34 @@ public sealed class RuntimeAgentHostTests
                     RuntimeUsageSourceReceiptContract.Hash(Configure.Registration, usage), Time.GetUtcNow());
                 Usage.Enqueue(receipt);
                 return Response(request, receipt);
+            }
+            if (path == "/internal/runtime/turns/accounting")
+            {
+                var accounted = await ReadAsync<RuntimeNativeTurnAccountingRequest>(request, token);
+                NativeAccounting.Enqueue(accounted);
+                RuntimeNativeTurnContract.AccountingSnapshotRequest(accounted.Recorded, accounted.RequiredReceipts);
+                Assert.Equal(accounted.Recorded.Observation.UsageEventIds.Length, accounted.RequiredReceipts.Length);
+                if (NativeAccountingFault == "unavailable")
+                    return Response(request, new { }, HttpStatusCode.ServiceUnavailable);
+                var binding = Configure.Registration.Binding;
+                var snapshot = new RuntimeUsageCostSnapshotReceipt(1,
+                    RuntimeUsageSourceReceiptContract.HashSource(Configure.Registration, _facts!), null,
+                    new(null, null, CostDisposition.Unpriced, null, "controlled fixture"),
+                    new(binding.TenantId, binding.ProjectId, binding.RunId, Usage.Count, false, [], []))
+                {
+                    DispatchId = accounted.Recorded.Admission.MessageId,
+                    RepresentedReceipts = NativeAccountingFault == "missing" ? [] : accounted.RequiredReceipts
+                };
+                if (NativeAccountingFault == "changed")
+                    snapshot = snapshot with
+                    {
+                        RepresentedReceipts = [accounted.RequiredReceipts[0] with
+                        {
+                            Accounting = accounted.RequiredReceipts[0].Accounting with { UnpricedReason = "changed" }
+                        }]
+                    };
+                return Response(request, new RuntimeNativeTurnAccountingReceipt(accounted.Recorded, snapshot,
+                    NativeAccountingFault == "revision" ? 3 : 4));
             }
             if (path.EndsWith("/usage-receipts", StringComparison.Ordinal))
             {
@@ -548,6 +779,10 @@ public sealed class RuntimeAgentHostTests
                             Configure.Registration.RuntimeInstanceId, Configure.Registration.Revision, b.ExecutionFence,
                             b.AcceptedSelectionHash, _facts!.SdkVersion, _facts.RuntimeVersion,
                             _facts.ModelSelectionReference, _facts.ModelId)
+                        {
+                            MaxPromptTokens = MaterialPromptCapacityChanged
+                                ? _facts.MaxPromptTokens + 1 : _facts.MaxPromptTokens
+                        }
                     });
                 _material[material.EventId] = new(receipt, material.Bytes);
                 return Response(request, receipt);

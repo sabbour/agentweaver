@@ -10,6 +10,7 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <PackageReference Include="Microsoft.Azure.Cosmos" Version="3.63.2" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageReference Include="StackExchange.Redis" Version="3.3.1" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Providers\Agentweaver.Providers.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />

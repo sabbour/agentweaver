@@ -203,6 +203,11 @@ public sealed class GitHubRepoAppConnectionServicePostgresTests(PostgresContaine
         Assert.Equal(connection.ConnectionId, browser.ConnectionId);
         Assert.Equal(connection.ConnectionRevision, browser.ConnectionRevision);
         Assert.Equal("connected-user", browser.GitHubLogin);
+        using var browserContract = JsonDocument.Parse(
+            JsonSerializer.Serialize(browser, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        Assert.Equal(
+            "connected-user",
+            browserContract.RootElement.GetProperty("githubLogin").GetString());
         var repository = Assert.Single(browser.Repositories);
         Assert.Equal(456, repository.InstallationId);
         Assert.Equal(789, repository.RepositoryId);

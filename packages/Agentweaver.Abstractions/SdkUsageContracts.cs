@@ -22,7 +22,11 @@ public sealed record SdkSessionFacts(
     string SourceMode,
     string MeterSource,
     string AcceptedSelectionHash,
-    long RegistrationRevision);
+    long RegistrationRevision)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxPromptTokens { get; init; }
+}
 
 public sealed record SdkUsageObservation(
     Guid EventId,

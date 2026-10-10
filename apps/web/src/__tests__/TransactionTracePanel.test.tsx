@@ -1,0 +1,255 @@
+import {
+  aggregateNanoAiu,
+  buildToolCallIndex,
+  buildTraceTree,
+  formatSafeToolValue,
+  getTraceTimeline,
+  totalNanoAiu,
+} from '../components/runs/traceTree';
+import { describe, expect, it } from 'vitest';
+import type { PersistedRunEvent, RunTraceSpanDto } from '../api/types';
+function span(partial: Partial<RunTraceSpanDto> & { id: string }): RunTraceSpanDto {
+  return {
+    name: partial.id,
+    timestamp: '2026-07-06T00:00:00.000Z',
+    durationMs: 100,
+    success: true,
+    ...partial,
+  } as RunTraceSpanDto;
+}
+
+describe('buildTraceTree', () => {
+  it('reconstructs a parent/child hierarchy from parentId links', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'agent', spanType: 'invoke-agent', agentName: 'coordinator', timestamp: '2026-07-06T00:00:00.000Z' }),
+      span({ id: 'tool-1', parentId: 'agent', spanType: 'tool', toolName: 'mock_search', timestamp: '2026-07-06T00:00:01.000Z' }),
+    ];
+
+    const tree = buildTraceTree(spans);
+    expect(tree).toHaveLength(1);
+    expect(tree[0].type).toBe('invoke-agent');
+    const toolChild = tree[0].children.find((c) => c.type === 'tool');
+    expect(toolChild?.span.toolName).toBe('mock_search');
+  });
+
+  it('synthesizes an LLM leaf under an agent span carrying model/tokens', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'agent', spanType: 'invoke-agent', agentName: 'coordinator', model: 'gpt-4o', inputTokens: 512, outputTokens: 128 }),
+    ];
+
+    const tree = buildTraceTree(spans);
+    const llm = tree[0].children.find((c) => c.type === 'llm');
+    expect(llm).toBeDefined();
+    expect(llm?.synthetic).toBe(true);
+    expect(llm?.span.model).toBe('gpt-4o');
+  });
+
+  it('treats spans with missing parents as roots', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'orphan', parentId: 'not-present', spanType: 'tool', toolName: 'grep' }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(tree).toHaveLength(1);
+    expect(tree[0].span.id).toBe('orphan');
+  });
+
+  it('returns an empty forest for no spans', () => {
+    expect(buildTraceTree([])).toEqual([]);
+  });
+});
+
+describe('getTraceTimeline', () => {
+  it('uses the earliest span start and latest span end as the trace window', () => {
+    const timeline = getTraceTimeline([
+      span({ id: 'first', timestamp: '2026-07-06T00:00:01.000Z', durationMs: 800 }),
+      span({ id: 'last', timestamp: '2026-07-06T00:00:02.000Z', durationMs: 2_500 }),
+    ]);
+
+    expect(timeline?.startedAtMs).toBe(new Date('2026-07-06T00:00:01.000Z').getTime());
+    expect(timeline?.endedAtMs).toBe(new Date('2026-07-06T00:00:04.500Z').getTime());
+    expect(timeline?.durationMs).toBe(3_500);
+  });
+
+  it('ignores invalid timestamps rather than corrupting the entire waterfall range', () => {
+    const timeline = getTraceTimeline([
+      span({ id: 'invalid', timestamp: 'not-a-date', durationMs: 100 }),
+      span({ id: 'valid', timestamp: '2026-07-06T00:00:01.000Z', durationMs: 100 }),
+    ]);
+
+    expect(timeline?.durationMs).toBe(100);
+  });
+});
+
+describe('buildToolCallIndex', () => {
+  function event(type: string, payload: Record<string, unknown>): PersistedRunEvent {
+    return { sequence: 0, type, payload };
+  }
+
+  it('pairs tool.call arguments with a matching tool.result content by callId', () => {
+    const events: PersistedRunEvent[] = [
+      event('tool.call', { callId: 'c1', toolName: 'start_preview_process', arguments: { command: 'python3 -m http.server 9090' } }),
+      event('tool.result', { callId: 'c1', content: 'preview_process_started: pid=594' }),
+    ];
+    const index = buildToolCallIndex(events);
+    const detail = index.get('c1');
+    expect(detail?.arguments).toEqual({ command: 'python3 -m http.server 9090' });
+    expect(detail?.content).toBe('preview_process_started: pid=594');
+    expect(detail?.errorMessage).toBeUndefined();
+  });
+
+  describe('formatSafeToolValue', () => {
+    it('formats structured tool input and JSON-string output for readable display', () => {
+      expect(formatSafeToolValue({ pattern: 'trace', path: 'src' })).toEqual({
+        state: 'available',
+        text: '{\n  "pattern": "trace",\n  "path": "src"\n}',
+      });
+      expect(formatSafeToolValue('{"matches":["src/trace.ts"],"count":1}')).toEqual({
+        state: 'available',
+        text: '{\n  "matches": [\n    "src/trace.ts"\n  ],\n  "count": 1\n}',
+      });
+    });
+
+    it('makes missing tool data explicit', () => {
+      expect(formatSafeToolValue(undefined)).toEqual({ state: 'unavailable' });
+    });
+
+    it('redacts sensitive keys and values before they can reach the inspector', () => {
+      const value = formatSafeToolValue({
+        authorization: 'Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+        nested: { apiKey: 'secret-value' },
+      });
+
+      expect(value.state).toBe('redacted');
+      expect(value.text).toContain('***REDACTED***');
+      expect(value.text).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789');
+      expect(value.text).not.toContain('secret-value');
+    });
+
+    it('marks already-redacted strings while preserving safe surrounding context', () => {
+      expect(formatSafeToolValue('provider returned ***REDACTED***')).toEqual({
+        state: 'redacted',
+        text: 'provider returned ***REDACTED***',
+      });
+    });
+
+    it('truncates oversize values with an explicit marker', () => {
+      const value = formatSafeToolValue(`prefix-${'x'.repeat(200)}`, 80);
+
+      expect(value.state).toBe('truncated');
+      expect(value.text).toContain('prefix-');
+      expect(value.text).toContain('truncated because too large');
+    });
+  });
+
+  it('pairs tool.call arguments with a matching tool.error message by callId', () => {
+    const events: PersistedRunEvent[] = [
+      event('tool.call', { callId: 'c2', toolName: 'observe_bound_port', arguments: { port: 9090 } }),
+      event('tool.error', { callId: 'c2', errorMessage: 'Tool execution failed' }),
+    ];
+    const index = buildToolCallIndex(events);
+    const detail = index.get('c2');
+    expect(detail?.arguments).toEqual({ port: 9090 });
+    expect(detail?.errorMessage).toBe('Tool execution failed');
+    expect(detail?.content).toBeUndefined();
+  });
+
+  it('tracks an output-free run_command heartbeat until a terminal event clears it', () => {
+    const active = buildToolCallIndex([
+      event('tool.call', { callId: 'c3', toolName: 'run_command', arguments: { command: 'npm test' } }),
+      event('tool.execution_pending', {
+        runId: 'run-1',
+        toolCallId: 'c3',
+        toolName: 'run_command',
+        startedAtUtc: '2026-09-14T09:00:00.000Z',
+        deadlineUtc: '2026-09-14T09:10:00.000Z',
+        elapsedSeconds: 12,
+      }),
+    ]);
+
+    expect(active.get('c3')?.activeExecution).toEqual({
+      runId: 'run-1',
+      toolCallId: 'c3',
+      toolName: 'run_command',
+      startedAtUtc: '2026-09-14T09:00:00.000Z',
+      deadlineUtc: '2026-09-14T09:10:00.000Z',
+      elapsedSeconds: 12,
+    });
+
+    const settled = buildToolCallIndex([
+      event('tool.call', { callId: 'c3', toolName: 'run_command', arguments: { command: 'npm test' } }),
+      event('tool.execution_pending', {
+        runId: 'run-1',
+        toolCallId: 'c3',
+        toolName: 'run_command',
+        startedAtUtc: '2026-09-14T09:00:00.000Z',
+        elapsedSeconds: 12,
+      }),
+      event('tool.result', { callId: 'c3', content: 'ok' }),
+    ]);
+
+    expect(settled.get('c3')?.outcome).toBe('succeeded');
+    expect(settled.get('c3')?.activeExecution).toBeUndefined();
+  });
+
+  it('ignores events without a callId and ignores unrelated event types', () => {
+    const events: PersistedRunEvent[] = [
+      event('tool.call', { toolName: 'no_call_id' }),
+      event('agent.message', { text: 'hello' }),
+    ];
+    expect(buildToolCallIndex(events).size).toBe(0);
+  });
+
+  it('returns an empty index for no events', () => {
+    expect(buildToolCallIndex([]).size).toBe(0);
+  });
+});
+
+describe('AIC (AI Credit) aggregation', () => {
+  it('attributes cost to a real llm node from its own totalNanoAiu', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'llm-1', spanType: 'llm', model: 'gpt-4o', totalNanoAiu: 5_000_000_000 }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(aggregateNanoAiu(tree[0])).toBe(5_000_000_000);
+  });
+
+  it('attributes zero cost to a tool node with no descendants', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'tool-1', spanType: 'tool', toolName: 'grep' }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(aggregateNanoAiu(tree[0])).toBe(0);
+  });
+
+  it('aggregates an invoke-agent node from its synthetic LLM leaf (single turn)', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'agent', spanType: 'invoke-agent', agentName: 'trinity', model: 'gpt-4o', totalNanoAiu: 7_667_650_000 }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(aggregateNanoAiu(tree[0])).toBe(7_667_650_000);
+  });
+
+  it('aggregates an invoke-agent node across multiple nested turns and tool calls', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'agent', spanType: 'invoke-agent', agentName: 'trinity' }),
+      span({ id: 'turn-1', parentId: 'agent', spanType: 'llm', model: 'gpt-4o', totalNanoAiu: 2_000_000_000, timestamp: '2026-07-06T00:00:01.000Z' }),
+      span({ id: 'tool-1', parentId: 'agent', spanType: 'tool', toolName: 'grep', timestamp: '2026-07-06T00:00:02.000Z' }),
+      span({ id: 'turn-2', parentId: 'agent', spanType: 'llm', model: 'gpt-4o', totalNanoAiu: 3_000_000_000, timestamp: '2026-07-06T00:00:03.000Z' }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(aggregateNanoAiu(tree[0])).toBe(5_000_000_000);
+  });
+
+  it('rolls up the run-level total across every root span in the forest', () => {
+    const spans: RunTraceSpanDto[] = [
+      span({ id: 'agent-1', spanType: 'invoke-agent', agentName: 'trinity', model: 'gpt-4o', totalNanoAiu: 1_000_000_000 }),
+      span({ id: 'agent-2', spanType: 'invoke-agent', agentName: 'tank', model: 'gpt-4o', totalNanoAiu: 4_000_000_000, timestamp: '2026-07-06T00:01:00.000Z' }),
+    ];
+    const tree = buildTraceTree(spans);
+    expect(totalNanoAiu(tree)).toBe(5_000_000_000);
+  });
+
+  it('returns zero for an empty forest', () => {
+    expect(totalNanoAiu([])).toBe(0);
+  });
+});

@@ -158,7 +158,8 @@ public sealed record CiliumPolicyMetadata(
     ImmutableDictionary<string, string> Labels,
     ImmutableDictionary<string, string> Annotations,
     string? ResourceVersion = null,
-    long? Generation = null);
+    long? Generation = null,
+    string? Uid = null);
 
 public sealed record CiliumEndpointSelector(ImmutableDictionary<string, string> MatchLabels)
 {

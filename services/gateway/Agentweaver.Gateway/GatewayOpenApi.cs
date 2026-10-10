@@ -22,10 +22,20 @@ internal static partial class GatewayOpenApi
             ["updateProject"] = C("UpdateProjectRequest", "ProjectSummary", "200"),
             ["getProjectConfiguration"] = C(null, "VersionedProjectConfiguration", "200"),
             ["updateProjectConfiguration"] = C("UpdateProjectConfigurationRequest", "VersionedProjectConfiguration", "200"),
+            ["getAuthorizationContext"] = C(null, "ProjectAuthorizationContext", "200"),
             ["acceptRunSelection"] = C("AcceptRunSelectionRequest", "EffectiveRunSelection", "200"),
             ["getRunSelection"] = C(null, "EffectiveRunSelection", "200"),
             ["getPlatformRuntimeDefaults"] = C(null, "VersionedPlatformRuntimeDefaults", "200"),
             ["updatePlatformRuntimeDefaults"] = C("UpdatePlatformRuntimeDefaultsRequest", "VersionedPlatformRuntimeDefaults", "200"),
+            ["pinSourceControlRepository"] = C("SourceControlRepositoryPinRequest", "SourceControlRepositoryPinView", "200", "202"),
+            ["createSourceControlIssue"] = C("SourceControlIssueRequest", "SourceControlIssue", "200"),
+            ["createSourceControlPullRequest"] = C("SourceControlPullRequestRequest", "SourceControlPullRequest", "200"),
+            ["readSourceControlReviews"] = C(null, "SourceControlReviewList", "200"),
+            ["prepareSourceControlWorkspace"] = C("PrepareSourceControlWorkspaceRequest", "SourceControlWorkspaceView", "202"),
+            ["readSourceControlWorkspaceDiff"] = C("PrepareSourceControlWorkspaceRevisionRequest", "SourceControlWorkspaceDiffView", "200"),
+            ["prepareSourceControlMergeIntent"] = C("PrepareSourceControlMergeIntentRequest", "SourceControlMergeApprovalView", "200", "202"),
+            ["readSourceControlMergeIntent"] = C(null, "SourceControlMergeIntentView", "200"),
+            ["executeSourceControlMergeIntent"] = C(null, "SourceControlMergeExecutionView", "200"),
             ["acceptRunRoot"] = C("AcceptRootRequest", "AcceptedRoot", "201"),
             ["proposeOutcome"] = C("ProposeCoordinatorOutcomeRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["readRunStatus"] = C(null, "OwnerRunStatus", "200"),
@@ -65,10 +75,10 @@ internal static partial class GatewayOpenApi
             ["searchKnowledge"] = C(null, "KnowledgeRecordPage", "200"),
             ["readKnowledgeRecord"] = C(null, "KnowledgeRecord", "200"),
             ["updateKnowledgeRecord"] = C("UpdateKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201"),
-            ["restoreKnowledgeRecord"] = C("RestoreKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201"),
-            ["approveKnowledgeDecision"] = C("ApproveKnowledgeDecisionRequest", "KnowledgeRecordWriteResult", "200", "201"),
+            ["restoreKnowledgeRecord"] = C("RestoreKnowledgeRecordRequest", "KnowledgeRecordWriteResult", "200", "201", "409"),
+            ["approveKnowledgeDecision"] = C("ApproveKnowledgeDecisionRequest", "KnowledgeRecordWriteResult", "200", "201", "409"),
             ["exportKnowledgeRecords"] = C(null, "KnowledgeRecordTransferBundle", "200"),
-            ["importKnowledgeRecords"] = C("KnowledgeRecordTransferBundle", "KnowledgeRecordImportResult", "200", "201"),
+            ["importKnowledgeRecords"] = C("KnowledgeRecordTransferBundle", "KnowledgeRecordImportResult", "200", "201", "400", "409", "413"),
             ["readKnowledgeRevisions"] = C(null, "KnowledgeRecordRevisionPage", "200"),
             ["promoteKnowledgeProposal"] = C("PromoteKnowledgeProposalRequest", "KnowledgeProposalPromotionResult", "200", "201"),
             ["rejectKnowledgeProposal"] = C("RejectKnowledgeProposalRequest", "KnowledgeRecordWriteResult", "200", "201"),
@@ -159,14 +169,15 @@ internal static partial class GatewayOpenApi
                 required = false,
                 schema = QuerySchema(name),
             }))
-            .Append(new
+            .ToArray();
+        if (route.ForwardTenantSelector || route.RequiresTenantSelector)
+            parameters = parameters.Append(new
             {
                 name = "X-Agentweaver-Tenant",
                 @in = "header",
-                required = false,
+                required = route.RequiresTenantSelector,
                 schema = new { type = "string" },
-            })
-            .ToArray();
+            }).ToArray();
 
         if (route.OperationId is
             "createKnowledgeRecord" or
@@ -237,7 +248,7 @@ internal static partial class GatewayOpenApi
             ["requestBody"] = route.HasJsonBody
                 ? new
                 {
-                    required = true,
+                    required = route.JsonBodyRequired,
                     content = new Dictionary<string, object>
                     {
                         ["application/json"] = new
@@ -302,6 +313,7 @@ internal static partial class GatewayOpenApi
     private static object PathParameterSchema(string constraint) => constraint switch
     {
         "guid" => new { type = "string", format = "uuid" },
+        "long" => Int(),
         _ => new { type = "string" },
     };
 
@@ -368,6 +380,21 @@ internal static partial class GatewayOpenApi
         ["CreateProjectRequest"] = Obj(["name"], ("name", Str())),
         ["UpdateProjectRequest"] = Obj(["expectedRevision", "name", "state"],
             ("expectedRevision", Int()), ("name", Str()), ("state", Enum("active", "archived"))),
+        ["ProjectAuthorizationContext"] = Obj(
+            ["contractVersion", "issuer", "actorId", "tenantId", "membershipRevision", "boundProjectId", "boundRunId", "effectiveAuthority"],
+            ("contractVersion", Int()), ("issuer", Str()), ("actorId", Str()), ("tenantId", Str()),
+            ("membershipRevision", Int()), ("boundProjectId", NullableStr()), ("boundRunId", NullableStr()),
+            ("effectiveAuthority", Arr(Ref("EffectiveProjectAuthorization")))),
+        ["EffectiveProjectAuthorization"] = Obj(
+            ["resourceType", "resourceId", "permissions"],
+            ("resourceType", Enum("platform", "tenant", "project")), ("resourceId", Str()),
+            ("permissions", Arr(Ref("ProjectAuthorizationPermissionGrant")))),
+        ["ProjectAuthorizationPermissionGrant"] = Obj(
+            ["permission", "roleRevision"],
+            ("permission", Enum("readProjects", "writeProjects", "createProjects", "readRunSelection",
+                "acceptRunSelection", "accessPrivateKnowledge", "readPlatformRuntimeDefaults",
+                "writePlatformRuntimeDefaults")),
+            ("roleRevision", Int())),
         ["VersionedProjectConfiguration"] = Obj(["projectId", "revision", "configuration", "updatedByActorId", "createdAt"],
             ("projectId", Str()), ("revision", Int()), ("configuration", Ref("ProjectConfiguration")),
             ("updatedByActorId", Str()), ("createdAt", Date())),
@@ -383,6 +410,7 @@ internal static partial class GatewayOpenApi
             ("defaultWorkflowId", NullableStr()), ("skills", Arr(Ref("SkillCatalogSetting"))),
             ("egressNarrowing", Nullable(Arr(Ref("NetworkEgressRule")))),
             ("runLimits", Ref("CopilotRunLimitOverrides")), ("sourceControl", Nullable(Obj([],
+                ("authMode", Enum("secret", "githubApp")), ("appConnectionId", Str()),
                 ("repository", Obj(["owner", "name"], ("owner", Str()), ("name", Str()))),
                 ("apiSecretReference", Ref("SecretRef")), ("checkoutSecretReference", Ref("SecretRef")),
                 ("webhookSecretReference", Ref("SecretRef")))))),
@@ -391,6 +419,63 @@ internal static partial class GatewayOpenApi
             ("sourceMode", new { type = new[] { "string", "null" }, @enum = new object?[] { "hostedCopilot", "byok", null } }),
             ("connectionId", new { type = new[] { "string", "null" }, format = "uuid" })),
         ["SecretRef"] = Obj(["id", "version"], ("id", Str()), ("version", Str())),
+        ["SourceControlRepositoryPinRequest"] = Obj(["selectionCode"], ("selectionCode", Str())),
+        ["SourceControlIssueRequest"] = Obj(["title"],
+            ("title", Str()), ("body", NullableStr())),
+        ["SourceControlIssue"] = Obj(["number", "title", "htmlUrl", "state"],
+            ("number", Int()), ("title", Str()), ("htmlUrl", new { type = "string", format = "uri" }),
+            ("state", Str())),
+        ["SourceControlPullRequestRequest"] = Obj(
+            ["title", "headBranch", "expectedHeadSha", "baseBranch", "expectedBaseSha", "draft"],
+            ("title", Str()), ("body", NullableStr()), ("headBranch", Str()), ("expectedHeadSha", Str()),
+            ("baseBranch", Str()), ("expectedBaseSha", Str()), ("draft", Bool())),
+        ["SourceControlPullRequest"] = Obj(
+            ["number", "htmlUrl", "state", "headBranch", "headSha", "baseBranch", "baseSha", "merged", "disposition"],
+            ("number", Int()), ("htmlUrl", new { type = "string", format = "uri" }), ("state", Str()),
+            ("headBranch", Str()), ("headSha", Str()), ("baseBranch", Str()), ("baseSha", Str()),
+            ("merged", Bool()), ("disposition", Enum("created", "reused", "observed"))),
+        ["SourceControlReview"] = Obj(["id", "reviewer", "state"],
+            ("id", Int()), ("reviewer", Str()),
+            ("state", Enum("approved", "changesRequested", "commented", "pending", "dismissed", "unknown")),
+            ("submittedAt", NullableDate())),
+        ["SourceControlReviewList"] = Arr(Ref("SourceControlReview")),
+        ["PrepareSourceControlWorkspaceRequest"] = Obj(["workspaceId", "baseSha", "branchName"],
+            ("workspaceId", Str()), ("baseSha", Str()), ("branchName", Str())),
+        ["PrepareSourceControlWorkspaceRevisionRequest"] = Obj(["baseSha", "branchName"],
+            ("baseSha", Str()), ("branchName", Str())),
+        ["SourceControlWorkspaceView"] = Obj(["workspaceId", "workspacePath", "baseSha", "branchName"],
+            ("workspaceId", Str()), ("workspacePath", Str()), ("baseSha", Str()), ("branchName", Str())),
+        ["SourceControlWorkspaceDiffView"] = Obj(["workspaceId", "baseSha", "headSha", "status", "patch"],
+            ("workspaceId", Str()), ("baseSha", Str()), ("headSha", Str()), ("status", Str()), ("patch", Str())),
+        ["PrepareSourceControlMergeIntentRequest"] = Obj(
+            ["idempotencyKey", "expectedStateVersion", "workflowId", "definitionRevision", "workPlanId",
+                "workflowStepId", "pullRequestNumber", "method"],
+            ("idempotencyKey", Str()), ("expectedStateVersion", Int()), ("workflowId", Str()),
+            ("definitionRevision", Str()), ("workPlanId", Str()), ("workflowStepId", Str()),
+            ("pullRequestNumber", Int()), ("method", Enum("merge", "squash", "rebase"))),
+        ["SourceControlRepositoryPinView"] = Obj(
+            ["pinId", "repository", "providerId", "resourceId", "resourceGeneration", "providerRepositoryId",
+                "defaultBranch", "isPrivate", "pinnedAt"],
+            ("pinId", Str()), ("repository", Str()), ("providerId", Str()), ("resourceId", Str()),
+            ("resourceGeneration", Int()), ("providerRepositoryId", Int()), ("defaultBranch", Str()),
+            ("isPrivate", Bool()), ("pinnedAt", Date())),
+        ["SourceControlMergeApprovalView"] = Obj(
+            ["intentId", "approvalRequestId", "state", "decisionId", "stateVersion", "pendingGate"],
+            ("intentId", Str()), ("approvalRequestId", Str()), ("state", Str()), ("decisionId", Uuid()),
+            ("stateVersion", Int()), ("pendingGate", NullableRef("CoordinatorGateRequest"))),
+        ["ExecutableActionGrantReference"] = Obj(["grantId", "revision"],
+            ("grantId", Str()), ("revision", Str())),
+        ["SourceControlMergeIntentView"] = Obj(
+            ["intentId", "approvalRequestId", "state", "repository", "pullRequestNumber", "headBranch",
+                "headSha", "baseBranch", "baseSha", "method"],
+            ("intentId", Str()), ("approvalRequestId", Str()), ("state", Str()), ("repository", Str()),
+            ("pullRequestNumber", Int()), ("headBranch", Str()), ("headSha", Str()), ("baseBranch", Str()),
+            ("baseSha", Str()), ("method", Enum("merge", "squash", "rebase")),
+            ("approvalDecisionId", NullableUuid()), ("approvalStateVersion", NullableInt()),
+            ("mergeSha", NullableStr()), ("lastFailureCode", NullableStr()),
+            ("grantReference", NullableRef("ExecutableActionGrantReference"))),
+        ["SourceControlMergeExecutionView"] = Obj(["intentId", "state"],
+            ("intentId", Str()), ("state", Str()), ("mergeSha", NullableStr()), ("failureCode", NullableStr())),
         ["ProjectProviderOverride"] = Obj(["seam", "providerId"],
             ("seam", ProviderSeamSchema()),
             ("providerId", Str())),

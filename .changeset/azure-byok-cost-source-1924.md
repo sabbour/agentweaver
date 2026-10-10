@@ -2,8 +2,9 @@
 "Agentweaver.EventsAndSessions": minor
 ---
 
-Add a meter-keyed Azure BYOK Cost provider for explicitly configured, versioned
-standard-token rate cards. Missing or unsupported usage remains unpriced; the
-provider does not fetch live rates or quote BYOK work, and provisioned-throughput
-usage remains unpriced without trusted usage-share evidence. This does not admit
-the native BYOK producer receipt path or complete issue #1924.
+Add a versioned Azure BYOK Cost provider for explicitly configured standard-token
+rate cards. It uses exact decimal arithmetic, does not fetch live rates or quote
+BYOK work, and leaves missing or unsupported usage unpriced. Provisioned-throughput
+usage remains unpriced without trusted usage-share evidence. The provider is not
+yet wired into native receipt pricing; BYOK receipts remain unpriced until the
+trusted Azure provider and deployment facts are admitted.

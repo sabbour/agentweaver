@@ -31,7 +31,10 @@ public sealed class RuntimeSessionMaterialHttpClient(
         var registration = session.Registration;
         var request = new SessionMaterialWriteRequest(1, eventId, registration.RuntimeInstanceId,
             registration.Revision, registration.Binding.ExecutionFence, kind,
-            bytes, role, session.Facts.SdkVersion, session.Facts.ModelId);
+            bytes, role, session.Facts.SdkVersion, session.Facts.ModelId)
+        {
+            MaxPromptTokens = session.Facts.MaxPromptTokens
+        };
         SessionMaterialValidation.Validate(request);
         var receipt = await RuntimeOwnerHttpTransport.SendAsync<SessionMaterialAcknowledgment>(
             client, _address, $"/internal/sessions/{Uri.EscapeDataString(registration.Binding.SessionId)}/material",
@@ -50,7 +53,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
             material.SdkVersion != session.Facts.SdkVersion ||
             material.RuntimeVersion != session.Facts.RuntimeVersion ||
             material.ModelId != session.Facts.ModelId ||
-            material.ModelSelectionReference != session.Facts.ModelSelectionReference)
+            material.ModelSelectionReference != session.Facts.ModelSelectionReference ||
+            material.MaxPromptTokens != session.Facts.MaxPromptTokens)
             throw new RuntimeAuthorizationException("runtime_material_receipt_invalid");
         return receipt;
     }

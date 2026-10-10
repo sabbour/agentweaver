@@ -15,6 +15,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     public DbSet<PlatformRuntimeHeadRecord> PlatformRuntimeHeads => Set<PlatformRuntimeHeadRecord>();
     public DbSet<PlatformRuntimeRevisionRecord> PlatformRuntimeRevisions => Set<PlatformRuntimeRevisionRecord>();
     public DbSet<ProjectRunSelectionRecord> RunSelections => Set<ProjectRunSelectionRecord>();
+    public DbSet<ProjectCastingProposalRecord> CastingProposals => Set<ProjectCastingProposalRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -209,6 +210,60 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasForeignKey(selection => selection.ProjectId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(selection => new { selection.ProjectId, selection.RunId }).IsUnique();
+        });
+
+        modelBuilder.Entity<ProjectCastingProposalRecord>(entity =>
+        {
+            entity.ToTable("project_casting_proposals", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_project_casting_proposals_base_revision",
+                    "base_configuration_revision > 0");
+                table.HasCheckConstraint("ck_project_casting_proposals_draft_revision", "draft_revision > 0");
+                table.HasCheckConstraint(
+                    "ck_project_casting_proposals_state",
+                    "state IN ('Pending', 'Confirmed', 'Rejected')");
+                table.HasCheckConstraint(
+                    "ck_project_casting_proposals_confirmed_result",
+                    "(state = 'Confirmed' AND confirmed_configuration_revision IS NOT NULL AND result IS NOT NULL) OR " +
+                    "(state <> 'Confirmed' AND confirmed_configuration_revision IS NULL AND result IS NULL)");
+                table.HasCheckConstraint(
+                    "ck_project_casting_proposals_transfer_provenance",
+                    "(transfer_format_version IS NULL AND transfer_source_project_id IS NULL AND " +
+                    "transfer_source_configuration_revision IS NULL AND transfer_content_digest IS NULL) OR " +
+                    "(transfer_format_version = 1 AND transfer_source_project_id IS NOT NULL AND " +
+                    "transfer_source_configuration_revision > 0 AND transfer_content_digest ~ '^[0-9a-f]{64}$')");
+            });
+            entity.HasKey(proposal => proposal.ProposalId);
+            entity.Property(proposal => proposal.ProposalId).HasColumnName("proposal_id");
+            entity.Property(proposal => proposal.ProjectId).HasColumnName("project_id").HasMaxLength(32).IsRequired();
+            entity.Property(proposal => proposal.BaseConfigurationRevision)
+                .HasColumnName("base_configuration_revision").IsRequired();
+            entity.Property(proposal => proposal.DraftRevision).HasColumnName("draft_revision").IsConcurrencyToken();
+            entity.Property(proposal => proposal.State).HasColumnName("state")
+                .HasConversion<string>().HasMaxLength(16).IsConcurrencyToken();
+            entity.Property(proposal => proposal.DraftJson).HasColumnName("draft").HasColumnType("jsonb").IsRequired();
+            entity.Property(proposal => proposal.ConfirmedConfigurationRevision)
+                .HasColumnName("confirmed_configuration_revision");
+            entity.Property(proposal => proposal.ResultJson).HasColumnName("result").HasColumnType("jsonb");
+            entity.Property(proposal => proposal.TransferFormatVersion).HasColumnName("transfer_format_version");
+            entity.Property(proposal => proposal.TransferSourceProjectId)
+                .HasColumnName("transfer_source_project_id").HasMaxLength(32);
+            entity.Property(proposal => proposal.TransferSourceConfigurationRevision)
+                .HasColumnName("transfer_source_configuration_revision");
+            entity.Property(proposal => proposal.TransferContentDigest)
+                .HasColumnName("transfer_content_digest").HasMaxLength(64);
+            entity.Property(proposal => proposal.CreatedByActorId)
+                .HasColumnName("created_by_actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(proposal => proposal.CreatedAt).HasColumnName("created_at");
+            entity.Property(proposal => proposal.UpdatedByActorId)
+                .HasColumnName("updated_by_actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(proposal => proposal.UpdatedAt).HasColumnName("updated_at");
+            entity.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(proposal => proposal.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(proposal => new { proposal.ProjectId, proposal.CreatedAt });
         });
     }
 }

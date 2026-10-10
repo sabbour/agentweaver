@@ -45,6 +45,21 @@ Environment's current placement also exposes its successful consumer pin without
 Neither response converts accepted candidates into provisioned resources.
 The native SDK supplies its effective `modelId` separately from the immutable accepted `modelSelectionReference` and `acceptedSelectionHash`.
 
+The shared, SDK-independent resolver reads `AgentHost:ModelBindings` and
+`AgentHost:ModelBindingsRevision` in AgentHost and the enabled Events native consumer.
+It resolves an exact accepted reference to an enabled concrete model and source mode.
+Its pin includes the configuration revision and canonical map hash.
+An optional positive `PromptCapacityTokens` is part of that canonical map.
+Omitted capacity preserves the historical null hash.
+Hosted prompt limits also require actual native catalog capacity.
+BYOK prompt limits require the concrete server-owned capacity and explicit SDK provider configuration.
+AgentHost narrows the accepted limit to those capacities and pins the effective value for resume.
+These are per-prompt/context capacities, not cumulative token budgets or internal model-call counters.
+For configured hosted credit limits, Events prices that concrete model before root
+acceptance or backlog claim, without creating SDK or usage facts.
+The Host later checks the accepted pin before SDK startup and verifies actual native model policy.
+BYOK token pricing cannot substitute for hosted Copilot credit admission.
+
 Explicit-event forks require the pinned provider's `sessions.events.fork` capability
 and a committed source event matched to its session-bound cursor. Events rechecks the
 Orchestrator's admission receipt inside the fork transaction, then atomically persists
@@ -89,8 +104,10 @@ limits.
 Native PostgreSQL remains the default. Cosmos negotiation validates the existing
 container identity, `/projectId` partition key, required search composite index, and
 non-expiring default TTL; it does not provision resources.
-Redis remains planned P2 work. These are Memory backends, not replacements for the
-PostgreSQL Sessions journal.
+The `redis.memory` source candidate requires TLS and negotiates standalone-primary,
+AOF-always, noeviction, no-replica/no-cluster, and non-expiring-data constraints.
+Neither candidate provisions resources. These are Memory backends, not replacements
+for the PostgreSQL Sessions journal.
 
 Application Hosting currently plans only the built-in AKS web runtime.
 Canvas owns A2UI and GitHub Canvas compatibility work. Elastic SAN is outside P2;

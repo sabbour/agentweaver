@@ -2,7 +2,9 @@ using System.Buffers;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
@@ -33,6 +35,14 @@ public sealed class GatewayOwnerClient(
     {
         MaxDepth = 16,
     };
+    private static readonly JsonSerializerOptions AuthorizationContextJsonOptions =
+        new(JsonSerializerDefaults.Web)
+        {
+            MaxDepth = 16,
+            PropertyNameCaseInsensitive = false,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false) },
+        };
 
     public async Task ProxyAsync(
         HttpContext context,
@@ -61,7 +71,7 @@ public sealed class GatewayOwnerClient(
             context.Response.StatusCode = (int)response.StatusCode;
             context.Response.Headers.CacheControl = "no-store";
             context.Response.Headers.XContentTypeOptions = "nosniff";
-            CopyResponseHeaders(context, response, route.Owner);
+            CopyResponseHeaders(context, response, route.Owner, route.ForwardSetCookie);
             if (response.Content.Headers.ContentType is { } contentType)
                 context.Response.ContentType = contentType.ToString();
             if (response.Content.Headers.ContentLength is { } contentLength)
@@ -102,6 +112,465 @@ public sealed class GatewayOwnerClient(
             await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
                 .ConfigureAwait(false);
         }
+    }
+
+    public async Task ProxyAuthorizationContextAsync(
+        HttpContext context,
+        GatewayRoute route,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (context.Request.Query.Count != 0 ||
+                context.Request.ContentLength is > 0 ||
+                context.Request.ContentType is not null)
+            {
+                await WriteProblemAsync(context, "request_shape_invalid", StatusCodes.Status400BadRequest)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
+            using var timeout = CreateOwnerTimeout(cancellationToken);
+            using var request = CreateOwnerRequest(context, route, bearer, out var tenantSelector);
+            using var response = await SendAsync(
+                GatewayOwner.Projects,
+                request,
+                timeout.Token).ConfigureAwait(false);
+            if (IsRedirect(response.StatusCode))
+            {
+                await WriteProblemAsync(context, "owner_redirect_rejected", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+                return;
+            }
+            if (response.StatusCode != HttpStatusCode.OK)
+            {
+                await WriteOwnerFailureAsync(
+                    context,
+                    await ToOwnerFailureAsync(response, timeout.Token).ConfigureAwait(false))
+                    .ConfigureAwait(false);
+                return;
+            }
+            if (response.Headers.CacheControl?.NoStore != true)
+            {
+                await WriteProblemAsync(
+                    context,
+                    "owner_contract_invalid",
+                    StatusCodes.Status502BadGateway).ConfigureAwait(false);
+                return;
+            }
+            if (response.Content.Headers.ContentLength is > 64 * 1024)
+            {
+                await WriteProblemAsync(
+                    context,
+                    "owner_response_too_large",
+                    StatusCodes.Status502BadGateway).ConfigureAwait(false);
+                return;
+            }
+            if (response.Content.Headers.ContentType?.MediaType is not { } mediaType ||
+                !(mediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+                  mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase)))
+            {
+                await WriteProblemAsync(
+                    context,
+                    "owner_contract_invalid",
+                    StatusCodes.Status502BadGateway).ConfigureAwait(false);
+                return;
+            }
+
+            var body = await ReadBoundedAsync(
+                response.Content,
+                64 * 1024,
+                timeout.Token).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(body, new JsonDocumentOptions { MaxDepth = 16 });
+            if (!HasExactAuthorizationContextShape(document.RootElement))
+            {
+                await WriteProblemAsync(
+                    context,
+                    "owner_contract_invalid",
+                    StatusCodes.Status502BadGateway).ConfigureAwait(false);
+                return;
+            }
+            var authorization = document.RootElement.Deserialize<ProjectAuthorizationContextResponse>(
+                AuthorizationContextJsonOptions);
+            if (!IsValidAuthorizationContext(authorization, context.User, tenantSelector))
+            {
+                await WriteProblemAsync(
+                    context,
+                    "owner_contract_invalid",
+                    StatusCodes.Status502BadGateway).ConfigureAwait(false);
+                return;
+            }
+
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            context.Response.ContentType = mediaType;
+            context.Response.ContentLength = body.Length;
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            await context.Response.Body.WriteAsync(body, timeout.Token).ConfigureAwait(false);
+        }
+        catch (GatewayOwnerFailureException exception)
+        {
+            await WriteOwnerFailureAsync(context, exception).ConfigureAwait(false);
+        }
+        catch (JsonException)
+        {
+            await WriteProblemAsync(
+                context,
+                "owner_contract_invalid",
+                StatusCodes.Status502BadGateway).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            await WriteProblemAsync(context, "owner_timeout", StatusCodes.Status504GatewayTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            await WriteProblemAsync(
+                context,
+                "owner_response_too_large",
+                StatusCodes.Status502BadGateway).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private bool IsValidAuthorizationContext(
+        ProjectAuthorizationContextResponse? value,
+        ClaimsPrincipal caller,
+        string? tenantSelector)
+    {
+        var subjects = caller.FindAll("sub").Take(2).ToArray();
+        return value is not null &&
+        value.ContractVersion == ProjectAuthorizationContextContract.CurrentVersion &&
+        string.Equals(value.Issuer, options.IdentityIssuer.AbsoluteUri, StringComparison.Ordinal) &&
+        subjects.Length == 1 &&
+        !string.IsNullOrWhiteSpace(subjects[0].Value) &&
+        string.Equals(value.ActorId, subjects[0].Value, StringComparison.Ordinal) &&
+        !string.IsNullOrWhiteSpace(value.TenantId) &&
+        (tenantSelector is null ||
+            string.Equals(value.TenantId, tenantSelector, StringComparison.Ordinal)) &&
+        MatchesOptionalCallerClaim(caller, "project_id", value.BoundProjectId) &&
+        MatchesOptionalCallerClaim(caller, "run_id", value.BoundRunId) &&
+        value.MembershipRevision > 0 &&
+        (value.BoundRunId is null || value.BoundProjectId is not null) &&
+        !value.EffectiveAuthority.IsDefault &&
+        value.EffectiveAuthority.All(grant =>
+            !string.IsNullOrWhiteSpace(grant.ResourceId) &&
+            !grant.Permissions.IsDefault &&
+            grant.Permissions.All(permission => permission.RoleRevision > 0));
+    }
+
+    private static bool MatchesOptionalCallerClaim(
+        ClaimsPrincipal caller,
+        string claimType,
+        string? responseValue)
+    {
+        var claims = caller.FindAll(claimType).Take(2).ToArray();
+        return claims.Length switch
+        {
+            0 => responseValue is null,
+            1 => !string.IsNullOrWhiteSpace(claims[0].Value) &&
+                string.Equals(responseValue, claims[0].Value, StringComparison.Ordinal),
+            _ => false,
+        };
+    }
+
+    private static bool HasExactAuthorizationContextShape(JsonElement value)
+    {
+        if (!HasExactPropertyNames(value,
+                [
+                    "contractVersion",
+                    "issuer",
+                    "actorId",
+                    "tenantId",
+                    "membershipRevision",
+                    "boundProjectId",
+                    "boundRunId",
+                    "effectiveAuthority",
+                ]) ||
+            value.GetProperty("effectiveAuthority").ValueKind != JsonValueKind.Array)
+            return false;
+
+        foreach (var grant in value.GetProperty("effectiveAuthority").EnumerateArray())
+        {
+            if (!HasExactPropertyNames(grant, ["resourceType", "resourceId", "permissions"]) ||
+                grant.GetProperty("permissions").ValueKind != JsonValueKind.Array)
+                return false;
+            foreach (var permission in grant.GetProperty("permissions").EnumerateArray())
+            {
+                if (!HasExactPropertyNames(permission, ["permission", "roleRevision"]))
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool HasExactPropertyNames(JsonElement value, string[] expected)
+    {
+        if (value.ValueKind != JsonValueKind.Object) return false;
+        var remaining = new HashSet<string>(expected, StringComparer.Ordinal);
+        foreach (var property in value.EnumerateObject())
+        {
+            if (!remaining.Remove(property.Name)) return false;
+        }
+        return remaining.Count == 0;
+    }
+
+    public Task ProxyCopilotConnectionAsync(
+        HttpContext context,
+        string method,
+        string ownerPath,
+        bool forwardLinkCookie,
+        CancellationToken cancellationToken) =>
+        ProxyIdentityBrokerApiAsync(
+            context,
+            method,
+            ownerPath,
+            hasJsonBody: HttpMethods.IsPost(method),
+            forwardTenantSelector: true,
+            forwardCookieName: forwardLinkCookie ? "__Host-agentweaver-copilot-link" : null,
+            cookieErrorCode: "copilot_connection_cookie_invalid",
+            cancellationToken);
+
+    public async Task ProxyIdentityBrokerApiAsync(
+        HttpContext context,
+        string method,
+        string ownerPath,
+        bool hasJsonBody,
+        bool forwardTenantSelector,
+        string? forwardCookieName,
+        string cookieErrorCode,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (context.Request.Query.Count > 0)
+                throw new GatewayOwnerFailureException(
+                    StatusCodes.Status400BadRequest,
+                    "application/problem+json",
+                    ProblemBody("request_query_invalid", StatusCodes.Status400BadRequest));
+
+            var bearer = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
+            using var timeout = CreateOwnerTimeout(cancellationToken);
+            using var request = new HttpRequestMessage(
+                new HttpMethod(method),
+                BuildOwnerUri(GatewayOwner.IdentityBroker, ownerPath));
+            request.Headers.Authorization = bearer;
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            if (forwardTenantSelector)
+                CopyTenantSelector(context, request);
+            if (hasJsonBody)
+            {
+                var requestContentType = context.Request.ContentType;
+                if (requestContentType is not null &&
+                    (!MediaTypeHeaderValue.TryParse(requestContentType, out var parsed) ||
+                     parsed.MediaType is null ||
+                     !(parsed.MediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+                       parsed.MediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase))))
+                {
+                    throw new GatewayOwnerFailureException(
+                        StatusCodes.Status415UnsupportedMediaType,
+                        "application/problem+json",
+                        ProblemBody("request_content_type_invalid", StatusCodes.Status415UnsupportedMediaType));
+                }
+                request.Content = new StreamContent(context.Request.Body);
+                if (context.Request.ContentLength is { } requestContentLength)
+                    request.Content.Headers.ContentLength = requestContentLength;
+                request.Content.Headers.ContentType = requestContentType is null
+                    ? new MediaTypeHeaderValue("application/json")
+                    : MediaTypeHeaderValue.Parse(requestContentType);
+            }
+            if (forwardCookieName is not null)
+                CopyNamedCookie(context, request, forwardCookieName, cookieErrorCode);
+
+            using var response = await SendAsync(
+                GatewayOwner.IdentityBroker,
+                request,
+                timeout.Token).ConfigureAwait(false);
+            if (IsRedirect(response.StatusCode))
+            {
+                await WriteProblemAsync(context, "owner_redirect_rejected", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+                return;
+            }
+            if (response.Content.Headers.ContentLength is > MaximumProxyResponseBytes)
+            {
+                await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            context.Response.StatusCode = (int)response.StatusCode;
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            CopyHeader(response.Headers, context.Response.Headers, "Set-Cookie");
+            CopyHeader(response.Headers, context.Response.Headers, "Retry-After");
+            if (response.Content.Headers.ContentType is { } contentType)
+                context.Response.ContentType = contentType.ToString();
+            if (response.Content.Headers.ContentLength is { } responseContentLength)
+                context.Response.ContentLength = responseContentLength;
+            if (response.StatusCode is not HttpStatusCode.NoContent and not HttpStatusCode.NotModified)
+                await CopyBoundedAsync(
+                    await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false),
+                    context.Response.Body,
+                    MaximumProxyResponseBytes,
+                    timeout.Token).ConfigureAwait(false);
+        }
+        catch (GatewayOwnerFailureException exception)
+        {
+            await WriteOwnerFailureAsync(context, exception).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            await WriteProblemAsync(context, "owner_timeout", StatusCodes.Status504GatewayTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            if (context.Response.HasStarted)
+                context.Abort();
+            else
+                await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+    }
+
+    public async Task ProxyGitHubRepoAppCallbackAsync(
+        HttpContext context,
+        string ownerPath,
+        string cookieName,
+        string cookieErrorCode,
+        IReadOnlyCollection<string> allowedQueryParameters,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var allowedQuery = new HashSet<string>(allowedQueryParameters, StringComparer.Ordinal);
+            if (context.Request.Query.Keys.Any(key =>
+                    !allowedQuery.Contains(key) || context.Request.Query[key].Count != 1))
+                throw new GatewayOwnerFailureException(
+                    StatusCodes.Status400BadRequest,
+                    "application/problem+json",
+                    ProblemBody("callback_query_invalid", StatusCodes.Status400BadRequest));
+
+            using var timeout = CreateOwnerTimeout(cancellationToken);
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                BuildOwnerUri(GatewayOwner.IdentityBroker, ownerPath + context.Request.QueryString));
+            CopyNamedCookie(context, request, cookieName, cookieErrorCode);
+            using var response = await SendAsync(
+                GatewayOwner.IdentityBroker,
+                request,
+                timeout.Token).ConfigureAwait(false);
+            if (response.Content.Headers.ContentLength is > MaximumProxyResponseBytes)
+            {
+                await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+                return;
+            }
+
+            context.Response.StatusCode = (int)response.StatusCode;
+            context.Response.Headers.CacheControl = "no-store";
+            context.Response.Headers.XContentTypeOptions = "nosniff";
+            CopyHeader(response.Headers, context.Response.Headers, "Set-Cookie");
+            CopyHeader(response.Headers, context.Response.Headers, "Location");
+            if (response.Content.Headers.ContentType is { } contentType)
+                context.Response.ContentType = contentType.ToString();
+            if (response.Content.Headers.ContentLength is { } responseContentLength)
+                context.Response.ContentLength = responseContentLength;
+            if (response.StatusCode is not HttpStatusCode.NoContent and not HttpStatusCode.NotModified)
+                await CopyBoundedAsync(
+                    await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false),
+                    context.Response.Body,
+                    MaximumProxyResponseBytes,
+                    timeout.Token).ConfigureAwait(false);
+        }
+        catch (GatewayOwnerFailureException exception)
+        {
+            await WriteOwnerFailureAsync(context, exception).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            await WriteProblemAsync(context, "owner_timeout", StatusCodes.Status504GatewayTimeout)
+                .ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            if (context.Response.HasStarted)
+                context.Abort();
+            else
+                await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
+                    .ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            await WriteProblemAsync(context, "owner_unavailable", StatusCodes.Status502BadGateway)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private static void CopyNamedCookie(
+        HttpContext context,
+        HttpRequestMessage request,
+        string cookieName,
+        string errorCode)
+    {
+        var matchingCookies = context.Request.Headers.Cookie
+            .SelectMany(value => (value ?? string.Empty).Split(';'))
+            .Select(value => value.Trim())
+            .Where(value => value.StartsWith(cookieName + "=", StringComparison.Ordinal))
+            .ToArray();
+        if (matchingCookies.Length != 1)
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status400BadRequest,
+                "application/problem+json",
+                ProblemBody(errorCode, StatusCodes.Status400BadRequest));
+
+        var cookieValue = matchingCookies[0][(cookieName.Length + 1)..];
+        if (cookieValue.Length is 0 or > 4096 ||
+            cookieValue.Any(char.IsControl) ||
+            !request.Headers.TryAddWithoutValidation("Cookie", $"{cookieName}={cookieValue}"))
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status400BadRequest,
+                "application/problem+json",
+                ProblemBody(errorCode, StatusCodes.Status400BadRequest));
     }
 
     public async Task SubscribeRunEventsAsync(
@@ -314,17 +783,29 @@ public sealed class GatewayOwnerClient(
     private HttpRequestMessage CreateOwnerRequest(
         HttpContext context,
         GatewayRoute route,
-        AuthenticationHeaderValue bearer)
+        AuthenticationHeaderValue bearer) =>
+        CreateOwnerRequest(context, route, bearer, out _);
+
+    private HttpRequestMessage CreateOwnerRequest(
+        HttpContext context,
+        GatewayRoute route,
+        AuthenticationHeaderValue bearer,
+        out string? tenantSelector)
     {
+        tenantSelector = null;
         var path = ExpandOwnerPath(route.OwnerPath, context);
         var target = BuildOwnerUri(route.Owner, path + context.Request.QueryString);
         var request = new HttpRequestMessage(new HttpMethod(route.Method), target);
         request.Headers.Authorization = bearer;
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        CopyTenantSelector(context, request);
+        if (route.ForwardTenantSelector)
+            tenantSelector = CopyTenantSelector(context, request);
         CopySingleRequestHeader(context, request, "Idempotency-Key");
         CopySingleRequestHeader(context, request, "If-Match");
-        if (route.HasJsonBody)
+        var hasRequestBody = context.Request.ContentLength is > 0 ||
+            context.Request.ContentType is not null ||
+            context.Request.Headers.ContainsKey("Transfer-Encoding");
+        if (route.HasJsonBody && (route.JsonBodyRequired || hasRequestBody))
         {
             var contentType = context.Request.ContentType;
             if (contentType is not null &&
@@ -454,11 +935,21 @@ public sealed class GatewayOwnerClient(
         OwnerHttpClient(owner).SendAsync(
             request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
-    private static void CopyTenantSelector(HttpContext context, HttpRequestMessage request)
+    private static string? CopyTenantSelector(HttpContext context, HttpRequestMessage request)
     {
-        foreach (var value in context.Request.Headers[TenantSelectorHeader])
-            if (value is not null)
-                request.Headers.TryAddWithoutValidation(TenantSelectorHeader, value);
+        var values = context.Request.Headers[TenantSelectorHeader];
+        if (values.Count == 0) return null;
+        var value = values.Count == 1 ? values[0] : null;
+        if (string.IsNullOrWhiteSpace(value) ||
+            !string.Equals(value, value.Trim(), StringComparison.Ordinal) ||
+            value.Contains(',') ||
+            value.Any(char.IsControl) ||
+            !request.Headers.TryAddWithoutValidation(TenantSelectorHeader, value))
+            throw new GatewayOwnerFailureException(
+                StatusCodes.Status400BadRequest,
+                "application/problem+json",
+                ProblemBody("tenant_selector_invalid", StatusCodes.Status400BadRequest));
+        return value;
     }
 
     private static void CopySingleRequestHeader(
@@ -479,11 +970,14 @@ public sealed class GatewayOwnerClient(
     private void CopyResponseHeaders(
         HttpContext context,
         HttpResponseMessage response,
-        GatewayOwner owner)
+        GatewayOwner owner,
+        bool forwardSetCookie)
     {
         CopyHeader(response.Headers, context.Response.Headers, "ETag");
         CopyHeader(response.Content.Headers, context.Response.Headers, "Last-Modified");
         CopyHeader(response.Headers, context.Response.Headers, "Retry-After");
+        if (forwardSetCookie)
+            CopyHeader(response.Headers, context.Response.Headers, "Set-Cookie");
         if (response.Headers.Location is { } location &&
             RewriteLocation(location, owner) is { } rewritten)
             context.Response.Headers.Location = rewritten;

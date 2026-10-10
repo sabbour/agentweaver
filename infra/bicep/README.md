@@ -115,3 +115,21 @@ migrations or provisions database roles. The
 [infrastructure specification](../../docs/specs/1777-azure-p0-infrastructure.md)
 records the full acceptance boundary. No live database or Azure operation is
 part of these definitions.
+
+Projects & Config applies migrations as its schema owner. After migration
+`20261009021400_AddCastingAuthorityLockFunction` is applied, an approved
+operator can grant the runtime role only `EXECUTE` on the exact casting
+authority-lock function:
+
+```powershell
+psql "$PROJECTS_CONFIG_DATABASE_URL" `
+  -v runtime_role="approved_projects_config_runtime" `
+  -f infra\bicep\postgres-projectsconfig-runtime-grants.sql
+```
+
+This file does not grant access to data tables. Keep
+`tenant_memberships` and `project_role_assignments` SELECT-only for runtime;
+do not add UPDATE privileges to enable row locking. The function is owned by
+the migration/schema owner, returns authorization status only, and is not
+executable by `PUBLIC`. The SQL file is an operator definition, not an
+automatic grant or deployment.

@@ -8,8 +8,11 @@ import { packComponentsFromFile } from '../pack.mjs';
 import { publishArtifacts } from '../publish.mjs';
 import { resolveProbeImageSource } from '../../azure/build-foundation-probe-image.mjs';
 
+const webBaseImage = `mcr.microsoft.com/dotnet/aspnet@sha256:${'a'.repeat(64)}`;
+const webImageId = `sha256:${'c'.repeat(64)}`;
+
 function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageXml,
-  foundationProbe = false, probeVersion = '0.0.1' } = {}) {
+  foundationProbe = false, probeVersion = '0.0.1', web = false } = {}) {
   const parent = path.resolve('artifacts', 'release-tests');
   mkdirSync(parent, { recursive: true });
   const root = mkdtempSync(path.join(parent, 'publication-'));
@@ -21,10 +24,14 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
     id: 'Agentweaver.FoundationProbe', kind: 'service', version: probeVersion,
     project: 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj',
   });
+  if (web) components.push({
+    id: 'Agentweaver.Web', kind: 'service', version: '0.1.0', project: 'apps/web/package.json',
+  });
   const manifest = { schemaVersion: 1, stage: 'draft', components, compatibility: [] };
   mkdirSync(path.join(root, 'releases'));
   writeFileSync(path.join(root, 'releases', 'foundation.json'), JSON.stringify(manifest));
   for (const component of components) {
+    if (component.id === 'Agentweaver.Web') continue;
     const directory = path.dirname(path.join(root, component.project));
     mkdirSync(directory, { recursive: true });
     writeFileSync(path.join(root, component.project), `<Project><PropertyGroup><Version>${component.version}</Version>${
@@ -32,11 +39,42 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
     }</PropertyGroup></Project>`);
     if (lock) writeFileSync(path.join(directory, 'packages.lock.json'), '{"version":1,"dependencies":{}}');
   }
+  if (web) {
+    const webDirectory = path.join(root, 'apps', 'web');
+    const webHostDirectory = path.join(webDirectory, 'host');
+    mkdirSync(path.join(webDirectory, 'src'), { recursive: true });
+    mkdirSync(webHostDirectory, { recursive: true });
+    writeFileSync(path.join(webDirectory, 'package.json'), JSON.stringify({
+      name: 'web', private: true, version: '0.1.0', scripts: { build: 'vite build' },
+    }, null, 2) + '\n');
+    writeFileSync(path.join(webDirectory, 'package-lock.json'), JSON.stringify({
+      name: 'web', version: '0.1.0', lockfileVersion: 3,
+      packages: { '': { name: 'web', version: '0.1.0' } },
+    }, null, 2) + '\n');
+    writeFileSync(path.join(webDirectory, 'index.html'), '<html>source web</html>\n');
+    writeFileSync(path.join(webDirectory, 'src', 'main.ts'), 'export const app = "web";\n');
+    writeFileSync(path.join(webHostDirectory, 'Agentweaver.Web.Host.csproj'),
+      '<Project Sdk="Microsoft.NET.Sdk.Web"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>\n');
+    writeFileSync(path.join(webHostDirectory, 'Program.cs'), 'var app = WebApplication.Create();\n');
+    writeFileSync(path.join(webHostDirectory, 'packages.lock.json'),
+      '{"version":1,"dependencies":{".NETCoreApp,Version=v10.0":{}}}\n');
+    writeFileSync(path.join(webDirectory, 'Dockerfile'), [
+      `FROM ${webBaseImage} AS runtime`,
+      'ARG IMAGE_TAG',
+      'ARG GIT_SHA',
+      'LABEL org.opencontainers.image.version="${IMAGE_TAG}"',
+      'LABEL org.opencontainers.image.revision="${GIT_SHA}"',
+      'COPY publish/ /app/',
+      'COPY wwwroot/ /app/wwwroot/',
+      'ENTRYPOINT ["dotnet", "Agentweaver.Web.Host.dll"]',
+      '',
+    ].join('\n'));
+  }
   if (foundationProbe) {
     mkdirSync(path.join(root, 'infra', 'bicep'), { recursive: true });
     writeFileSync(path.join(root, 'infra', 'bicep', 'main.bicep'), "targetScope = 'resourceGroup'\n");
   }
-  writeFileSync(path.join(root, '.gitignore'), 'artifacts/\n');
+  writeFileSync(path.join(root, '.gitignore'), 'artifacts/\napps/web/node_modules/\napps/web/dist/\n.env.*.local\n');
   git('init', '-q');
   git('config', 'core.autocrlf', 'false');
   git('add', '.');
@@ -49,10 +87,49 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
       calls.push(args);
       if (args[0] === 'pack') writeFileSync(path.join(outDir, 'Pkg.0.1.0.nupkg'), 'test package bytes');
       if (args[0] === 'publish') {
-        const output = args.find((arg) => arg.startsWith('-p:ContainerArchiveOutputPath=')).split('=').slice(1).join('=');
-        writeFileSync(output, 'test container archive bytes');
+        if (args[1].includes(path.join('apps', 'web', 'host', 'Agentweaver.Web.Host.csproj'))) {
+          const output = args[args.indexOf('--output') + 1];
+          mkdirSync(output, { recursive: true });
+          writeFileSync(path.join(output, 'Agentweaver.Web.Host.dll'), 'compiled ASP.NET host');
+          writeFileSync(path.join(output, 'Agentweaver.Web.Host.runtimeconfig.json'), '{"runtimeOptions":{}}');
+        } else {
+          const output = args.find((arg) => arg.startsWith('-p:ContainerArchiveOutputPath=')).split('=').slice(1).join('=');
+          writeFileSync(output, 'test container archive bytes');
+        }
       }
     },
+    ...(web ? {
+      npm(args, cwd) {
+        if (args[0] === 'run') {
+          mkdirSync(path.join(cwd, 'dist'), { recursive: true });
+          writeFileSync(path.join(cwd, 'dist', 'index.html'), '<html>built web</html>\n');
+          writeFileSync(path.join(cwd, 'dist', 'assets.js'), 'source-bound web output\n');
+        }
+      },
+      docker(args) {
+        if (args[0] === 'image' && args[1] === 'inspect' && args.at(-1).includes('@sha256:')) {
+          return JSON.stringify({
+            Id: `sha256:${'d'.repeat(64)}`,
+            RepoDigests: [webBaseImage],
+          });
+        }
+        if (args[0] === 'image' && args[1] === 'inspect') {
+          return JSON.stringify({
+            Id: webImageId,
+            Os: 'linux',
+            Architecture: 'amd64',
+            Config: { Labels: {
+              'org.opencontainers.image.revision': git('rev-parse', 'HEAD'),
+              'org.opencontainers.image.version': '0.1.0',
+            } },
+          });
+        }
+        if (args[0] === 'save') {
+          writeFileSync(args[args.indexOf('--output') + 1], 'test web image archive bytes');
+        }
+        return '';
+      },
+    } : {}),
     ...override,
   });
   const env = {
@@ -91,6 +168,17 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   };
   const publish = (options = {}) => {
     const external = options.run ?? ((bin, args) => {
+      if (bin === 'docker' && args[0] === 'image' && args[1] === 'inspect') {
+        return JSON.stringify({
+          Id: webImageId,
+          Os: 'linux',
+          Architecture: 'amd64',
+          Config: { Labels: {
+            'org.opencontainers.image.revision': sourceSha,
+            'org.opencontainers.image.version': '0.1.0',
+          } },
+        });
+      }
       if (bin === 'docker' && args[0] === 'inspect') {
         const repository = args.at(-1).replace(/:[^/:]+$/, '');
         return JSON.stringify([`${repository}@sha256:${'b'.repeat(64)}`]);
@@ -122,6 +210,71 @@ test('prepares locked packages and unpublished service images without a registry
   assert.match(image.baseImage, /@sha256:[a-f0-9]{64}$/);
   assert.ok(receipt.components.every(({ lock }) => /^[a-f0-9]{64}$/.test(lock.sha256)));
   assert.equal(receipt.sourceSha, f.sourceSha);
+});
+
+test('web prepare and publish use the proven source tag and verify the loaded image before registry effects', (t) => {
+  const f = fixture(t, { service: false, web: true });
+  const provenance = f.prepare();
+  const artifact = provenance.artifacts.find(({ componentId }) => componentId === 'Agentweaver.Web');
+  assert.equal(artifact.path, 'Agentweaver.Web.0.1.0.tar');
+  assert.equal(artifact.imageReference, `agentweaver-web:0.1.0-${f.sourceSha}`);
+  assert.equal(artifact.platform, 'linux/amd64');
+  assert.equal(artifact.imageId, webImageId);
+
+  const receipt = f.publish();
+  assert.equal(receipt.status, 'published');
+  const published = receipt.published.find(({ id }) => id === 'Agentweaver.Web');
+  assert.equal(published.image, `registry.example.invalid/agentweaver-web@sha256:${'b'.repeat(64)}`);
+  assert.equal(published.archiveSha256, artifact.sha256);
+  const loadIndex = f.externalCalls.findIndex(({ bin, args }) =>
+    bin === 'docker' && args[0] === 'load' && args.at(-1).endsWith(artifact.path));
+  const verifyIndex = f.externalCalls.findIndex(({ bin, args }) =>
+    bin === 'docker' && args[0] === 'image' && args[1] === 'inspect' &&
+    args.at(-1) === artifact.imageReference);
+  const loginIndex = f.externalCalls.findIndex(({ bin, args }) => bin === 'docker' && args[0] === 'login');
+  const tagIndex = f.externalCalls.findIndex(({ bin, args }) =>
+    bin === 'docker' && args[0] === 'tag' &&
+    args[1] === artifact.imageReference &&
+    args[2] === 'registry.example.invalid/agentweaver-web:0.1.0');
+  const pushIndex = f.externalCalls.findIndex(({ bin, args }) =>
+    bin === 'docker' && args[0] === 'push' &&
+    args[1] === 'registry.example.invalid/agentweaver-web:0.1.0');
+  assert.ok(loadIndex >= 0 && verifyIndex > loadIndex && loginIndex > verifyIndex);
+  assert.ok(tagIndex > loginIndex && pushIndex > tagIndex);
+});
+
+for (const [field, value] of [
+  ['imageReference', 'agentweaver-web:0.1.0-unverified'],
+  ['platform', 'linux/arm64'],
+]) {
+  test(`web publication rejects altered ${field} provenance before any external effect`, (t) => {
+    const f = fixture(t, { service: false, web: true });
+    f.prepare();
+    const provenancePath = path.join(f.outDir, 'provenance.json');
+    const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'));
+    const webArtifact = provenance.artifacts.find(({ componentId }) => componentId === 'Agentweaver.Web');
+    webArtifact[field] = value;
+    writeFileSync(provenancePath, JSON.stringify(provenance, null, 2) + '\n');
+
+    assert.throws(() => f.publish(), /prepared web image provenance/);
+    assert.deepEqual(f.remoteCalls, []);
+    assert.deepEqual(f.externalCalls, []);
+  });
+}
+
+test('web publication rejects altered ASP.NET host lock and framework-dependent output provenance', (t) => {
+  const f = fixture(t, { service: false, web: true });
+  f.prepare();
+  const provenancePath = path.join(f.outDir, 'provenance.json');
+  const provenance = JSON.parse(readFileSync(provenancePath, 'utf8'));
+  const webBuild = provenance.components.find(({ id }) => id === 'Agentweaver.Web').build;
+  webBuild.dotnet.lock.sha256 = 'f'.repeat(64);
+  webBuild.dotnet.useAppHost = true;
+  writeFileSync(provenancePath, JSON.stringify(provenance, null, 2) + '\n');
+
+  assert.throws(() => f.publish(), /prepared web image provenance/);
+  assert.deepEqual(f.remoteCalls, []);
+  assert.deepEqual(f.externalCalls, []);
 });
 
 for (const options of [{ lock: false }, { pinnedBase: false }]) {

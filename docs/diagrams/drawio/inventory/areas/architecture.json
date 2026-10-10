@@ -45,6 +45,20 @@
       }
     },
     {
+      "name": "v1-environment-buildtest-command",
+      "area": "architecture",
+      "disposition": "retain",
+      "owner": null,
+      "replacement": null,
+      "notes": "Core-accepted BuildTest intent, same-operation command reconciliation, and trusted required-output collection.",
+      "paths": {
+        "input": "docs/diagrams/src/flagship/v1-environment-buildtest-command.json",
+        "drawio": "docs/diagrams/drawio/generated/flagship/v1-environment-buildtest-command.drawio",
+        "png": "docs/diagrams/flagship/v1-environment-buildtest-command.png",
+        "hash": "docs/diagrams/flagship/v1-environment-buildtest-command.hash.txt"
+      }
+    },
+    {
       "name": "v1-identity-redemption",
       "area": "architecture",
       "disposition": "retain",

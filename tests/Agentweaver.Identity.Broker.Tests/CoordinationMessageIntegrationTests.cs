@@ -1,12 +1,16 @@
 extern alias EventsHost;
 extern alias OrchestratorHost;
 extern alias ProjectsConfig;
+extern alias WebHost;
 
 using System.Collections.Immutable;
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -32,8 +36,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.Playwright;
 using Npgsql;
 using NpgsqlTypes;
+using OpenIddict.Abstractions;
 using OrchestratorHost::Agentweaver.Orchestrator;
 using ProjectsConfig::Agentweaver.Projects.Config;
 using MAFCheckpointing = Microsoft.Agents.AI.Workflows.Checkpointing;
@@ -251,7 +257,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     {
                         MaxModelTurns = 12,
                         MaxToolCalls = 100,
-                        MaxChildren = 4,
+                        MaxChildren = 6,
                         MaxConcurrentChildren = 2,
                         MaxWallTimeSeconds = 3600,
                         MaxPromptTokens = 20000
@@ -461,6 +467,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             BaseAddress = new Uri("https://events.test")
         });
+        await using var gateway = GatewayProductionResourceServer.Start(
+            signingKey,
+            (request, cancellationToken) =>
+                ForwardOwnerRequestAsync(request, projects.Client, cancellationToken),
+            orchestratorOwner: (request, cancellationToken) =>
+                ForwardOwnerRequestAsync(request, orchestrator, cancellationToken),
+            identityAudience: "https://api.test");
 
         using var rootResponse = await SendJsonAsync(
             orchestrator,
@@ -589,14 +602,19 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         var sourceControlBasePath =
             $"/api/projects/{project.ProjectId}/runs/{RunId}/source-control/sessions/{root.RootSessionId}";
+        var sourceControlGatewayBasePath =
+            $"/api/v1/projects/{project.ProjectId}/runs/{RunId}/source-control/sessions/{root.RootSessionId}";
         using (var pinResponse = await SendAsync(
-                   orchestrator,
+                   gateway.Client,
                    HttpMethod.Post,
-                   sourceControlBasePath + "/pin",
+                   sourceControlGatewayBasePath + "/pin",
                    runToken,
                    [TenantId]))
         {
-            Assert.Equal(HttpStatusCode.Accepted, pinResponse.StatusCode);
+            var responseBody = await pinResponse.Content.ReadAsStringAsync();
+            Assert.True(
+                pinResponse.StatusCode == HttpStatusCode.Accepted,
+                $"Expected {HttpStatusCode.Accepted}, got {pinResponse.StatusCode}: {responseBody}");
         }
         using (var selectionCodeOnSecretPin = await SendJsonAsync(
                    orchestrator,
@@ -648,9 +666,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         using (var prepareWorkspace = await SendJsonAsync(
-                   orchestrator,
+                   gateway.Client,
                    HttpMethod.Post,
-                   sourceControlBasePath + "/workspaces",
+                   sourceControlGatewayBasePath + "/workspaces",
                    runToken,
                    new OrchestratorHost::Agentweaver.Orchestrator.PrepareSourceControlWorkspaceRequest(
                        sourceControlWorkspaceId,
@@ -696,9 +714,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         using (var readWorkspaceDiff = await SendJsonAsync(
-                   orchestrator,
+                   gateway.Client,
                    HttpMethod.Post,
-                   sourceControlBasePath + "/workspaces/" + sourceControlWorkspaceId + "/diff",
+                   sourceControlGatewayBasePath + "/workspaces/" + sourceControlWorkspaceId + "/diff",
                    runToken,
                    new OrchestratorHost::Agentweaver.Orchestrator.PrepareSourceControlWorkspaceRevisionRequest(
                        checkoutBaseSha,
@@ -1093,9 +1111,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         using (var issueResponse = await SendJsonAsync(
-                   orchestrator,
+                   gateway.Client,
                    HttpMethod.Post,
-                   sourceControlBasePath + "/issues",
+                   sourceControlGatewayBasePath + "/issues",
                    runToken,
                    new SourceControlIssueRequest("Integration issue", "Created through the authorized owner route.")))
         {
@@ -1108,9 +1126,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         const string sourceHeadSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         const string sourceBaseSha = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         using (var pullRequestResponse = await SendJsonAsync(
-                   orchestrator,
+                   gateway.Client,
                    HttpMethod.Post,
-                   sourceControlBasePath + "/pull-requests",
+                   sourceControlGatewayBasePath + "/pull-requests",
                    runToken,
                    new SourceControlPullRequestRequest(
                        "Integration change",
@@ -1130,9 +1148,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
 
         using (var reviewsResponse = await SendAsync(
-                   orchestrator,
+                   gateway.Client,
                    HttpMethod.Get,
-                   sourceControlBasePath + "/pull-requests/17/reviews",
+                   sourceControlGatewayBasePath + "/pull-requests/17/reviews",
                    runToken,
                    [TenantId]))
         {
@@ -1355,6 +1373,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal("outcome-gate-1", proposedOutcomeResult.PendingGate?.RequestId);
         Assert.Equal(CoordinatorGateKind.OutcomeConfirmation, proposedOutcomeResult.PendingGate?.Kind);
 
+        if (!revokeSourceBeforeSdk && sourceLoss is null)
+            await AssertBrowserReadsPendingOutcomeGateAsync(
+                projects,
+                events,
+                orchestrator,
+                signingKey,
+                ownerSchema,
+                project.ProjectId,
+                RunId,
+                currentRunnerSubject,
+                root.RootSessionId);
+
         using var currentDecisionState = await SendAsync(
             orchestrator,
             HttpMethod.Get,
@@ -1498,14 +1528,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             "1.0.0",
             "generated-catalog-v1",
             WorkflowDefinitionOrigin.Generated,
-            1,
+            3,
             [
                 new WorkflowStepDefinition(
                     "implement",
                     "Implement an accepted item using the selected isolation provider.",
                     WorkflowStepMode.Open,
                     0,
-                    new WorkflowCardinality(1, 1),
+                    new WorkflowCardinality(1, 3),
                     [],
                     ["implementer"],
                     ["implementation"],
@@ -1926,6 +1956,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "implement",
                     "Implement the accepted change",
                     "Implement the accepted change and verify it with targeted tests.",
+                    "implementer",
+                    "test-agent",
+                    "implementation",
+                    "platform-model",
+                    "sandbox-platform",
+                    "isolated-worktree",
+                    [],
+                    []),
+                new WorkPlanItem(
+                    "implement-2",
+                    "implement",
+                    "Implement the second accepted change",
+                    "Implement the second accepted change and verify it with targeted tests.",
+                    "implementer",
+                    "test-agent",
+                    "implementation",
+                    "platform-model",
+                    "sandbox-platform",
+                    "isolated-worktree",
+                    [],
+                    []),
+                new WorkPlanItem(
+                    "implement-3",
+                    "implement",
+                    "Implement the third accepted change",
+                    "Implement the third accepted change and verify it with targeted tests.",
                     "implementer",
                     "test-agent",
                     "implementation",
@@ -2986,7 +3042,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 CoordinationSessionKind.ChildWork,
                 "child-two-spawn",
                 "Execute the confirmed work item.",
-                WorkPlanItemId: "implement-1"));
+                WorkPlanItemId: "implement-2"));
         await AssertStatusAsync(secondChildResponse, HttpStatusCode.Accepted);
         var spawnedChildTwo = await ReadJsonAsync<SpawnedSession>(secondChildResponse);
         var childTwo = new RegisteredChild(
@@ -3017,7 +3073,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
             runToken,
-            new RegisterChildRequest("child-three"));
+            new RegisterChildRequest("child-three", "implement-3"));
         Assert.Equal(HttpStatusCode.Conflict, overConcurrentLimit.StatusCode);
         Assert.Contains(
             "run_concurrent_child_limit_exceeded",
@@ -3049,7 +3105,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 await selectionPause.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
                 var ownerBeforeDecisionChange = await ReadRuntimeOwnerRowAsync(
                     _connectionString, ownerSchema, project.ProjectId, "child-two");
-                Assert.Equal("implement-1", ownerBeforeDecisionChange.WorkPlanItemId);
+                Assert.Equal("implement-2", ownerBeforeDecisionChange.WorkPlanItemId);
 
                 using var runtimeOwnerDecisionStateResponse = await SendAsync(
                     orchestrator, HttpMethod.Get, decisionStatePath, runToken, [TenantId]);
@@ -3070,7 +3126,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         "Should the approved work item continue?",
                         ["continue"],
                         true));
-                Assert.Equal(HttpStatusCode.OK, pendingOwnerContextGate.StatusCode);
+                await AssertStatusAsync(pendingOwnerContextGate, HttpStatusCode.OK);
                 var pendingGateResult =
                     await ReadJsonAsync<CoordinatorDecisionOperationResponse>(pendingOwnerContextGate);
                 Assert.True(pendingGateResult.Accepted);
@@ -3112,7 +3168,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
         var mappedActiveChild = await ReadRuntimeOwnerRowAsync(
             _connectionString, ownerSchema, project.ProjectId, "child-two");
-        Assert.Equal("implement-1", mappedActiveChild.WorkPlanItemId);
+        Assert.Equal("implement-2", mappedActiveChild.WorkPlanItemId);
         await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
         await using (var connection = await ownerDatabase.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand($"""
@@ -4668,12 +4724,367 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             "source-control-policy-v1",
             [SourceControlMergeAllowPolicy]);
 
-    private async Task RestartBrokerForSourceControlAsync(RecordingSecretRedemption backend)
+    private async Task AssertBrowserReadsPendingOutcomeGateAsync(
+        ProjectsConfigResourceServer projects,
+        HttpClient events,
+        HttpClient orchestrator,
+        SecurityKey signingKey,
+        string ownerSchema,
+        string projectId,
+        string runId,
+        string expectedActorId,
+        string rootSessionId)
+    {
+        const string outcomeGateRequestId = "outcome-gate-1";
+        var port = BrowserIntegrationReverseProxy.GetAvailablePort();
+        var brokerAuthority = $"https://broker.test:{port}";
+        var brokerIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
+        var identityProviderAuthority = FakeIdentityProvider.Authority;
+        var browserRedirectUri = $"{brokerAuthority}/auth/callback";
+        var scopes = string.Join(
+            " ",
+            IdentityBrokerWebApplicationFactory.TestClientScopes.Concat(ProjectScopes));
+
+        await using var gateway = GatewayProductionResourceServer.Start(
+            signingKey,
+            (request, cancellationToken) =>
+                ForwardOwnerRequestAsync(request, projects.Client, cancellationToken),
+            (request, cancellationToken) =>
+                ForwardOwnerRequestAsync(request, events, cancellationToken),
+            orchestratorOwner: (request, cancellationToken) =>
+                ForwardOwnerRequestAsync(request, orchestrator, cancellationToken),
+            identityAudience: "https://api.test");
+
+        var webClient = await StartWebClientAsync(brokerAuthority, browserRedirectUri, scopes);
+        try
+        {
+            _fakeIdp.Subject = "coordination-runner";
+            _fakeIdp.TenantIds = [TenantId];
+            await AddBrowserRedirectUriAsync(browserRedirectUri);
+
+            using var brokerProxy = new HttpClient(_brokerFactory.Server.CreateHandler())
+            {
+                BaseAddress = new Uri(brokerAuthority)
+            };
+            using var fakeIdpProxy = new HttpClient(_fakeIdp.Server.CreateHandler())
+            {
+                BaseAddress = new Uri(identityProviderAuthority)
+            };
+            using var viteProxy = new HttpClient
+            {
+                BaseAddress = webClient.BaseAddress
+            };
+            using var webCallbackFactory = new WebApplicationFactory<WebHost::Program>()
+                .WithWebHostBuilder(builder =>
+                {
+                    builder.UseWebRoot(Path.Combine(FindRepositoryRoot(), "apps", "web", "dist"));
+                    builder.ConfigureAppConfiguration((_, configuration) =>
+                        configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                        {
+                            ["VITE_IDENTITY_BROKER_URL"] = brokerAuthority,
+                            ["VITE_IDENTITY_BROKER_ISSUER"] = brokerIssuer,
+                            ["VITE_OAUTH_REDIRECT_URI"] = browserRedirectUri,
+                        }));
+                });
+            using var webCallback = webCallbackFactory.CreateClient(
+                new WebApplicationFactoryClientOptions
+                {
+                    BaseAddress = new Uri($"https://web.broker.test:{port}")
+                });
+            await using var reverseProxy = await BrowserIntegrationReverseProxy.StartAsync(
+                port,
+                brokerProxy,
+                gateway.Client,
+                viteProxy,
+                webCallback);
+            reverseProxy.UseIdentityProvider(fakeIdpProxy);
+
+            using var browser = await Playwright.CreateAsync();
+            await using var chromium = await browser.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+            {
+                Headless = true,
+                Args =
+                [
+                    "--no-proxy-server",
+                    $"--host-resolver-rules={reverseProxy.HostResolverRules}"
+                ]
+            });
+            var browserContext = await chromium.NewContextAsync(new BrowserNewContextOptions
+            {
+                IgnoreHTTPSErrors = true
+            });
+            var page = await browserContext.NewPageAsync();
+            var browserTrace = new ConcurrentQueue<string>();
+            page.Console += (_, message) => browserTrace.Enqueue($"console {message.Type}: {message.Text}");
+            page.PageError += (_, error) => browserTrace.Enqueue($"page error: {error}");
+            page.RequestFailed += (_, request) =>
+                browserTrace.Enqueue($"request failed: {request.Method} {request.Url} ({request.Failure})");
+
+            await page.AddInitScriptAsync($$"""
+                window.__AGENTWEAVER_CONFIG_BASE64__ = {
+                  GATEWAY_URL: btoa('/api/v1'),
+                  IDENTITY_BROKER_URL: btoa('{{brokerAuthority}}'),
+                  IDENTITY_BROKER_ISSUER: btoa('{{brokerIssuer}}'),
+                  OAUTH_CLIENT_ID: btoa('{{IdentityBrokerWebApplicationFactory.TestClientId}}'),
+                  OAUTH_REDIRECT_URI: btoa('{{brokerAuthority}}/auth/callback'),
+                  OAUTH_SCOPES: btoa('{{scopes}}')
+                };
+                """);
+            try
+            {
+                await page.GotoAsync(
+                    $"{brokerAuthority}/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}?view=approvals",
+                    new PageGotoOptions
+                    {
+                        WaitUntil = WaitUntilState.Commit,
+                        Timeout = 15_000
+                    });
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    $"Browser navigation failed.{Environment.NewLine}" +
+                    $"Bridge:{Environment.NewLine}{reverseProxy.RequestTrace}{Environment.NewLine}" +
+                    $"Browser:{Environment.NewLine}{string.Join(Environment.NewLine, browserTrace)}",
+                    exception);
+            }
+            try
+            {
+                await page.GetByRole(AriaRole.Button, new() { Name = "Continue with Identity Broker" }).ClickAsync();
+                await page.GetByRole(AriaRole.Heading, new() { Name = "Review access" }).WaitForAsync();
+                await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
+                await page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" }).WaitForAsync();
+                var browserToken = reverseProxy.BrokerAccessToken
+                    ?? throw new InvalidOperationException("The browser did not redeem a Broker access token.");
+                var browserSubject = SingleClaim(
+                    new JwtSecurityTokenHandler().ReadJwtToken(browserToken).Claims, "sub");
+                Assert.Equal(expectedActorId, browserSubject);
+                using (var grantScope = _brokerFactory.Services.CreateScope())
+                {
+                    var grantAuthority = grantScope.ServiceProvider.GetRequiredService<IdentityGrantAuthority>();
+                    Assert.True(
+                        await grantAuthority.HasActiveRunBindingAsync(browserSubject, projectId, runId),
+                        "The subject in the browser's Broker token must have the active run grant.");
+                }
+                await page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" }).ClickAsync();
+                await page.GetByText("Confirm the exact pending outcome gate.").WaitForAsync();
+                await page.GetByText($"Request ID: {outcomeGateRequestId}").WaitForAsync();
+            }
+            catch (Exception exception)
+            {
+                var body = await page.Locator("body").InnerTextAsync();
+                throw new InvalidOperationException(
+                    $"Browser authentication did not reach the pending gate.{Environment.NewLine}" +
+                    $"Body:{Environment.NewLine}{body}{Environment.NewLine}" +
+                    $"Bridge:{Environment.NewLine}{reverseProxy.RequestTrace}{Environment.NewLine}" +
+                    $"Browser:{Environment.NewLine}{string.Join(Environment.NewLine, browserTrace)}",
+                    exception);
+            }
+            Assert.Equal("approvals", new Uri(page.Url).Query.TrimStart('?').Split('&')
+                .Select(part => part.Split('=', 2))
+                .FirstOrDefault(part => part.Length == 2 && part[0] == "view")?[1]);
+            Assert.False(string.IsNullOrWhiteSpace(reverseProxy.BrokerAccessToken));
+            Assert.Contains(
+                reverseProxy.RequestTrace.Split(Environment.NewLine),
+                request => request.StartsWith("200 ", StringComparison.Ordinal) &&
+                    request.EndsWith("/auth/callback", StringComparison.Ordinal));
+
+            using var ownerRequest = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"/api/v1/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/coordination/sessions/{Uri.EscapeDataString(rootSessionId)}/decisions");
+            AddBearerAndTenant(ownerRequest, reverseProxy.BrokerAccessToken!, TenantId);
+            using var ownerResponse = await gateway.Client.SendAsync(ownerRequest);
+            Assert.Equal(HttpStatusCode.OK, ownerResponse.StatusCode);
+            var decisionState =
+                await ownerResponse.Content.ReadFromJsonAsync<CoordinatorDecisionStateView>(
+                    CoordinationJsonOptions);
+            Assert.NotNull(decisionState);
+            Assert.Equal(outcomeGateRequestId, decisionState.PendingGate?.RequestId);
+
+            await using var database = NpgsqlDataSource.Create(_connectionString);
+            await using var connection = await database.OpenConnectionAsync();
+            await using var query = new NpgsqlCommand($"""
+                SELECT gate_state
+                FROM "{ownerSchema}".coordinator_gates
+                WHERE project_id = @project AND run_id = @run
+                  AND session_id = @session AND request_id = @request
+                """, connection);
+            query.Parameters.AddWithValue("project", projectId);
+            query.Parameters.AddWithValue("run", runId);
+            query.Parameters.AddWithValue("session", rootSessionId);
+            query.Parameters.AddWithValue("request", outcomeGateRequestId);
+            Assert.Equal("pending", await query.ExecuteScalarAsync());
+            await browserContext.CloseAsync();
+        }
+        finally
+        {
+            await RemoveBrowserRedirectUriAsync(browserRedirectUri);
+            await StopWebClientAsync(webClient);
+        }
+    }
+
+    private async Task AddBrowserRedirectUriAsync(string redirectUri)
+    {
+        using var scope = _brokerFactory.Services.CreateScope();
+        var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        var application = await applications.FindByClientIdAsync(
+            IdentityBrokerWebApplicationFactory.TestClientId)
+            ?? throw new InvalidOperationException("The test OAuth client was not registered.");
+        var descriptor = new OpenIddictApplicationDescriptor();
+        await applications.PopulateAsync(descriptor, application);
+        descriptor.RedirectUris.Add(new Uri(redirectUri));
+        await applications.UpdateAsync(application, descriptor);
+    }
+
+    private async Task RemoveBrowserRedirectUriAsync(string redirectUri)
+    {
+        using var scope = _brokerFactory.Services.CreateScope();
+        var applications = scope.ServiceProvider.GetRequiredService<IOpenIddictApplicationManager>();
+        var application = await applications.FindByClientIdAsync(
+            IdentityBrokerWebApplicationFactory.TestClientId)
+            ?? throw new InvalidOperationException("The test OAuth client was not registered.");
+        var descriptor = new OpenIddictApplicationDescriptor();
+        await applications.PopulateAsync(descriptor, application);
+        if (descriptor.RedirectUris.Remove(new Uri(redirectUri)))
+            await applications.UpdateAsync(application, descriptor);
+    }
+
+    internal static async Task<WebClientProcess> StartWebClientAsync(
+        string identityBrokerAuthority,
+        string oauthRedirectUri,
+        string oauthScopes)
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var webDirectory = Path.Combine(repositoryRoot, "apps", "web");
+        var viteEntry = Path.Combine(webDirectory, "node_modules", "vite", "bin", "vite.js");
+        if (!File.Exists(viteEntry))
+            throw new InvalidOperationException($"The web client dependencies are missing: {viteEntry}");
+
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+
+        var startInfo = new ProcessStartInfo("node")
+        {
+            WorkingDirectory = webDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add(viteEntry);
+        startInfo.ArgumentList.Add("--host");
+        startInfo.ArgumentList.Add("127.0.0.1");
+        startInfo.ArgumentList.Add("--port");
+        startInfo.ArgumentList.Add(port.ToString(CultureInfo.InvariantCulture));
+        startInfo.ArgumentList.Add("--strictPort");
+        var brokerIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri;
+        startInfo.Environment["VITE_GATEWAY_URL"] = "/api/v1";
+        startInfo.Environment["VITE_IDENTITY_BROKER_URL"] = identityBrokerAuthority;
+        startInfo.Environment["VITE_IDENTITY_BROKER_ISSUER"] = brokerIssuer;
+        startInfo.Environment["VITE_OAUTH_CLIENT_ID"] = IdentityBrokerWebApplicationFactory.TestClientId;
+        startInfo.Environment["VITE_OAUTH_REDIRECT_URI"] = oauthRedirectUri;
+        startInfo.Environment["VITE_OAUTH_SCOPES"] = oauthScopes;
+
+        var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("The web client Vite process did not start.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        var baseAddress = new Uri($"http://127.0.0.1:{port}/");
+        using var readinessClient = new HttpClient { BaseAddress = baseAddress };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        while (!timeout.IsCancellationRequested)
+        {
+            if (process.HasExited)
+            {
+                var output = await Task.WhenAll(standardOutput, standardError);
+                process.Dispose();
+                throw new InvalidOperationException(
+                    $"The web client Vite process exited before becoming ready.{Environment.NewLine}{string.Join(Environment.NewLine, output)}");
+            }
+            try
+            {
+                using var response = await readinessClient.GetAsync("/", timeout.Token);
+                if (response.IsSuccessStatusCode)
+                    return new WebClientProcess(process, baseAddress, standardOutput, standardError);
+            }
+            catch (HttpRequestException) when (!timeout.IsCancellationRequested)
+            {
+            }
+            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            {
+                break;
+            }
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+        }
+
+        await StopWebClientAsync(new WebClientProcess(process, baseAddress, standardOutput, standardError));
+        var logs = await Task.WhenAll(standardOutput, standardError);
+        throw new InvalidOperationException(
+            $"The web client Vite process did not become ready.{Environment.NewLine}{string.Join(Environment.NewLine, logs)}");
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        foreach (var startingPath in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        {
+            for (var directory = new DirectoryInfo(startingPath); directory is not null; directory = directory.Parent)
+            {
+                if (File.Exists(Path.Combine(directory.FullName, "apps", "web", "package.json")))
+                    return directory.FullName;
+            }
+        }
+        throw new InvalidOperationException("Could not find the repository root for the web client test.");
+    }
+
+    private static async Task<HttpResponseMessage> ForwardOwnerRequestAsync(
+        HttpRequestMessage request,
+        HttpClient destination,
+        CancellationToken cancellationToken)
+    {
+        var forwarded = new HttpRequestMessage(
+            request.Method,
+            request.RequestUri!.PathAndQuery);
+        if (request.Content is not null)
+        {
+            forwarded.Content = new ByteArrayContent(
+                await request.Content.ReadAsByteArrayAsync(cancellationToken));
+            foreach (var header in request.Content.Headers)
+                forwarded.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+        foreach (var header in request.Headers)
+            forwarded.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        return await destination.SendAsync(
+            forwarded,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+    }
+
+    internal static async Task StopWebClientAsync(WebClientProcess webClient)
+    {
+        if (!webClient.Process.HasExited)
+        {
+            webClient.Process.Kill(entireProcessTree: true);
+            await webClient.Process.WaitForExitAsync();
+        }
+        webClient.Process.Dispose();
+    }
+
+    internal sealed record WebClientProcess(
+        Process Process,
+        Uri BaseAddress,
+        Task<string> StandardOutput,
+        Task<string> StandardError);
+
+    private async Task RestartBrokerForSourceControlAsync(
+        RecordingSecretRedemption backend,
+        FakeIdentityProvider? fakeIdp = null)
     {
         await _brokerFactory.DisposeAsync();
         _brokerFactory = new IdentityBrokerWebApplicationFactory(
             _connectionString,
-            _fakeIdp,
+            fakeIdp ?? _fakeIdp,
             signingCertificate: _signingCertificate,
             configure: settings =>
             {

@@ -1,0 +1,17 @@
+<svg id="uuid-6786f051-f47a-4eb5-a945-326fda369af1" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <defs>
+    <linearGradient id="uuid-cdec3fcb-abf5-4687-912d-2f4da8f3e477" x1="65" y1="-144.672" x2="65" y2="-128.242" gradientTransform="translate(-56 145.516)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fb5937" />
+      <stop offset="1" stop-color="#ffc205" />
+    </linearGradient>
+  </defs>
+  <path d="M.666,2.724h16.677c.279-.012.516.203.532.482v11.587c-.015.279-.252.494-.532.482H.666c-.281.012-.521-.202-.541-.482V3.226c.011-.288.253-.512.54-.502h0Z" fill="url(#uuid-cdec3fcb-abf5-4687-912d-2f4da8f3e477)" />
+  <rect x="12.411" y="4.273" width="1.511" height="9.219" rx=".145" ry=".145" fill="#fff" isolation="isolate" opacity=".9" />
+  <rect x="1.73" y="11.592" width="8.453" height="1.91" rx=".157" ry=".157" fill="#fff" isolation="isolate" opacity=".6" />
+  <rect x="14.727" y="8.044" width="1.511" height="5.447" rx=".111" ry=".111" fill="#fff" isolation="isolate" opacity=".9" />
+  <polygon points="9.115 4.831 7.015 8.568 4.793 6.305 2.503 9.274 3.04 9.695 4.856 7.352 7.162 9.705 9.71 5.173 9.115 4.831" fill="#fff" />
+  <ellipse cx="4.82" cy="6.826" rx=".864" ry=".869" fill="#fff" />
+  <ellipse cx="7.162" cy="8.979" rx=".864" ry=".869" fill="#fff" />
+  <ellipse cx="9.336" cy="5.11" rx=".864" ry=".869" fill="#fff" />
+  <ellipse cx="2.861" cy="9.358" rx=".864" ry=".869" fill="#fff" />
+</svg>

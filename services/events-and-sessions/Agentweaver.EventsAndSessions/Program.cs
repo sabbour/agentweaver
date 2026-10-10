@@ -130,30 +130,14 @@ var messagingRegistration = messagingProvider.CreateRegistration(messagingOption
 var costOptions = CopilotCostProviderOptions.FromConfiguration(
     builder.Configuration.GetSection("EventsAndSessions:Cost:Copilot"));
 var costProvider = costOptions is null ? null : new CopilotCostProvider(costOptions);
-var azureCostOptions = AzureCostProviderOptions.FromConfiguration(
-    builder.Configuration.GetSection("EventsAndSessions:Cost:Azure"));
-var azureCostProvider = azureCostOptions is null ? null : new AzureCostProvider(azureCostOptions);
 var registrations = new List<ProviderRegistration> { registration, messagingRegistration };
-var meterSourceSelections = new List<ProviderMeterSourceSelection>();
-var costProviders = new Dictionary<string, ICostProvider>(StringComparer.Ordinal);
 if (costProvider is not null)
 {
     registrations.Add(costProvider.CreateRegistration());
     builder.Services.AddSingleton(costProvider);
-    costProviders.Add(CopilotCostProvider.MeterSource, costProvider);
-    meterSourceSelections.Add(
-        new ProviderMeterSourceSelection(CopilotCostProvider.MeterSource, CopilotCostProvider.ProviderId));
+    builder.Services.AddSingleton<ICostProvider>(costProvider);
+    builder.Services.AddSingleton<ICostProviderBinder, CopilotCostProviderBinder>();
 }
-if (azureCostProvider is not null)
-{
-    registrations.Add(azureCostProvider.CreateRegistration());
-    builder.Services.AddSingleton(azureCostProvider);
-    costProviders.Add(AzureCostProvider.MeterSource, azureCostProvider);
-    meterSourceSelections.Add(
-        new ProviderMeterSourceSelection(AzureCostProvider.MeterSource, AzureCostProvider.ProviderId));
-}
-builder.Services.AddSingleton<IReadOnlyDictionary<string, ICostProvider>>(
-    costProviders.ToImmutableDictionary(StringComparer.Ordinal));
 var permittedOverrides = projectOverrides.Values.Distinct(StringComparer.Ordinal)
     .Select(providerId => new ProviderOverridePermission(ProviderSeam.Sessions, providerId))
     .ToArray();
@@ -164,7 +148,8 @@ var catalogResult = ProviderCatalog.Create(
         new ProviderSelection(ProviderSeam.Messaging, NativePostgresMessagingProvider.ProviderId)
     ],
     permittedOverrides,
-    meterSourceSelections: meterSourceSelections);
+    meterSourceSelections: costProvider is null ? []
+        : [new(CopilotCostProvider.MeterSource, CopilotCostProvider.ProviderId)]);
 if (!catalogResult.IsSuccess)
     throw new InvalidOperationException("The Sessions provider catalog configuration is invalid.");
 var resolver = new ProviderResolver(catalogResult.Value!);
@@ -172,16 +157,6 @@ builder.Services.AddSingleton(provider);
 builder.Services.AddSingleton(messagingProvider);
 builder.Services.AddSingleton(catalogResult.Value!);
 builder.Services.AddSingleton(resolver);
-builder.Services.AddSingleton<ICostProviderBinder>(services =>
-{
-    var binders = new Dictionary<string, ICostProviderBinder>(StringComparer.Ordinal);
-    if (costProvider is not null)
-        binders.Add(CopilotCostProvider.MeterSource, new CopilotCostProviderBinder(
-            costProvider, resolver, services.GetRequiredService<ILogger<CopilotCostProviderBinder>>()));
-    if (azureCostProvider is not null)
-        binders.Add(AzureCostProvider.MeterSource, new AzureCostProviderBinder(azureCostProvider, resolver));
-    return new MeterCostProviderBinder(binders);
-});
 var nativeUsageEnabled = builder.Services.AddNativeUsageConsumer(builder.Configuration);
 var materialContainer = builder.Configuration["EventsAndSessions:SessionMaterial:ContainerUri"];
 if (materialContainer is not null)

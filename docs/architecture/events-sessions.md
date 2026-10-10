@@ -78,15 +78,16 @@ the session journal, addressed messages, project facts, and explicit session for
 The migration preserves admitted version-4 schemas and the earlier version-2 project-fact layout.
 Migration `006_native_sdk_usage.sql` adds cache-write values and permits unknown
 request counts. Migration `007_native_usage_receipts.sql` adds immutable source
-receipts and run-scoped Cost bindings.
-Migration `008_dispatch_accounting_witness.sql` adds nullable dispatch and
-accounting-revision fields for legacy-compatible entries, plus an immutable
-source-completion record. Ordinary startup requires version 8.
+receipts and run-scoped Cost bindings. Ordinary startup requires version 7.
 
 `PostgresUsageLedger` implements the low-level `IUsageLedger` storage contract.
 An entry records tenant, project, run, session, agent, model metadata, measurements,
 the Cost binding, and the price.
 Native submissions also retain the turn, SDK event ID, and complete SDK source snapshot.
+Optional `A2AMessageId` and `SdkAccounting` metadata participate in the canonical hash.
+Absent metadata preserves the historical canonical payload and hash.
+Accounting metadata retains the native source session, positive sequence, usage ID,
+reported credit status, and whether the SDK actually supplied that status.
 Cache-read and cache-write measurements remain separate. Native request counts stay
 null because the SDK callback does not report them. Nullable measurements remain
 unknown rather than zero.
@@ -97,6 +98,35 @@ BYOK retains native token measurements under `byok.tokens`, without Copilot unit
 Without an admitted Cost provider, BYOK accounting remains `Unpriced`.
 Unknown cost cannot satisfy a hard cost bound.
 
+The standalone `AzureCostProvider` accepts an explicitly configured, versioned
+rate card with model-scoped standard input/output token rates and a declared
+currency. It performs exact decimal arithmetic, does not fetch live prices, and
+does not quote BYOK work. Missing token counts, unsupported cache categories,
+unknown models, and changed bindings remain `Unpriced`. Events must also verify
+trusted Azure provider and deployment facts against the accepted runtime model
+pin before it can price a source receipt. That source contract is not yet admitted,
+so the current receipt consumer keeps BYOK usage `Unpriced`. Provisioned-throughput
+usage also remains `Unpriced` until trusted resource and time-window usage share
+is available.
+
+When `EventsAndSessions:RuntimeUsage:Enabled` is true, Events requires the same
+server-owned `AgentHost:ModelBindings` map and `AgentHost:ModelBindingsRevision` as AgentHost.
+It uses the SDK-independent shared resolver, not a separate Events model catalog.
+The concrete model ID and canonical map identity can therefore match an accepted runtime pin.
+This configuration does not by itself prove live model availability.
+The optional `copilot-run-admission` route accepts only the accepted-selection hash.
+Events reads the actual selection from its fixed Projects owner with the original bearer.
+It requires current `ReadRunSelection` and `AcceptRunSelection` for the exact signed project/run.
+The shared resolver supplies the concrete enabled hosted model; caller model IDs are not accepted.
+The existing Cost lock and transaction bind the real zero-work quote and Copilot-only totals.
+Events rereads Projects selection and authority before committing that Cost pin.
+Unknown or unpriced pricing rejects; no SDK session, usage event, source receipt, or ledger row is invented.
+Orchestrator persists the typed admission receipt with root acceptance through its existing outbox.
+Backlog claim uses the same acceptance transaction.
+An identical accepted-root replay uses that immutable receipt without repricing earlier admission.
+Configured Copilot credit limits cannot use BYOK token pricing or an unbound hosted connection.
+These are source paths; live PostgreSQL, native availability, and deployment still require separate acceptance.
+
 A transaction commits the rate card and usage entry before returning.
 The accounting receipt binds the canonical SHA-256 hash, attribution, immutable
 price, rate-card version, and commit timestamp. Identical retries return the original
@@ -105,37 +135,17 @@ Database triggers reject changes and truncation of history.
 Statement-level guards also reject `TRUNCATE`, including dependent and multi-table
 operations, on native source records, accounting receipts, and run-scoped Cost bindings.
 
-The run-wide accounting cursor is allocated under the shared transaction lock from
-the maximum committed revision across usage entries and source-completion records.
-It follows commit order, not provider occurrence time. Exact retries retain their
-original cursor, and rolled-back writes do not advance it. Legacy rows keep a null
-cursor; the migration does not invent historical order. A new usage entry for a
-dispatch with a stored source-completion record is rejected, while an exact event
-replay still returns its original receipt.
-`UsageRunTotals.Events` remains an event count, not an accounting cursor. A
-dispatch witness may omit its `RunTotals` only for legacy payload compatibility;
-every new positive witness must include the exact authorized, same-snapshot
-Copilot/AIC ROOT RUN totals, not a dispatch-only subtotal. This service does not
-yet expose a witness route.
-
-Source completeness describes whether the authenticated producer's exact receipt
-set is complete; it does not describe whether those receipts have a price. An
-honest `Unpriced` accounting acknowledgment is not a zero-cost result and can
-coexist with a complete source receipt set. Missing receipt or host-terminal/drain
-proof remains `Unknown` or `Partial`. Events source completeness is not Core
-retirement authority: Core must independently join the same dispatch's verified
-source completion with its current host-terminal/drain proof, exact meter/unit and
-rate coverage, represented charges, and a fresh compare-and-set before retiring
-priced hard-credit exposure. This checkout persists the completion record but
-does not expose a host-drain assertion or a source-completion ingestion route.
-
 Totals retain separate meter-source and unit groups. A missing measurement makes
 that measurement total unknown. An unpriced entry makes the run or agent pricing
-incomplete. A valid hosted Copilot nano-AIU price counts as priced without optional
-SDK identity or status data. The ledger retains supplied identity and status as
-metadata. BYOK accounting still requires the `byok.tokens` meter, token units,
-and input/output token counts. Rate changes never reprice earlier entries. Exact
-totals that exceed the numeric range fail rather than round or wrap.
+incomplete. Rate changes never reprice earlier entries. Exact totals that exceed
+the numeric range fail rather than round or wrap.
+
+Hosted native entries with valid `copilot.nano_aiu` source and measured units count as priced.
+Optional SDK accounting identity and status do not control pricing completeness.
+Supplied identity text, source session, and positive sequence remain validated.
+BYOK pricing uses the actual `tokens` measurement shape and the existing price disposition.
+Hosted credit status does not determine BYOK token-pricing completeness.
+Neither a fully priced subtotal nor a native usage watermark proves complete dispatch membership.
 
 `CopilotCostProvider` prices SDK-reported `nano_aiu` values in AI credits (`AIC`).
 One AIC contains `1_000_000_000` nano-AIU. Those reported units already include
@@ -143,29 +153,12 @@ model weighting. Only quotes with an explicit unweighted basis apply a model
 multiplier. The adapter requires an immutable rate card and exact provider,
 configuration, resource, and capability bindings.
 
-The optional `AzureCostProvider` uses an explicitly configured, versioned
-Azure Retail Prices rate card for model-scoped standard input/output token rates
-in the declared currency. It performs exact decimal arithmetic without currency
-rounding and does not fetch prices. Missing token/cache measurements, nonzero
-cache categories, unknown models, and changed bindings remain `Unpriced`.
-BYOK quotes are unsupported. Provisioned-throughput mode also remains `Unpriced`
-until trusted usage-share evidence supplies the resource and time-window denominator.
-The provider composition does not establish the positive BYOK receipt path; that
-requires genuine producer admission in [#1921](https://github.com/sabbour/agentweaver/issues/1921).
-
 `IUsageLedger.AppendAsync` remains a low-level storage contract without caller authorization.
-The optional HTTP consumer has separate append, source-preflight, and reconciliation paths.
-`POST /internal/sessions/{sessionId}/usage-receipts` accepts only `receiptId`;
-callers cannot supply a source URL, SDK measurements, price, rate card, or accepted marker.
+The optional HTTP consumer uses a different, reference-only admission path.
+`POST /internal/sessions/{sessionId}/usage-receipts` accepts only `receiptId`.
+Callers cannot supply a source URL, SDK measurements, price, rate card, or accepted marker.
 Events fetches the immutable receipt from its fixed HTTPS Orchestrator owner.
 The HTTP client rejects redirects and preserves the original validated bearer.
-`POST /internal/runtime/sources/{runtimeInstanceId}/cost-preflight` reads the
-current owner registration and SDK source receipt, then pins/verifies the run's
-cost binding and returns a quote result. This is not a dispatch source report.
-`POST /internal/projects/{projectId}/runs/{runId}/usage-cost-reconciliation`
-accepts exact Copilot receipt references and returns same-snapshot run totals.
-Its `AccountingRevision` remains the legacy event count; this advisory API is
-not the committed cursor or proof for Core budget retirement.
 
 The Orchestrator source writer requires that bearer and an independent observe credential.
 It checks the current registration, Core permission, accepted selection, active
@@ -188,8 +181,23 @@ It remains separate from the source receipt.
 Committed source receipts support explicit retries after restart.
 Unavailable providers and missing measurements produce `Unpriced`, not zero cost.
 `GET /internal/projects/{projectId}/runs/{runId}/usage` returns exact run and agent totals.
+`POST /internal/projects/{projectId}/runs/{runId}/usage/copilot-cost-snapshot` returns
+the existing run-pinned binding, a zero-work quote for the actual SDK model, and Copilot-only totals.
+It uses the same Cost lock and transaction as native receipt ingestion.
+This quote does not create a usage event or accounting receipt.
+An empty observed set is zero only when the pinned provider can price that model.
+Unpriced Copilot entries remain incomplete. Other meters do not affect Copilot credit limits.
+The snapshot endpoint rechecks current signed run authority before it commits.
+An optional dispatch ID and at most 512 required references request an observed accounting join.
+Events reads each immutable source receipt, accounting receipt, and ledger row in the same transaction.
+Each registration, SDK source, platform message, event, accounting hash, and stored price must match.
+The response returns only those verified references as `RepresentedReceipts`.
+Missing rows reject the join; altered references cannot substitute another receipt.
+Observed validation permits an explicit `Unpriced` receipt.
+The separate capped-admission validator still requires a valid quote and fully priced Copilot totals.
+This path neither fetches a Source GET manifest nor writes synthetic usage.
 These routes are enabled only with `EventsAndSessions:RuntimeUsage:Enabled`.
-The [AgentHost candidate](agenthost.md) waits for this committed accounting acknowledgment before turn completion.
+The [AgentHost candidate](agenthost.md) waits for the observed join and durable owner completion before it returns workflow output.
 This source has no background usage relay or cloud acceptance.
 
 ## Addressed-message owner integration

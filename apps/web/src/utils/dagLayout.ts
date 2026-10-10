@@ -1,0 +1,2088 @@
+import Dagre from 'dagre';
+import type { Edge, Node } from '@xyflow/react';
+export const NODE_W = 200;
+export const NODE_H = 145;
+export const DAG_NODE_SEP = 96;
+
+// Compact "pill" node dimensions for the coordinator topology DAG. Node heights are DIFFERENTIATED
+// so dagre packs a tight, data-driven graph without wasted space:
+//   • SUBTASK (agent task) nodes are TALL — avatar + 2-line title + "Name (Role)" line + AI credits,
+//     with the model-name caption rendered just BELOW the card. SUBTASK_CARD_H is the card box;
+//     SUBTASK_NODE_H additionally reserves room for that caption (dagre hint).
+//   • ALL other nodes (Coordinator, Outcome plan, Work plan, RAI, Review, Merge, Scribe) use the
+//     SMALL card — icon + one-line title (+ short sub-label), no avatar/credits on the face
+//     (FIXED_CARD_H / FIXED_NODE_H). ANY compact node that HAS a model additionally renders a
+//     model-name caption BELOW the card, so its dagre hint reserves the extra caption room
+//     (FIXED_NODE_WITH_CAPTION_H) — driven purely off the node's model, not its role.
+//   • The Human Review gate GROWS to fit on-face action buttons while it is awaiting a decision;
+//     REVIEW_EXPANDED_NODE_H is its dagre hint in that state so the staircase reserves the room.
+// Node WIDTHS are differentiated too: SUBTASK nodes are WIDE (SUBTASK_NODE_W) to fit the 2-line
+// title + "Name (Role)" + AI credits; the compact gate/system/coordinator nodes are NARROWER
+// (FIXED_NODE_W) since they only carry an icon + title (+ model caption). Both widths are fed to
+// dagre as per-node hints so columns stay cleanly aligned.
+export const SUBTASK_NODE_W = 250;
+export const FIXED_NODE_W = 184;
+// Back-compat alias: existing imports refer to the wide (subtask) pill width.
+export const COMPACT_NODE_W = SUBTASK_NODE_W;
+export const SUBTASK_CARD_H = 88;
+export const SUBTASK_NODE_H = 112;
+export const FIXED_CARD_H = 48;
+export const FIXED_NODE_H = 56;
+// A compact node that also shows a model caption below the card (Coordinator / RAI): small card +
+// the same caption reserve the subtask node uses (SUBTASK_NODE_H − SUBTASK_CARD_H = 24px).
+export const FIXED_NODE_WITH_CAPTION_H = FIXED_CARD_H + (SUBTASK_NODE_H - SUBTASK_CARD_H);
+export const REVIEW_EXPANDED_NODE_H = 96;
+export const POD_INDICATOR_NODE_H = 28;
+// Back-compat aliases: existing imports refer to the subtask (tall) pill dimensions.
+export const COMPACT_CARD_H = SUBTASK_CARD_H;
+export const COMPACT_NODE_H = SUBTASK_NODE_H;
+
+// Workflow definitions need more visual mass than the compact runtime stages. The viewer and editor
+// share this footprint so layout hints, edge routing, and the rendered cards stay aligned.
+export const WORKFLOW_DEFINITION_NODE_W = 240;
+export const WORKFLOW_PILL_NODE_W = WORKFLOW_DEFINITION_NODE_W;
+export const WORKFLOW_PILL_NODE_H: Record<string, number> = {
+  agent: 80,
+  subtask: 80,
+  gate: 76,
+  action: 80,
+  terminal: 68,
+};
+export const WORKFLOW_PILL_DEFAULT_NODE_H = 80;
+export const WORKFLOW_EDITOR_ACTIONS_HEIGHT = 44;
+export const WORKFLOW_FIT_VIEW_OPTIONS = { padding: 0.1, maxZoom: 1.8 } as const;
+export const WORKFLOW_LONG_LINEAR_MIN_RANKS = 5;
+
+// Back-compat export retained for consumers that used the former staircase
+// tuning constant. Banded-lane wrapping now derives its width from aspect.
+export const STAIR_RUN = 2;
+
+// Per-node-type layout dimensions. Keep in sync with WorkflowGraphPanel card widths.
+export const NODE_TYPE_W: Record<string, number> = {
+  agent:    220,
+  subtask:  220,
+  gate:     180,
+  action:   170,
+  terminal: 150,
+};
+export const NODE_TYPE_H: Record<string, number> = {
+  agent:    160,
+  subtask:  180,
+  gate:     130,
+  action:   130,
+  terminal: 110,
+};
+
+// Conservative rendered-card height hints for dagre. These include headers, metadata,
+// timers/cost chips, and one or more action buttons so tall cards don't overlap.
+export const RENDERED_NODE_TYPE_H: Record<string, number> = {
+  agent:    240,
+  subtask:  244,
+  gate:     190,
+  action:   210,
+  terminal: 150,
+};
+
+export const RENDERED_DEFAULT_NODE_H = 220;
+export const RENDERED_TOPOLOGY_NODE_H = 260;
+
+export interface LayoutOpts {
+  rankdir?: 'LR' | 'TB';
+  rankSep?: number;
+  nodeSep?: number;
+  crossAlign?: 'start' | 'center';
+}
+
+export interface BalancedGridLayoutOpts extends LayoutOpts {
+  viewportWidth?: number;
+  viewportHeight?: number;
+  minColumns?: number;
+  maxColumns?: number;
+}
+
+export interface StaircaseLayoutOpts extends LayoutOpts {
+  /** Desired width/height of the graph bounding box (matches the panel's aspect). */
+  targetAspect?: number;
+  /** Only cascade (step) when the rank count exceeds this; short chains stay a straight line. */
+  minStepRanks?: number;
+  /** Explicit cross-axis offset added per rank. When omitted it's derived from targetAspect. */
+  stepOffset?: number;
+}
+
+export interface NodeSizeHint {
+  width: number;
+  height: number;
+}
+
+export interface ConnectorPoint {
+  x: number;
+  y: number;
+}
+
+export interface ConnectorDirectionMarker extends ConnectorPoint {
+  angle: number;
+}
+
+export const TOPOLOGY_CONNECTOR_CARD_CLEARANCE = 14;
+export const TOPOLOGY_CONNECTOR_DIRECTION_MARKER_SPACING = 160;
+
+/**
+ * Computes the axis-aligned bounding box (width/height) that encloses a laid-out
+ * node set, honoring each node's size hint (falling back to the default node box).
+ * Used to compare LR vs TB staircase footprints when auto-picking the orientation
+ * that best fills the topology panel.
+ */
+export function layoutBBox(
+  nodes: { id: string; position: { x: number; y: number } }[],
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): { w: number; h: number } {
+  if (nodes.length === 0) return { w: 0, h: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    const hint = nodeSizeHints?.[n.id];
+    const w = hint?.width ?? NODE_W;
+    const h = hint?.height ?? NODE_H;
+    minX = Math.min(minX, n.position.x);
+    minY = Math.min(minY, n.position.y);
+    maxX = Math.max(maxX, n.position.x + w);
+    maxY = Math.max(maxY, n.position.y + h);
+  }
+  return { w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+}
+
+export interface SteppedConnectorRoute {
+  path: string;
+  labelX: number;
+  labelY: number;
+  points: ConnectorPoint[];
+}
+
+function coord(value: number): string {
+  return `${Math.round(value * 100) / 100}`;
+}
+
+function pointCommand(point: ConnectorPoint): string {
+  return `${coord(point.x)},${coord(point.y)}`;
+}
+
+function dedupePoints(points: ConnectorPoint[]): ConnectorPoint[] {
+  return points.filter((point, index) => {
+    const prev = points[index - 1];
+    return !prev || Math.abs(prev.x - point.x) > 0.01 || Math.abs(prev.y - point.y) > 0.01;
+  });
+}
+
+export interface ConnectorBridge {
+  x: number;
+  y: number;
+  orientation: 'horizontal' | 'vertical';
+}
+
+const BRIDGE_ENDPOINT_CLEARANCE = 18;
+
+interface OrthogonalSegment {
+  orientation: 'horizontal' | 'vertical';
+  constant: number;
+  start: number;
+  end: number;
+}
+
+interface SpineEdgeRoutingData {
+  flowDirection?: 'horizontal' | 'vertical';
+  gutterLaneOffset?: number;
+  routePoints?: ConnectorPoint[];
+}
+
+function handlePoint(node: Node, handle: string | null | undefined): ConnectorPoint {
+  const { width, height } = graphNodeSize(node);
+  const side = handle?.split('-').at(-1);
+  if (side === 'left') return { x: node.position.x, y: node.position.y + height / 2 };
+  if (side === 'right') return { x: node.position.x + width, y: node.position.y + height / 2 };
+  if (side === 'top') return { x: node.position.x + width / 2, y: node.position.y };
+  if (side === 'bottom') return { x: node.position.x + width / 2, y: node.position.y + height };
+  return { x: node.position.x + width / 2, y: node.position.y + height / 2 };
+}
+
+function spineRoutePoints(edge: Edge, nodes: Map<string, Node>): ConnectorPoint[] | null {
+  const source = nodes.get(edge.source);
+  const target = nodes.get(edge.target);
+  if (!source || !target || edge.type !== 'spine') return null;
+  const data = edge.data as SpineEdgeRoutingData | undefined;
+  if (data?.routePoints && data.routePoints.length >= 2) return data.routePoints;
+  const from = handlePoint(source, edge.sourceHandle);
+  const to = handlePoint(target, edge.targetHandle);
+  return buildSteppedConnectorRoute({
+    sourceX: from.x,
+    sourceY: from.y,
+    targetX: to.x,
+    targetY: to.y,
+    orientation: data?.flowDirection,
+    laneOffset: data?.gutterLaneOffset,
+  }).points;
+}
+
+function orthogonalSegments(points: ConnectorPoint[]): OrthogonalSegment[] {
+  const segments: OrthogonalSegment[] = [];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const from = points[index];
+    const to = points[index + 1];
+    if (Math.abs(from.x - to.x) < 0.5 && Math.abs(from.y - to.y) > 0.5) {
+      segments.push({
+        orientation: 'vertical',
+        constant: from.x,
+        start: Math.min(from.y, to.y),
+        end: Math.max(from.y, to.y),
+      });
+    } else if (Math.abs(from.y - to.y) < 0.5 && Math.abs(from.x - to.x) > 0.5) {
+      segments.push({
+        orientation: 'horizontal',
+        constant: from.y,
+        start: Math.min(from.x, to.x),
+        end: Math.max(from.x, to.x),
+      });
+    }
+  }
+  return segments;
+}
+
+/**
+ * Finds right-angle connector crossings after `routeGridEdges` has assigned
+ * lanes and handles. The later stable edge receives a visible bridge at an
+ * interior crossing rather than visually merging with the lower connector.
+ */
+export function findConnectorBridges(edges: Edge[], nodes: Node[]): Map<string, ConnectorBridge[]> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const routes = edges
+    .filter((edge) => edge.type === 'spine')
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .flatMap((edge) => {
+      const points = spineRoutePoints(edge, byId);
+      return points ? [{ edge, segments: orthogonalSegments(points) }] : [];
+    });
+  const bridges = new Map<string, ConnectorBridge[]>();
+
+  for (let current = 1; current < routes.length; current += 1) {
+    for (let prior = 0; prior < current; prior += 1) {
+      for (const currentSegment of routes[current].segments) {
+        for (const priorSegment of routes[prior].segments) {
+          if (currentSegment.orientation === priorSegment.orientation) continue;
+          const horizontal = currentSegment.orientation === 'horizontal' ? currentSegment : priorSegment;
+          const vertical = currentSegment.orientation === 'vertical' ? currentSegment : priorSegment;
+          const x = vertical.constant;
+          const y = horizontal.constant;
+          const inset = BRIDGE_ENDPOINT_CLEARANCE;
+          if (
+            x <= horizontal.start + inset || x >= horizontal.end - inset ||
+            y <= vertical.start + inset || y >= vertical.end - inset
+          ) {
+            continue;
+          }
+          const edgeBridges = bridges.get(routes[current].edge.id) ?? [];
+          if (!edgeBridges.some((bridge) => Math.abs(bridge.x - x) < 0.5 && Math.abs(bridge.y - y) < 0.5)) {
+            edgeBridges.push({ x, y, orientation: currentSegment.orientation });
+            bridges.set(routes[current].edge.id, edgeBridges);
+          }
+        }
+      }
+    }
+  }
+
+  return bridges;
+}
+
+export interface ConnectorJunction {
+  x: number;
+  y: number;
+}
+
+export interface RoutedConnector {
+  id: string;
+  source: string;
+  target: string;
+  points: ConnectorPoint[];
+}
+
+export interface ConnectorContinuationJoin {
+  point: ConnectorPoint;
+  direction: 'left' | 'right' | 'top' | 'bottom';
+}
+
+/**
+ * Follows a return edge's normal forward path to the first decision or
+ * convergence. Linear paths retain the original return target; returns that
+ * reach a decision rejoin that decision's downstream continuation.
+ */
+export function findLoopbackReturnJoinNode(loopback: Edge, edges: Edge[]): string {
+  const forwardEdges = edges.filter((edge) => edge.type === 'spine');
+  const outgoing = new Map<string, Edge[]>();
+  const incoming = new Map<string, number>();
+  for (const edge of forwardEdges) {
+    const next = outgoing.get(edge.source) ?? [];
+    next.push(edge);
+    outgoing.set(edge.source, next);
+    incoming.set(edge.target, (incoming.get(edge.target) ?? 0) + 1);
+  }
+
+  const fallback = loopback.target;
+  const visited = new Set<string>();
+  let current = fallback;
+  while (!visited.has(current)) {
+    visited.add(current);
+    const next = outgoing.get(current) ?? [];
+    if (next.length > 1 || (current !== fallback && (incoming.get(current) ?? 0) > 1)) {
+      return current;
+    }
+    if (next.length !== 1) return fallback;
+    current = next[0].target;
+  }
+  return fallback;
+}
+
+function samePoint(left: ConnectorPoint, right: ConnectorPoint): boolean {
+  return Math.abs(left.x - right.x) < 0.5 && Math.abs(left.y - right.y) < 0.5;
+}
+
+function sharedSourcePoint(
+  routes: Array<{ points: ConnectorPoint[] }>,
+): ConnectorPoint | undefined {
+  const candidate = routes[0]?.points[0];
+  if (!candidate) return undefined;
+  return routes.every((route) => {
+    const point = route.points[0];
+    return point !== undefined && samePoint(candidate, point);
+  })
+    ? candidate
+    : undefined;
+}
+
+type CardinalDirection = 'top' | 'right' | 'bottom' | 'left';
+
+function directionFrom(from: ConnectorPoint, to: ConnectorPoint): CardinalDirection | undefined {
+  if (Math.abs(from.y - to.y) < 0.5 && Math.abs(from.x - to.x) > 0.5) {
+    return to.x > from.x ? 'right' : 'left';
+  }
+  if (Math.abs(from.x - to.x) < 0.5 && Math.abs(from.y - to.y) > 0.5) {
+    return to.y > from.y ? 'bottom' : 'top';
+  }
+  return undefined;
+}
+
+function routeDirectionsAt(point: ConnectorPoint, points: ConnectorPoint[]): Set<CardinalDirection> {
+  const directions = new Set<CardinalDirection>();
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    const forward = directionFrom(from, to);
+    if (!forward) continue;
+    const reverse = directionFrom(to, from)!;
+    if (samePoint(point, from)) {
+      directions.add(forward);
+    } else if (samePoint(point, to)) {
+      directions.add(reverse);
+    } else if (
+      (Math.abs(from.x - to.x) < 0.5 && Math.abs(point.x - from.x) < 0.5 &&
+        point.y > Math.min(from.y, to.y) + 0.5 && point.y < Math.max(from.y, to.y) - 0.5) ||
+      (Math.abs(from.y - to.y) < 0.5 && Math.abs(point.y - from.y) < 0.5 &&
+        point.x > Math.min(from.x, to.x) + 0.5 && point.x < Math.max(from.x, to.x) - 0.5)
+    ) {
+      directions.add(forward);
+      directions.add(reverse);
+    }
+  }
+  return directions;
+}
+
+function logicalTeePoints(
+  routes: RoutedConnector[],
+): Array<{ edgeId: string; point: ConnectorPoint }> {
+  const tees = new Map<string, { edgeId: string; point: ConnectorPoint }>();
+  for (const route of routes) {
+    for (let index = 1; index < route.points.length - 1; index += 1) {
+      const point = route.points[index];
+      if (routes.some((candidate) => {
+        const terminal = candidate.points.at(-1);
+        return terminal !== undefined && samePoint(point, terminal);
+      })) continue;
+      const related = routes.filter((candidate) => routeDirectionsAt(point, candidate.points).size > 0);
+      if (related.length < 2) continue;
+      const directions = new Set(related.flatMap((candidate) => [...routeDirectionsAt(point, candidate.points)]));
+      if (directions.size < 3) continue;
+      const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
+      const existing = tees.get(key);
+      if (!existing || route.id.localeCompare(existing.edgeId) < 0) {
+        tees.set(key, { edgeId: route.id, point });
+      }
+    }
+  }
+  return [...tees.values()];
+}
+
+/**
+ * Finds the point where a semantic return can safely join the target's actual
+ * continuation route. A marker is valid only when the two graph edges share
+ * this exact point; an isolated return rail corner is never a junction.
+ */
+export function findLoopbackContinuationJoin(
+  loopback: Edge,
+  edges: Edge[],
+  nodes: Node[],
+  clearance = 18,
+): ConnectorContinuationJoin | undefined {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const returnJoin = findLoopbackReturnJoinNode(loopback, edges);
+  const continuation = edges
+    .filter((edge) => edge.type === 'spine' && edge.source === returnJoin)
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .at(0);
+  if (!continuation) return undefined;
+  const points = spineRoutePoints(continuation, byId);
+  if (!points || points.length < 2) return undefined;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    const distance = Math.hypot(to.x - from.x, to.y - from.y);
+    if (distance < 0.5) continue;
+    const dx = (to.x - from.x) / distance;
+    const dy = (to.y - from.y) / distance;
+    return {
+      point: {
+        x: from.x + dx * Math.min(clearance, distance / 2),
+        y: from.y + dy * Math.min(clearance, distance / 2),
+      },
+      direction: Math.abs(dx) >= Math.abs(dy)
+        ? (dx >= 0 ? 'right' : 'left')
+        : (dy >= 0 ? 'bottom' : 'top'),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Marks only nonterminal shared split and merge points. The endpoints must be
+ * identical in the routed geometry as well as related by the graph. A merge must share
+ * an incoming terminal trunk before its card entry. Shared route vertices are
+ * marked only when related paths form degree-three topology, independent of
+ * cardinal direction; card-entry targets, isolated elbows, layer bounds, and
+ * incidental path crossings never create a marker.
+ */
+export function findRoutedConnectorJunctions(routes: RoutedConnector[]): Map<string, ConnectorJunction[]> {
+  const ordered = [...routes].sort((left, right) => left.id.localeCompare(right.id));
+  const bySource = new Map<string, typeof routes>();
+  const byTarget = new Map<string, typeof routes>();
+  for (const route of ordered) {
+    const source = bySource.get(route.source) ?? [];
+    source.push(route);
+    bySource.set(route.source, source);
+    const target = byTarget.get(route.target) ?? [];
+    target.push(route);
+    byTarget.set(route.target, target);
+  }
+
+  const junctions = new Map<string, ConnectorJunction[]>();
+  const claimed = new Set<string>();
+  const add = (edgeId: string, point: ConnectorPoint | undefined) => {
+    if (!point) return;
+    const key = `${Math.round(point.x * 10)}:${Math.round(point.y * 10)}`;
+    if (claimed.has(key)) return;
+    claimed.add(key);
+    const markers = junctions.get(edgeId) ?? [];
+    markers.push({ x: point.x, y: point.y });
+    junctions.set(edgeId, markers);
+  };
+
+  for (const group of bySource.values()) {
+    if (group.length < 2) continue;
+    const sourcePoint = sharedSourcePoint(group);
+    add(group[0].id, sourcePoint);
+    for (const tee of logicalTeePoints(group)) {
+      if (sourcePoint && Math.hypot(tee.point.x - sourcePoint.x, tee.point.y - sourcePoint.y) <= BRIDGE_ENDPOINT_CLEARANCE) {
+        continue;
+      }
+      add(tee.edgeId, tee.point);
+    }
+  }
+  for (const group of byTarget.values()) {
+    if (group.length < 2) continue;
+    for (const tee of logicalTeePoints(group)) add(tee.edgeId, tee.point);
+  }
+  return junctions;
+}
+
+export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string, ConnectorJunction[]> {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const routes = edges
+    .filter((edge) => edge.type === 'spine')
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .flatMap((edge) => {
+      const points = spineRoutePoints(edge, byId);
+      return points ? [{ id: edge.id, source: edge.source, target: edge.target, points }] : [];
+    });
+  return findRoutedConnectorJunctions(routes);
+}
+
+export function roundedOrthogonalPath(points: ConnectorPoint[], radius = 8): string {
+  const clean = dedupePoints(points);
+  if (clean.length === 0) return '';
+  if (clean.length === 1) return `M ${pointCommand(clean[0])}`;
+
+  const commands = [`M ${pointCommand(clean[0])}`];
+  for (let i = 1; i < clean.length - 1; i += 1) {
+    const prev = clean[i - 1];
+    const cur = clean[i];
+    const next = clean[i + 1];
+    const inDx = Math.sign(cur.x - prev.x);
+    const inDy = Math.sign(cur.y - prev.y);
+    const outDx = Math.sign(next.x - cur.x);
+    const outDy = Math.sign(next.y - cur.y);
+    const prevDist = Math.hypot(cur.x - prev.x, cur.y - prev.y);
+    const nextDist = Math.hypot(next.x - cur.x, next.y - cur.y);
+    const straight = (inDx === outDx && inDy === outDy) || (inDx === -outDx && inDy === -outDy);
+    if (radius <= 0 || straight || prevDist < 2 || nextDist < 2) {
+      commands.push(`L ${pointCommand(cur)}`);
+      continue;
+    }
+    const r = Math.min(radius, prevDist / 2, nextDist / 2);
+    const before = { x: cur.x - inDx * r, y: cur.y - inDy * r };
+    const after = { x: cur.x + outDx * r, y: cur.y + outDy * r };
+    commands.push(`L ${pointCommand(before)}`);
+    commands.push(`Q ${pointCommand(cur)} ${pointCommand(after)}`);
+  }
+  commands.push(`L ${pointCommand(clean[clean.length - 1])}`);
+  return commands.join(' ');
+}
+
+/**
+ * Uses path interruption rather than a background mask at crossings. The
+ * connector itself leaves a gap and draws the rounded overpass arc, so bridge
+ * geometry remains correct in every theme and print/export surface.
+ */
+export function buildBridgedOrthogonalPath(
+  points: ConnectorPoint[],
+  bridges: ConnectorBridge[],
+  radius = 7,
+): string {
+  if (bridges.length === 0) return roundedOrthogonalPath(points);
+  const clean = dedupePoints(points);
+  if (clean.length < 2) return roundedOrthogonalPath(clean);
+
+  const commands = [`M ${pointCommand(clean[0])}`];
+  for (let index = 0; index < clean.length - 1; index += 1) {
+    const from = clean[index];
+    const to = clean[index + 1];
+    const horizontal = Math.abs(from.y - to.y) < 0.5;
+    const vertical = Math.abs(from.x - to.x) < 0.5;
+    const segmentBridges = bridges
+      .filter((bridge) =>
+        (horizontal && bridge.orientation === 'horizontal' && Math.abs(bridge.y - from.y) < 0.5 &&
+          bridge.x > Math.min(from.x, to.x) + radius && bridge.x < Math.max(from.x, to.x) - radius) ||
+        (vertical && bridge.orientation === 'vertical' && Math.abs(bridge.x - from.x) < 0.5 &&
+          bridge.y > Math.min(from.y, to.y) + radius && bridge.y < Math.max(from.y, to.y) - radius))
+      .sort((left, right) => horizontal
+        ? (to.x >= from.x ? left.x - right.x : right.x - left.x)
+        : vertical
+          ? (to.y >= from.y ? left.y - right.y : right.y - left.y)
+          : 0);
+    if (segmentBridges.length === 0) {
+      commands.push(`L ${pointCommand(to)}`);
+      continue;
+    }
+    for (const bridge of segmentBridges) {
+      const forward = horizontal ? Math.sign(to.x - from.x) : Math.sign(to.y - from.y);
+      const start = horizontal
+        ? { x: bridge.x - radius * forward, y: bridge.y }
+        : { x: bridge.x, y: bridge.y - radius * forward };
+      const end = horizontal
+        ? { x: bridge.x + radius * forward, y: bridge.y }
+        : { x: bridge.x, y: bridge.y + radius * forward };
+      const sweep = horizontal ? (forward > 0 ? 0 : 1) : (forward > 0 ? 1 : 0);
+      commands.push(`L ${pointCommand(start)} A ${radius},${radius} 0 0 ${sweep} ${pointCommand(end)}`);
+    }
+    commands.push(`L ${pointCommand(to)}`);
+  }
+  return commands.join(' ');
+}
+
+export function buildSteppedConnectorRoute(input: {
+  sourceX: number;
+  sourceY: number;
+  targetX: number;
+  targetY: number;
+  orientation?: 'auto' | 'horizontal' | 'vertical';
+  laneOffset?: number;
+}): SteppedConnectorRoute {
+  const { sourceX, sourceY, targetX, targetY, orientation = 'auto', laneOffset = 0 } = input;
+  const vertical = orientation === 'vertical'
+    || (orientation === 'auto' && Math.abs(targetY - sourceY) >= Math.abs(targetX - sourceX));
+  const points = vertical
+    ? [
+        { x: sourceX, y: sourceY },
+        { x: sourceX, y: (sourceY + targetY) / 2 + laneOffset },
+        { x: targetX, y: (sourceY + targetY) / 2 + laneOffset },
+        { x: targetX, y: targetY },
+      ]
+    : [
+        { x: sourceX, y: sourceY },
+        { x: (sourceX + targetX) / 2 + laneOffset, y: sourceY },
+        { x: (sourceX + targetX) / 2 + laneOffset, y: targetY },
+        { x: targetX, y: targetY },
+      ];
+  const clean = dedupePoints(points);
+  return {
+    path: roundedOrthogonalPath(clean),
+    labelX: (sourceX + targetX) / 2 + (vertical ? 0 : laneOffset),
+    labelY: (sourceY + targetY) / 2 + (vertical ? laneOffset : 0),
+    points: clean,
+  };
+}
+
+export function connectorRouteLabelPoint(points: ConnectorPoint[]): ConnectorPoint {
+  const clean = dedupePoints(points);
+  if (clean.length === 0) return { x: 0, y: 0 };
+  if (clean.length === 1) return clean[0];
+  const segmentLengths = clean.slice(1).map((point, index) =>
+    Math.hypot(point.x - clean[index].x, point.y - clean[index].y));
+  const total = segmentLengths.reduce((sum, length) => sum + length, 0);
+  if (total <= 0) return clean[Math.floor(clean.length / 2)];
+  let cursor = 0;
+  for (let index = 0; index < segmentLengths.length; index += 1) {
+    const length = segmentLengths[index];
+    if (cursor + length >= total / 2) {
+      const from = clean[index];
+      const to = clean[index + 1];
+      const ratio = (total / 2 - cursor) / length;
+      return {
+        x: from.x + (to.x - from.x) * ratio,
+        y: from.y + (to.y - from.y) * ratio,
+      };
+    }
+    cursor += length;
+  }
+  return clean[clean.length - 1];
+}
+
+export function connectorDirectionMarkers(
+  points: ConnectorPoint[],
+  maxSpacing = TOPOLOGY_CONNECTOR_DIRECTION_MARKER_SPACING,
+): ConnectorDirectionMarker[] {
+  const clean = dedupePoints(points);
+  if (clean.length < 2) return [];
+  const segments = clean.slice(1).map((point, index) => {
+    const from = clean[index];
+    const to = point;
+    return {
+      from,
+      to,
+      length: Math.hypot(to.x - from.x, to.y - from.y),
+    };
+  }).filter((segment) => segment.length > 0.5);
+  const total = segments.reduce((sum, segment) => sum + segment.length, 0);
+  if (total <= 0) return [];
+
+  const count = Math.max(1, Math.ceil(total / maxSpacing));
+  const distances = Array.from({ length: count }, (_, index) => ((index + 1) * total) / (count + 1));
+  const markers: ConnectorDirectionMarker[] = [];
+  for (const distance of distances) {
+    let cursor = 0;
+    for (const segment of segments) {
+      if (cursor + segment.length < distance) {
+        cursor += segment.length;
+        continue;
+      }
+      const ratio = clamp((distance - cursor) / segment.length, 0, 1);
+      markers.push({
+        x: segment.from.x + (segment.to.x - segment.from.x) * ratio,
+        y: segment.from.y + (segment.to.y - segment.from.y) * ratio,
+        angle: Math.atan2(segment.to.y - segment.from.y, segment.to.x - segment.from.x) * 180 / Math.PI,
+      });
+      break;
+    }
+  }
+  return markers;
+}
+
+export function workflowNodeSizeHint(
+  nodeType?: string | null,
+  opts: { withEditorActions?: boolean } = {},
+): NodeSizeHint {
+  const key = nodeType ?? '';
+  return {
+    width: WORKFLOW_PILL_NODE_W,
+    height: (WORKFLOW_PILL_NODE_H[key] ?? WORKFLOW_PILL_DEFAULT_NODE_H)
+      + (opts.withEditorActions ? WORKFLOW_EDITOR_ACTIONS_HEIGHT : 0),
+  };
+}
+
+export interface WorkflowLayoutAnalysis {
+  rankCount: number;
+  hasBranching: boolean;
+  hasParallelRank: boolean;
+  isLongLinear: boolean;
+}
+
+export type WorkflowDefinitionLayoutMode = 'balanced-grid';
+
+export interface WorkflowDefinitionLayoutResult {
+  nodes: Node[];
+  mode: WorkflowDefinitionLayoutMode;
+  bbox: { w: number; h: number };
+  analysis: WorkflowLayoutAnalysis;
+}
+
+interface BandedSection {
+  nodeIds: string[];
+  cols: number;
+  rows: number;
+}
+
+interface BandedLayoutOptions {
+  rankdir: 'LR' | 'TB';
+  rankGap: number;
+  nodeGap: number;
+  snakeMinRanks: number;
+  targetAspect: number;
+}
+
+const BANDED_MARGIN = 24;
+export const TOPOLOGY_CONNECTOR_LANE_GAP = 34;
+const BANDED_LANE_STEP = TOPOLOGY_CONNECTOR_LANE_GAP;
+const BANDED_LABEL_CHAR_W = 7;
+const BANDED_SNAKE_MIN_RANKS = 3;
+
+function edgeLabelSize(edge: Edge): NodeSizeHint {
+  if (typeof edge.label !== 'string' && typeof edge.label !== 'number') {
+    return { width: 0, height: 0 };
+  }
+  const text = String(edge.label).trim();
+  if (!text) return { width: 0, height: 0 };
+  return {
+    width: text.length * BANDED_LABEL_CHAR_W + 20,
+    height: 26,
+  };
+}
+
+/**
+ * Stable longest-path ranks. DFS back edges are ignored for ranking so loops
+ * remain visible without pushing their target below its own descendants.
+ */
+function rankBandedNodes(nodes: Node[], edges: Edge[]): Map<string, number> {
+  const index = new Map(nodes.map((node, i) => [node.id, i]));
+  const ids = new Set(index.keys());
+  const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target) || edge.source === edge.target) continue;
+    outgoing.get(edge.source)!.push(edge.target);
+  }
+  for (const targets of outgoing.values()) {
+    targets.sort((a, b) => (index.get(a) ?? 0) - (index.get(b) ?? 0));
+  }
+
+  const backEdges = new Set<string>();
+  const state = new Map<string, 0 | 1 | 2>();
+  const visit = (id: string) => {
+    state.set(id, 1);
+    for (const target of outgoing.get(id) ?? []) {
+      const targetState = state.get(target) ?? 0;
+      if (targetState === 1) backEdges.add(`${id}\0${target}`);
+      else if (targetState === 0) visit(target);
+    }
+    state.set(id, 2);
+  };
+  for (const node of nodes) {
+    if ((state.get(node.id) ?? 0) === 0) visit(node.id);
+  }
+
+  const predecessors = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
+    if (!backEdges.has(`${edge.source}\0${edge.target}`)) {
+      predecessors.get(edge.target)!.push(edge.source);
+    }
+  }
+
+  const ranks = new Map<string, number>();
+  const rankOf = (id: string): number => {
+    const known = ranks.get(id);
+    if (known !== undefined) return known;
+    ranks.set(id, 0);
+    const parents = predecessors.get(id) ?? [];
+    const rank = parents.length === 0 ? 0 : Math.max(...parents.map(rankOf)) + 1;
+    ranks.set(id, rank);
+    return rank;
+  };
+  for (const node of nodes) rankOf(node.id);
+  return ranks;
+}
+
+function bandedLayers(nodes: Node[], edges: Edge[], ranks: Map<string, number>): string[][] {
+  const index = new Map(nodes.map((node, i) => [node.id, i]));
+  const ids = new Set(index.keys());
+  const rankValues = [...new Set(nodes.map((node) => ranks.get(node.id) ?? 0))].sort((a, b) => a - b);
+  const layerIndex = new Map(rankValues.map((rank, i) => [rank, i]));
+  const layers = rankValues.map(() => [] as string[]);
+  for (const node of nodes) layers[layerIndex.get(ranks.get(node.id) ?? 0)!].push(node.id);
+
+  const predecessors = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
+    if ((ranks.get(edge.source) ?? 0) < (ranks.get(edge.target) ?? 0)) {
+      predecessors.get(edge.target)!.push(edge.source);
+    }
+  }
+
+  const slots = new Map<string, number>();
+  layers[0]?.forEach((id, i) => slots.set(id, i));
+  for (let layer = 1; layer < layers.length; layer += 1) {
+    layers[layer] = layers[layer]
+      .map((id, original) => {
+        const parents = (predecessors.get(id) ?? []).filter((parent) => slots.has(parent));
+        const barycenter = parents.length === 0
+          ? original
+          : parents.reduce((sum, parent) => sum + slots.get(parent)!, 0) / parents.length;
+        return { id, original, barycenter };
+      })
+      .sort((a, b) =>
+        a.barycenter - b.barycenter
+        || a.original - b.original
+        || (index.get(a.id) ?? 0) - (index.get(b.id) ?? 0))
+      .map(({ id }) => id);
+    layers[layer].forEach((id, i) => slots.set(id, i));
+  }
+  return layers;
+}
+
+function snakeColumns(
+  count: number,
+  sizes: Map<string, NodeSizeHint>,
+  ids: string[],
+  nodeGap: number,
+  targetAspect: number,
+  rankdir: 'LR' | 'TB',
+): number {
+  let best = 1;
+  let bestScore = Infinity;
+  const typicalWidth = Math.max(1, median(ids.map((id) => sizes.get(id)!.width)));
+  const typicalHeight = Math.max(1, median(ids.map((id) => sizes.get(id)!.height)));
+  const maxPrimarySlots = Math.min(count, 6, Math.max(1, count - 1));
+  for (let cols = 1; cols <= maxPrimarySlots; cols += 1) {
+    const rows = Math.ceil(count / cols);
+    const width = (rankdir === 'LR' ? cols : rows) * typicalWidth
+      + Math.max(0, (rankdir === 'LR' ? cols : rows) - 1) * nodeGap;
+    const height = (rankdir === 'LR' ? rows : cols) * typicalHeight
+      + Math.max(0, (rankdir === 'LR' ? rows : cols) - 1) * nodeGap;
+    const desiredAspect = rankdir === 'LR'
+      ? targetAspect
+      : typicalHeight / typicalWidth / targetAspect;
+    const score = Math.abs(Math.log(width / height / desiredAspect));
+    if (score < bestScore) {
+      bestScore = score;
+      best = cols;
+    }
+  }
+  return best;
+}
+
+function serpentineIds(ids: string[], cols: number): string[] {
+  const ordered: string[] = [];
+  for (let row = 0; row * cols < ids.length; row += 1) {
+    const slice = ids.slice(row * cols, (row + 1) * cols);
+    ordered.push(...(row % 2 === 1 ? slice.reverse() : slice));
+  }
+  return ordered;
+}
+
+function layoutBandedLane(
+  nodes: Node[],
+  edges: Edge[],
+  options: BandedLayoutOptions,
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): Node[] {
+  if (nodes.length === 0) return nodes;
+
+  const sizes = new Map<string, NodeSizeHint>();
+  for (const node of nodes) {
+    const hint = nodeSizeHints?.[node.id];
+    sizes.set(node.id, {
+      width: hint?.width ?? NODE_W,
+      height: hint?.height ?? NODE_H,
+    });
+  }
+
+  const ranks = rankBandedNodes(nodes, edges);
+  const layers = bandedLayers(nodes, edges, ranks);
+  const linked = new Set(edges.map((edge) => `${edge.source}\0${edge.target}`));
+  const aspect = Number.isFinite(options.targetAspect) && options.targetAspect > 0
+    ? options.targetAspect
+    : 1.4;
+  const snakeMin = Math.max(2, Math.floor(options.snakeMinRanks));
+  const sections: BandedSection[] = [];
+
+  let layer = 0;
+  while (layer < layers.length) {
+    let end = layer;
+    while (
+      layers[end]?.length === 1
+      && layers[end + 1]?.length === 1
+      && linked.has(`${layers[end][0]}\0${layers[end + 1][0]}`)
+    ) {
+      end += 1;
+    }
+    const runLength = end - layer + 1;
+    if (runLength >= snakeMin) {
+      const ids = layers.slice(layer, end + 1).map((rank) => rank[0]);
+      const cols = snakeColumns(ids.length, sizes, ids, options.nodeGap, aspect, options.rankdir);
+      sections.push({
+        nodeIds: serpentineIds(ids, cols),
+        cols,
+        rows: Math.ceil(ids.length / cols),
+      });
+      layer = end + 1;
+      continue;
+    }
+
+    sections.push({
+      nodeIds: layers[layer],
+      cols: 1,
+      rows: layers[layer].length,
+    });
+    layer += 1;
+  }
+
+  const sectionByNode = new Map<string, number>();
+  sections.forEach((section, sectionIndex) => {
+    section.nodeIds.forEach((id) => sectionByNode.set(id, sectionIndex));
+  });
+
+  const boundaryEdges = Array.from({ length: Math.max(0, sections.length - 1) }, () => [] as Edge[]);
+  for (const edge of edges) {
+    const sourceSection = sectionByNode.get(edge.source);
+    const targetSection = sectionByNode.get(edge.target);
+    if (sourceSection === undefined || targetSection === undefined || sourceSection === targetSection) continue;
+    const lo = Math.min(sourceSection, targetSection);
+    const hi = Math.max(sourceSection, targetSection);
+    for (let boundary = lo; boundary < hi; boundary += 1) boundaryEdges[boundary].push(edge);
+  }
+  const boundaryGap = boundaryEdges.map((crossing) => {
+    const labelExtent = crossing.reduce((max, edge) => {
+      const label = edgeLabelSize(edge);
+      return Math.max(max, options.rankdir === 'LR' ? label.width : label.height);
+    }, 0);
+    return Math.max(
+      options.rankGap,
+      options.rankGap + Math.max(0, crossing.length - 1) * BANDED_LANE_STEP,
+      labelExtent + 24 + Math.max(0, crossing.length - 1) * BANDED_LANE_STEP,
+    );
+  });
+
+  const sectionGeometry = sections.map((section, sectionIndex) => {
+    const internalLabels = edges
+      .filter((edge) =>
+        sectionByNode.get(edge.source) === sectionByNode.get(edge.target)
+        && sectionByNode.get(edge.source) === sectionIndex)
+      .map(edgeLabelSize);
+    const primaryGap = Math.max(
+      options.nodeGap,
+      ...internalLabels.map((label) =>
+        (options.rankdir === 'LR' ? label.width : label.height) + 24),
+    );
+    const crossGap = Math.max(
+      options.nodeGap,
+      ...internalLabels.map((label) =>
+        (options.rankdir === 'LR' ? label.height : label.width) + 24),
+    );
+    const primaryExtents = Array.from({ length: section.cols }, () => 0);
+    const crossExtents = Array.from({ length: section.rows }, () => 0);
+    section.nodeIds.forEach((id, i) => {
+      const crossSlot = Math.floor(i / section.cols);
+      const rowLength = Math.min(section.cols, section.nodeIds.length - crossSlot * section.cols);
+      const primarySlot = i % section.cols
+        + (crossSlot % 2 === 1 ? section.cols - rowLength : 0);
+      const size = sizes.get(id)!;
+      const primarySize = options.rankdir === 'LR' ? size.width : size.height;
+      const crossSize = options.rankdir === 'LR' ? size.height : size.width;
+      primaryExtents[primarySlot] = Math.max(primaryExtents[primarySlot], primarySize);
+      crossExtents[crossSlot] = Math.max(crossExtents[crossSlot], crossSize);
+    });
+    const primaryStarts: number[] = [];
+    const crossStarts: number[] = [];
+    primaryExtents.reduce((cursor, extent, i) => {
+      primaryStarts[i] = cursor;
+      return cursor + extent + primaryGap;
+    }, 0);
+    crossExtents.reduce((cursor, extent, i) => {
+      crossStarts[i] = cursor;
+      return cursor + extent + crossGap;
+    }, 0);
+    const primaryExtent = primaryExtents.reduce((sum, extent) => sum + extent, 0)
+      + Math.max(0, section.cols - 1) * primaryGap;
+    const crossExtent = crossExtents.reduce((sum, extent) => sum + extent, 0)
+      + Math.max(0, section.rows - 1) * crossGap;
+    return { primaryExtents, crossExtents, primaryStarts, crossStarts, primaryExtent, crossExtent };
+  });
+  const maxCrossExtent = Math.max(...sectionGeometry.map((geometry) => geometry.crossExtent));
+
+  const positions = new Map<string, { x: number; y: number }>();
+  let primaryCursor = BANDED_MARGIN;
+  for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
+    const section = sections[sectionIndex];
+    const geometry = sectionGeometry[sectionIndex];
+    const crossOrigin = BANDED_MARGIN + (maxCrossExtent - geometry.crossExtent) / 2;
+    section.nodeIds.forEach((id, i) => {
+      const crossSlot = Math.floor(i / section.cols);
+      const rowLength = Math.min(section.cols, section.nodeIds.length - crossSlot * section.cols);
+      const primarySlot = i % section.cols
+        + (crossSlot % 2 === 1 ? section.cols - rowLength : 0);
+      const size = sizes.get(id)!;
+      const primarySize = options.rankdir === 'LR' ? size.width : size.height;
+      const crossSize = options.rankdir === 'LR' ? size.height : size.width;
+      const primary = primaryCursor
+        + geometry.primaryStarts[primarySlot]
+        + (geometry.primaryExtents[primarySlot] - primarySize) / 2;
+      const cross = crossOrigin
+        + geometry.crossStarts[crossSlot]
+        + (geometry.crossExtents[crossSlot] - crossSize) / 2;
+      positions.set(id, options.rankdir === 'LR'
+        ? { x: primary, y: cross }
+        : { x: cross, y: primary });
+    });
+
+    primaryCursor += geometry.primaryExtent + (boundaryGap[sectionIndex] ?? 0);
+  }
+
+  return nodes.map((node) => {
+    const size = sizes.get(node.id)!;
+    return {
+      ...node,
+      position: positions.get(node.id) ?? node.position,
+      initialWidth: size.width,
+      initialHeight: size.height,
+    };
+  });
+}
+
+export function analyzeWorkflowLayout(nodes: Node[], edges: Edge[]): WorkflowLayoutAnalysis {
+  if (nodes.length === 0) {
+    return { rankCount: 0, hasBranching: false, hasParallelRank: false, isLongLinear: false };
+  }
+
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const originalIndex = new Map(nodes.map((node, index) => [node.id, index]));
+  const outgoing = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  const incoming = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  const indegree = new Map(nodes.map((node) => [node.id, 0]));
+
+  for (const edge of edges) {
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
+    outgoing.get(edge.source)!.push(edge.target);
+    incoming.get(edge.target)!.push(edge.source);
+    indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
+  }
+  for (const targets of outgoing.values()) {
+    targets.sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0));
+  }
+
+  const queue = nodes
+    .filter((node) => (indegree.get(node.id) ?? 0) === 0)
+    .map((node) => node.id);
+  const depth = new Map(queue.map((id) => [id, 0]));
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    visited.add(id);
+    const baseDepth = depth.get(id) ?? 0;
+    for (const target of outgoing.get(id) ?? []) {
+      depth.set(target, Math.max(depth.get(target) ?? 0, baseDepth + 1));
+      indegree.set(target, (indegree.get(target) ?? 0) - 1);
+      if ((indegree.get(target) ?? 0) === 0) {
+        queue.push(target);
+        queue.sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0));
+      }
+    }
+  }
+
+  // Keep malformed/cyclic definitions deterministic and visible; validation handles the error itself.
+  for (const node of nodes) {
+    if (visited.has(node.id)) continue;
+    const parentDepth = (incoming.get(node.id) ?? []).reduce(
+      (max, parent) => Math.max(max, depth.get(parent) ?? 0),
+      0,
+    );
+    depth.set(node.id, parentDepth + 1);
+  }
+
+  const rankCounts = new Map<number, number>();
+  for (const node of nodes) {
+    const rank = depth.get(node.id) ?? 0;
+    rankCounts.set(rank, (rankCounts.get(rank) ?? 0) + 1);
+  }
+
+  const rankCount = Math.max(0, ...depth.values()) + 1;
+  const hasParallelRank = [...rankCounts.values()].some((count) => count > 1);
+  const hasBranching = hasParallelRank
+    || [...outgoing.values()].some((targets) => targets.length > 1)
+    || [...incoming.values()].some((sources) => sources.length > 1);
+  const isLongLinear = !hasBranching
+    && rankCount >= WORKFLOW_LONG_LINEAR_MIN_RANKS
+    && rankCount === nodes.length;
+
+  return { rankCount, hasBranching, hasParallelRank, isLongLinear };
+}
+
+export function layoutWorkflowDefinitionNodes(
+  nodes: Node[],
+  edges: Edge[],
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): WorkflowDefinitionLayoutResult {
+  const analysis = analyzeWorkflowLayout(nodes, edges);
+  const laidOut = layoutDagBalancedGrid(nodes, edges, {
+    rankSep: 72,
+    nodeSep: 48,
+    minColumns: 1,
+    maxColumns: 4,
+  }, nodeSizeHints);
+
+  return {
+    nodes: laidOut,
+    mode: 'balanced-grid',
+    bbox: layoutBBox(laidOut, nodeSizeHints),
+    analysis,
+  };
+}
+
+export function workflowDefinitionViewportHeight(bbox: { w: number; h: number }): number {
+  if (bbox.w === 0 || bbox.h === 0) return 320;
+  return Math.min(520, Math.max(300, Math.ceil(bbox.h + 80)));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Balanced row/column layout for the Coordinator topology inspector.
+ *
+ * Unlike `layoutDagColumns`, this is intentionally not a strict LR or TB layout:
+ * it computes DAG depths for stable ordering, then packs ranks into an adaptive
+ * row-major grid. Fan-out ranks occupy clean left-to-right rows, while the
+ * single-node assembly tail after fan-in continues across columns instead of
+ * becoming a tall one-node-per-row stack.
+ */
+export function layoutDagBalancedGrid(
+  nodes: Node[],
+  edges: Edge[],
+  opts: BalancedGridLayoutOpts = {},
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): Node[] {
+  if (nodes.length === 0) return nodes;
+
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const originalIndex = new Map(nodes.map((n, index) => [n.id, index]));
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, string[]>();
+  const indegree = new Map<string, number>();
+  for (const n of nodes) {
+    outgoing.set(n.id, []);
+    incoming.set(n.id, []);
+    indegree.set(n.id, 0);
+  }
+
+  for (const e of edges) {
+    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
+    outgoing.get(e.source)!.push(e.target);
+    incoming.get(e.target)!.push(e.source);
+    indegree.set(e.target, (indegree.get(e.target) ?? 0) + 1);
+  }
+  for (const list of outgoing.values()) {
+    list.sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0));
+  }
+
+  const queue = nodes
+    .filter((n) => (indegree.get(n.id) ?? 0) === 0)
+    .map((n) => n.id)
+    .sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0));
+  const topo: string[] = [];
+  const depth = new Map<string, number>();
+  for (const id of queue) depth.set(id, 0);
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    topo.push(id);
+    const baseDepth = depth.get(id) ?? 0;
+    for (const target of outgoing.get(id) ?? []) {
+      depth.set(target, Math.max(depth.get(target) ?? 0, baseDepth + 1));
+      indegree.set(target, (indegree.get(target) ?? 0) - 1);
+      if ((indegree.get(target) ?? 0) === 0) {
+        queue.push(target);
+        queue.sort((a, b) => (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0));
+      }
+    }
+  }
+
+  // Defensive cycle/partial-descriptor fallback: keep every node visible and stable.
+  for (const n of nodes) {
+    if (topo.includes(n.id)) continue;
+    const parentDepth = (incoming.get(n.id) ?? []).reduce(
+      (max, parent) => Math.max(max, depth.get(parent) ?? 0),
+      0,
+    );
+    depth.set(n.id, parentDepth + 1);
+    topo.push(n.id);
+  }
+
+  const topoIndex = new Map(topo.map((id, index) => [id, index]));
+  const sizes = new Map<string, NodeSizeHint>();
+  for (const n of nodes) {
+    const hint = nodeSizeHints?.[n.id];
+    sizes.set(n.id, { width: hint?.width ?? NODE_W, height: hint?.height ?? NODE_H });
+  }
+
+  const typicalWidth = Math.max(
+    1,
+    median(nodes.map((n) => sizes.get(n.id)!.width)),
+  );
+  const typicalHeight = Math.max(
+    1,
+    median(nodes.map((n) => sizes.get(n.id)!.height)),
+  );
+  const maxNodeWidth = Math.max(
+    1,
+    ...nodes.map((n) => sizes.get(n.id)!.width),
+  );
+  const colGap = opts.nodeSep ?? 56;
+  const rowGap = opts.rankSep ?? 56;
+  const margin = 24;
+  const minColumns = opts.minColumns ?? 1;
+  const maxColumns = opts.maxColumns ?? 5;
+  const usableWidth = Math.max(0, (opts.viewportWidth ?? 0) - margin * 2);
+  const widthSafeColumns = opts.viewportWidth
+    ? Math.max(1, Math.floor((usableWidth + colGap) / (maxNodeWidth + colGap)))
+    : maxColumns;
+  const maxAllowedColumns = Math.max(1, Math.min(maxColumns, widthSafeColumns));
+  let columns = opts.viewportWidth
+    ? Math.floor((usableWidth + colGap) / (typicalWidth + colGap))
+    : 3;
+  columns = clamp(columns || 1, Math.min(minColumns, maxAllowedColumns), maxAllowedColumns);
+
+  if (opts.viewportHeight && nodes.length > columns) {
+    const estimatedRows = () => Math.ceil(nodes.length / columns);
+    while (
+      columns < maxAllowedColumns &&
+      estimatedRows() * typicalHeight + Math.max(0, estimatedRows() - 1) * rowGap + margin * 2 > opts.viewportHeight
+    ) {
+      columns += 1;
+    }
+  }
+
+  const ranks = new Map<number, string[]>();
+  for (const id of topo) {
+    const d = depth.get(id) ?? 0;
+    if (!ranks.has(d)) ranks.set(d, []);
+    ranks.get(d)!.push(id);
+  }
+
+  const cellById = new Map<string, { row: number; col: number }>();
+  const occupied = new Set<string>();
+  let cursorRow = 0;
+  let cursorCol = 0;
+
+  const keyFor = (row: number, col: number) => `${row}:${col}`;
+  const bumpCursor = () => {
+    cursorCol += 1;
+    if (cursorCol >= columns) {
+      cursorCol = 0;
+      cursorRow += 1;
+    }
+    while (occupied.has(keyFor(cursorRow, cursorCol))) {
+      cursorCol += 1;
+      if (cursorCol >= columns) {
+        cursorCol = 0;
+        cursorRow += 1;
+      }
+    }
+  };
+  const place = (id: string, row: number, col: number) => {
+    let r = row;
+    let c = clamp(col, 0, columns - 1);
+    while (occupied.has(keyFor(r, c))) {
+      c += 1;
+      if (c >= columns) {
+        c = 0;
+        r += 1;
+      }
+    }
+    occupied.add(keyFor(r, c));
+    cellById.set(id, { row: r, col: c });
+    if (r > cursorRow || (r === cursorRow && c >= cursorCol)) {
+      cursorRow = r;
+      cursorCol = c;
+      bumpCursor();
+    }
+  };
+  const placeNext = (id: string) => place(id, cursorRow, cursorCol);
+
+  const sortedRankKeys = [...ranks.keys()].sort((a, b) => a - b);
+  for (const rank of sortedRankKeys) {
+    const ids = ranks.get(rank)!.sort((a, b) => {
+      const ai = topoIndex.get(a) ?? 0;
+      const bi = topoIndex.get(b) ?? 0;
+      return ai - bi || (originalIndex.get(a) ?? 0) - (originalIndex.get(b) ?? 0);
+    });
+
+    if (ids.length > 1 && cursorCol !== 0) {
+      cursorRow += 1;
+      cursorCol = 0;
+    }
+
+    for (const id of ids) {
+      const parentCells = (incoming.get(id) ?? [])
+        .map((parent) => cellById.get(parent))
+        .filter((cell): cell is { row: number; col: number } => Boolean(cell));
+      if (ids.length === 1 && parentCells.length > 1) {
+        const parentCols = parentCells.map((cell) => cell.col);
+        const maxParentRow = parentCells.reduce((max, cell) => Math.max(max, cell.row), 0);
+        let row = Math.max(cursorRow, maxParentRow + 1);
+        const col = clamp(Math.round(median(parentCols)), 0, columns - 1);
+        if (row === cursorRow && col < cursorCol) row += 1;
+        place(id, row, col);
+      } else {
+        placeNext(id);
+      }
+    }
+  }
+
+  const colWidths = Array.from({ length: columns }, () => 0);
+  let rowCount = 0;
+  for (const [id, cell] of cellById) {
+    const size = sizes.get(id)!;
+    colWidths[cell.col] = Math.max(colWidths[cell.col], size.width);
+    rowCount = Math.max(rowCount, cell.row + 1);
+  }
+  const rowHeights = Array.from({ length: rowCount }, () => 0);
+  for (const [id, cell] of cellById) {
+    const size = sizes.get(id)!;
+    rowHeights[cell.row] = Math.max(rowHeights[cell.row], size.height);
+  }
+
+  const colX: number[] = [];
+  let x = margin;
+  for (let col = 0; col < columns; col += 1) {
+    colX[col] = x;
+    x += colWidths[col] + colGap;
+  }
+  const rowY: number[] = [];
+  let y = margin;
+  for (let row = 0; row < rowCount; row += 1) {
+    rowY[row] = y;
+    y += rowHeights[row] + rowGap;
+  }
+
+  return nodes.map((n) => {
+    const size = sizes.get(n.id)!;
+    const cell = cellById.get(n.id);
+    if (!cell) return n;
+    return {
+      ...n,
+      position: {
+        x: Math.round(colX[cell.col] + (colWidths[cell.col] - size.width) / 2),
+        y: Math.round(rowY[cell.row] + (rowHeights[cell.row] - size.height) / 2),
+      },
+      initialWidth: size.width,
+      initialHeight: size.height,
+    };
+  });
+}
+
+/**
+ * Rank-aligned DAG layout. Runs dagre to determine rank (depth) assignments,
+ * then snaps every node in the same rank to an exact virtual lane so cards line
+ * up in clean rows/columns. Supports both LR (vertical columns, left→right) and
+ * TB (horizontal rows, top→bottom) rank directions.
+ *
+ * Use this for the coordinator run page where the aligned "grid" look is
+ * required. Other surfaces can keep using layoutDag directly.
+ */
+export function layoutDagColumns(
+  nodes: Node[],
+  edges: Edge[],
+  opts: LayoutOpts = {},
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): Node[] {
+  if (nodes.length === 0) return nodes;
+
+  const rankdir = opts.rankdir ?? 'LR';
+  const g = new Dagre.graphlib.Graph();
+  g.setGraph({
+    rankdir,
+    ranksep: opts.rankSep ?? 80,
+    nodesep: opts.nodeSep ?? 40,
+    marginx: 24,
+    marginy: 24,
+  });
+  g.setDefaultEdgeLabel(() => ({}));
+
+  for (const n of nodes) {
+    const hint = nodeSizeHints?.[n.id];
+    g.setNode(n.id, { width: hint?.width ?? NODE_W, height: hint?.height ?? NODE_H });
+  }
+  for (const e of edges) {
+    g.setEdge(e.source, e.target);
+  }
+
+  Dagre.layout(g);
+
+  const isVertical = rankdir === 'TB';
+
+  // Group nodes by dagre-assigned rank. In LR mode all nodes at the same depth
+  // share the same X value; in TB mode they share the same Y value. Round to
+  // absorb floating-point noise.
+  const byRank = new Map<number, string[]>();
+  for (const n of nodes) {
+    const node = g.node(n.id);
+    const key = Math.round(isVertical ? node.y : node.x);
+    if (!byRank.has(key)) byRank.set(key, []);
+    byRank.get(key)!.push(n.id);
+  }
+
+  const LANE_GAP = opts.rankSep ?? 72; // gap between successive ranks (columns for LR, rows for TB)
+  const CROSS_GAP = opts.nodeSep ?? 40; // gap between stacked cards within a rank
+  const MARGIN = 24;
+
+  const posMap = new Map<string, { x: number; y: number }>();
+  const sortedRankKeys = [...byRank.keys()].sort((a, b) => a - b);
+
+  if (isVertical) {
+    // Compute each rank's total row width so we can centre every row on a
+    // shared vertical axis. A single-node spine rank then lands centred over a
+    // multi-node fan-out row, and fan-out rows spread symmetrically.
+    const rowWidthOf = (nodeIds: string[]): number =>
+      nodeIds.reduce((sum, id) => sum + (nodeSizeHints?.[id]?.width ?? NODE_W), 0) +
+      Math.max(0, nodeIds.length - 1) * CROSS_GAP;
+
+    const maxRowWidth = sortedRankKeys.reduce(
+      (max, key) => Math.max(max, rowWidthOf(byRank.get(key)!)),
+      0,
+    );
+    const centerX = MARGIN + maxRowWidth / 2;
+
+    let laneStart = MARGIN;
+    for (const rankKey of sortedRankKeys) {
+      const nodeIds = byRank.get(rankKey)!;
+      nodeIds.sort((a, b) => g.node(a).x - g.node(b).x);
+
+      const rowH = nodeIds.reduce((max, id) => Math.max(max, nodeSizeHints?.[id]?.height ?? NODE_H), 0);
+      let crossX = Math.round(centerX - rowWidthOf(nodeIds) / 2);
+      for (const id of nodeIds) {
+        const hint = nodeSizeHints?.[id];
+        const h = hint?.height ?? NODE_H;
+        const w = hint?.width ?? NODE_W;
+        posMap.set(id, { x: crossX, y: laneStart + (rowH - h) / 2 });
+        crossX += w + CROSS_GAP;
+      }
+      laneStart += rowH + LANE_GAP;
+    }
+  } else {
+    const colHeightOf = (nodeIds: string[]): number =>
+      nodeIds.reduce((sum, id) => sum + (nodeSizeHints?.[id]?.height ?? NODE_H), 0) +
+      Math.max(0, nodeIds.length - 1) * CROSS_GAP;
+    const maxColHeight = sortedRankKeys.reduce(
+      (max, key) => Math.max(max, colHeightOf(byRank.get(key)!)),
+      0,
+    );
+
+    let laneStart = MARGIN;
+    for (const rankKey of sortedRankKeys) {
+      const nodeIds = byRank.get(rankKey)!;
+      // Preserve dagre's cross-axis ordering within the rank.
+      nodeIds.sort((a, b) => g.node(a).y - g.node(b).y);
+
+      // Rank lanes run left→right; cards stack top→bottom within each column.
+      const colW = nodeIds.reduce((max, id) => Math.max(max, nodeSizeHints?.[id]?.width ?? NODE_W), 0);
+      let crossY = opts.crossAlign === 'center'
+        ? MARGIN + (maxColHeight - colHeightOf(nodeIds)) / 2
+        : MARGIN;
+      for (const id of nodeIds) {
+        const hint = nodeSizeHints?.[id];
+        const h = hint?.height ?? NODE_H;
+        const w = hint?.width ?? NODE_W;
+        // Centre narrower cards within the column width.
+        posMap.set(id, { x: laneStart + (colW - w) / 2, y: crossY });
+        crossY += h + CROSS_GAP;
+      }
+      laneStart += colW + LANE_GAP;
+    }
+  }
+
+  // Guard against any negative coordinates by shifting everything so the graph
+  // starts at MARGIN on the cross axis.
+  if (isVertical && posMap.size > 0) {
+    let minX = Infinity;
+    for (const pos of posMap.values()) minX = Math.min(minX, pos.x);
+    if (minX < MARGIN) {
+      const shift = MARGIN - minX;
+      for (const pos of posMap.values()) pos.x += shift;
+    }
+  }
+
+  return nodes.map((n) => {
+    const hint = nodeSizeHints?.[n.id];
+    return {
+      ...n,
+      position: posMap.get(n.id) ?? n.position,
+      initialWidth: hint?.width ?? NODE_W,
+      initialHeight: hint?.height ?? NODE_H,
+    };
+  });
+}
+
+/**
+ * Deterministic banded-lane layout for runtime and landing DAGs.
+ *
+ * Long one-node rank runs fold into a serpentine grid; branching ranks remain
+ * fixed bands ordered by stable longest-path rank and predecessor barycenter.
+ * Inter-band spacing reserves orthogonal routing gutters, including additional
+ * lanes for parallel crossings and room for rendered edge labels.
+ */
+export function layoutDagStaircase(
+  nodes: Node[],
+  edges: Edge[],
+  opts: StaircaseLayoutOpts = {},
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): Node[] {
+  const rawStep = opts.stepOffset;
+  const extraGap = rawStep != null && Number.isFinite(rawStep) ? Math.max(0, rawStep) : 0;
+  return layoutBandedLane(
+    nodes,
+    edges,
+    {
+      rankdir: opts.rankdir ?? 'LR',
+      rankGap: Math.max(opts.rankSep ?? 72, extraGap),
+      nodeGap: opts.nodeSep ?? 40,
+      snakeMinRanks: opts.minStepRanks ?? BANDED_SNAKE_MIN_RANKS,
+      targetAspect: opts.targetAspect ?? 1.4,
+    },
+    nodeSizeHints,
+  );
+}
+
+/**
+ * Runs dagre auto-layout on the given nodes and edges.
+ * Returns a new nodes array with computed positions.
+ * Pass only forward (non-loopback) edges so dagre doesn't try to route cycles.
+ * Optionally provide per-node size overrides via `nodeSizeHints`.
+ */
+export function layoutDag(
+  nodes: Node[],
+  edges: Edge[],
+  opts: LayoutOpts = {},
+  nodeSizeHints?: Record<string, NodeSizeHint>,
+): Node[] {
+  const g = new Dagre.graphlib.Graph();
+  g.setGraph({
+    rankdir: opts.rankdir ?? 'LR',
+    ranksep: opts.rankSep ?? 80,
+    nodesep: opts.nodeSep ?? 40,
+    marginx: 24,
+    marginy: 24,
+  });
+  g.setDefaultEdgeLabel(() => ({}));
+
+  for (const n of nodes) {
+    const hint = nodeSizeHints?.[n.id];
+    g.setNode(n.id, { width: hint?.width ?? NODE_W, height: hint?.height ?? NODE_H });
+  }
+  for (const e of edges) {
+    g.setEdge(e.source, e.target);
+  }
+
+  Dagre.layout(g);
+
+  return nodes.map((n) => {
+    const pos = g.node(n.id);
+    const hint = nodeSizeHints?.[n.id];
+    const w = hint?.width ?? NODE_W;
+    const h = hint?.height ?? NODE_H;
+    return { ...n, position: { x: pos.x - w / 2, y: pos.y - h / 2 }, initialWidth: w, initialHeight: h };
+  });
+}
+
+interface RouteRect {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+const GRID_ROUTE_CLEARANCE = TOPOLOGY_CONNECTOR_CARD_CLEARANCE;
+const GRID_ROUTE_BEND_PENALTY = 24;
+const GRID_ROUTE_PORT_STUB = Math.max(8, TOPOLOGY_CONNECTOR_CARD_CLEARANCE - 4);
+
+function nodeRouteRect(node: Node, clearance = 0): RouteRect {
+  const size = graphNodeSize(node);
+  return {
+    x0: node.position.x - clearance,
+    y0: node.position.y - clearance,
+    x1: node.position.x + size.width + clearance,
+    y1: node.position.y + size.height + clearance,
+  };
+}
+
+function pointInsideRouteRect(point: ConnectorPoint, rect: RouteRect): boolean {
+  return point.x > rect.x0 && point.x < rect.x1 && point.y > rect.y0 && point.y < rect.y1;
+}
+
+function segmentCrossesRouteRect(from: ConnectorPoint, to: ConnectorPoint, rect: RouteRect): boolean {
+  if (Math.abs(from.x - to.x) < 0.5) {
+    const x = from.x;
+    if (x <= rect.x0 || x >= rect.x1) return false;
+    return Math.max(from.y, to.y) > rect.y0 && Math.min(from.y, to.y) < rect.y1;
+  }
+  if (Math.abs(from.y - to.y) < 0.5) {
+    const y = from.y;
+    if (y <= rect.y0 || y >= rect.y1) return false;
+    return Math.max(from.x, to.x) > rect.x0 && Math.min(from.x, to.x) < rect.x1;
+  }
+  return false;
+}
+
+function routeSegmentClear(from: ConnectorPoint, to: ConnectorPoint, obstacles: RouteRect[]): boolean {
+  return obstacles.every((rect) =>
+    !pointInsideRouteRect(from, rect)
+    && !pointInsideRouteRect(to, rect)
+    && !segmentCrossesRouteRect(from, to, rect));
+}
+
+function addCoordinate(values: number[], value: number) {
+  if (!Number.isFinite(value)) return;
+  const rounded = Math.round(value * 100) / 100;
+  if (!values.some((existing) => Math.abs(existing - rounded) < 0.5)) values.push(rounded);
+}
+
+function simplifyRoutePoints(points: ConnectorPoint[]): ConnectorPoint[] {
+  const clean = dedupePoints(points);
+  return clean.filter((point, index) => {
+    if (index === 0 || index === clean.length - 1) return true;
+    const prev = clean[index - 1];
+    const next = clean[index + 1];
+    return !(
+      (Math.abs(prev.x - point.x) < 0.5 && Math.abs(point.x - next.x) < 0.5) ||
+      (Math.abs(prev.y - point.y) < 0.5 && Math.abs(point.y - next.y) < 0.5)
+    );
+  });
+}
+
+function handleOutwardVector(handle: string): ConnectorPoint {
+  const side = handle.split('-').at(-1);
+  if (side === 'left') return { x: -1, y: 0 };
+  if (side === 'right') return { x: 1, y: 0 };
+  if (side === 'top') return { x: 0, y: -1 };
+  if (side === 'bottom') return { x: 0, y: 1 };
+  return { x: 0, y: 0 };
+}
+
+function perpendicularVector(vector: ConnectorPoint): ConnectorPoint {
+  return { x: -vector.y, y: vector.x };
+}
+
+function translatePoint(point: ConnectorPoint, vector: ConnectorPoint, distance: number): ConnectorPoint {
+  if (Math.abs(distance) < 0.5) return point;
+  return { x: point.x + vector.x * distance, y: point.y + vector.y * distance };
+}
+
+function connectorRouteClear(points: ConnectorPoint[], obstacles: RouteRect[]): boolean {
+  return points.every((point, index) => index === 0 || routeSegmentClear(points[index - 1], point, obstacles));
+}
+
+function obstacleAwareLaneRoute(input: {
+  from: ConnectorPoint;
+  to: ConnectorPoint;
+  nodes: Node[];
+  excludedNodeIds: Set<string>;
+  preferredOrientation: 'horizontal' | 'vertical';
+  sourceHandle: string;
+  targetHandle: string;
+  sourcePortLaneOffset: number;
+  targetPortLaneOffset: number;
+  gutterLaneOffset: number;
+}): ConnectorPoint[] {
+  const obstacles = input.nodes
+    .filter((node) => !input.excludedNodeIds.has(node.id))
+    .map((node) => nodeRouteRect(node, GRID_ROUTE_CLEARANCE));
+  const sourceOutward = handleOutwardVector(input.sourceHandle);
+  const targetOutward = handleOutwardVector(input.targetHandle);
+  const sourceStub = translatePoint(input.from, sourceOutward, GRID_ROUTE_PORT_STUB);
+  const targetStub = translatePoint(input.to, targetOutward, GRID_ROUTE_PORT_STUB);
+  const sourceLane = translatePoint(sourceStub, perpendicularVector(sourceOutward), input.sourcePortLaneOffset);
+  const targetLane = translatePoint(targetStub, perpendicularVector(targetOutward), input.targetPortLaneOffset);
+  const middle = obstacleAvoidingRoute(
+    sourceLane,
+    targetLane,
+    input.nodes,
+    input.excludedNodeIds,
+    input.preferredOrientation,
+    input.gutterLaneOffset,
+  );
+  const candidate = simplifyRoutePoints([
+    input.from,
+    sourceStub,
+    sourceLane,
+    ...middle,
+    targetLane,
+    targetStub,
+    input.to,
+  ]);
+  if (connectorRouteClear(candidate, obstacles)) return candidate;
+  return obstacleAvoidingRoute(
+    input.from,
+    input.to,
+    input.nodes,
+    input.excludedNodeIds,
+    input.preferredOrientation,
+    input.gutterLaneOffset,
+  );
+}
+
+function obstacleAvoidingRoute(
+  from: ConnectorPoint,
+  to: ConnectorPoint,
+  nodes: Node[],
+  excludedNodeIds: Set<string>,
+  preferredOrientation: 'horizontal' | 'vertical',
+  laneOffset = 0,
+): ConnectorPoint[] {
+  const obstacles = nodes
+    .filter((node) => !excludedNodeIds.has(node.id))
+    .map((node) => nodeRouteRect(node, GRID_ROUTE_CLEARANCE));
+
+  const fallback = buildSteppedConnectorRoute({
+    sourceX: from.x,
+    sourceY: from.y,
+    targetX: to.x,
+    targetY: to.y,
+    orientation: preferredOrientation,
+    laneOffset,
+  }).points;
+  if (fallback.every((point, index) => index === 0 || routeSegmentClear(fallback[index - 1], point, obstacles))) {
+    return fallback;
+  }
+
+  const xs: number[] = [];
+  const ys: number[] = [];
+  addCoordinate(xs, from.x);
+  addCoordinate(xs, to.x);
+  addCoordinate(ys, from.y);
+  addCoordinate(ys, to.y);
+  if (preferredOrientation === 'horizontal') {
+    addCoordinate(xs, (from.x + to.x) / 2 + laneOffset);
+  } else {
+    addCoordinate(ys, (from.y + to.y) / 2 + laneOffset);
+  }
+  for (const rect of obstacles) {
+    addCoordinate(xs, rect.x0);
+    addCoordinate(xs, rect.x1);
+    addCoordinate(ys, rect.y0);
+    addCoordinate(ys, rect.y1);
+  }
+  xs.sort((a, b) => a - b);
+  ys.sort((a, b) => a - b);
+
+  const pointKey = (x: number, y: number) => `${x}:${y}`;
+  const points: ConnectorPoint[] = [];
+  const pointIndex = new Map<string, number>();
+  for (const y of ys) {
+    for (const x of xs) {
+      const point = { x, y };
+      if (obstacles.some((rect) => pointInsideRouteRect(point, rect))) continue;
+      pointIndex.set(pointKey(x, y), points.length);
+      points.push(point);
+    }
+  }
+
+  const start = pointIndex.get(pointKey(Math.round(from.x * 100) / 100, Math.round(from.y * 100) / 100));
+  const end = pointIndex.get(pointKey(Math.round(to.x * 100) / 100, Math.round(to.y * 100) / 100));
+  if (start === undefined || end === undefined) return fallback;
+
+  const byRow = new Map<number, number[]>();
+  const byCol = new Map<number, number[]>();
+  points.forEach((point, index) => {
+    byRow.set(point.y, [...(byRow.get(point.y) ?? []), index]);
+    byCol.set(point.x, [...(byCol.get(point.x) ?? []), index]);
+  });
+  for (const indexes of byRow.values()) indexes.sort((a, b) => points[a].x - points[b].x);
+  for (const indexes of byCol.values()) indexes.sort((a, b) => points[a].y - points[b].y);
+
+  const neighbors = (index: number) => {
+    const point = points[index];
+    const result: Array<{ index: number; direction: 'horizontal' | 'vertical'; distance: number }> = [];
+    const row = byRow.get(point.y) ?? [];
+    const rowIndex = row.indexOf(index);
+    for (const nextIndex of [row[rowIndex - 1], row[rowIndex + 1]]) {
+      if (nextIndex === undefined) continue;
+      const next = points[nextIndex];
+      if (routeSegmentClear(point, next, obstacles)) {
+        result.push({ index: nextIndex, direction: 'horizontal', distance: Math.abs(next.x - point.x) });
+      }
+    }
+    const col = byCol.get(point.x) ?? [];
+    const colIndex = col.indexOf(index);
+    for (const nextIndex of [col[colIndex - 1], col[colIndex + 1]]) {
+      if (nextIndex === undefined) continue;
+      const next = points[nextIndex];
+      if (routeSegmentClear(point, next, obstacles)) {
+        result.push({ index: nextIndex, direction: 'vertical', distance: Math.abs(next.y - point.y) });
+      }
+    }
+    return result;
+  };
+
+  type StateDirection = 'start' | 'horizontal' | 'vertical';
+  const stateKey = (index: number, direction: StateDirection) => `${index}:${direction}`;
+  const queue: Array<{ index: number; direction: StateDirection; cost: number }> = [
+    { index: start, direction: 'start', cost: 0 },
+  ];
+  const dist = new Map([[stateKey(start, 'start'), 0]]);
+  const previous = new Map<string, { key: string; index: number; direction: StateDirection }>();
+  let bestEndKey: string | undefined;
+
+  while (queue.length > 0) {
+    queue.sort((a, b) => a.cost - b.cost);
+    const current = queue.shift()!;
+    const currentKey = stateKey(current.index, current.direction);
+    if ((dist.get(currentKey) ?? Infinity) < current.cost) continue;
+    if (current.index === end) {
+      bestEndKey = currentKey;
+      break;
+    }
+    for (const next of neighbors(current.index)) {
+      const bend = current.direction !== 'start' && current.direction !== next.direction
+        ? GRID_ROUTE_BEND_PENALTY
+        : 0;
+      const cost = current.cost + next.distance + bend;
+      const nextKey = stateKey(next.index, next.direction);
+      if (cost >= (dist.get(nextKey) ?? Infinity)) continue;
+      dist.set(nextKey, cost);
+      previous.set(nextKey, { key: currentKey, index: current.index, direction: current.direction });
+      queue.push({ index: next.index, direction: next.direction, cost });
+    }
+  }
+
+  if (!bestEndKey) return fallback;
+  const reversed: ConnectorPoint[] = [];
+  let cursorKey: string | undefined = bestEndKey;
+  while (cursorKey) {
+    const [indexPart] = cursorKey.split(':');
+    reversed.push(points[Number(indexPart)]);
+    cursorKey = previous.get(cursorKey)?.key;
+  }
+  return simplifyRoutePoints(reversed.reverse());
+}
+
+/**
+ * Rendered footprint of a laid-out grid node: measured size wins, then the layout
+ * helper's `initialWidth`/`initialHeight` hint, then the compact-pill default.
+ */
+export function graphNodeSize(node: Node): { width: number; height: number } {
+  return {
+    width: node.measured?.width ?? node.initialWidth ?? COMPACT_NODE_W,
+    height: node.measured?.height ?? node.initialHeight ?? COMPACT_NODE_H,
+  };
+}
+
+/**
+ * Stepped-edge routing for a grid/staircase layout.
+ *
+ * Chooses the source/target handle (of the eight GRID handles rendered by
+ * WorkflowNode) and a `flowDirection` for every `spine` / `loopback` edge so the
+ * connector leaves and enters on the correct side. Spine edges receive routed
+ * points that avoid occupied node rectangles; edges missing either endpoint are
+ * dropped so React Flow never renders a dangling connector.
+ * Shared by the Coordinator run graph and the landing scenario demo so both use
+ * the exact same production routing (never a reimplementation).
+ */
+export function routeGridEdges(edges: Edge[], nodes: Node[]): Edge[] {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const validEdges = edges.filter((edge) => byId.has(edge.source) && byId.has(edge.target));
+  const center = (node: Node) => {
+    const size = graphNodeSize(node);
+    return {
+      x: node.position.x + size.width / 2,
+      y: node.position.y + size.height / 2,
+    };
+  };
+  const spineDirection = (sourceCenter: ConnectorPoint, targetCenter: ConnectorPoint) => {
+    const dx = targetCenter.x - sourceCenter.x;
+    const dy = targetCenter.y - sourceCenter.y;
+    if (dx >= 0 && Math.abs(dx) >= Math.abs(dy)) {
+      return {
+        sourceHandle: 'source-right',
+        targetHandle: 'target-left',
+        flowDirection: 'horizontal' as const,
+      };
+    }
+    if (dy >= 0 || Math.abs(dy) > 0.5) {
+      return {
+        sourceHandle: dy >= 0 ? 'source-bottom' : 'source-top',
+        targetHandle: dy >= 0 ? 'target-top' : 'target-bottom',
+        flowDirection: 'vertical' as const,
+      };
+    }
+    return {
+      sourceHandle: 'source-left',
+      targetHandle: 'target-right',
+      flowDirection: 'horizontal' as const,
+    };
+  };
+  const laneOffsets = new Map<string, number>();
+  const sourcePortLaneOffsets = new Map<string, number>();
+  const targetPortLaneOffsets = new Map<string, number>();
+  const gutterGroups = new Map<string, Array<{ edge: Edge; cross: number }>>();
+  const sourcePortGroups = new Map<string, Array<{ edge: Edge; cross: number }>>();
+  const targetPortGroups = new Map<string, Array<{ edge: Edge; cross: number }>>();
+  const loopbackSides = new Map<string, 'left' | 'right' | 'top' | 'bottom'>();
+  const loopbackGroups = new Map<string, Edge[]>();
+  const spineDirections = new Map<string, ReturnType<typeof spineDirection>>();
+  for (const edge of validEdges) {
+    const source = byId.get(edge.source)!;
+    const target = byId.get(edge.target)!;
+    const sourceCenter = center(source);
+    const targetCenter = center(target);
+    if (edge.type === 'loopback') {
+      const returnJoin = findLoopbackReturnJoinNode(edge, validEdges);
+      const joinNode = byId.get(returnJoin);
+      const joinCenter = joinNode ? center(joinNode) : targetCenter;
+      const horizontal = Math.abs(joinCenter.x - sourceCenter.x)
+        >= Math.abs(joinCenter.y - sourceCenter.y);
+      let side: 'left' | 'right' | 'top' | 'bottom';
+      if (horizontal) {
+        side = joinCenter.x <= sourceCenter.x ? 'left' : 'right';
+      } else {
+        side = joinCenter.y <= sourceCenter.y ? 'top' : 'bottom';
+      }
+      loopbackSides.set(edge.id, side);
+      const key = `loopback:${side}:${returnJoin}`;
+      if (!loopbackGroups.has(key)) loopbackGroups.set(key, []);
+      loopbackGroups.get(key)!.push(edge);
+      continue;
+    }
+    if (edge.type !== 'spine') continue;
+    const direction = spineDirection(sourceCenter, targetCenter);
+    spineDirections.set(edge.id, direction);
+    const horizontal = direction.flowDirection === 'horizontal';
+    const midpoint = horizontal
+      ? (sourceCenter.x + targetCenter.x) / 2
+      : (sourceCenter.y + targetCenter.y) / 2;
+    const cross = horizontal
+      ? (sourceCenter.y + targetCenter.y) / 2
+      : (sourceCenter.x + targetCenter.x) / 2;
+    const key = `${horizontal ? 'h' : 'v'}:${Math.round(midpoint / 4)}`;
+    if (!gutterGroups.has(key)) gutterGroups.set(key, []);
+    gutterGroups.get(key)!.push({ edge, cross });
+
+    const sourcePortKey = `${edge.source}:${direction.sourceHandle}`;
+    if (!sourcePortGroups.has(sourcePortKey)) sourcePortGroups.set(sourcePortKey, []);
+    sourcePortGroups.get(sourcePortKey)!.push({
+      edge,
+      cross: direction.sourceHandle.endsWith('top') || direction.sourceHandle.endsWith('bottom')
+        ? targetCenter.x
+        : targetCenter.y,
+    });
+
+    const targetPortKey = `${edge.target}:${direction.targetHandle}`;
+    if (!targetPortGroups.has(targetPortKey)) targetPortGroups.set(targetPortKey, []);
+    targetPortGroups.get(targetPortKey)!.push({
+      edge,
+      cross: direction.targetHandle.endsWith('top') || direction.targetHandle.endsWith('bottom')
+        ? sourceCenter.x
+        : sourceCenter.y,
+    });
+  }
+  for (const group of gutterGroups.values()) {
+    group.sort((a, b) => a.cross - b.cross || a.edge.id.localeCompare(b.edge.id));
+    group.forEach(({ edge }, index) => {
+      laneOffsets.set(edge.id, (index - (group.length - 1) / 2) * BANDED_LANE_STEP);
+    });
+  }
+  for (const group of sourcePortGroups.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => a.cross - b.cross || a.edge.id.localeCompare(b.edge.id));
+    group.forEach(({ edge }, index) => {
+      sourcePortLaneOffsets.set(edge.id, (index - (group.length - 1) / 2) * BANDED_LANE_STEP);
+    });
+  }
+  for (const group of targetPortGroups.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => a.cross - b.cross || a.edge.id.localeCompare(b.edge.id));
+    group.forEach(({ edge }, index) => {
+      targetPortLaneOffsets.set(edge.id, (index - (group.length - 1) / 2) * BANDED_LANE_STEP);
+    });
+  }
+
+  const loopbackLanes = new Map<'left' | 'right' | 'top' | 'bottom', number>();
+  for (const group of loopbackGroups.values()) {
+    const side = loopbackSides.get(group[0].id)!;
+    const lane = loopbackLanes.get(side) ?? 0;
+    loopbackLanes.set(side, lane + 1);
+    group.forEach((edge) => {
+      laneOffsets.set(edge.id, lane * BANDED_LANE_STEP);
+    });
+  }
+
+  return validEdges.map((edge) => {
+    const source = byId.get(edge.source)!;
+    const target = byId.get(edge.target)!;
+    const sourceCenter = center(source);
+    const targetCenter = center(target);
+    if (edge.type === 'loopback') {
+      const side = loopbackSides.get(edge.id) ?? 'top';
+      const returnJoin = findLoopbackReturnJoinNode(edge, validEdges);
+      return {
+        ...edge,
+        sourceHandle: `source-${side}`,
+        targetHandle: `target-${side}`,
+        data: {
+          ...(edge.data ?? {}),
+          returnSide: side,
+          returnLaneOffset: laneOffsets.get(edge.id) ?? 0,
+          returnJoin,
+        },
+      };
+    }
+    if (edge.type !== 'spine') return edge;
+    const direction = spineDirections.get(edge.id) ?? spineDirection(sourceCenter, targetCenter);
+    const laneOffset = laneOffsets.get(edge.id) ?? 0;
+    const from = handlePoint(source, direction.sourceHandle);
+    const to = handlePoint(target, direction.targetHandle);
+    return {
+      ...edge,
+      sourceHandle: direction.sourceHandle,
+      targetHandle: direction.targetHandle,
+      data: {
+        ...(edge.data ?? {}),
+        flowDirection: direction.flowDirection,
+        gutterLaneOffset: laneOffset,
+        routePoints: obstacleAwareLaneRoute({
+          from,
+          to,
+          nodes,
+          excludedNodeIds: new Set([edge.source, edge.target]),
+          preferredOrientation: direction.flowDirection,
+          sourceHandle: direction.sourceHandle,
+          targetHandle: direction.targetHandle,
+          sourcePortLaneOffset: sourcePortLaneOffsets.get(edge.id) ?? 0,
+          targetPortLaneOffset: targetPortLaneOffsets.get(edge.id) ?? 0,
+          gutterLaneOffset: laneOffset,
+        }),
+      },
+    };
+  });
+}

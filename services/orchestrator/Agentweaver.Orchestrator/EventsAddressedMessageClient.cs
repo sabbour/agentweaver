@@ -577,7 +577,11 @@ internal sealed class EventsAddressedMessageClient(
         }
     }
 
-    private Uri RequireEventsOwner(HttpContext context, SessionIdentity identity)
+    private Uri RequireEventsOwner(HttpContext context, SessionIdentity identity) =>
+        RequireEventsOwner(context, new CoordinationRunScope(identity.ProjectId, identity.RunId), options);
+
+    internal static Uri RequireEventsOwner(
+        HttpContext context, CoordinationRunScope identity, OrchestratorOptions options)
     {
         CoordinationIdentity.RequireScopes(context.User);
         var scope = CoordinationIdentity.RequireRunScope(context.User);

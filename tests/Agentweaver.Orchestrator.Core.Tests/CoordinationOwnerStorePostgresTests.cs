@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using System.Collections.Immutable;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Npgsql;
 using NpgsqlTypes;
@@ -70,6 +71,71 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task CappedRootAdmissionPersistsWithTheRootAndReplaysWithoutRepricing()
+    {
+        var run = "capped-" + Guid.NewGuid().ToString("N");
+        var selection = _selection with
+        {
+            Selection = _selection.Selection with
+            {
+                RunId = run, Snapshot = CoordinatorRunAdmissionTests.Selection(_root.ProjectId, run)
+            },
+            Authorization = _selection.Authorization with { BoundRunId = run }
+        };
+        var admission = CoordinatorRunAdmissionTests.Receipt(selection);
+        var reads = 0;
+        var first = await _store.AcceptRootAsync(_actor, selection, "capped-root", CancellationToken.None,
+            _ => { reads++; return Task.FromResult(admission); }, _ => Task.CompletedTask);
+        var restarted = new CoordinationOwnerStore(_fixture.DataSource, _schema);
+        var stored = await restarted.ReadRunAdmissionAsync(_actor, selection, CancellationToken.None);
+        Assert.Equal(admission.ModelBindingPin, stored!.ModelBindingPin);
+        Assert.Equal(admission.ModelSelection, stored.ModelSelection);
+        Assert.Equal(first, await restarted.AcceptRootAsync(_actor, selection, "capped-root", CancellationToken.None,
+            _ => throw new InvalidOperationException("An identical accepted run must not be repriced."),
+            _ => Task.CompletedTask));
+        Assert.Equal(1, reads);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("unpriced")]
+    [InlineData("boundary")]
+    [InlineData("revoked")]
+    public async Task RejectedCappedAdmissionLeavesNoRootRunOrAdmissionOutbox(string fault)
+    {
+        var run = "rejected-" + Guid.NewGuid().ToString("N");
+        var selection = _selection with
+        {
+            Selection = _selection.Selection with
+            {
+                RunId = run, Snapshot = CoordinatorRunAdmissionTests.Selection(_root.ProjectId, run)
+            },
+            Authorization = _selection.Authorization with { BoundRunId = run }
+        };
+        var receipt = CoordinatorRunAdmissionTests.Receipt(selection, fault == "boundary" ? 10 : 0);
+        if (fault == "unpriced")
+            receipt = receipt with { CostBinding = null };
+        var checks = 0;
+        await Assert.ThrowsAsync<CoordinationException>(() => _store.AcceptRootAsync(
+            _actor, selection, "rejected-root", CancellationToken.None,
+            fault == "missing" ? null : _ => Task.FromResult(receipt),
+            _ => fault == "revoked" && ++checks == 2
+                ? Task.FromException(new CoordinationException("run_selection_permission_denied", 403))
+                : Task.CompletedTask));
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{_schema}".accepted_runs WHERE run_id = @run),
+                   (SELECT count(*) FROM "{_schema}".coordination_sessions WHERE run_id = @run),
+                   (SELECT count(*) FROM "{_schema}".outbox_events
+                    WHERE event_type = 'orchestrator.run.copilot_admission' AND payload->>'runId' = @run)
+            """, connection);
+        command.Parameters.AddWithValue("run", run);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.All(Enumerable.Range(0, 3), column => Assert.Equal(0L, reader.GetInt64(column)));
+    }
+
+    [Fact]
     public async Task RootAndChildRegistrationsAreIdempotentAndWriterBound()
     {
         Assert.Equal("idle", await _store.ReadCurrentExecutionStateAsync(
@@ -91,6 +157,47 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         var conflictingRoot = await Assert.ThrowsAsync<CoordinationException>(() =>
             _store.AcceptRootAsync(_actor, _selection, "other-root", CancellationToken.None));
         Assert.Equal(409, conflictingRoot.StatusCode);
+    }
+
+    [Fact]
+    public async Task CoordinatorExecutionCheckpointsAppendLinkedValuesAndReadBackFromTheirStore()
+    {
+        var runId = Guid.NewGuid().ToString("D");
+        var selection = new AuthorizedRunSelection(
+            _selection.Selection with
+            {
+                RunId = runId,
+                Snapshot = Payload("""{"modelSelection":{"reference":"model-1"}}""")
+            },
+            _selection.Authorization with { BoundRunId = runId });
+        var root = await _store.AcceptRootAsync(
+            _actor, selection, "checkpoint-root", CancellationToken.None);
+        var identity = new SessionIdentity(selection.Selection.ProjectId, runId, "checkpoint-root");
+        var binding = new MafCheckpointBinding(
+            identity,
+            _actor,
+            root.ExecutionFence,
+            MafExecutionCheckpointStore.CurrentSdkVersion,
+            "model-1",
+            CacheReference: null,
+            StoreName: MafExecutionCheckpointContract.StoreName);
+        var checkpointStore = new PostgresMafCheckpointStore(
+            _fixture.DataSource, _schema, objectStore: null).ForRun(binding);
+
+        var first = await checkpointStore.CreateCheckpointAsync(
+            identity.SessionId, Payload("""{"revision":1}"""));
+        var second = await checkpointStore.CreateCheckpointAsync(
+            identity.SessionId, Payload("""{"revision":2}"""), first);
+
+        var index = await checkpointStore.RetrieveIndexAsync(identity.SessionId);
+        Assert.Equal(2, index.Count());
+        Assert.Contains(index, checkpoint => checkpoint.CheckpointId == first.CheckpointId);
+        Assert.Contains(index, checkpoint => checkpoint.CheckpointId == second.CheckpointId);
+
+        var latest = await checkpointStore.ReadLatestCheckpointAsync(binding, CancellationToken.None);
+        Assert.NotNull(latest);
+        Assert.Equal(second.CheckpointId, latest.Value.Info.CheckpointId);
+        Assert.Equal(2, latest.Value.Value.GetProperty("revision").GetInt32());
     }
 
     [Fact]

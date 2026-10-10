@@ -72,6 +72,41 @@ internal sealed class CoordinatorDecisionOwnerStore
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
+        var initialized = await InitializeRootCoreAsync(
+            connection, transaction, actor, identity, selection, null, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return initialized;
+    }
+
+    internal async Task<CoordinatorDecisionCurrentState> InitializeRootInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        WorkPlanRunSelectionContext preparedSelectionContext,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(preparedSelectionContext);
+        if (!ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
+        ValidateInput(actor, identity, selection);
+        return await InitializeRootCoreAsync(
+            connection, transaction, actor, identity, selection, preparedSelectionContext, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<CoordinatorDecisionCurrentState> InitializeRootCoreAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        WorkPlanRunSelectionContext? preparedSelectionContext,
+        CancellationToken cancellationToken)
+    {
         OwnerBinding binding;
         await using (var ownerLock = CreateOwnerBindingCommand(
                          connection,
@@ -96,7 +131,11 @@ internal sealed class CoordinatorDecisionOwnerStore
         if (latest is not null)
         {
             var existing = await RestoreEnvelopeAsync(
-                latest.Envelope, expectedBinding, selection.Selection, cancellationToken).ConfigureAwait(false);
+                latest.Envelope,
+                expectedBinding,
+                selection.Selection,
+                cancellationToken,
+                preparedSelectionContext).ConfigureAwait(false);
             if (!existing.IsValid ||
                 !string.Equals(
                     latest.Envelope.AcceptedSelectionHash,
@@ -104,7 +143,6 @@ internal sealed class CoordinatorDecisionOwnerStore
                     StringComparison.Ordinal))
                 throw InvalidPersistedState();
             ValidateStateActor(existing.State!, actor);
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new CoordinatorDecisionCurrentState(
                 existing.State!,
                 latest.StateVersion,
@@ -179,8 +217,133 @@ internal sealed class CoordinatorDecisionOwnerStore
             requestId,
             stateVersion,
             cancellationToken).ConfigureAwait(false);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new CoordinatorDecisionCurrentState(state, stateVersion, expectedBinding.AcceptedSelectionHash);
+    }
+
+    internal async Task<CoordinatorDecisionCurrentState> ReadBacklogCurrentDecisionInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        string tenantId,
+        SessionIdentity identity,
+        EffectiveRunSelection selection,
+        string acceptedSelectionHash,
+        long executionFence,
+        long expectedCurrentStateVersion,
+        WorkPlanRunSelectionContext preparedSelectionContext,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(preparedSelectionContext);
+        if (!ReferenceEquals(transaction.Connection, connection))
+            throw new ArgumentException("The transaction must belong to the supplied connection.", nameof(transaction));
+        if (string.IsNullOrWhiteSpace(tenantId) ||
+            string.IsNullOrWhiteSpace(acceptedSelectionHash) ||
+            acceptedSelectionHash.Length != 64 ||
+            !acceptedSelectionHash.All(Uri.IsHexDigit) ||
+            executionFence <= 0 ||
+            expectedCurrentStateVersion <= 0 ||
+            selection.ProjectId != identity.ProjectId ||
+            selection.RunId != identity.RunId ||
+            selection.ProjectRevision < 1 ||
+            selection.ProjectConfigurationRevision < 1 ||
+            selection.PlatformRuntimeRevision < 1 ||
+            string.IsNullOrWhiteSpace(selection.ContextRevision))
+            throw new CoordinationException(
+                "backlog_prerequisite_binding_invalid", StatusCodes.Status409Conflict);
+
+        long runFence;
+        long rootFence;
+        string runState;
+        string persistedSelectionHash;
+        string persistedTenantId;
+        string writerIssuer;
+        string writerSubject;
+        string lifecycleState;
+        await using (var ownerBinding = CreateOwnerBindingCommand(
+                         connection,
+                         transaction,
+                         actor,
+                         identity,
+                         tenantId,
+                         forUpdate: true))
+        await using (var reader = await ownerBinding.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new CoordinationException(
+                    "backlog_prerequisite_binding_unavailable", StatusCodes.Status409Conflict);
+            persistedTenantId = reader.GetString(0);
+            runFence = reader.GetInt64(1);
+            runState = reader.GetString(2);
+            persistedSelectionHash = reader.GetString(3).TrimEnd();
+            rootFence = reader.GetInt64(4);
+            writerIssuer = reader.GetString(5);
+            writerSubject = reader.GetString(6);
+            lifecycleState = reader.GetString(7);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw InvalidPersistedState();
+        }
+
+        if (persistedTenantId != tenantId ||
+            writerIssuer != actor.Issuer ||
+            writerSubject != actor.Subject ||
+            runFence != executionFence ||
+            rootFence != executionFence ||
+            persistedSelectionHash != acceptedSelectionHash ||
+            lifecycleState == "cancelled" ||
+            runState is not ("idle" or "active" or "blocked" or "completed"))
+            throw new CoordinationException(
+                "backlog_prerequisite_binding_stale", StatusCodes.Status409Conflict);
+
+        var expectedBinding = new CoordinatorDecisionBinding(
+            actor.Issuer,
+            actor.Subject,
+            tenantId,
+            identity.ProjectId,
+            identity.RunId,
+            identity.SessionId,
+            persistedSelectionHash,
+            selection.ProjectRevision,
+            selection.ProjectConfigurationRevision,
+            selection.PlatformRuntimeRevision,
+            selection.ContextRevision,
+            executionFence);
+        var latest = await ReadLatestDecisionAsync(
+            connection, transaction, identity, cancellationToken).ConfigureAwait(false);
+        if (latest is null ||
+            latest.StateVersion != expectedCurrentStateVersion ||
+            latest.StateVersion <= 0 ||
+            latest.Envelope.Issuer != actor.Issuer ||
+            latest.Envelope.Subject != actor.Subject ||
+            latest.Envelope.TenantId != tenantId ||
+            latest.Envelope.ProjectId != identity.ProjectId ||
+            latest.Envelope.RunId != identity.RunId ||
+            latest.Envelope.RootSessionId != identity.SessionId ||
+            latest.Envelope.AcceptedSelectionHash != persistedSelectionHash ||
+            latest.Envelope.Fence != executionFence ||
+            latest.Envelope.ProjectRevision != selection.ProjectRevision ||
+            latest.Envelope.ProjectConfigurationRevision != selection.ProjectConfigurationRevision ||
+            latest.Envelope.PlatformRuntimeRevision != selection.PlatformRuntimeRevision ||
+            latest.Envelope.ContextRevision != selection.ContextRevision)
+            throw new CoordinationException(
+                "backlog_prerequisite_decision_stale", StatusCodes.Status409Conflict);
+
+        var restored = await RestoreEnvelopeAsync(
+            latest.Envelope,
+            expectedBinding,
+            selection,
+            cancellationToken,
+            preparedSelectionContext).ConfigureAwait(false);
+        if (!restored.IsValid ||
+            restored.State is null ||
+            restored.State.Fence != executionFence)
+            throw InvalidPersistedState();
+        ValidateStateActor(restored.State, actor);
+        return new CoordinatorDecisionCurrentState(
+            restored.State, latest.StateVersion, persistedSelectionHash);
     }
 
     public async Task<CoordinatorDecisionCurrentState> ReadCurrentAsync(
@@ -217,6 +380,71 @@ internal sealed class CoordinatorDecisionOwnerStore
         await ValidatePendingGateRowsAsync(
             connection, identity, actor, current, cancellationToken).ConfigureAwait(false);
         return current;
+    }
+
+    internal async Task RequireCurrentDispatchStateInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        WorkPlanRunSelectionContext? selectionContext,
+        long expectedStateVersion,
+        long expectedFence,
+        string expectedWorkPlanId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        ValidateInput(actor, identity, selection);
+        if (expectedStateVersion < 1 || expectedFence < 1 ||
+            string.IsNullOrWhiteSpace(expectedWorkPlanId))
+            throw new CoordinationException(
+                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+
+        var selectionHash = HashSelection(selection.Selection);
+        OwnerBinding binding;
+        await using (var command = CreateOwnerBindingCommand(
+                         connection,
+                         transaction,
+                         actor,
+                         identity,
+                         selection.Authorization.TenantId,
+                         forUpdate: true))
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                throw new CoordinationException(
+                    "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+            binding = ReadOwnerBinding(reader, selectionHash, selection.Authorization.TenantId);
+        }
+        if (binding.RunFence != expectedFence)
+            throw new CoordinationException(
+                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+
+        var latest = await ReadLatestDecisionAsync(
+            connection, transaction, identity, cancellationToken, forShare: true).ConfigureAwait(false);
+        if (latest is null ||
+            latest.DecisionState != "accepted" ||
+            latest.StateVersion != expectedStateVersion ||
+            latest.Envelope.Fence != expectedFence ||
+            !string.Equals(latest.Envelope.AcceptedSelectionHash, binding.SelectionHash, StringComparison.Ordinal))
+            throw new CoordinationException(
+                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+
+        var expectedBinding = CoordinatorDecisionBinding.Create(actor, identity, selection, binding.RunFence);
+        var restored = await RestoreEnvelopeAsync(
+            latest.Envelope,
+            expectedBinding,
+            selection.Selection,
+            cancellationToken,
+            selectionContext).ConfigureAwait(false);
+        if (!restored.IsValid || restored.State is not { } state ||
+            state.Fence != expectedFence ||
+            !state.CanDispatch ||
+            state.ConfirmedWorkPlan?.Plan.Id != expectedWorkPlanId)
+            throw new CoordinationException(
+                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
     }
 
     public async Task<int> ReadRegisteredChildCountAsync(
@@ -1007,8 +1235,10 @@ internal sealed class CoordinatorDecisionOwnerStore
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
         SessionIdentity identity,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool forShare = false)
     {
+        var lockClause = forShare ? "FOR SHARE" : string.Empty;
         await using var command = new NpgsqlCommand($"""
             SELECT decision_id, request_id, action_kind, command_hash, decision_state,
                    state_version, decision::text
@@ -1016,6 +1246,7 @@ internal sealed class CoordinatorDecisionOwnerStore
             WHERE project_id = @project AND run_id = @run AND session_id = @session
             ORDER BY state_version DESC
             LIMIT 1
+            {lockClause}
             """, connection, transaction);
         AddIdentity(command, identity);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);

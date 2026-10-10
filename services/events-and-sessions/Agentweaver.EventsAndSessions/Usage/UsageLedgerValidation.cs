@@ -29,11 +29,6 @@ internal static class UsageLedgerValidation
         ValidateIdentifier(submission.Attribution.AgentId, nameof(submission), 256);
         if (submission.Attribution.TurnId is not null)
             ValidateIdentifier(submission.Attribution.TurnId, nameof(submission), 256);
-        if (submission.Attribution.DispatchId is not null &&
-            (!Guid.TryParseExact(submission.Attribution.DispatchId, "D", out var dispatchId) ||
-             dispatchId == Guid.Empty ||
-             dispatchId.ToString("D") != submission.Attribution.DispatchId))
-            throw new ArgumentException("The dispatch ID must be a non-empty canonical GUID.", nameof(submission));
         ValidateIdentifier(submission.ModelBinding.ModelReference, nameof(submission));
         ValidateIdentifier(submission.ModelBinding.ModelId, nameof(submission));
         ValidateIdentifier(submission.ModelBinding.MeterSource, nameof(submission), 256);
@@ -56,6 +51,7 @@ internal static class UsageLedgerValidation
         RequireNonNegative(price.Amount, nameof(price.Amount));
         if (price.Unit is not null)
             ValidateIdentifier(price.Unit, nameof(price.Unit), 128);
+
         if (binding is null)
         {
             if (price.Disposition != CostDisposition.Unpriced || price.RateCard is not null)
@@ -109,8 +105,7 @@ internal static class UsageLedgerValidation
             return submission.SdkAccounting is null;
         if (submission.ModelBinding.MeterSource != submission.SdkSource.MeterSource)
             return false;
-
-        var accountingIdentity = submission.SdkAccounting?.Identity;
+        var identity = submission.SdkAccounting?.Identity;
         return submission.SdkSource.SourceMode switch
         {
             "byok" =>
@@ -123,13 +118,18 @@ internal static class UsageLedgerValidation
                 submission.SdkSource.MeterSource == SdkMeterSources.CopilotNanoAiu &&
                 submission.Measurement.ProviderUnits is not null &&
                 submission.Measurement.ProviderUnit == "nano_aiu" &&
-                (accountingIdentity is null ||
-                 accountingIdentity.SourceSessionId == submission.SdkSource.SdkSessionId &&
-                 accountingIdentity.Sequence > 0 &&
-                 !string.IsNullOrWhiteSpace(accountingIdentity.UsageId)),
+                (identity is null ||
+                 identity.Sequence > 0 &&
+                 identity.SourceSessionId == submission.SdkSource.SdkSessionId &&
+                 IsAccountingIdentityText(identity.SourceSessionId) &&
+                 IsAccountingIdentityText(identity.UsageId)),
             _ => false
         };
     }
+
+    private static bool IsAccountingIdentityText(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 512 &&
+        !value.Any(character => char.IsControl(character) || char.IsWhiteSpace(character));
 
     private static void ValidateBinding(CostBinding binding)
     {
@@ -210,8 +210,6 @@ internal static class UsageLedgerCanonicalizer
             writer.WriteString("agentId", submission.Attribution.AgentId);
             if (submission.Attribution.TurnId is not null)
                 writer.WriteString("turnId", submission.Attribution.TurnId);
-            if (submission.Attribution.DispatchId is not null)
-                writer.WriteString("dispatchId", submission.Attribution.DispatchId);
             writer.WriteEndObject();
 
             writer.WritePropertyName("modelBinding");
