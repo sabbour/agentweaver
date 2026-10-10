@@ -228,6 +228,8 @@ The collector uses the pinned image and executable with a read-only Workspace mo
 AgentHost routes `--build-test-output-collector-v1` before web configuration or native SDK startup.
 This Linux-only mode accepts one bounded encoded request.
 It opens accepted paths without following symlinks, checks regular files and mount identity, and returns a bounded receipt.
+Native directory and no-follow flags match the executing Linux architecture; unsupported architectures fail before collection.
+The stream matches the synchronous native file descriptor and keeps bounded cancellable reads.
 The receipt binds the collector Pod UID, container, operation, checkpoint, and request fingerprint.
 Missing required files or an invalid collector receipt are `Failed`.
 Bound collector timeout, cancellation, or output-limit termination is `Interrupted`, even after the command exits successfully.

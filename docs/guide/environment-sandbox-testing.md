@@ -34,6 +34,22 @@ They also cover retirement, durable policy-attempt markers, PostgreSQL timestamp
 Replay preserves the original result; a later save cannot replace terminal evidence or return a terminal operation to Running.
 These store tests do not execute command Pods, prove HTTP authorization, or verify live Kubernetes isolation and Cilium enforcement.
 
+The release tests also run the managed collector in a cached Linux ASP.NET runtime:
+
+```powershell
+$env:AGENTWEAVER_CONTAINER_ENGINE = "podman"
+node --test scripts\release\tests\buildtest-output-collector.test.mjs
+```
+
+Linux CI uses Docker and its already cached, pinned runtime image.
+The test mounts the managed application and a test-owned Workspace volume read-only.
+The collector runs without network access as user 1654, before web configuration or native SDK startup.
+It checks regular and empty files, exact hashes, absent files, symlinks, non-regular files, byte limits, and malformed requests.
+The collector opens native file descriptors synchronously and retains bounded cancellable reads.
+Its directory and no-follow flags match the executing Linux architecture.
+Local arm64 execution proves managed collector behavior only; the production profile still requires a Linux amd64 image.
+These checks do not prove command-Pod execution, deployed PVC isolation, or Cilium enforcement.
+
 The lease tests use the test project's disposable PostgreSQL 16 container. They
 cover per-Environment capacity, idempotent reservation, owner lifecycle fencing,
 explicit abandonment, supported terminal evidence, exact release receipts,

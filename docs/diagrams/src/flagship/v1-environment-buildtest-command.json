@@ -149,7 +149,7 @@
               "type": "message",
               "from": "execution",
               "to": "execution",
-              "label": "Run the pinned collector against accepted output paths",
+              "label": "Read accepted paths with native no-follow flags and bounded reads on the read-only Workspace",
               "line": "solid",
               "arrow": "filled"
             },
