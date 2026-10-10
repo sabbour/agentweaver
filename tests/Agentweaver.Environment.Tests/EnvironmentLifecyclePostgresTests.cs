@@ -339,8 +339,24 @@ public sealed class EnvironmentPostgresFixture : IAsyncLifetime
 
     public EnvironmentLifecycleStore CreateStore() => new(DataSource, TimeProvider.System);
 
-    public NpgsqlDataSource CreateDataSource(string applicationName) => NpgsqlDataSource.Create(
-        new NpgsqlConnectionStringBuilder(_container.GetConnectionString()) { ApplicationName = applicationName }.ConnectionString);
+    public NpgsqlDataSource CreateDataSource(string applicationName) =>
+        CreateDataSource(applicationName, null, null);
+
+    public NpgsqlDataSource CreateDataSource(
+        string applicationName,
+        string? username,
+        string? password)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(_container.GetConnectionString())
+        {
+            ApplicationName = applicationName
+        };
+        if (username is not null)
+            builder.Username = username;
+        if (password is not null)
+            builder.Password = password;
+        return NpgsqlDataSource.Create(builder.ConnectionString);
+    }
 
     public async Task DisposeAsync()
     {

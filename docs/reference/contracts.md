@@ -169,6 +169,14 @@ The MCP host requires HTTPS `Identity:Issuer`, `Identity:Audience`, and
 `Gateway:BaseAddress` service-root settings. Its tool catalog is fetched from the
 configured Gateway; callers cannot override this address.
 
+## Environment remote MCP connections
+
+The Environment source candidate stores owner-authorized remote MCP connection
+configuration and immutable catalog pins. Its routes use current Projects &
+Config authority and no-store responses. The exact route list, revision fields,
+Identity correlation boundary, parser limits, and missing discovery/transport
+proof are described in [Remote MCP connections](../architecture/remote-mcp-connections.md).
+
 `UsageSubmission` contains an event ID, occurrence time, attribution, model
 metadata, and nullable measurements. `IUsageLedger.AppendAsync` validates and
 commits the immutable entry and rate card before returning. It returns the original
