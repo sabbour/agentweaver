@@ -39,6 +39,7 @@ Reuse invocation IDs on HTTP retry without treating identical arguments as ident
 Treat prompt limits as per-prompt/context capacity and narrow accepted limits using actual SDK catalog or server-owned BYOK capacity.
 Pin effective prompt capacity in SDK-source and session-material records; preserve it on resume and reject a smaller current capacity.
 Retain standard TRX test results with the existing exact-source CI coverage artifacts.
+Deduplicate byte-identical TRX coverage attachments while retaining distinct-report failures.
 Add typed BuildTest workflow commands and require the pinned Sandbox command capability.
 Persist immutable operation, command, execution-profile, and Environment bindings in MAF checkpoints.
 Resolve accepted commands through the owner-authorized Core getter and retain their original operation IDs during recovery.
@@ -46,6 +47,7 @@ Use the same BuildTest executor in normal and recovered frontiers.
 Require bound terminal and collector evidence before dependent work advances.
 Join required command outputs to final SourceControl captures by digest and byte count.
 The Environment command producer now resolves immutable Core acceptance, reserves the existing owner-effects record, and reconciles gated command and separate collector Pods.
+Bind BuildTest handler managers explicitly as services so partial hosts can construct unrelated authenticated routes without body inference.
 Server configuration loads the optional accepted BuildTest profile before advertising capability.
 AgentHost routes the trusted Linux collector mode before web or native runtime startup.
 The AgentSandbox provider exposes typed command preparation, execution, and collector receipts through the existing Environment owner.

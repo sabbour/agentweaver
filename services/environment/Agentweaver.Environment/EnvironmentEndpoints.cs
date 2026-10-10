@@ -3,6 +3,7 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Providers.Storage.AzureFiles;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Environment;
 
@@ -390,7 +391,7 @@ public static class EnvironmentEndpoints
             string sessionId,
             string executionProfileReference,
             HttpContext context,
-            EnvironmentSandboxBuildTestCommandManager manager,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
@@ -408,7 +409,7 @@ public static class EnvironmentEndpoints
             string environmentId,
             SandboxBuildTestApiRequest request,
             HttpContext context,
-            EnvironmentSandboxBuildTestCommandManager manager,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
@@ -432,7 +433,7 @@ public static class EnvironmentEndpoints
             string environmentId,
             Guid operationId,
             HttpContext context,
-            EnvironmentSandboxBuildTestCommandManager manager,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
@@ -453,7 +454,7 @@ public static class EnvironmentEndpoints
             Guid operationId,
             SandboxBuildTestApiRequest request,
             HttpContext context,
-            EnvironmentSandboxBuildTestCommandManager manager,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
