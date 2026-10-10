@@ -22,6 +22,8 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
     private const string ActorId = "actor-1";
     private const string TenantId = "tenant-1";
     private const string ProjectId = "project-1";
+    private const string ProjectsOwnerAddress = "https://projects.test/";
+    private const string EnvironmentOwnerAddress = "https://environment.test/";
     private static readonly Guid ConnectionId =
         Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     private const string InitialConfigurationHash =
@@ -39,10 +41,12 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
         await using (db)
         {
             var row = await SeedConnectionAsync(db);
-            var handler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
-            using var http = new HttpClient(handler);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
             var secrets = new ControlledSecretWriter();
-            var service = CreateService(db, http, secrets);
+            var service = CreateService(db, projects, environment, secrets);
 
             var result = await service.PrepareConsentAsync(
                 Actor(), Issuer, ActorId, ConnectionId, Request(), CancellationToken.None);
@@ -54,15 +58,15 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             Assert.Equal(2, result.ConnectionRevision);
             Assert.Equal("remote-mcp-" + ConnectionId.ToString("N") + "-verifier",
                 Assert.Single(secrets.SecretIds));
-            Assert.Equal(1, handler.LinkRequests);
-            Assert.Equal(3, handler.AuthorizationRequests);
-            Assert.All(handler.Requests, request =>
+            Assert.Equal(1, environmentHandler.LinkRequests);
+            Assert.Equal(4, projectsHandler.AuthorizationRequests);
+            Assert.All(projectsHandler.Requests.Concat(environmentHandler.Requests), request =>
             {
                 Assert.Equal("actor-token", request.Headers.Authorization?.Parameter);
                 Assert.Equal(TenantId, Assert.Single(request.Headers.GetValues(
                     ProjectAuthorizationContextContract.TenantSelectorHeader)));
             });
-            Assert.DoesNotContain(handler.Requests, request =>
+            Assert.DoesNotContain(projectsHandler.Requests.Concat(environmentHandler.Requests), request =>
                 request.RequestUri!.AbsolutePath.Contains("/token", StringComparison.Ordinal));
 
             var savedConnection = await db.RemoteMcpOAuthConnections.AsNoTracking()
@@ -94,9 +98,11 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
         await using (dataSource)
         await using (db)
         {
-            using var http = new HttpClient(new EnvironmentOwnerHandler(
-                Guid.NewGuid().ToString("N")));
-            var service = CreateService(db, http, secretWriter: null);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(Guid.NewGuid().ToString("N"));
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            var service = CreateService(db, projects, environment, secretWriter: null);
 
             var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
                 service.PrepareConsentAsync(
@@ -104,6 +110,8 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
 
             Assert.Equal("remote_mcp_secret_store_unavailable", error.Code);
             Assert.Equal(StatusCodes.Status503ServiceUnavailable, error.StatusCode);
+            Assert.Empty(projectsHandler.Requests);
+            Assert.Empty(environmentHandler.Requests);
         }
     }
 
@@ -115,10 +123,12 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
         await using (db)
         {
             var row = await SeedConnectionAsync(db);
-            var handler = new EnvironmentOwnerHandler(row.IdentityBindingReference, denyWriteOnCheck: 3);
-            using var http = new HttpClient(handler);
+            var projectsHandler = new ProjectsOwnerHandler(denyWriteOnCheck: 3);
+            var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
             var secrets = new ControlledSecretWriter();
-            var service = CreateService(db, http, secrets);
+            var service = CreateService(db, projects, environment, secrets);
 
             var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
                 service.PrepareConsentAsync(
@@ -143,11 +153,13 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
         await using (db)
         {
             var row = await SeedConnectionAsync(db);
-            var handler = new EnvironmentOwnerHandler(
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(
                 row.IdentityBindingReference, driftAfterLink: true);
-            using var http = new HttpClient(handler);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
             var secrets = new ControlledSecretWriter();
-            var service = CreateService(db, http, secrets);
+            var service = CreateService(db, projects, environment, secrets);
 
             var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() =>
                 service.PrepareConsentAsync(
@@ -158,6 +170,60 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
             var savedConnection = await db.RemoteMcpOAuthConnections.AsNoTracking()
                 .SingleAsync(item => item.ConnectionId == ConnectionId);
             Assert.Equal(RemoteMcpOAuthConnectionState.NotConnected, savedConnection.State);
+            Assert.Empty(await db.RemoteMcpOAuthConsents.AsNoTracking().ToListAsync());
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PreparationRejectsAuthorityOrConfigurationDriftAfterDatabaseLockWait(
+        bool driftConfiguration)
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(row.IdentityBindingReference);
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            var secrets = new ControlledSecretWriter();
+            var service = CreateService(db, projects, environment, secrets);
+
+            await using var lockConnection = await dataSource.OpenConnectionAsync();
+            await using var lockTransaction = await lockConnection.BeginTransactionAsync();
+            await using (var holdConnection = new NpgsqlCommand("""
+                SELECT id FROM identity_broker.remote_mcp_oauth_connections
+                WHERE connection_id = @connection FOR UPDATE
+                """, lockConnection, lockTransaction))
+            {
+                holdConnection.Parameters.AddWithValue("connection", ConnectionId);
+                Assert.NotNull(await holdConnection.ExecuteScalarAsync());
+            }
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var preparation = service.PrepareConsentAsync(
+                Actor(), Issuer, ActorId, ConnectionId, Request(), timeout.Token);
+            await WaitForConsentPublicationWaitAsync(dataSource, timeout.Token);
+            if (driftConfiguration)
+                environmentHandler.DriftCurrentConfiguration();
+            else
+                projectsHandler.DenyWriteOnCheck = 4;
+            await lockTransaction.CommitAsync(timeout.Token);
+
+            var error = await Assert.ThrowsAsync<RemoteMcpOAuthManagementException>(() => preparation);
+            Assert.Equal(
+                driftConfiguration
+                    ? "remote_mcp_connection_revision_conflict"
+                    : "remote_mcp_owner_denied",
+                error.Code);
+            Assert.Single(secrets.Values);
+            var savedConnection = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            Assert.Equal(RemoteMcpOAuthConnectionState.NotConnected, savedConnection.State);
+            Assert.Equal(1, savedConnection.ConfigurationRevision);
             Assert.Empty(await db.RemoteMcpOAuthConsents.AsNoTracking().ToListAsync());
         }
     }
@@ -217,10 +283,36 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
 
     private static RemoteMcpOAuthManagementService CreateService(
         IdentityBrokerDbContext db,
-        HttpClient http,
+        HttpClient projects,
+        HttpClient environment,
         ISecretVersionWriter? secretWriter) =>
-        new(db, new RemoteMcpOAuthOptions { ProjectsOwnerAddress = "https://environment.test/" },
-            http, new FrozenTimeProvider(Now), secretWriter);
+        new(db, new RemoteMcpOAuthOptions
+        {
+            ProjectsOwnerAddress = ProjectsOwnerAddress,
+            EnvironmentOwnerAddress = EnvironmentOwnerAddress
+        }, projects, environment, new FrozenTimeProvider(Now), secretWriter);
+
+    private static async Task WaitForConsentPublicationWaitAsync(
+        NpgsqlDataSource dataSource,
+        CancellationToken cancellationToken)
+    {
+        await using var observer = await dataSource.OpenConnectionAsync(cancellationToken);
+        for (var attempt = 0; attempt < 400; attempt++)
+        {
+            await using var wait = new NpgsqlCommand("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_stat_activity
+                    WHERE datname = current_database()
+                      AND wait_event_type = 'Lock'
+                      AND query LIKE 'UPDATE%remote_mcp_oauth_connections%'
+                )
+                """, observer);
+            if ((bool)(await wait.ExecuteScalarAsync(cancellationToken))!)
+                return;
+            await Task.Delay(25, cancellationToken);
+        }
+        Assert.Fail("Consent preparation did not wait on its PostgreSQL connection row lock.");
+    }
 
     private static RuntimeActorAuthorization Actor() =>
         new(new SecretCredential("actor-token", Now.AddHours(1), new FrozenTimeProvider(Now)), TenantId);
@@ -258,36 +350,85 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
         }
     }
 
-    private sealed class EnvironmentOwnerHandler(
-        string identityBindingReference,
-        bool grantWrite = true,
-        int denyWriteOnCheck = 0,
-        bool driftAfterLink = false) : HttpMessageHandler
+    private sealed class ProjectsOwnerHandler(
+        int denyWriteOnCheck = 0) : HttpMessageHandler
     {
-        private bool _linked;
         private int _authorizationChecks;
 
         public List<HttpRequestMessage> Requests { get; } = [];
-        public int LinkRequests { get; private set; }
+        public int DenyWriteOnCheck { get; set; } = denyWriteOnCheck;
         public int AuthorizationRequests => _authorizationChecks;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            Assert.Equal("projects.test", request.RequestUri!.Host);
+            Assert.Equal("actor-token", request.Headers.Authorization?.Parameter);
+            Assert.Equal(TenantId, Assert.Single(request.Headers.GetValues(
+                ProjectAuthorizationContextContract.TenantSelectorHeader)));
+
+            var path = request.RequestUri.AbsolutePath;
+            if (request.Method == HttpMethod.Get && path == "/api/authorization/context")
+            {
+                _authorizationChecks++;
+                return Task.FromResult(Json(request, AuthorizationContext(
+                    _authorizationChecks != DenyWriteOnCheck)));
+            }
+            if (request.Method == HttpMethod.Get && path == "/api/projects/project-1")
+                return Task.FromResult(Json(request,
+                    new { projectId = ProjectId, revision = 1, state = "active" }));
+            throw new Xunit.Sdk.XunitException($"Unexpected Projects request: {request.Method} {path}");
+        }
+
+        private static ProjectAuthorizationContextResponse AuthorizationContext(bool grantWrite) =>
+            new(
+                ProjectAuthorizationContextContract.CurrentVersion,
+                Issuer,
+                ActorId,
+                TenantId,
+                1,
+                null,
+                null,
+                ImmutableArray.Create(new EffectiveProjectAuthorization(
+                    ProjectAuthorityResourceType.Project,
+                    ProjectId,
+                    ImmutableArray.Create(new ProjectAuthorizationPermissionGrant(
+                        grantWrite ? ProjectAuthorizationPermission.WriteProjects :
+                            ProjectAuthorizationPermission.ReadProjects,
+                        1)))));
+    }
+
+    private static HttpResponseMessage Json<T>(HttpRequestMessage request, T body) =>
+        new(HttpStatusCode.OK)
+        {
+            RequestMessage = request,
+            Content = JsonContent.Create(body),
+            Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+        };
+
+    private sealed class EnvironmentOwnerHandler(
+        string identityBindingReference,
+        bool driftAfterLink = false) : HttpMessageHandler
+    {
+        private bool _linked;
+        private volatile bool _configurationDrift;
+
+        public List<HttpRequestMessage> Requests { get; } = [];
+        public int LinkRequests { get; private set; }
+
+        public void DriftCurrentConfiguration() => _configurationDrift = true;
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add(request);
+            Assert.Equal("environment.test", request.RequestUri!.Host);
             Assert.Equal("actor-token", request.Headers.Authorization?.Parameter);
             Assert.Equal(TenantId, Assert.Single(request.Headers.GetValues(
                 ProjectAuthorizationContextContract.TenantSelectorHeader)));
 
-            var path = request.RequestUri!.AbsolutePath;
-            if (request.Method == HttpMethod.Get && path == "/api/authorization/context")
-            {
-                _authorizationChecks++;
-                var allow = grantWrite && _authorizationChecks != denyWriteOnCheck;
-                return Json(request, AuthorizationContext(allow));
-            }
-            if (request.Method == HttpMethod.Get && path == "/api/projects/project-1")
-                return Json(request, new { projectId = ProjectId, revision = 1, state = "active" });
+            var path = request.RequestUri.AbsolutePath;
             if (request.Method == HttpMethod.Get &&
                 path == $"/api/projects/{ProjectId}/remote-mcp/connections/{ConnectionId:D}")
                 return Json(request, Snapshot());
@@ -311,7 +452,7 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                     ProjectId, ConnectionId, input.OperationId, 2,
                     FinalConfigurationHash, identityBindingReference));
             }
-            throw new Xunit.Sdk.XunitException($"Unexpected owner request: {request.Method} {path}");
+            throw new Xunit.Sdk.XunitException($"Unexpected Environment request: {request.Method} {path}");
         }
 
         private object Snapshot()
@@ -330,7 +471,7 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                     rowRevision = revision,
                     currentConfigurationRevision = revision,
                     currentDiscoveryRevision = (long?)null,
-                    state = "Draft"
+                    state = "draft"
                 },
                 configuration = Configuration()
             };
@@ -348,7 +489,7 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                 },
                 configurationRevision = revision,
                 configurationSha256 = _linked
-                    ? driftAfterLink ? ChangedConfigurationHash : FinalConfigurationHash
+                    ? driftAfterLink || _configurationDrift ? ChangedConfigurationHash : FinalConfigurationHash
                     : InitialConfigurationHash,
                 endpointUri = "https://mcp.example.test/",
                 resourceUri = "https://mcp.example.test/resource",
@@ -357,23 +498,6 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
                 identityBindingReference = _linked ? identityBindingReference : null
             };
         }
-
-        private static ProjectAuthorizationContextResponse AuthorizationContext(bool grantWrite) =>
-            new(
-                ProjectAuthorizationContextContract.CurrentVersion,
-                Issuer,
-                ActorId,
-                TenantId,
-                1,
-                null,
-                null,
-                ImmutableArray.Create(new EffectiveProjectAuthorization(
-                    ProjectAuthorityResourceType.Project,
-                    ProjectId,
-                    ImmutableArray.Create(new ProjectAuthorizationPermissionGrant(
-                        grantWrite ? ProjectAuthorizationPermission.WriteProjects :
-                            ProjectAuthorizationPermission.ReadProjects,
-                        1)))));
 
         private static HttpResponseMessage Json<T>(HttpRequestMessage request, T body) =>
             new(HttpStatusCode.OK)

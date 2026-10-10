@@ -54,6 +54,7 @@ internal sealed class RemoteMcpOAuthManagementService(
     IdentityBrokerDbContext db,
     RemoteMcpOAuthOptions options,
     HttpClient projects,
+    HttpClient environment,
     TimeProvider time,
     ISecretVersionWriter? secretWriter = null)
 {
@@ -63,6 +64,8 @@ internal sealed class RemoteMcpOAuthManagementService(
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly Uri _projectsOwnerAddress =
         RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(options.ProjectsOwnerAddress));
+    private readonly Uri _environmentOwnerAddress =
+        RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(options.EnvironmentOwnerAddress));
 
     public async Task<RemoteMcpOAuthManagementStatus> ReadStatusAsync(
         RuntimeActorAuthorization actor,
@@ -204,7 +207,7 @@ internal sealed class RemoteMcpOAuthManagementService(
         try
         {
             using var bindingClient = new RemoteMcpOAuthIdentityBindingClient(
-                _projectsOwnerAddress, projects);
+                _environmentOwnerAddress, environment);
             receipt = await bindingClient.LinkAsync(
                 actor,
                 row.ProjectId,
@@ -303,6 +306,15 @@ internal sealed class RemoteMcpOAuthManagementService(
                 ExpiresAt = transition.Consent.ExpiresAt
             });
             await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+            await RequireWriteProjectsAsync(actor, issuer, actorId, row, cancellationToken)
+                .ConfigureAwait(false);
+            var finalConfiguration = await ReadCurrentConfigurationAsync(actor, row, cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw Unavailable("remote_mcp_environment_configuration_unavailable");
+            if (!MatchesReceipt(row, finalConfiguration, receipt))
+                throw RevisionConflict();
+
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
 
             return new RemoteMcpOAuthConsentPreparation(
@@ -409,7 +421,7 @@ internal sealed class RemoteMcpOAuthManagementService(
     {
         var path = $"/api/projects/{Uri.EscapeDataString(row.ProjectId)}/remote-mcp/connections/{row.ConnectionId:D}";
         var snapshot = await RuntimeOwnerHttpTransport.ReadOptionalAsync<EnvironmentSnapshot>(
-            projects, _projectsOwnerAddress, path, actor, cancellationToken).ConfigureAwait(false);
+            environment, _environmentOwnerAddress, path, actor, cancellationToken).ConfigureAwait(false);
         if (snapshot is null)
             return null;
         if (snapshot.Head is null || snapshot.Head.Connection is null || snapshot.Configuration is null ||
@@ -423,7 +435,7 @@ internal sealed class RemoteMcpOAuthManagementService(
             throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
 
         var configuration = await RuntimeOwnerHttpTransport.ReadOptionalAsync<EnvironmentConfiguration>(
-            projects, _projectsOwnerAddress,
+            environment, _environmentOwnerAddress,
             $"{path}/configurations/{snapshot.Head.CurrentConfigurationRevision}",
             actor, cancellationToken).ConfigureAwait(false);
         if (configuration is null)
@@ -473,7 +485,7 @@ internal sealed class RemoteMcpOAuthManagementService(
         CurrentConfiguration? configuration) =>
         configuration is not null &&
         IsKnownEnvironmentConnectionState(configuration.ConnectionState) &&
-        !configuration.ConnectionState.Equals("Removed", StringComparison.Ordinal) &&
+        !configuration.ConnectionState.Equals("removed", StringComparison.Ordinal) &&
         configuration.Revision == row.ConfigurationRevision &&
         configuration.Hash == row.EnvironmentConfigurationHash &&
         configuration.EndpointUri == row.EndpointUri &&
@@ -544,7 +556,7 @@ internal sealed class RemoteMcpOAuthManagementService(
         uri.AbsoluteUri == value;
 
     private static bool IsKnownEnvironmentConnectionState(string value) =>
-        value is "Draft" or "Enabled" or "Disabled" or "Removed";
+        value is "draft" or "enabled" or "disabled" or "removed";
 
     private static bool IsExpectedPreLinkOrReplayConfiguration(
         RemoteMcpOAuthConnectionRecord row,
@@ -558,7 +570,7 @@ internal sealed class RemoteMcpOAuthManagementService(
             configuration.Revision > row.ConfigurationRevision &&
             configuration.IdentityBindingReference == row.IdentityBindingReference;
         return IsKnownEnvironmentConnectionState(configuration.ConnectionState) &&
-            !configuration.ConnectionState.Equals("Removed", StringComparison.Ordinal) &&
+            !configuration.ConnectionState.Equals("removed", StringComparison.Ordinal) &&
             configuration.EndpointUri == row.EndpointUri &&
             configuration.ResourceUri == row.ResourceUri &&
             configuration.AuthenticationMode == OAuthAuthenticationMode &&
@@ -571,7 +583,7 @@ internal sealed class RemoteMcpOAuthManagementService(
         RemoteMcpOAuthConnectionRecord row,
         CurrentConfiguration configuration,
         RemoteMcpIdentityBindingReceipt receipt) =>
-        configuration.ConnectionState.Equals("Draft", StringComparison.Ordinal) &&
+        configuration.ConnectionState.Equals("draft", StringComparison.Ordinal) &&
         configuration.Revision == receipt.FinalConfigurationRevision &&
         configuration.Hash == receipt.FinalConfigurationSha256 &&
         configuration.IdentityBindingReference == receipt.IdentityBindingReference &&

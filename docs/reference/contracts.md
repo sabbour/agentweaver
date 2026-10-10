@@ -840,6 +840,8 @@ current event-delivery boundaries.
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTenantId` | Explicit Entra tenant ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityClientId` | Explicit Entra client ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTokenFilePath` | Absolute projected token-file path. |
+| `IdentityBroker:RemoteMcpOAuth:ProjectsOwnerAddress` | Fixed absolute HTTPS root for current Projects authorization and project status. |
+| `IdentityBroker:RemoteMcpOAuth:EnvironmentOwnerAddress` | Fixed absolute HTTPS root for Environment connection configuration reads and identity-binding updates. Both Remote MCP owner addresses are required when this section is configured. |
 | `IdentityBroker:GitHubRepoApp:OAuthClientId` / `OAuthClientSecret` | Registered GitHub OAuth client used only for the Repo App user connection; the secret is deployment configuration, not a database value. |
 | `IdentityBroker:GitHubRepoApp:CallbackUri` | Absolute HTTPS `/auth/github/repo-app/callback` URI with no query, user info, or fragment. |
 | `IdentityBroker:GitHubRepoApp:AppId` / `AppSlug` | Exact configured GitHub App identity and install URL slug. |

@@ -265,16 +265,22 @@ if (identityOptions.RemoteMcpOAuth is { } remoteMcpOAuthOptions)
 {
     Validator.ValidateObject(
         remoteMcpOAuthOptions, new ValidationContext(remoteMcpOAuthOptions), validateAllProperties: true);
-    if (!Uri.TryCreate(remoteMcpOAuthOptions.ProjectsOwnerAddress, UriKind.Absolute, out var projectsOwnerAddress))
-        throw new InvalidOperationException("Remote MCP management requires an absolute Projects owner address.");
+    if (!Uri.TryCreate(remoteMcpOAuthOptions.ProjectsOwnerAddress, UriKind.Absolute, out var projectsOwnerAddress) ||
+        !Uri.TryCreate(remoteMcpOAuthOptions.EnvironmentOwnerAddress, UriKind.Absolute, out var environmentOwnerAddress))
+        throw new InvalidOperationException(
+            "Remote MCP management requires absolute Projects and Environment owner addresses.");
     RuntimeOwnerHttpTransport.RequireOwnerAddress(projectsOwnerAddress);
+    RuntimeOwnerHttpTransport.RequireOwnerAddress(environmentOwnerAddress);
     builder.Services.AddSingleton(remoteMcpOAuthOptions);
     builder.Services.AddHttpClient("RemoteMcpOAuthProjects")
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    builder.Services.AddHttpClient("RemoteMcpOAuthEnvironment")
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
     builder.Services.AddScoped(provider => new RemoteMcpOAuthManagementService(
         provider.GetRequiredService<IdentityBrokerDbContext>(),
         remoteMcpOAuthOptions,
         provider.GetRequiredService<IHttpClientFactory>().CreateClient("RemoteMcpOAuthProjects"),
+        provider.GetRequiredService<IHttpClientFactory>().CreateClient("RemoteMcpOAuthEnvironment"),
         provider.GetRequiredService<TimeProvider>(),
         provider.GetRequiredService<ISecretVersionWriter>()));
 }

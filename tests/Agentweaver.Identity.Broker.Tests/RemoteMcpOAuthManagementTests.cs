@@ -19,7 +19,7 @@ public sealed class RemoteMcpOAuthManagementTests
             "streamableHttp20250618",
             row.IdentityBindingReference)
         {
-            ConnectionState = "Draft"
+            ConnectionState = "draft"
         };
 
         var status = RemoteMcpOAuthManagementService.ToStatus(row, configuration);
@@ -46,7 +46,7 @@ public sealed class RemoteMcpOAuthManagementTests
             "streamableHttp20250618",
             row.IdentityBindingReference)
         {
-            ConnectionState = "Draft"
+            ConnectionState = "draft"
         };
 
         Assert.False(RemoteMcpOAuthManagementService.IsCurrentConfiguration(
@@ -54,7 +54,7 @@ public sealed class RemoteMcpOAuthManagementTests
         Assert.False(RemoteMcpOAuthManagementService.IsCurrentConfiguration(
             row, current with { IdentityBindingReference = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }));
         Assert.False(RemoteMcpOAuthManagementService.IsCurrentConfiguration(
-            row, current with { ConnectionState = "Removed" }));
+            row, current with { ConnectionState = "removed" }));
         Assert.False(RemoteMcpOAuthManagementService.IsCurrentConfiguration(
             row, current with { ConnectionState = "unknown" }));
     }

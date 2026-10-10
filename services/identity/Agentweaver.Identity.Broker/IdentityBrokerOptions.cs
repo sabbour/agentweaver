@@ -45,6 +45,9 @@ public sealed class RemoteMcpOAuthOptions
 {
     [Required]
     public required string ProjectsOwnerAddress { get; set; }
+
+    [Required]
+    public required string EnvironmentOwnerAddress { get; set; }
 }
 
 public sealed class GitHubRepoAppOptions
