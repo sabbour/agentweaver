@@ -34,12 +34,11 @@ public sealed partial class ProjectsConfigService
         CancellationToken cancellationToken)
     {
         RequireCastingWrite(caller, projectId);
-        var normalized = ProjectConfigurationValidator.Validate(draft);
         return CreateCastingProposalAsync(
             caller,
             projectId,
             expectedConfigurationRevision,
-            normalized,
+            draft,
             transferProvenance: null,
             cancellationToken);
     }
@@ -80,14 +79,14 @@ public sealed partial class ProjectsConfigService
         ProjectAuthorizationContext caller,
         string projectId,
         long expectedConfigurationRevision,
-        ProjectConfiguration normalized,
+        ProjectConfiguration draft,
         ProjectCastingTransferProvenance? transferProvenance,
         CancellationToken cancellationToken)
         => CreateCastingProposalFromCurrentConfigurationAsync(
             caller,
             projectId,
             expectedConfigurationRevision,
-            _ => normalized,
+            _ => draft,
             cancellationToken,
             transferProvenance);
 
@@ -117,8 +116,10 @@ public sealed partial class ProjectsConfigService
                     token)
                 .ConfigureAwait(false)
                 ?? throw ProjectConfigException.NotFound();
-            var normalized = ProjectConfigurationValidator.Validate(
-                createDraft(Deserialize<ProjectConfiguration>(currentConfiguration.ConfigurationJson)));
+            var current = Deserialize<ProjectConfiguration>(currentConfiguration.ConfigurationJson);
+            var normalized = ProjectConfigurationValidator.ValidateTransition(
+                current,
+                createDraft(current));
             await EnsureCastingProjectNarrowingAsync(context, normalized, token).ConfigureAwait(false);
             return await AddCastingProposalAsync(
                 context, caller, project, normalized, transferProvenance, token).ConfigureAwait(false);
@@ -180,7 +181,6 @@ public sealed partial class ProjectsConfigService
         RequireCastingWrite(caller, projectId);
         ValidateCastingProposalId(proposalId);
         ValidateExpectedDraftRevision(expectedDraftRevision);
-        var normalized = ProjectConfigurationValidator.Validate(draft);
 
         return ExecuteCastingProposalTransactionAsync(async (context, token) =>
         {
@@ -192,6 +192,16 @@ public sealed partial class ProjectsConfigService
             RequirePendingCastingProposal(proposal, expectedDraftRevision);
             if (proposal.BaseConfigurationRevision != project.ConfigurationRevision)
                 throw CastingConfigurationConflict();
+            var currentRevision = await context.ProjectConfigurationRevisions.AsNoTracking()
+                .SingleOrDefaultAsync(
+                    record => record.ProjectId == project.ProjectId &&
+                        record.Revision == project.ConfigurationRevision,
+                    token)
+                .ConfigureAwait(false)
+                ?? throw ProjectConfigException.NotFound();
+            var normalized = ProjectConfigurationValidator.ValidateTransition(
+                Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson),
+                draft);
             await EnsureCastingProjectNarrowingAsync(context, normalized, token).ConfigureAwait(false);
 
             proposal.DraftJson = Serialize(normalized);
@@ -237,7 +247,15 @@ public sealed partial class ProjectsConfigService
             if (proposal.BaseConfigurationRevision != project.ConfigurationRevision)
                 throw CastingConfigurationConflict();
 
-            var configuration = ProjectConfigurationValidator.Validate(
+            var currentRevision = await context.ProjectConfigurationRevisions.AsNoTracking()
+                .SingleOrDefaultAsync(
+                    record => record.ProjectId == project.ProjectId &&
+                        record.Revision == project.ConfigurationRevision,
+                    token)
+                .ConfigureAwait(false)
+                ?? throw ProjectConfigException.NotFound();
+            var configuration = ProjectConfigurationValidator.ValidateTransition(
+                Deserialize<ProjectConfiguration>(currentRevision.ConfigurationJson),
                 Deserialize<ProjectConfiguration>(proposal.DraftJson));
             await EnsureCastingProjectNarrowingAsync(context, configuration, token).ConfigureAwait(false);
             var now = timeProvider.GetUtcNow();
