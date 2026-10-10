@@ -72,6 +72,7 @@ The authorization-context route requires `api.read`, accepts the existing option
 - A project model-selection reference takes precedence over the platform reference. If the explicit project reference is absent from the supplied immutable selection context, run selection fails closed; it does not fall back to the platform model.
 - Project configuration may name an optional `defaultWorkflowId`. Orchestrator accepts it only when it resolves to a server-registered workflow in the accepted selection's authorized catalog; project workflow references narrow that catalog when present. An unknown or unauthorized default falls back to the validated built-in workflow. The field is an identifier, not a workflow definition or an authority grant.
 - `SecretRef` values may be persisted as references. Credential values are not part of configuration or run-selection snapshots.
+- Optional `reviewedRemoteToolSnapshots` contains exact project-scoped snapshot references. Null omission preserves older configuration bytes. Duplicate references and references to another project are rejected. The accepted run retains these references, not mutable current project settings.
 - `ModelSelectionSettings.SourceMode` selects `hostedCopilot` or `byok` in the platform or project configuration. Runtime owner bindings retain that accepted mode. There is no personal model-provider precedence or fallback.
 - Hosted selection requires a stable `ConnectionId` and prohibits `CredentialReference`. Identity owns the current connection revision, GitHub user identity, freshness, revocation, and exact protected secret version. Rotation does not change the accepted selection bytes or hash. A different account, owner, or scope requires a new connection and selection.
 - BYOK selection requires an exact `CredentialReference` and prohibits `ConnectionId`. Orchestrator exposes that reference only when the confirmed WorkPlan model matches the accepted selection. The reference is not grant authority and contains no credential value.
@@ -111,6 +112,24 @@ recheck authorization before forwarding run-scoped data.
 See [Environment egress](./environment-egress.md) for how a privileged consumer
 uses both current authorization and the immutable selection without a separate
 membership or role cache.
+
+Orchestrator resolves each retained remote-tool reference against its immutable snapshot store.
+It checks the complete stored digest and exact reference before returning the accepted selection.
+It then refreshes Projects authority. A missing, changed, or foreign snapshot fails the read.
+The snapshot tables still require their explicit schema resource; normal migration startup does not create them.
+This read does not authorize credentials, network access, or a remote tool call.
+
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant P as Projects
+    participant S as Immutable snapshot store
+    O->>P: Check current selection permission
+    O->>P: Read accepted configuration references
+    O->>S: Resolve exact references and verify digests
+    S-->>O: Verified immutable snapshot data
+    O->>P: Refresh current selection permission
+```
 
 ## Validation
 

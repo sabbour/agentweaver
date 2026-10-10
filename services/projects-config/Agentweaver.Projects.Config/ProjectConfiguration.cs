@@ -86,6 +86,9 @@ public sealed record ProjectConfiguration
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SourceControlProjectSettings? SourceControl { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<ReviewedRemoteToolSnapshotReference>? ReviewedRemoteToolSnapshots { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -143,6 +146,17 @@ public static class ProjectConfigurationValidator
             configuration.EgressNarrowing is { IsDefault: true } ||
             configuration.RunLimits is null)
             throw Invalid("Configuration collections and run-limit settings must be present.");
+
+        if (configuration.ReviewedRemoteToolSnapshots is { } reviewedSnapshots)
+        {
+            if (reviewedSnapshots.IsDefault || reviewedSnapshots.Any(snapshot => snapshot is null))
+            throw Invalid("Reviewed remote tool snapshot references must be present and non-null.");
+            if (reviewedSnapshots
+            .Select(snapshot => (snapshot.ProjectId, snapshot.SnapshotId))
+            .Distinct()
+            .Count() != reviewedSnapshots.Length)
+            throw Invalid("Reviewed remote tool snapshot references must not contain duplicate project and snapshot IDs.");
+        }
 
         if (configuration.ModelSelection is { } model)
         {
