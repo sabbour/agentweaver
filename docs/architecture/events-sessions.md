@@ -98,6 +98,17 @@ BYOK retains native token measurements under `byok.tokens`, without Copilot unit
 Without an admitted Cost provider, BYOK accounting remains `Unpriced`.
 Unknown cost cannot satisfy a hard cost bound.
 
+The standalone `AzureCostProvider` accepts an explicitly configured, versioned
+rate card with model-scoped standard input/output token rates and a declared
+currency. It performs exact decimal arithmetic, does not fetch live prices, and
+does not quote BYOK work. Missing token counts, unsupported cache categories,
+unknown models, and changed bindings remain `Unpriced`. Events must also verify
+trusted Azure provider and deployment facts against the accepted runtime model
+pin before it can price a source receipt. That source contract is not yet admitted,
+so the current receipt consumer keeps BYOK usage `Unpriced`. Provisioned-throughput
+usage also remains `Unpriced` until trusted resource and time-window usage share
+is available.
+
 When `EventsAndSessions:RuntimeUsage:Enabled` is true, Events requires the same
 server-owned `AgentHost:ModelBindings` map and `AgentHost:ModelBindingsRevision` as AgentHost.
 It uses the SDK-independent shared resolver, not a separate Events model catalog.
