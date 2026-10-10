@@ -53,7 +53,27 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             "512Mi",
             60,
             100,
-            new(30, 30, 30, 30, 30, 120));
+            new(30, 30, 30, 30, 30, 120))
+        {
+            AcceptedBuildTestProfile = new(
+                "offline-build",
+                "registry.example/build@sha256:" + new string('a', 64),
+                "linux/amd64",
+                ["/usr/bin/make"],
+                "1",
+                "512Mi",
+                "1Gi",
+                60,
+                4096,
+                1024,
+                SandboxBuildTestLimits.OfflineEgressProfile,
+                "registry.example/collector@sha256:" + new string('b', 64),
+                "linux/amd64",
+                SandboxBuildTestLimits.OutputCollectorExecutable,
+                [SandboxBuildTestLimits.OutputCollectorAssembly],
+                SandboxBuildTestLimits.OutputCollectorMode,
+                SandboxBuildTestLimits.OutputCollectorContainerName)
+        };
         var storageOptions = new AzureFilesCsiOptions(
             1, "options-1", "agentweaver", "azure-files", 100, 60, 100);
         var ciliumOptions = new CiliumEgressProviderOptions(
@@ -256,7 +276,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             RequiredCapabilities = ImmutableHashSet.Create(
                                 StringComparer.Ordinal,
                                 SandboxCapabilities.VmIsolation,
-                                SandboxCapabilities.WorkspacePersistentVolumeClaim)
+                                SandboxCapabilities.WorkspacePersistentVolumeClaim,
+                                SandboxCapabilities.BuildTestCommandPod)
                         },
                         new ProviderRequirement
                         {
@@ -461,6 +482,78 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(SandboxLeaseState.Active, sandboxProvisionResult.State);
             Assert.False(sandboxProvisionResult.ReadyForDispatch);
         }
+        var buildTestPath = $"{sandboxPath}/build-test";
+        const string buildTestSessionId = "build-test-session";
+        var bindingPath = $"{buildTestPath}/binding-preparation" +
+            $"?sessionId={buildTestSessionId}&executionProfileReference=offline-build";
+        var providerCreatesBeforeBuildTest = sandboxKubernetesHandler.CreateCount;
+        SandboxBuildTestBindingPreparation preparedBuildTest;
+        using (var prepareBuildTest = await SendAsync(
+            environment.Client, HttpMethod.Get, bindingPath, owner.Token, [TenantId]))
+        {
+            await AssertStatusAsync(prepareBuildTest, HttpStatusCode.OK);
+            preparedBuildTest = await ReadJsonAsync<SandboxBuildTestBindingPreparation>(prepareBuildTest);
+            preparedBuildTest.Validate(buildTestSessionId, "offline-build");
+            var currentLease = await sandboxLeaseStore.GetCurrentAsync(fence, CancellationToken.None);
+            Assert.NotNull(currentLease);
+            Assert.Equal(fence, preparedBuildTest.ExpectedBinding.Fence);
+            Assert.Equal(currentLease.OperationId, preparedBuildTest.ExpectedBinding.SandboxLeaseOperationId);
+            Assert.Equal(currentLease.ProvisionedResource!.Resource, preparedBuildTest.ExpectedBinding.SandboxResource);
+            Assert.True(JsonNode.DeepEquals(
+                JsonSerializer.SerializeToNode(currentLease.ProvisionedResource.ProviderBinding),
+                JsonSerializer.SerializeToNode(preparedBuildTest.ExpectedBinding.SandboxProviderBinding)));
+            Assert.Equal(currentLease.ProviderFencingGeneration, preparedBuildTest.ExpectedBinding.ProviderFencingGeneration);
+            Assert.Equal(new WorkspaceVolumeReference(
+                project.ProjectId, volumeId, beforeDeniedWrites.ResourceGeneration),
+                preparedBuildTest.ExpectedBinding.WorkspaceVolume);
+            Assert.Equal(beforeDeniedWrites.DataGeneration, preparedBuildTest.ExpectedBinding.DataGeneration);
+            Assert.Equal(1, preparedBuildTest.ExpectedBinding.NetworkPolicyGeneration);
+            Assert.Equal(sandboxOptions.OptionsRevision, preparedBuildTest.ProviderOptionsRevision);
+            Assert.Equal(
+                SandboxBuildTestBindingPreparation.ComputeExecutionOptionsSha256(sandboxOptions.AcceptedBuildTestProfile!),
+                preparedBuildTest.ExecutionOptionsSha256);
+        }
+        foreach (var deniedActor in new[] { viewer.Token, foreignOwner.Token })
+        {
+            using var deniedBuildTest = await SendAsync(
+                environment.Client, HttpMethod.Get, bindingPath, deniedActor, [TenantId]);
+            await AssertForbiddenAsync(deniedBuildTest, "project_write_not_authorized");
+        }
+        using (var missingSelectionBuildTest = await SendAsync(
+            environment.Client, HttpMethod.Get, bindingPath, ownerWithoutSelection.Token, [TenantId]))
+            await AssertForbiddenAsync(missingSelectionBuildTest, "run_selection_not_authorized");
+        using (var mismatchedProfile = await SendAsync(
+            environment.Client, HttpMethod.Get,
+            $"{buildTestPath}/binding-preparation?sessionId={buildTestSessionId}&executionProfileReference=another-profile",
+            owner.Token, [TenantId]))
+        {
+            await AssertStatusAsync(mismatchedProfile, HttpStatusCode.Conflict);
+            using var error = JsonDocument.Parse(await mismatchedProfile.Content.ReadAsStringAsync());
+            Assert.Equal("buildtest_profile_mismatch", error.RootElement.GetProperty("code").GetString());
+        }
+        var unknownBuildTestOperation = Guid.NewGuid();
+        using (var unknownBuildTest = await SendAsync(
+            environment.Client, HttpMethod.Get,
+            $"{buildTestPath}/commands/{unknownBuildTestOperation}", owner.Token, [TenantId]))
+            await AssertStatusAsync(unknownBuildTest, HttpStatusCode.NotFound);
+        using (var unresolvedCommand = await SendJsonAsync(
+            environment.Client, HttpMethod.Post, $"{buildTestPath}/commands", owner.Token,
+            new SandboxBuildTestApiRequest(
+                new SandboxBuildTestCheckpointReference(
+                    project.ProjectId, RunId, buildTestSessionId, "unresolved-checkpoint",
+                    "unresolved-plan", "build-test", 1, 1, 1, new string('A', 64)),
+                preparedBuildTest.ExpectedBinding)))
+        {
+            await AssertStatusAsync(unresolvedCommand, HttpStatusCode.ServiceUnavailable);
+            using var error = JsonDocument.Parse(await unresolvedCommand.Content.ReadAsStringAsync());
+            Assert.Equal("runtime_owner_context_unavailable", error.RootElement.GetProperty("code").GetString());
+        }
+        Assert.Equal(providerCreatesBeforeBuildTest, sandboxKubernetesHandler.CreateCount);
+        await using (var buildTestConnection = await environment.OpenConnectionAsync())
+        await using (var buildTestRows = new NpgsqlCommand(
+            "SELECT COUNT(*) FROM environment.owner_effects WHERE effect_kind = 'BuildTestCommand'",
+            buildTestConnection))
+            Assert.Equal(0L, await buildTestRows.ExecuteScalarAsync());
         var selectionReadsBeforePlacementProjection = selectionObserver.SelectionReadCount;
         EnvironmentSandboxPlacementProjectionV1 publicPlacementProjection;
         using (var sandboxPlacement = await SendAsync(
@@ -1834,13 +1927,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             services.AddSingleton(TimeProvider.System);
                             services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
                             services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
+                            services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
                             services.AddScoped<WorkspaceVolumeService>();
                             services.AddScoped<EnvironmentEgressManager>();
                             services.AddScoped<CiliumEgressPolicyAdapter>();
                             services.AddScoped<EnvironmentSandboxManager>();
+                            services.AddScoped<EnvironmentSandboxBuildTestCommandManager>();
                             services.AddScoped<EnvironmentWorkspaceVolumeManager>();
                             services.AddSingleton<IWorkspaceVolumeProvider>(provider);
                             services.AddSingleton<ISandboxProvider>(sandboxProvider);
+                            services.AddScoped<ISandboxBuildTestCommandProvider>(services =>
+                                (ISandboxBuildTestCommandProvider)services.GetRequiredService<ISandboxProvider>());
                             services.AddSingleton(sandboxOptions);
                             services.AddSingleton(sandboxKubernetesClient);
                             services.AddSingleton(ciliumOptions);
@@ -1848,6 +1945,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             services.AddHttpClient<IProjectsConfigClient, ProjectsConfigHttpClient>(client =>
                                 client.BaseAddress = new Uri("https://projects.test/"))
                                 .ConfigurePrimaryHttpMessageHandler(projectsHandlerFactory);
+                            services.AddHttpContextAccessor();
+                            services.AddHttpClient<ISandboxBuildTestAcceptedCommandVerifier,
+                                EnvironmentSandboxBuildTestAcceptedCommandVerifier>();
                             services.ConfigureHttpJsonOptions(options =>
                             {
                                 options.SerializerOptions.UnmappedMemberHandling =

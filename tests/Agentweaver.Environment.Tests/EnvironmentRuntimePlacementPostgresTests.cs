@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
@@ -248,27 +249,54 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         var adapter = new CiliumEgressPolicyAdapter(network, networkOptions);
         var selector = EnvironmentEgressSelector.Create(owner.EnvironmentId, owner.TenantId, owner.ProjectId,
             owner.RunId, networkOptions.Namespace);
+        const long policyGeneration = 7;
         var effect = await fixture.CreateStore().ReserveNetworkEffectAsync(lifecycle.Fence,
-            $"{selector.Namespace}/{selector.PolicyName}", 1, 0, EnvironmentNetworkEffectKind.Apply,
+            $"{selector.Namespace}/{selector.PolicyName}", policyGeneration, 0, EnvironmentNetworkEffectKind.Apply,
             "network-ready", timeout.Token);
         var compilation = EgressIntentCompiler.Compile(selection);
         Assert.True(compilation.IsSuccess, compilation.Failure?.Message);
-        await adapter.ApplyAsync(selector, compilation.Intent!, 1, 0, timeout.Token);
+        await adapter.ApplyAsync(selector, compilation.Intent!, policyGeneration, 0, timeout.Token);
         await fixture.CreateStore().CompleteNetworkEffectAsync(effect.OperationId, lifecycle.Fence, true, true, timeout.Token);
         var sandboxOptions = new AgentSandboxOptions(AgentSandboxOptions.CurrentOptionsSchemaVersion,
             "sandbox-options", "agentweaver", "azure-files-csi", "runtime-test@sha256:" + new string('a', 64),
             "linux/amd64", 123456, "kata-test", "kata-test", "100m", "128Mi", 20, 100,
             new(30, 30, 30, 30, 30, 120));
         var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        json.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
         var provision = new SandboxProvisionApiRequest("workspace", 1, 0,
-            "/workspace/project", false, 1, "runtime-ready");
+            "/workspace/agentweaver/project", false, policyGeneration, "runtime-ready");
         var intent = new SandboxLeaseProvisionIntent("agent-sandbox", "1.0.0",
             sandboxOptions.OptionsSchemaVersion, sandboxOptions.OptionsRevision,
             JsonSerializer.SerializeToElement(sandboxOptions, json), JsonSerializer.SerializeToElement(selection, json),
             JsonSerializer.SerializeToElement(provision, json));
         var reserved = await store.ReserveProvisionAsync(lifecycle.Fence, "runtime-ready", intent, timeout.Token);
+        var resource = Resource(reserved.Lease);
+        var workspace = new SandboxWorkspaceAttachment(
+            new(owner.ProjectId, owner.EnvironmentId, owner.RunId,
+                new(owner.ProjectId, provision.VolumeId, provision.VolumeResourceGeneration),
+                resource.Resource,
+                new(ProviderSeam.Storage, sandboxOptions.WorkspaceStorageProviderId, "workspace-claim",
+                    provision.VolumeResourceGeneration),
+                lifecycle.Fence, provision.DataGeneration, provision.MountPath, provision.ReadOnly,
+                WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim),
+            JsonSerializer.SerializeToElement(new AgentSandboxPersistentVolumeClaimAttachment(
+                1, sandboxOptions.WorkspaceStorageProviderId, sandboxOptions.Namespace, "workspace-claim",
+                "workspace-claim-uid"), json)).Validate();
+        var recoveryIntent = JsonSerializer.SerializeToElement(new
+        {
+            contractVersion = 1,
+            request = provision,
+            workspace,
+            egressSelectorLabels = selector.MatchLabels,
+            workspaceAttachmentTransitionRevision = 2
+        }, json);
+        await store.SaveProviderRequestAsync(
+            reserved.Lease.OperationId, lifecycle.Fence, recoveryIntent, timeout.Token);
         var lease = await store.CompleteProvisionAsync(reserved.Lease.OperationId, lifecycle.Fence,
-            Resource(reserved.Lease), true, timeout.Token);
+            resource, true, timeout.Token);
+        var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
+        var retained = await restarted.GetCurrentAsync(lifecycle.Fence, timeout.Token);
+        Assert.True(JsonElement.DeepEquals(recoveryIntent, retained!.ProvisionIntent.ProviderRequest));
         var observed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var provider = new ReadinessSandboxProvider(async (request, token) =>
@@ -282,11 +310,16 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
                  new(SandboxStartupPhase.Started, 1, request.LeaseCreatedAt)]);
         });
         var egress = new EnvironmentEgressManager(projects, adapter, networkOptions, fixture.CreateStore());
-        var manager = new EnvironmentSandboxManager(projects, fixture.CreateStore(), store, provider,
+        var manager = new EnvironmentSandboxManager(projects, fixture.CreateStore(), restarted, provider,
             sandboxOptions, new KubernetesAgentSandboxClient(_kubernetes), networkOptions, egress);
         var read = manager.GetCurrentPlacementCoreAsync(caller, owner.ProjectId, owner.RunId, owner.EnvironmentId,
             runBoundRead: true, (projection, _) => Task.FromResult(projection), timeout.Token, includeRuntimeReadiness: true);
-        await observed.Task.WaitAsync(timeout.Token);
+        await Task.WhenAny(observed.Task, read).WaitAsync(timeout.Token);
+        if (!observed.Task.IsCompleted)
+        {
+            await read;
+            throw new InvalidOperationException("Readiness completed without observing its exact Sandbox resource.");
+        }
         var application = "readiness-retirement-" + Guid.NewGuid().ToString("N");
         await using var retirementDataSource = fixture.CreateDataSource(application);
         var retirement = new EnvironmentSandboxLeaseStore(retirementDataSource, TimeProvider.System).BeginRetirementAsync(
@@ -315,9 +348,11 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
             var projection = await read;
             Assert.NotNull(projection?.RuntimeReadiness);
             Assert.Equal(lease.LeaseRevision, projection.LeaseRevision);
+            Assert.Equal(resource.Resource, projection.Resource);
+            Assert.Equal(resource.Resource, projection.RuntimeReadiness.Observation.Resource);
             Assert.Equal(lease.CreatedAt, projection.RuntimeReadiness.LeaseCreatedAt);
-            Assert.Equal(1, projection.RuntimeReadiness.Observation.VerifiedNetworkGeneration);
-            Assert.Equal("/workspace/project", projection.RuntimeReadiness.WorkspaceMountPath);
+            Assert.Equal(policyGeneration, projection.RuntimeReadiness.Observation.VerifiedNetworkGeneration);
+            Assert.Equal(provision.MountPath, projection.RuntimeReadiness.WorkspaceMountPath);
             Assert.Equal(sandboxOptions.StartupBudgets.ToContract(), projection.RuntimeReadiness.StartupBudgets);
             Assert.Equal(0, projects.SelectionReads);
             Assert.Equal(1, network.Creates);

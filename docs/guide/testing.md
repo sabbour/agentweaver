@@ -18,7 +18,7 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 | PostgreSQL tests | Outbox and inbox transactions, duplicates, concurrency, leases, relay outcomes, and recovery across restart. | A broker, relay daemon, exactly-once delivery, or cross-service transaction. |
 | Events & Sessions tests | Provider-neutral contracts and the P0 Identity Broker principal profile; explicit runtime/migration Entra configuration with no identity fallback; PostgreSQL token refresh and password rejection; project/run-scoped IDs; append, deduplication/conflicts, PolicyEvaluation redaction and provenance checks, receipt-reference admission/no-store acknowledgments/transaction rollback, legacy capability pins, fork prefix lineage and authenticated idempotent retries, owner-admission revocation, migration, and rollback. Addressed-message tests cover idempotency, ordering, leases/fencing, transactional outbox, acknowledgments, expiry, and undeliverable state. PostgreSQL coverage uses disposable containers. | Workload-identity federation, production Entra grants, live cloud migration, AgentHost integration, protected-effect call-site enforcement, or production-scale replica behavior. |
 | Environment egress tests | Purpose-aware FQDN/CIDR intersection, Projects authorization freshness, Cilium options and policy rendering, resource-version/generation fencing, object readback, and provider pinning with fake Kubernetes resources. | Sandbox claim/template labels, Kubernetes RBAC/workload identity, a deployed Cilium datapath, actual network reachability, or public HTTPS/Remote MCP L7 mediation. |
-| Environment Sandbox tests | See the [Sandbox testing guide](./environment-sandbox-testing.md) for owner-fenced lease, selected-provider, readiness, and recovery coverage. BuildTest source tests check complete checkpoint/profile binding, required-output failure, distinct collector terminal provenance, timeout/cancellation classification, server capability configuration, and migration/model metadata consistency without a database connection. | Live AKS or RuntimeClass behavior, Cilium datapath enforcement, deployed AgentHost configuration, durable BuildTest PostgreSQL execution, Core run pins, or deployed service configuration. |
+| Environment Sandbox tests | See the [Sandbox testing guide](./environment-sandbox-testing.md) for owner-fenced lease, selected-provider, readiness, and recovery coverage. BuildTest source tests check complete checkpoint/profile binding, required-output failure, distinct collector terminal provenance, timeout/cancellation classification, server capability configuration, and migration/model metadata consistency without a database connection. BuildTest PostgreSQL tests create actual owner, attached Workspace, and active Sandbox records. They cover concurrent reservation, connection-pool restart replay, immutable intent, stale-binding no-effect rejection, policy-attempt persistence, timestamp precision, and terminal-evidence preservation. | Live AKS or RuntimeClass behavior, Cilium datapath enforcement, deployed AgentHost configuration, BuildTest command-Pod execution, Core run pins, or deployed service configuration. |
 | Knowledge tests | Knowledge-owned PostgreSQL migrations and least-privilege runtime grants; project/agent isolation; immutable revision history, CAS conflicts, idempotent retries, explicit proposal decisions and outbox persistence; context filtering/restart; TestServer checks for fresh Projects authority and original-token forwarding; Cosmos adapter option/provider tests with a fake document store, including negotiation rejection for an expiring TTL or missing search index, batch timeout/size/throttle failures, immutable run-pin checks, and no fallback when Cosmos is unavailable; Redis adapter tests with a controlled command-client fake for TLS/options and provider selection, AOF/eviction/topology rejection, persistent-key and hash-field checks, malformed typed-payload rejection during negotiation and scans, single-write batch prevalidation, CAS, lost-response idempotency, server-time lease fencing, and backend-loss behavior; opt-in native Redis tests use the production client/store for real-Lua batch atomicity, concurrent CAS, and promotion/receipt/idempotency plus server-time lease fencing across an AOF-backed restart of one digest-pinned, test-owned instance; deterministic identical-retry races for update, reject, and promote; current scoped receipt reads, legacy three-field N-1 delivery/replay, partial-scope rejection, and a missing-pin lookup that verifies no binding is created. Identity Broker integration tests use broker-issued minimal-profile tokens, live Core membership/role lookup, the Knowledge API, and PostgreSQL to verify the private-content `WriteProjects` boundary. PostgreSQL uses disposable containers. | A deployed Knowledge service, production workload identity, live Cosmos or Redis permissions/durability/availability, or delivery from either Memory adapter to a deployed Events & Sessions journal. |
 | Key Vault tests | Azure SDK authentication and secret requests through in-memory HTTP transports. Workload identity tests use generated token files and fake OAuth and Key Vault endpoints. | Live token exchange, Key Vault RBAC, or an Azure deployment. |
 | Blob tests | Azure SDK requests, streamed data, create-only writes, and missing-object results through a fake HTTP transport. | Live credentials, permissions, durability, or cloud access. |
@@ -248,6 +248,56 @@ Live Xunit output identifies current native requests and cleanup if the case rea
 The focused Copilot lifecycle cases cover cookie/subject/state rejection before exchange, callback replay,
 concurrent refresh, transient recovery, permanent rejection, uncertain rotation, account change, and current Core revocation.
 These cases use disposable PostgreSQL and controlled external transports, not live OAuth or paid model calls.
+
+## P1 retained-surface harness candidates
+
+The [API adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/api-harness/README.md), [UI adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/ui-harness/README.md),
+and [MCP adapter](https://github.com/sabbour/agentweaver/blob/v1/scripts/mcp-harness/README.md) selectively reuse released 0.x patterns.
+They use current v1 contracts, not retired monolith routes or an inherited P0 acceptance result.
+
+```powershell
+npm run test:harness
+npm run test:harness:api
+npm run test:harness:ui
+npm run test:harness:mcp
+```
+
+The combined command runs controlled adapter checks.
+API tests use actual loopback HTTP with controlled contracts.
+MCP tests use the pinned SDK with an actual loopback JSON-RPC server.
+UI tests use a controlled injected-page contract, not a browser.
+These checks do not prove a real cross-surface journey, native model execution, or deployment.
+
+For an approved journey, discover the live API and MCP menus first.
+Use `requireJourneyCapabilities` from `scripts/harness-shared/journey-capabilities.mjs` before dispatch.
+It checks only the selected gate action, message, or journal requirements.
+Missing required operations block the journey; they do not produce a skipped success.
+Helper and menu presence are not proof of current DOM controls or owner authority.
+Journal replay requires API SSE support, but MCP deliberately does not advertise an SSE tool.
+
+The UI adapter requires an already authorized page and exact Broker identity metadata.
+It neither starts a browser nor changes its profile or stored credentials.
+Gate actions require current owner snapshots and exact request, actor, fence, state version, and answer contracts.
+Decision receipts must match that fence and the next state version, including owner denials.
+After awaited work, the adapter rechecks the exact page scope before final action clicks and replay proof.
+Actual denials remain denials.
+Message acceptance and local browser echoes cannot prove delivery or gate completion.
+
+The retained journal exposes ordered event DTOs and opaque object references.
+The public Gateway has no object-content read route.
+The UI adapter checks replay pages against the current DOM, without inventing transcript text.
+
+![Retained journal and owner evidence boundaries](/diagrams/flagship/v1-sessions-journal.png)
+
+The retained surfaces observe owner evidence; they do not create authority from browser output.
+<p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> | <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
+
+Use the shared redacted JSONL writer and the [P1 judge brief](https://github.com/sabbour/agentweaver/blob/v1/scripts/harness-judge/README.md).
+Record exact source, target, scenario, surface, and owner evidence references.
+Do not persist transient raw bodies or credential values.
+An expected source SHA does not observe a deployment.
+Client disposal does not clean up a project, run, session, or Environment.
+Product cleanup requires current authority, exact test-owned identities, and verified owner receipts.
 
 ## Validate the documentation site
 
