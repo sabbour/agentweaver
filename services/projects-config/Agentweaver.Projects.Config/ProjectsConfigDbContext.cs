@@ -15,6 +15,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     public DbSet<PlatformRuntimeHeadRecord> PlatformRuntimeHeads => Set<PlatformRuntimeHeadRecord>();
     public DbSet<PlatformRuntimeRevisionRecord> PlatformRuntimeRevisions => Set<PlatformRuntimeRevisionRecord>();
     public DbSet<ProjectRunSelectionRecord> RunSelections => Set<ProjectRunSelectionRecord>();
+    public DbSet<ProjectMarketplaceSourceRecord> MarketplaceSources => Set<ProjectMarketplaceSourceRecord>();
     public DbSet<ProjectCastingProposalRecord> CastingProposals => Set<ProjectCastingProposalRecord>();
     public DbSet<ProjectSkillContentRevisionRecord> SkillContentRevisions => Set<ProjectSkillContentRevisionRecord>();
     public DbSet<ProjectSkillImportIdempotencyRecord> SkillImportIdempotency =>
@@ -215,6 +216,43 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasForeignKey(selection => selection.ProjectId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(selection => new { selection.ProjectId, selection.RunId }).IsUnique();
+        });
+
+        modelBuilder.Entity<ProjectMarketplaceSourceRecord>(entity =>
+        {
+            entity.ToTable("marketplace_sources", table =>
+            {
+                table.HasCheckConstraint("ck_marketplace_sources_revision", "revision > 0");
+                table.HasCheckConstraint(
+                    "ck_marketplace_sources_state",
+                    "state IN ('Active', 'Removed')");
+            });
+            entity.HasKey(source => source.SourceId);
+            entity.Property(source => source.SourceId).HasColumnName("source_id");
+            entity.Property(source => source.ProjectId).HasColumnName("project_id").HasMaxLength(32).IsRequired();
+            entity.Property(source => source.Name).HasColumnName("name").HasMaxLength(64).IsRequired();
+            entity.Property(source => source.NormalizedName)
+                .HasColumnName("normalized_name").HasMaxLength(64).IsRequired();
+            entity.Property(source => source.Repository).HasColumnName("repository").HasMaxLength(201).IsRequired();
+            entity.Property(source => source.RequestedRef).HasColumnName("requested_ref").HasMaxLength(255).IsRequired();
+            entity.Property(source => source.Subpath).HasColumnName("subpath").HasMaxLength(1024);
+            entity.Property(source => source.Revision).HasColumnName("revision").IsConcurrencyToken();
+            entity.Property(source => source.State).HasColumnName("state").HasConversion<string>().HasMaxLength(16);
+            entity.Property(source => source.CreatedByActorId)
+                .HasColumnName("created_by_actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(source => source.UpdatedByActorId)
+                .HasColumnName("updated_by_actor_id").HasMaxLength(256).IsRequired();
+            entity.Property(source => source.CreatedAt).HasColumnName("created_at");
+            entity.Property(source => source.UpdatedAt).HasColumnName("updated_at");
+            entity.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(source => source.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(source => new { source.ProjectId, source.NormalizedName })
+                .IsUnique()
+                .HasDatabaseName("ux_marketplace_sources_project_name_active")
+                .HasFilter("\"state\" = 'Active'");
+            entity.HasIndex(source => new { source.ProjectId, source.State });
         });
 
         modelBuilder.Entity<ProjectCastingProposalRecord>(entity =>
