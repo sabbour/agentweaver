@@ -195,6 +195,100 @@ public static class SkillMarketplaceEndpoints
             }
         }).WithName("BrowseProjectMarketplaceSource");
 
+        sources.MapPost("/{sourceId}/preview", async (
+            string projectId,
+            string sourceId,
+            MarketplaceSkillPreviewRequest request,
+            HttpContext context,
+            ProjectMarketplaceSkillContentService service,
+            ProjectsConfigService projects,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                RejectBodyQuery(context);
+                var parsedSourceId = ParseSourceId(sourceId);
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var preview = await service.PreviewAsync(
+                    caller,
+                    projectId,
+                    parsedSourceId,
+                    request,
+                    CreateAuthorityVerifier(
+                        context, authorizationOwner, projects, caller, projectId, requireWrite: false),
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(preview);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (MarketplaceSourceException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (SkillContentServiceException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (SkillContentValidationException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("PreviewProjectMarketplaceSkill");
+
+        sources.MapPost("/{sourceId}/import", async (
+            string projectId,
+            string sourceId,
+            MarketplaceSkillImportRequest request,
+            HttpContext context,
+            ProjectMarketplaceSkillContentService service,
+            ProjectsConfigService projects,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            try
+            {
+                RejectBodyQuery(context);
+                var parsedSourceId = ParseSourceId(sourceId);
+                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                    .ConfigureAwait(false);
+                var receipt = await service.ImportAsync(
+                    caller,
+                    projectId,
+                    parsedSourceId,
+                    request,
+                    CreateAuthorityVerifier(
+                        context, authorizationOwner, projects, caller, projectId, requireWrite: true),
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Ok(receipt);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (MarketplaceSourceException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (SkillContentServiceException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (SkillContentValidationException exception)
+            {
+                return ToProblem(exception);
+            }
+            catch (SkillContentObjectStoreException exception)
+            {
+                return ToProblem(exception);
+            }
+        }).WithName("ImportProjectMarketplaceSkill");
+
         return app;
     }
 
@@ -221,6 +315,30 @@ public static class SkillMarketplaceEndpoints
         original.MembershipId == current.MembershipId &&
         original.MembershipRevision == current.MembershipRevision;
 
+    private static Func<CancellationToken, Task> CreateAuthorityVerifier(
+        HttpContext context,
+        ProjectAuthorizationOwner authorizationOwner,
+        ProjectsConfigService projects,
+        ProjectAuthorizationContext caller,
+        string projectId,
+        bool requireWrite) =>
+        async cancellationToken =>
+        {
+            var refreshed = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                .ConfigureAwait(false);
+            if (!SameActor(caller, refreshed))
+                throw MarketplaceSourceException.Forbidden();
+            _ = await projects.GetMarketplaceProjectAsync(
+                    refreshed, projectId, requireWrite, cancellationToken)
+                .ConfigureAwait(false);
+        };
+
+    private static void RejectBodyQuery(HttpContext context)
+    {
+        if (context.Request.Query.Count != 0)
+            throw MarketplaceSourceException.InvalidRequest("Query parameters are not supported for this operation.");
+    }
+
     private static IResult ToProblem(ProjectConfigException exception) =>
         Results.Problem(
             title: exception.Code,
@@ -234,4 +352,33 @@ public static class SkillMarketplaceEndpoints
             detail: exception.Message,
             statusCode: exception.StatusCode,
             extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+
+    private static IResult ToProblem(SkillContentServiceException exception) =>
+        Results.Problem(
+            title: exception.Code,
+            detail: exception.Message,
+            statusCode: exception.StatusCode,
+            extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+
+    private static IResult ToProblem(SkillContentValidationException exception) =>
+        Results.Problem(
+            title: SkillContentValidationException.ErrorCode,
+            detail: exception.Message,
+            statusCode: StatusCodes.Status400BadRequest,
+            extensions: new Dictionary<string, object?>
+            {
+                ["code"] = SkillContentValidationException.ErrorCode,
+            });
+
+    private static IResult ToProblem(SkillContentObjectStoreException exception)
+    {
+        var status = exception.Code == SkillContentObjectStoreException.UnavailableCode
+            ? StatusCodes.Status503ServiceUnavailable
+            : StatusCodes.Status500InternalServerError;
+        return Results.Problem(
+            title: exception.Code,
+            detail: exception.Message,
+            statusCode: status,
+            extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
+    }
 }
