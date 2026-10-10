@@ -108,12 +108,145 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
             false, null, true, failureState);
 
+    [Fact]
+    public Task AcceptedSkillImportAssignmentFlowsThroughRuntimeRegistrationAndNativeSdk() =>
+        RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            false, null, false, OwnerRunFailureState.Indeterminate, acceptedSkillJourney: true);
+
+    private async Task<(SkillRuntimeContentV1 Skill, VersionedProjectConfiguration Configuration)>
+        ImportAndAssignSkillAsync(
+            HttpClient writer,
+            string token,
+            string projectId,
+            long expectedProjectConfigurationRevision)
+    {
+        var skill = await ImportSkillRevisionAsync(
+            writer,
+            token,
+            projectId,
+            null,
+            null,
+            "Follow only the approved revision-one instructions.",
+            "# Approved reference bytes.\n");
+        var configuration = await UpdateSkillAssignmentAsync(
+            writer, token, projectId, expectedProjectConfigurationRevision, skill);
+        return (skill, configuration);
+    }
+
+    private async Task<SkillRuntimeContentV1> ImportSkillRevisionAsync(
+        HttpClient writer,
+        string token,
+        string projectId,
+        string? skillId,
+        long? expectedRevision,
+        string instructions,
+        string referenceContent)
+    {
+        const string name = "pinned-skill";
+        const string description = "A revision-pinned native runtime skill.";
+        const string resourcePath = "docs/reference.md";
+        var markdown = Encoding.UTF8.GetBytes($$"""
+            ---
+            name: {{name}}
+            description: {{description}}
+            ---
+            {{instructions}}
+            """);
+        var resourceBytes = Encoding.UTF8.GetBytes(referenceContent);
+        var candidate = new SkillContentCandidateRequest
+        {
+            SkillMarkdown = markdown,
+            Resources =
+            [
+                new SkillContentResourceRequest
+                {
+                    RelativePath = resourcePath,
+                    Content = resourceBytes
+                }
+            ]
+        };
+
+        using var previewResponse = await SendJsonAsync(
+            writer, HttpMethod.Post, "/api/skills/preview", token,
+            new PreviewSkillContentRequest { Candidate = candidate });
+        await AssertStatusAsync(previewResponse, HttpStatusCode.OK);
+        var preview = await ReadJsonAsync<SkillContentPreview>(previewResponse);
+        var resource = new SkillRuntimeContentResourceV1(
+            resourcePath,
+            ImmutableArray.CreateRange(resourceBytes),
+            Convert.ToHexStringLower(SHA256.HashData(resourceBytes)));
+        ImmutableArray<SkillRuntimeContentResourceV1> resources = [resource];
+        var contentDigest = SkillRuntimeContentContract.ComputeContentDigest(
+            name, description, instructions, resources);
+        Assert.Equal(contentDigest, preview.ContentDigest);
+
+        var import = new ImportSkillContentRequest
+        {
+            IdempotencyKey = "native-skill-" + Guid.NewGuid().ToString("N"),
+            ExpectedContentDigest = preview.ContentDigest,
+            SkillId = skillId,
+            ExpectedRevision = expectedRevision,
+            Candidate = candidate
+        };
+        using var importResponse = await SendJsonAsync(
+            writer, HttpMethod.Post, $"/api/projects/{projectId}/skills/import", token, import);
+        await AssertStatusAsync(importResponse, HttpStatusCode.OK);
+        var receipt = await ReadJsonAsync<SkillContentImportReceipt>(importResponse);
+        Assert.Equal(contentDigest, receipt.ContentDigest);
+        if (skillId is not null)
+            Assert.Equal(skillId, receipt.SkillId);
+        if (expectedRevision is not null)
+            Assert.Equal(expectedRevision + 1, receipt.Revision);
+        if (expectedRevision is null)
+        {
+            using var retryResponse = await SendJsonAsync(
+                writer, HttpMethod.Post, $"/api/projects/{projectId}/skills/import", token, import);
+            await AssertStatusAsync(retryResponse, HttpStatusCode.OK);
+            Assert.Equal(receipt, await ReadJsonAsync<SkillContentImportReceipt>(retryResponse));
+        }
+
+        return new(
+            receipt.SkillId,
+            receipt.Revision,
+            receipt.Name,
+            receipt.Description,
+            instructions,
+            receipt.ContentDigest,
+            resources);
+    }
+
+    private async Task<VersionedProjectConfiguration> UpdateSkillAssignmentAsync(
+        HttpClient writer,
+        string token,
+        string projectId,
+        long expectedProjectConfigurationRevision,
+        SkillRuntimeContentV1 skill)
+    {
+        using var response = await SendJsonAsync(
+            writer,
+            HttpMethod.Put,
+            $"/api/projects/{projectId}/skills/{skill.SkillId}/assignment",
+            token,
+            new UpdateSkillAssignmentRequest
+            {
+                ExpectedProjectConfigurationRevision = expectedProjectConfigurationRevision,
+                Revision = skill.Revision,
+                ContentDigest = skill.ContentDigest,
+                Enabled = true,
+                Order = 0,
+                AgentIds = ["test-agent"]
+            });
+        await AssertStatusAsync(response, HttpStatusCode.OK);
+        return await ReadJsonAsync<VersionedProjectConfiguration>(response);
+    }
+
     private async Task RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
         bool revokeSourceBeforeSdk,
         string? sourceLoss,
         bool stopAfterProducedRunCapture,
         OwnerRunFailureState captureFailureState,
-        bool azureByok = false)
+        bool azureByok = false,
+        bool acceptedSkillJourney = false)
     {
         var sourceControlSecretBackend = new RecordingSecretRedemption();
         await RestartBrokerForSourceControlAsync(sourceControlSecretBackend);
@@ -122,13 +255,24 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             _signingCertificate.Password,
             X509KeyStorageFlags.EphemeralKeySet);
         var signingKey = new X509SecurityKey(signingCertificate);
+        var skillContentObjects = acceptedSkillJourney ? new InMemoryObjectStore() : null;
         await using var projects = await ProjectsConfigResourceServer.StartAsync(
             _connectionString,
             signingKey,
-            providerCatalog: CreateSourceControlProviderCatalog());
+            providerCatalog: CreateSourceControlProviderCatalog(),
+            skillContentObjects: skillContentObjects);
+        await using var skillWriter = acceptedSkillJourney
+            ? await ProjectsConfigResourceServer.StartAsync(
+                _connectionString,
+                signingKey,
+                providerCatalog: CreateSourceControlProviderCatalog(),
+                skillContentObjects: skillContentObjects,
+                usePublicWriterFixture: true)
+            : null;
 
         var platformAdminToken = await IssueTokenAsync(
-            "projects.admin", [TenantId], "coordination-admin", null, null, ["platform_admin"]);
+            acceptedSkillJourney ? "api.read projects.admin" : "projects.admin",
+            [TenantId], "coordination-admin", null, null, ["platform_admin"]);
         var platformAdminSubject = SingleClaim(
             new JwtSecurityTokenHandler().ReadJwtToken(platformAdminToken).Claims, "sub");
         var platformAdminMembership = await AddMembershipAsync(
@@ -220,12 +364,20 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ExpectedRevision = project.ConfigurationRevision,
                 Configuration = new ProjectConfiguration
                 {
-                    AgentCharters =
-                    [
-                        new ProjectAgentCharter(
-                            "test-agent", "Test agent", "implementer", "Implements the accepted work item.")
-                    ],
-                    Casting = [new ProjectAgentCast("test-agent", "implementer", 0)],
+                    AgentCharters = acceptedSkillJourney
+                        ? ImmutableArray.Create(
+                            new ProjectAgentCharter(
+                                "test-agent", "Test agent", "implementer", "Implements the accepted work item."),
+                            new ProjectAgentCharter(
+                                "unassigned-agent", "Unassigned agent", "reviewer", "Has no assigned skill."))
+                        : ImmutableArray.Create(
+                            new ProjectAgentCharter(
+                                "test-agent", "Test agent", "implementer", "Implements the accepted work item.")),
+                    Casting = acceptedSkillJourney
+                        ? ImmutableArray.Create(
+                            new ProjectAgentCast("test-agent", "implementer", 0),
+                            new ProjectAgentCast("unassigned-agent", "reviewer", 1))
+                        : ImmutableArray.Create(new ProjectAgentCast("test-agent", "implementer", 0)),
                     SourceControl = new SourceControlProjectSettings(
                         new SourceControlRepositoryIdentity("octo", "agentweaver"),
                         new SecretRef("github-api", "api-v1"),
@@ -242,6 +394,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             await updatedProjectConfiguration.Content.ReadFromJsonAsync<VersionedProjectConfiguration>(
                 AuthorizationJsonOptions);
         Assert.NotNull(projectConfiguration);
+        SkillRuntimeContentV1? acceptedSkill = null;
+        if (acceptedSkillJourney)
+        {
+            var imported = await ImportAndAssignSkillAsync(
+                skillWriter!.Client,
+                platformAdminToken,
+                project.ProjectId,
+                projectConfiguration.Revision);
+            acceptedSkill = imported.Skill;
+            projectConfiguration = imported.Configuration;
+        }
 
         using var updateDefaults = new HttpRequestMessage(HttpMethod.Put, "/api/platform/runtime-defaults/")
         {
@@ -356,6 +519,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(
                 acceptedProjectsSelectionHash,
                 Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stableSelectionJson))));
+        }
+
+        if (acceptedSkill is not null)
+        {
+            var updatedSkill = await ImportSkillRevisionAsync(
+                skillWriter!.Client,
+                platformAdminToken,
+                project.ProjectId,
+                acceptedSkill.SkillId,
+                acceptedSkill.Revision,
+                "Use only the newer unaccepted instructions.",
+                "# Newer reference, not accepted by this run.\n");
+            Assert.Equal(acceptedSkill.Revision + 1, updatedSkill.Revision);
+            Assert.NotEqual(acceptedSkill.ContentDigest, updatedSkill.ContentDigest);
+            _ = await UpdateSkillAssignmentAsync(
+                skillWriter.Client,
+                platformAdminToken,
+                project.ProjectId,
+                projectConfiguration.Revision,
+                updatedSkill);
         }
 
         var ownerSchema = "coordination_it_" + Guid.NewGuid().ToString("N");
@@ -3359,7 +3542,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     else
                         await RevokeRoleAsync(projects.PrivilegedFixtureDataSource,
                             runnerRole.AssignmentId, runnerRole.Revision);
-                }, azureByok ? sourceControlSecretBackend : null);
+                }, azureByok ? sourceControlSecretBackend : null,
+                acceptedSkill,
+                acceptedSkillJourney ? "unassigned-agent" : null,
+                skillWriter);
         }
 
         using var sendReply = await SendJsonAsync(
