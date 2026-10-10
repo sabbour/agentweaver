@@ -38,12 +38,17 @@ public sealed class IdentityBrokerDbContext : DbContext
     public DbSet<RepoAppInstallationRecord> RepoAppInstallations => Set<RepoAppInstallationRecord>();
     public DbSet<RepoAppRepositorySelectionRecord> RepoAppRepositorySelections =>
         Set<RepoAppRepositorySelectionRecord>();
+    public DbSet<RemoteMcpOAuthConnectionRecord> RemoteMcpOAuthConnections =>
+        Set<RemoteMcpOAuthConnectionRecord>();
+    public DbSet<RemoteMcpOAuthConsentRecord> RemoteMcpOAuthConsents =>
+        Set<RemoteMcpOAuthConsentRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);
         RuntimeGrantModel.Configure(modelBuilder);
         CopilotConnectionModel.Configure(modelBuilder);
+        RemoteMcpOAuthModel.Configure(modelBuilder);
 
         modelBuilder.Entity<BrokerUser>(entity =>
         {

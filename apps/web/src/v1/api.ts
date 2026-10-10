@@ -30,6 +30,13 @@ import type {
   SkillContentImportRequest,
   SkillContentPreview,
   ProjectSummary,
+  RemoteMcpOAuthCallbackRequest,
+  RemoteMcpOAuthConsentPreparation,
+  RemoteMcpOAuthConsentRequest,
+  RemoteMcpOAuthConnectionRegistration,
+  RemoteMcpOAuthDisconnectRequest,
+  RemoteMcpOAuthManagementStatus,
+  RemoteMcpOAuthRefreshRequest,
   RepoAppAuthorizationStart,
   RepoAppAuthorizationStatus,
   RepoAppAuthorizationTransaction,
@@ -400,6 +407,98 @@ export class AgentweaverGatewayClient {
     return this.request(
       token,
       '/api/connections/copilot-user/v1/revoke',
+      { method: 'POST', body: JSON.stringify(request) },
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
+  }
+
+  registerRemoteMcpOAuthConnection(
+    token: string,
+    request: RemoteMcpOAuthConnectionRegistration,
+    tenantSelector?: string | null,
+  ): Promise<RemoteMcpOAuthManagementStatus> {
+    return this.request(
+      token,
+      '/api/connections/remote-mcp/v1/register',
+      { method: 'POST', body: JSON.stringify(request) },
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
+  }
+
+  getRemoteMcpOAuthConnection(
+    token: string,
+    connectionId: string,
+    tenantSelector?: string | null,
+  ): Promise<RemoteMcpOAuthManagementStatus> {
+    return this.request(
+      token,
+      `/api/connections/remote-mcp/v1/${encodeURIComponent(connectionId)}`,
+      {},
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
+  }
+
+  prepareRemoteMcpOAuthConsent(
+    token: string,
+    connectionId: string,
+    request: RemoteMcpOAuthConsentRequest,
+    tenantSelector?: string | null,
+  ): Promise<RemoteMcpOAuthConsentPreparation> {
+    return this.request(
+      token,
+      `/api/connections/remote-mcp/v1/${encodeURIComponent(connectionId)}/consent`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
+  }
+
+  completeRemoteMcpOAuthCallback(
+    token: string,
+    request: RemoteMcpOAuthCallbackRequest,
+    tenantSelector?: string | null,
+  ): Promise<RemoteMcpOAuthManagementStatus> {
+    return this.request(
+      token,
+      '/api/connections/remote-mcp/v1/callback',
+      {
+        method: 'POST',
+        body: JSON.stringify(request.error === 'access_denied'
+          ? { state: request.state, error: request.error }
+          : { state: request.state, code: request.code }),
+      },
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
+  }
+
+  refreshRemoteMcpOAuthConnection(
+    token: string,
+    connectionId: string,
+    request: RemoteMcpOAuthRefreshRequest,
+    tenantSelector?: string | null,
+  ): Promise<RemoteMcpOAuthManagementStatus> {
+    return this.request(
+      token,
+      `/api/connections/remote-mcp/v1/${encodeURIComponent(connectionId)}/refresh`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.gatewayRootUrl,
+      tenantSelector,
+    );
+  }
+
+  disconnectRemoteMcpOAuthConnection(
+    token: string,
+    connectionId: string,
+    request: RemoteMcpOAuthDisconnectRequest,
+    tenantSelector?: string | null,
+  ): Promise<RemoteMcpOAuthManagementStatus> {
+    return this.request(
+      token,
+      `/api/connections/remote-mcp/v1/${encodeURIComponent(connectionId)}/disconnect`,
       { method: 'POST', body: JSON.stringify(request) },
       this.gatewayRootUrl,
       tenantSelector,
