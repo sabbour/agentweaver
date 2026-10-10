@@ -34,7 +34,17 @@ public sealed record ProjectAgentCast(string AgentId, string Role, int Order);
 public sealed record BlueprintWorkflowReference(string BlueprintId, string WorkflowId);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record SkillCatalogSetting(string SkillId, bool Enabled, int Order);
+public sealed record SkillCatalogSetting(string SkillId, bool Enabled, int Order)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? Revision { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ContentDigest { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<string>? AgentIds { get; init; }
+}
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CopilotRunLimitOverrides
@@ -240,6 +250,28 @@ public static class ProjectConfigurationValidator
             ValidateIdentifier(item.SkillId, "skills.skillId");
             if (item.Order < 0)
                 throw Invalid("Skill order cannot be negative.");
+
+            var hasRevision = item.Revision is not null;
+            var hasDigest = item.ContentDigest is not null;
+            var hasAgentIds = item.AgentIds is not null;
+            if (item.Enabled && !hasRevision)
+                throw Invalid("Enabled skills must pin an imported revision, content digest, and agent assignment.");
+            if (hasRevision != hasDigest || hasRevision != hasAgentIds)
+                throw Invalid("Skill revision, content digest, and agent assignments must be provided together.");
+            if (!hasRevision)
+                continue;
+            if (item.Revision <= 0)
+                throw Invalid("Skill revision must be positive.");
+            if (item.ContentDigest is not { Length: 64 } digest ||
+                digest.Any(character => character is not (>= 'a' and <= 'f' or >= '0' and <= '9')))
+                throw Invalid("Skill content digest must be a lowercase SHA-256 digest.");
+            if (item.AgentIds!.Value.IsDefault)
+                throw Invalid("Skill agent assignments must be present.");
+            if (item.Enabled && item.AgentIds.Value.IsEmpty)
+                throw Invalid("Enabled skills must be assigned to at least one project agent.");
+            EnsureUnique(item.AgentIds.Value, "skill agent");
+            foreach (var agentId in item.AgentIds.Value)
+                ValidateIdentifier(agentId, "skills.agentIds");
         }
 
         var normalizedEgress = configuration.EgressNarrowing is { } narrowing
@@ -249,6 +281,36 @@ public static class ProjectConfigurationValidator
         ValidateSourceControl(configuration.SourceControl);
         return configuration with { EgressNarrowing = normalizedEgress };
     }
+
+    public static ProjectConfiguration ValidateTransition(
+        ProjectConfiguration previous,
+        ProjectConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(configuration);
+        if (configuration.Skills.IsDefault)
+            return Validate(configuration);
+
+        foreach (var skill in configuration.Skills)
+        {
+            if (skill is not { Enabled: true } || !IsUnpinned(skill))
+                continue;
+            if (previous.Skills.IsDefaultOrEmpty || !previous.Skills.Contains(skill))
+                throw Invalid(
+                    "Enabled skills without imported pins may only be preserved unchanged from the previous configuration.");
+        }
+
+        var strictSkills = configuration.Skills
+            .Select(skill => skill is { Enabled: true } && IsUnpinned(skill)
+                ? skill with { Enabled = false }
+                : skill)
+            .ToImmutableArray();
+        var validated = Validate(configuration with { Skills = strictSkills });
+        return validated with { Skills = configuration.Skills };
+    }
+
+    private static bool IsUnpinned(SkillCatalogSetting skill) =>
+        skill.Revision is null && skill.ContentDigest is null && skill.AgentIds is null;
 
     private static void ValidateCastingProjection(
         ImmutableArray<ProjectAgentCharter> charters,

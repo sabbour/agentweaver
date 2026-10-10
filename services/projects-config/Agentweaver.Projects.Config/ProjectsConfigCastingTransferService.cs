@@ -79,11 +79,13 @@ public sealed partial class ProjectsConfigService
             ProjectConfiguration imported;
             try
             {
-                imported = ProjectConfigurationValidator.Validate(current with
-                {
-                    AgentCharters = request.Transfer.AgentCharters,
-                    Casting = request.Transfer.Casting,
-                });
+                imported = ProjectConfigurationValidator.ValidateTransition(
+                    current,
+                    current with
+                    {
+                        AgentCharters = request.Transfer.AgentCharters,
+                        Casting = request.Transfer.Casting,
+                    });
             }
             catch (ProjectConfigException exception)
             {

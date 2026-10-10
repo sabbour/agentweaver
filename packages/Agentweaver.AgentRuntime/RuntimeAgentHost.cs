@@ -123,9 +123,11 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             }
             var retained = _actor;
             _material ??= new(_http, _options.EventsAddress, retained);
+            var skillContent = new RuntimeSkillContentHttpClient(
+                _http, _options.OrchestratorAddress, retained);
             var bootstrap = new RuntimeSessionBootstrap(
                 _owner, new(_http, _options.BrokerAddress, request.Registration.Binding.ActorIssuer, retained, _time),
-                _sessions, retained, _time,
+                _sessions, skillContent, retained, _time,
                 _options.Image, _material, new(_http, _options.OrchestratorAddress, retained),
                 async (registration, cancellation) =>
                 {

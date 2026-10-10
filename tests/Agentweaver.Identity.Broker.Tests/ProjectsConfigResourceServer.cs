@@ -111,6 +111,15 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 services.AddSingleton(catalog);
                 services.AddSingleton(TimeProvider.System);
                 services.AddScoped<ProjectsConfigService>();
+                services.AddScoped<SkillContentService>(provider => new SkillContentService(
+                    provider.GetRequiredService<ProjectsConfigDbContext>(),
+                    null,
+                    provider.GetRequiredService<ProjectsConfigService>(),
+                    provider.GetRequiredService<TimeProvider>()));
+                services.AddScoped<ISkillContentService>(provider =>
+                    provider.GetRequiredService<SkillContentService>());
+                services.AddScoped<ISkillAssignmentService>(provider =>
+                    provider.GetRequiredService<SkillContentService>());
                 services.AddSingleton(new ProjectsConfigIdentityOptions(
                     new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri));
                 services.AddScoped<ProjectAuthorizationOwner>();
@@ -141,7 +150,11 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 app.UseRouting();
                 app.UseAuthentication();
                 app.UseAuthorization();
-                app.UseEndpoints(endpoints => endpoints.MapProjectConfigEndpoints());
+                app.UseEndpoints(endpoints =>
+                {
+                    endpoints.MapProjectConfigEndpoints();
+                    endpoints.MapSkillContentEndpoints();
+                });
             });
         }).StartAsync();
 
