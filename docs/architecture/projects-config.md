@@ -55,8 +55,18 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
+| `GET, POST /api/projects/{projectId}/skill-marketplaces/sources` | List or add revisioned project skill sources. |
+| `PUT, DELETE /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}` | Update or tombstone a source using its expected revision. |
+| `GET /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/browse` | Resolve a source ref to a commit and return a bounded, filtered, paged manifest index. |
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
+
+Marketplace source CRUD, source revisioning, and commit-pinned browse are
+documented in the [skill marketplace source contract](./skill-marketplace.md).
+Browse reads only current-page `SKILL.md` descriptions. The separate Skills
+owner supplies selected-content preview, immutable import receipts, and runtime
+assignment; Projects does not create a second content loader or catalog
+authority.
 
 ### Reviewed casting proposals and explicit transfers
 
