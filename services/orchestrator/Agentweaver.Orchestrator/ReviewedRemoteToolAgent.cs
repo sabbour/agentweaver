@@ -390,7 +390,7 @@ internal sealed class ReviewedRemoteToolAgent(
             contentClass);
     }
 
-    private static RemoteToolResultSnapshotBinding SnapshotBinding(ReviewedRemoteToolSnapshot snapshot)
+    internal static RemoteToolResultSnapshotBinding SnapshotBinding(ReviewedRemoteToolSnapshot snapshot)
     {
         var pin = snapshot.RegistryServerPin;
         return new(

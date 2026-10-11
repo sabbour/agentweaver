@@ -239,10 +239,8 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         var request = new SessionMaterialWriteRequest(
             1, eventId, _registration.RuntimeInstanceId, _registration.Revision,
             _registration.Binding.ExecutionFence, SessionMaterialKind.RemoteToolResult,
-            """{"content":[{"type":"text","text":"saved result"}]}"""u8.ToArray(),
-            SdkVersion: Source.SdkVersion, ModelId: Source.ModelId)
+            """{"content":[{"type":"text","text":"saved result"}]}"""u8.ToArray())
         {
-            MaxPromptTokens = Source.MaxPromptTokens,
             RemoteToolResultProof = proof
         };
         var acknowledgment = await Store.WriteAsync(

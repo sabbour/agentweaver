@@ -76,7 +76,7 @@
     {
       "type": "note",
       "over": ["environment", "workspace-egress"],
-      "label": "Validate the stored Sandbox mount request. Before each effect, recheck authority, accepted intent, current lease, exact PVC, and network binding."
+      "label": "Before each effect, recheck authority, command metadata, lease, PVC, and network binding. Reuse the verified seed; do not fetch it again."
     },
     {
       "type": "message",
@@ -174,7 +174,7 @@
       "type": "message",
       "from": "environment",
       "to": "environment",
-      "label": "Persist one immutable terminal snapshot; restart replay preserves evidence, and uncertain effects reconcile the same operation",
+      "label": "Persist terminal metadata without seed bytes. Replay preserves evidence; reconciliation restores the exact verified seed after matching stored metadata.",
       "line": "solid",
       "arrow": "filled"
     },

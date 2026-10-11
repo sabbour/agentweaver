@@ -300,6 +300,8 @@ Redirects, short or extra bytes, denied reads, and changed command metadata are 
 The client deadline covers both response headers and the complete bounded body.
 Environment rechecks Core metadata after the transfer and before reserving the command.
 Later current-command checks do not fetch the seed again.
+Stored operation updates, request fingerprints, and Core terminal receipts validate the bound metadata without seed bytes.
+Reconciliation restores the freshly verified seed only after it matches the stored command metadata.
 Version 2 still requires the actual validated bytes before execution; metadata alone is not executable input.
 
 The Kubernetes client adds a bounded native WebSocket exchange for fixed preparation and collector containers.

@@ -84,7 +84,7 @@ public sealed class MafBuildTestCheckpointTests
         Assert.DoesNotContain("workspaceSource", json);
     }
 
-    private static MafExecutionBuildTestIntent SeedIntent()
+    internal static MafExecutionBuildTestIntent SeedIntent()
     {
         var intent = Intent();
         var seed = new byte[1024];

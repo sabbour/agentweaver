@@ -379,7 +379,7 @@ public sealed record SandboxBuildTestApiRequest(
     {
         ArgumentNullException.ThrowIfNull(acceptedCommand);
         _ = Validate();
-        _ = acceptedCommand.Validate();
+        _ = acceptedCommand.ValidateMetadata();
         if (!SandboxBuildTestCanonicalJson.SameCheckpoint(Checkpoint, acceptedCommand.Checkpoint))
             throw new ArgumentException("The accepted command does not match the referenced MAF checkpoint.");
 
@@ -767,7 +767,7 @@ public sealed record SandboxBuildTestOperationSnapshot(
         ArgumentNullException.ThrowIfNull(acceptedCommand);
         ArgumentNullException.ThrowIfNull(ExpectedBinding);
         ArgumentNullException.ThrowIfNull(ExpectedCommandPolicy);
-        _ = acceptedCommand.Validate();
+        _ = acceptedCommand.ValidateMetadata();
         _ = ExpectedBinding.Validate();
         ExpectedBinding.ValidateSandboxProviderBinding();
         _ = ExpectedCommandPolicy.ValidateForOperation(OperationId, SandboxBuildTestLimits.CommandPolicyRole);

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Claims;
@@ -26,6 +27,46 @@ public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifierTests
         Assert.Single(handler.Requests);
         Assert.DoesNotContain("/workspace-seed", handler.Requests[0].Uri);
         Assert.True(handler.Requests[0].NoStore);
+    }
+
+    [Fact]
+    public async Task ManagerEffectChecksReuseTheVerifiedSeedAndReadOnlyCurrentOwnerMetadata()
+    {
+        var command = CreateSeedCommand() with { WorkspaceSeed = new byte[1024].ToImmutableArray() };
+        var handler = new SeedCommandHandler(command);
+        using var client = new HttpClient(handler);
+        var manager = new EnvironmentSandboxBuildTestCommandManager(
+            null!, null!, null!, null!, CreateVerifier(client), null!, null!, TimeProvider.System, null!);
+        var persisted = command with { WorkspaceSeed = null };
+
+        for (var effect = 0; effect < 3; effect++)
+            await manager.VerifyCurrentCommandAsync(command, persisted, CancellationToken.None);
+
+        Assert.Equal(3, handler.Requests.Count);
+        Assert.All(handler.Requests, request =>
+        {
+            Assert.DoesNotContain("/workspace-seed", request.Uri);
+            Assert.True(request.NoStore);
+        });
+        Assert.Equal(new byte[1024], command.WorkspaceSeed!.Value.ToArray());
+    }
+
+    [Fact]
+    public async Task ManagerEffectCheckRejectsChangedPersistedIntentWithoutAnyOwnerRequest()
+    {
+        var command = CreateSeedCommand();
+        var changed = command with { Arguments = ["other"] };
+        changed = changed with { ImmutableHash = changed.ComputeImmutableHash() };
+        var handler = new SeedCommandHandler(command);
+        using var client = new HttpClient(handler);
+        var manager = new EnvironmentSandboxBuildTestCommandManager(
+            null!, null!, null!, null!, CreateVerifier(client), null!, null!, TimeProvider.System, null!);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            manager.VerifyCurrentCommandAsync(command, changed, CancellationToken.None));
+
+        Assert.Equal("buildtest_command_checkpoint_changed", failure.Code);
+        Assert.Empty(handler.Requests);
     }
 
     [Theory]

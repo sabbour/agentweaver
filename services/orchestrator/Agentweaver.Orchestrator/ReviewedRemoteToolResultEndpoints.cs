@@ -187,38 +187,8 @@ internal sealed class ReviewedRemoteToolResultVerifier(
     private static void RequireSnapshotBinding(ReviewedRemoteToolSnapshot snapshot, RemoteToolResultProof proof)
     {
         if (!SameReference(snapshot.Reference, proof.Snapshot) ||
-            SnapshotBinding(snapshot) != proof.SnapshotBinding)
+            ReviewedRemoteToolAgent.SnapshotBinding(snapshot) != proof.SnapshotBinding)
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_snapshot_binding_invalid");
-    }
-
-    private static RemoteToolResultSnapshotBinding SnapshotBinding(ReviewedRemoteToolSnapshot snapshot)
-    {
-        var pin = snapshot.RegistryServerPin;
-        return new(
-            snapshot.ConnectionId,
-            snapshot.ConnectionRowRevision,
-            snapshot.ConnectionConfigurationRevision,
-            snapshot.ConnectionDiscoveryRevision,
-            snapshot.ConnectionState,
-            snapshot.ConfigurationSha256,
-            snapshot.EndpointUri,
-            snapshot.ResourceUri,
-            snapshot.AuthenticationMode,
-            snapshot.IdentityBindingReference,
-            snapshot.TransportProfile,
-            pin?.ServerName,
-            pin?.ExactVersion,
-            pin?.MetadataSha256,
-            snapshot.CatalogRevision,
-            snapshot.CatalogDigest,
-            snapshot.ToolId,
-            snapshot.ToolRevision,
-            snapshot.ToolDigest,
-            snapshot.ToolSchemaRevision,
-            snapshot.ToolSchemaDigest,
-            snapshot.Permission.ActionId,
-            snapshot.Permission.Purpose,
-            snapshot.Permission.Digest);
     }
 
     private static void RequireExactCall(ReviewedRemoteToolCall call, RemoteToolResultProof proof)

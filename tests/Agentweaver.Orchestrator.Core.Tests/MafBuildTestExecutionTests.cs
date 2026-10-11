@@ -21,6 +21,48 @@ public sealed class MafBuildTestExecutionTests
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    [Theory]
+    [InlineData(SandboxBuildTestOperationStatus.Completed)]
+    [InlineData(SandboxBuildTestOperationStatus.Failed)]
+    [InlineData(SandboxBuildTestOperationStatus.Stale)]
+    public void VersionTwoTerminalCheckpointRecoversAndReplaysWithoutEmbeddingTheSeed(
+        SandboxBuildTestOperationStatus status)
+    {
+        var taskStatus = status switch
+        {
+            SandboxBuildTestOperationStatus.Completed => MafExecutionTaskStatus.Succeeded,
+            SandboxBuildTestOperationStatus.Failed => MafExecutionTaskStatus.Failed,
+            _ => MafExecutionTaskStatus.Indeterminate
+        };
+        var intent = MafBuildTestCheckpointTests.SeedIntent();
+        var initial = new MafExecutionCheckpointSnapshot(new("root", "initial"),
+            new(1, "plan-1", 3, MafExecutionProgress.Empty));
+        var running = CoordinationEndpoints.PrepareBuildTestCheckpoint(initial, intent)!;
+        var recoveredRunning = MafExecutionCheckpointContract.Deserialize(
+            MafExecutionCheckpointContract.Serialize(running));
+        var restored = recoveredRunning.BuildTestIntents["build-test"];
+        Assert.Null(restored.WorkspaceSeed);
+        var operation = Operation(intent) with { Status = status };
+        if (status == SandboxBuildTestOperationStatus.Failed)
+            operation = operation with
+            {
+                Terminal = operation.Terminal! with { ExitCode = 1 }, FailureCode = "command_failed"
+            };
+
+        Assert.Equal(taskStatus, MafBuildTestCommandContract.Classify(restored, operation));
+        var completed = CoordinationEndpoints.PrepareBuildTestCompletionCheckpoint(
+            new(new("root", intent.CheckpointId), recoveredRunning), restored, operation)!;
+        var serialized = MafExecutionCheckpointContract.Serialize(completed);
+        Assert.DoesNotContain("\"workspaceSeed\":", serialized.GetRawText());
+        var recovered = MafExecutionCheckpointContract.Deserialize(serialized);
+        Assert.Equal(taskStatus, recovered.Progress.NonModelSteps["build-test"]);
+        Assert.Equal(taskStatus, recovered.BuildTestReceipts["build-test"].ValidateFor(
+            recovered.BuildTestIntents["build-test"]));
+        Assert.Null(CoordinationEndpoints.PrepareBuildTestCompletionCheckpoint(
+            new(new("root", "completed"), recovered), restored, operation));
+        Assert.Throws<ArgumentException>(() => restored.ToAcceptedCommand());
+    }
+
     [Fact]
     public void TerminalAndRequiredOutputJoinAdvancesTheDependentModelFrontier()
     {

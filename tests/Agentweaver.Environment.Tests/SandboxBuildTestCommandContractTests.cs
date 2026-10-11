@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 
@@ -92,6 +93,67 @@ public sealed class SandboxBuildTestCommandContractTests
             (command with { WorkspaceSeed = new byte[1023].ToImmutableArray() }).Validate());
         Assert.Throws<ArgumentException>(() =>
             (command with { WorkspaceSeed = Enumerable.Repeat((byte)1, 1024).ToImmutableArray() }).Validate());
+    }
+
+    [Fact]
+    public void VersionTwoStoredStateRecoversUpdatesAndReplaysWithMetadataOnly()
+    {
+        var command = SeedCommand();
+        command = command with { ImmutableHash = command.ComputeImmutableHash() };
+        var fixture = CreateFixture() with { Command = command };
+        var state = new EnvironmentSandboxBuildTestCommandState(
+            command, CreateSnapshot(fixture), ["command-pod:create"]);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+        var commandJson = JsonSerializer.Serialize(command, options);
+        Assert.DoesNotContain("workspaceSeed", commandJson);
+        var row = new EnvironmentSandboxBuildTestCommandStore.StoredRow(
+            fixture.Request.ExpectedBinding.Fence.Owner, "BuildTestCommand",
+            fixture.Request.ComputeRequestFingerprint(command), commandJson,
+            JsonSerializer.Serialize(fixture.Request.ExpectedBinding, options),
+            EnvironmentSandboxBuildTestCommandStore.SerializeMutableState(state),
+            state.Operation.CreatedAt);
+
+        var restored = EnvironmentSandboxBuildTestCommandStore.DeserializeState(row);
+        Assert.Null(restored.AcceptedCommand.WorkspaceSeed);
+        Assert.Equal(command.ImmutableHash, restored.AcceptedCommand.ValidateMetadata().ImmutableHash);
+        Assert.Equal(row.Fingerprint, fixture.Request.ComputeRequestFingerprint(restored.AcceptedCommand));
+        Assert.Same(restored.Operation, restored.Operation.Validate(
+            restored.AcceptedCommand, command.ExecutionOptions.MaximumOutputBytes));
+        Assert.Throws<ArgumentException>(() => restored.AcceptedCommand.Validate());
+        var updated = restored with
+        {
+            Operation = restored.Operation with
+            {
+            Status = SandboxBuildTestOperationStatus.Stale,
+            FailureCode = "buildtest_checkpoint_stale",
+            UpdatedAt = restored.Operation.UpdatedAt.AddSeconds(1)
+            },
+            AttemptedEffects = restored.AttemptedEffects.Add("command-pod:observed")
+        };
+        var replay = EnvironmentSandboxBuildTestCommandStore.DeserializeState(row with
+        {
+            TargetBindingJson = EnvironmentSandboxBuildTestCommandStore.SerializeMutableState(updated)
+        });
+        Assert.Equal(SandboxBuildTestOperationStatus.Stale, replay.Operation.Status);
+        Assert.Equal(updated.AttemptedEffects.ToArray(), replay.AttemptedEffects.ToArray());
+        Assert.Equal(row.Fingerprint, fixture.Request.ComputeRequestFingerprint(replay.AcceptedCommand));
+
+        var executable = EnvironmentSandboxBuildTestCommandManager.RestoreAcceptedCommand(restored, command);
+        Assert.Equal(command.WorkspaceSeed!.Value.ToArray(),
+            executable.AcceptedCommand.Validate().WorkspaceSeed!.Value.ToArray());
+        Assert.Throws<ArgumentException>(() =>
+            EnvironmentSandboxBuildTestCommandManager.RestoreAcceptedCommand(restored, command with
+            {
+            WorkspaceSeed = null
+            }));
+        var changed = command with { Arguments = ["other"] };
+        changed = changed with { ImmutableHash = changed.ComputeImmutableHash() };
+        var conflict = Assert.Throws<EnvironmentLifecycleException>(() =>
+            EnvironmentSandboxBuildTestCommandManager.RestoreAcceptedCommand(restored, changed));
+        Assert.Equal("buildtest_request_conflict", conflict.Code);
     }
 
     [Fact]

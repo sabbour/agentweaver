@@ -16,7 +16,6 @@ internal static class GatewayRunEventProjection
     private const int MaximumCursorLength = 8192;
     private const string RemoteToolCallIdPrefix = "remote_tool_call_";
     private const string RemoteToolNamePrefix = "remote_tool_";
-    private const string RemoteToolPurpose = "runtime-remote-tool-result";
 
     private static readonly string[] EventProperties =
     [
