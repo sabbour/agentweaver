@@ -338,6 +338,34 @@ internal sealed class SourceControlOwnerStore(
             "source_control_pin_unavailable", StatusCodes.Status404NotFound);
     }
 
+    internal async Task RequireBuildTestInputInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        AuthorizedRunSelection selection,
+        long stateVersion,
+        long executionFence,
+        SandboxBuildTestWorkspaceSource source,
+        CancellationToken cancellationToken)
+    {
+        var selectionHash = HashSelection(selection.Selection);
+        var owner = await ReadPrerequisiteOwnerBindingInTransactionAsync(
+            connection, transaction, actor, identity, selection.Authorization.TenantId,
+            selectionHash, executionFence, cancellationToken).ConfigureAwait(false);
+        if (owner.StateVersion != stateVersion || owner.DecisionState != "accepted" ||
+            owner.ExecutionState is not ("idle" or "active" or "blocked") || owner.SessionLifecycle != "active")
+            throw new CoordinationException(
+                "source_control_run_binding_changed", StatusCodes.Status409Conflict);
+        var pin = await ReadPinAsync(
+            connection, transaction, identity, selectionHash, cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException(
+                "source_control_pin_unavailable", StatusCodes.Status404NotFound);
+        EnsureCurrentBinding(owner, selection, pin.AcceptedRun);
+        SourceControlEndpoints.ValidateBuildTestSourceOwner(
+            source, actor, identity, selection.Authorization.TenantId, selectionHash, pin, executionFence);
+    }
+
     public async Task<SourceControlRepositoryPin?> FindRepositoryPinAsync(
         CoordinationActor actor,
         SessionIdentity identity,

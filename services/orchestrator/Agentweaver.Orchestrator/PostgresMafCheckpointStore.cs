@@ -554,7 +554,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         if (origins.Length == 0)
             return;
         var intent = origins[0];
-        var source = intent.Command.WorkspaceSource!;
+        var source = intent.EffectiveWorkspaceSource!;
         if (intent.Identity != binding.Identity || intent.ExecutionFence != binding.ExecutionFence ||
             intent.AcceptedSelectionHash != selectionHash ||
             source.ActorIssuer != binding.Actor.Issuer || source.ActorSubject != binding.Actor.Subject ||
@@ -575,7 +575,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             validatedBinding.StoreName != MafExecutionCheckpointContract.StoreName ||
             intent.Identity != validatedBinding.Identity ||
             intent.ExecutionFence != validatedBinding.ExecutionFence ||
-            intent.Command.WorkspaceSource is null || intent.WorkspaceSeedReference is null)
+            intent.EffectiveWorkspaceSource is null || intent.WorkspaceSeedReference is null)
             throw new CoordinationException("checkpoint_workspace_seed_binding_invalid", StatusCodes.Status403Forbidden);
         _ = intent.ToAcceptedCommand(requireSeed: false);
         var current = await ReadCurrentBindingAsync(
