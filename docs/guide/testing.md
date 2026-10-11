@@ -13,6 +13,13 @@ It keeps the two-active-child limit and checks that one more active child is rej
 Fixed-child model assertions cover both Copilot connections and Azure BYOK bindings.
 Historical run-limit JSON checks use a fixture with the optional limits unset.
 The retirement fixture supplies both required Environment fencing generations.
+The selected Events workload profile uses only pure Node source checks.
+Run `node --test scripts\azure\tests\events-runtime-profile.test.mjs` from the repository root.
+These checks reject missing startup inputs, changed identity/database scope, credentials,
+mutable images, malformed Blob paths, migration settings, and unsafe workload/network settings.
+Its image user/group, existing TLS Secret, and owner ports remain operator-reviewed inputs.
+The incomplete example must fail rendering.
+No check proves an image publication, live certificate/file access, cloud grant, or deployment.
 The oversized webhook request uses `Expect: 100-continue` to receive the
 exact `413` rejection before uploading its body. The one-MiB limit is unchanged.
 
