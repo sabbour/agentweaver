@@ -2,6 +2,11 @@
 
 The v1 tests use in-memory providers, fake Azure SDK transports, and disposable PostgreSQL. They do not require an Azure subscription.
 
+Fixed-child store cases compile with the PostgreSQL suite. They check a null
+Open WorkPlan link and a recovered checkpoint association, not runtime permission.
+The runtime-owner context matcher separately checks the confirmed Fixed step.
+Compilation does not prove PostgreSQL execution.
+
 | Test suite | What it exercises | What it does not prove |
 | --- | --- | --- |
 | Orchestrator Core tests | Typed outcome/workflow/plan/revision validation, workflow grammar and step DAG validation, bounded WorkPlan eligibility and joins, deterministic UTC daily/weekly/monthly occurrence evaluation, stable schedule idempotency inputs, bounded structured GitHub event predicates and regex safety, project-scoped backlog graph edits and cycle checks, revision-fenced readiness for merge-complete and verified non-merge completion, MAF witness serialization and current-capture inventory regressions for late non-empty captures and multiple captures, pinned model/provider selection checks, structured scope diffs, AGT Policy provider validation and evaluation, negotiation/pinning, deny-by-default and project-policy narrowing, plus action-guard grant scope/fence checks, immutable owner receipt persistence, journal-ACK ordering, current-grant revalidation, and no-effect behavior on evidence failure. Its PostgreSQL integration tests cover persisted backlog edits, concurrent claim arbitration, idempotent replay after store restart, rollback of claim/root/decision intent, and rollback when current authority is lost immediately before commit or replay commit. The source-only Guardrails candidate uses controlled classifiers, authority and journal doubles to cover ordered seam/run/resource pin consistency, invalid null/default shapes, content SHA-256 binding, typed stage/content support, AGT deny monotonicity, timeout/failure, revocation, redaction, and append response-loss/replay. | Current network authorization in backlog routes, production task-to-whole-plan evidence association/output-proof verification, automatic workflow initiation, live model output, full child dispatch, deployed authorization, production Prompt Shields transport, a trusted Guardrails journal/current-authority adapter, MAF gate wiring, or protected-effect call-site enforcement. |
@@ -63,6 +68,12 @@ Fixed-work tests compare the exact child association, accepted model, plan, outp
 Route tests check registration-read authorization and readiness rejection for anonymous, foreign-tenant, wrong-audience, and stale-registration requests.
 These tests use controlled owners and SDK responses.
 They do not prove live PostgreSQL reads, native execution, private TLS, or deployment.
+
+Retained catalog tests check wall-time bounds, the exact inclusive deadline, and configured or omitted numeric limits.
+The registration persistence case checks complete session-scoped pages without duplicate or cross-scope IDs.
+The Knowledge endpoint case rejects a prompt-token request above the accepted run budget.
+The latter two cases require the existing disposable PostgreSQL fixtures.
+Compilation alone does not prove those database cases passed.
 
 The positive Broker fixture prepares its guarded native turn through the current Orchestrator owner and persisted MAF checkpoint.
 One real Events host provides pricing, accounting, and session material; the controlled SDK supplies native completion evidence, not a paid model call.

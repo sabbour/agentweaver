@@ -137,8 +137,34 @@ checks its current decision version, selection hash, and fence before storing
 that association. Unmapped legacy children remain usable for existing operations
 but cannot provide runtime ownership. The authenticated `runtime-owner-context`
 GET derives agent, model reference, and deterministic turn identity from the
-current accepted selection, confirmed plan, and active child turn. It rechecks
+current accepted selection, confirmed WorkPlan item or retained fixed-work checkpoint association, and active child turn. It rechecks
 the root decision and current Projects authority before returning.
+
+The authenticated session-scoped runtime-registration `GET` resolves that current child context.
+It pages registration IDs for the exact project, run, and session, with a maximum of 64 candidates.
+Each candidate must match the current owner and Environment placement.
+The read returns exactly one current registration.
+Missing matches, ambiguous matches, or an exceeded candidate bound return an explicit conflict.
+The owner rechecks the child context and selected registration after the scan.
+This read does not authorize configure delivery.
+
+```mermaid
+sequenceDiagram
+    participant C as Authenticated caller
+    participant O as Orchestrator
+    participant D as Registration store
+    participant E as Environment
+    C->>O: Read current session registration
+    O->>O: Check caller, child, decision, and accepted selection
+    O->>D: Page exact project, run, and session IDs
+    loop At most 64 candidates
+        O->>E: Check current placement
+        E-->>O: Current binding or explicit failure
+        O->>O: Check current child and registration
+    end
+    O->>O: Recheck child and sole selected registration
+    O-->>C: Current registration or explicit conflict, no-store
+```
 
 The `Agentweaver.AgentRuntime` library uses the pinned native Copilot SDK.
 Its model catalog, effective model ID, SDK session ID/version, nullable
