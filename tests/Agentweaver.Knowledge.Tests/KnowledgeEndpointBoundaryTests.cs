@@ -482,6 +482,28 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
     }
 
     [Fact]
+    public async Task EndpointCannotWidenConfiguredPromptTokenBudget()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        using var contextRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/projects/project-a/runs/run-a/agents/agent-a/context?maxTokens=1001");
+        contextRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", "caller-token");
+
+        using var response = await client.SendAsync(contextRequest);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("context_budget_exceeded", await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            ["/api/authorization/context", "/api/projects/project-a/runs/run-a/selection"],
+            owner.Paths.ToArray());
+    }
+
+    [Fact]
     public async Task AcceptedEffectReceiptIsNoStoreRedactedAndPendingDeliveryDoesNotUndoPromotion()
     {
         await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
