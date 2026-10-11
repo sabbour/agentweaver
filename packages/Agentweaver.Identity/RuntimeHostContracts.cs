@@ -29,6 +29,9 @@ public sealed record RuntimeHostConfigureRequest(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeMcpServerEndpoint? McpServer { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeResumeBootstrapRequest? ResumeBootstrap { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -62,6 +65,9 @@ public sealed record RuntimeHostSuspendReceipt(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public WorkspaceVolumeFlushReceipt? WorkspaceFlush { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SessionMaterialAcknowledgment? ConfigurationAcknowledgment { get; init; }
 }
 
 public sealed record RuntimeHostReadinessReceipt(
@@ -71,7 +77,11 @@ public sealed record RuntimeHostReadinessReceipt(
     long ExecutionFence,
     SandboxImageIdentity Image,
     ImmutableArray<SandboxStartupPhaseObservation> StartupPhases,
-    RuntimeGrantReceipt SourceGrant);
+    RuntimeGrantReceipt SourceGrant)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeHostResumeCacheReceipt? ResumeCache { get; init; }
+}
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeA2ATextPart(string Kind, string Text);

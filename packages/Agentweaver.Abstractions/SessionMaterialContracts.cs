@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
-public enum SessionMaterialKind { TurnContent, SdkCache, RemoteToolResult }
+public enum SessionMaterialKind { TurnContent, SdkCache, RemoteToolResult, RuntimeConfiguration }
 
 public enum SessionMaterialResultContentClass { TextOnly, Structured, NonText, Mixed }
 
@@ -193,6 +193,7 @@ public static class SessionMaterialValidation
         SessionMaterialKind.TurnContent => "runtime-turn-content",
         SessionMaterialKind.SdkCache => "runtime-sdk-cache",
         SessionMaterialKind.RemoteToolResult => "runtime-remote-tool-result",
+        SessionMaterialKind.RuntimeConfiguration => "runtime-configuration",
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
 
