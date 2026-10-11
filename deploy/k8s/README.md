@@ -155,6 +155,14 @@ manual reconciliation of the exact database target before retry. Ordinary
 
 ## Workload identity wiring
 
+The separate P1 identity template uses the same federation module for
+`projects-config`, `environment`, `knowledge`, `events-and-sessions`, and
+`orchestrator` ServiceAccounts in this namespace.
+It creates no database or Azure resource grant.
+Workload manifests must use each service's observed client ID, not the Broker
+or Probe identity.
+Schema initialization and runtime database grants require separate approval.
+
 The Bicep identity module defines three separate UAMIs:
 `foundation-probe`, `identity-broker`, and `identity-broker-migration`.
 Each federated subject must match its exact ServiceAccount in

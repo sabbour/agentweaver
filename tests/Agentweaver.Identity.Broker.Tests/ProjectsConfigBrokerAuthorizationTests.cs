@@ -135,7 +135,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             File.Delete(_signingCertificate.PfxPath);
         if (Directory.Exists(_signingCertificate.PfxPath + ".keys"))
             Directory.Delete(_signingCertificate.PfxPath + ".keys", recursive: true);
-        var after = await PostgresContainerFixture.CountConnectionsAsync(_connectionString);
+        var after = await PostgresContainerFixture.WaitForNoConnectionsAsync(_connectionString);
         Console.WriteLine($"Native fixture owned connections: before cleanup={before}, after cleanup={after}.");
         Assert.Equal(0, after);
     }
