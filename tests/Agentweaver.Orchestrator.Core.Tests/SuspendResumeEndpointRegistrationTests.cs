@@ -18,6 +18,36 @@ public sealed class SuspendResumeEndpointRegistrationTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task CurrentSessionRegistrationReadIsAuthenticatedAndOnlyMappedWhenConfigured(bool configured)
+    {
+        var builder = WebApplication.CreateBuilder();
+        var options = new OrchestratorOptions(
+            "https://issuer.test/", "orchestrator-api", "https://projects.test/",
+            "projects-api", "https://events.test/", "events-api");
+        builder.Services.AddAuthorization();
+        if (configured)
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress"] = "https://environment.test/"
+            });
+        var enabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
+        await using var app = builder.Build();
+        if (enabled)
+            app.MapRuntimeRegistrationEndpoints();
+        var routes = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>().Where(endpoint =>
+                endpoint.RoutePattern.RawText ==
+                "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations" &&
+                endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.Contains("GET")).ToArray();
+
+        Assert.Equal(configured ? 1 : 0, routes.Length);
+        if (configured)
+            Assert.NotEmpty(Assert.Single(routes).Metadata.GetOrderedMetadata<IAuthorizeData>());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task OptionalRuntimeOwnerControlsOnlyTheInternalSuspendRoute(bool configured)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions

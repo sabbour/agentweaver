@@ -262,11 +262,25 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         token.ThrowIfCancellationRequested();
     }
 
-    public async Task<RuntimeHostReadinessReceipt> ReadinessAsync(CancellationToken token)
+    public Task<RuntimeHostReadinessReceipt> ReadinessAsync(CancellationToken token) =>
+        ReadinessAsyncCore(null, token);
+
+    public Task<RuntimeHostReadinessReceipt> ReadinessAsync(
+        RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        return ReadinessAsyncCore(actor, token);
+    }
+
+    private async Task<RuntimeHostReadinessReceipt> ReadinessAsyncCore(
+        RuntimeActorAuthorization? requestActor, CancellationToken token)
     {
         RequireAvailable();
-        if (_readyAt is null || _session is not { } session || _actor is not { } actor)
+        if (_readyAt is null || _session is not { } session || _actor is not { } configuredActor)
             throw new RuntimeAuthorizationException("runtime_host_not_ready");
+        var actor = requestActor ?? configuredActor;
+        if (requestActor is not null)
+            await RequireCallerAsync(session.Registration, requestActor, token).ConfigureAwait(false);
         await session.RequireCurrentAsync(token).ConfigureAwait(false);
         var phases = await ReadPlacementAsync(session.Registration, actor, token).ConfigureAwait(false);
         RequireAvailable();

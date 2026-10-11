@@ -11,16 +11,18 @@ public static partial class CoordinationEndpoints
         string projectId, string runId, string sessionId, HttpContext context,
         OrchestratorOptions options, ProjectsRunSelectionClient projects,
         CoordinationOwnerStore store, CoordinatorDecisionOwnerStore decisions,
-        CoordinatorRunSelectionContextStore runSelectionContexts, CancellationToken cancellationToken) =>
+        CoordinatorRunSelectionContextStore runSelectionContexts, PostgresMafCheckpointStore checkpoints,
+        CancellationToken cancellationToken) =>
         ExecuteAsync(async () => Results.Ok(await ReadRuntimeOwnerContextCoreAsync(
             projectId, runId, sessionId, context, options, projects, store, decisions,
-            runSelectionContexts, cancellationToken).ConfigureAwait(false)), cancellationToken);
+            runSelectionContexts, checkpoints, cancellationToken).ConfigureAwait(false)), cancellationToken);
 
     internal static async Task<RuntimeOwnerContext> ReadRuntimeOwnerContextCoreAsync(
         string projectId, string runId, string sessionId, HttpContext context,
         OrchestratorOptions options, ProjectsRunSelectionClient projects,
         CoordinationOwnerStore store, CoordinatorDecisionOwnerStore decisions,
-        CoordinatorRunSelectionContextStore runSelectionContexts, CancellationToken cancellationToken)
+        CoordinatorRunSelectionContextStore runSelectionContexts, PostgresMafCheckpointStore checkpoints,
+        CancellationToken cancellationToken)
     {
         context.Response.Headers.CacheControl = "no-store";
         var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
@@ -44,13 +46,41 @@ public static partial class CoordinationEndpoints
             confirmedPlan.Workflow, confirmedPlan.Plan, selectionContext);
         if (!validatedPlan.IsValid || validatedPlan.Value is null)
             throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
-        var workPlanItem = validatedPlan.Value.Plan.Items.FirstOrDefault(item =>
-            string.Equals(item.Id, owner.WorkPlanItemId, StringComparison.Ordinal));
-        if (workPlanItem is null || string.IsNullOrWhiteSpace(workPlanItem.AgentId) ||
-            string.IsNullOrWhiteSpace(workPlanItem.ModelSelectionReference))
-            throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+        var plan = validatedPlan.Value;
+        string agentId;
+        string modelSelectionReference;
+        string workflowStepId;
+        MafExecutionCheckpointStore? execution = null;
+        MafExecutionFixedWorkAssociation? fixedAssociation = null;
+        if (owner.WorkPlanItemId is { } workPlanItemId)
+        {
+            var workPlanItem = plan.Plan.Items.FirstOrDefault(item =>
+                string.Equals(item.Id, workPlanItemId, StringComparison.Ordinal));
+            if (workPlanItem is null || string.IsNullOrWhiteSpace(workPlanItem.AgentId) ||
+                string.IsNullOrWhiteSpace(workPlanItem.ModelSelectionReference))
+                throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+            agentId = workPlanItem.AgentId;
+            modelSelectionReference = workPlanItem.ModelSelectionReference;
+            workflowStepId = workPlanItem.WorkflowStepId;
+        }
+        else
+        {
+            execution = new MafExecutionCheckpointStore(
+                checkpoints, CreateExecutionCheckpointBinding(root, actor, owner.ExecutionFence,
+                    MafExecutionCheckpointStore.CurrentSdkVersion,
+                    PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot)));
+            fixedAssociation = await execution.ReadFixedWorkAssociationAsync(
+                sessionId, plan.Plan.Id, cancellationToken).ConfigureAwait(false);
+            if (fixedAssociation is null ||
+                !MatchesFixedRuntimeAssociation(fixedAssociation, plan, selectionContext, root,
+                    sessionId, owner.AcceptedSelectionHash, owner.ExecutionFence, decision.StateVersion))
+                throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+            agentId = fixedAssociation.AgentId;
+            modelSelectionReference = fixedAssociation.ModelSelectionReference;
+            workflowStepId = fixedAssociation.StepId;
+        }
         var modelSelection = ReadModelSelection(
-            selection.Selection.Snapshot, workPlanItem.ModelSelectionReference);
+            selection.Selection.Snapshot, modelSelectionReference);
         var runAdmission = await store.ReadRunAdmissionAsync(actor, selection, cancellationToken)
             .ConfigureAwait(false);
         await RequireUnchangedAuthorizedSelectionAsync(
@@ -61,27 +91,57 @@ public static partial class CoordinationEndpoints
             throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
         var currentDecision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
             .ConfigureAwait(false);
-        var currentWorkPlanItem = currentDecision.State.ConfirmedWorkPlan?.Plan.Items.FirstOrDefault(item =>
-            string.Equals(item.Id, owner.WorkPlanItemId, StringComparison.Ordinal));
         if (currentDecision.StateVersion != decision.StateVersion ||
             currentDecision.SelectionHash != decision.SelectionHash ||
             currentDecision.State.Fence != owner.ExecutionFence || !currentDecision.State.CanDispatch ||
-            currentWorkPlanItem is null ||
-            !string.Equals(currentWorkPlanItem.AgentId, workPlanItem.AgentId, StringComparison.Ordinal) ||
-            !string.Equals(currentWorkPlanItem.ModelSelectionReference,
-                workPlanItem.ModelSelectionReference, StringComparison.Ordinal))
+            currentDecision.State.ConfirmedWorkPlan is not { } currentConfirmedPlan)
             throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+        if (owner.WorkPlanItemId is { } currentWorkPlanItemId)
+        {
+            var currentWorkPlanItem = currentConfirmedPlan.Plan.Items.FirstOrDefault(item =>
+                string.Equals(item.Id, currentWorkPlanItemId, StringComparison.Ordinal));
+            if (currentWorkPlanItem is null ||
+                !string.Equals(currentWorkPlanItem.AgentId, agentId, StringComparison.Ordinal) ||
+                !string.Equals(currentWorkPlanItem.ModelSelectionReference, modelSelectionReference,
+                    StringComparison.Ordinal))
+                throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+        }
+        else
+        {
+            var currentPlan = WorkPlanValidator.ValidateAndSnapshot(
+                currentConfirmedPlan.Workflow, currentConfirmedPlan.Plan, selectionContext);
+            if (!currentPlan.IsValid || currentPlan.Value is null)
+                throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+            var currentAssociation = await execution!.ReadFixedWorkAssociationAsync(
+                sessionId, currentPlan.Value.Plan.Id, cancellationToken).ConfigureAwait(false);
+            if (currentAssociation is null ||
+                !MatchesFixedRuntimeAssociation(currentAssociation, currentPlan.Value, selectionContext,
+                    root, sessionId, currentDecision.SelectionHash, owner.ExecutionFence,
+                    currentDecision.StateVersion) ||
+                !MatchesFixedRuntimeAssociation(fixedAssociation!, currentPlan.Value, selectionContext,
+                    root, sessionId, currentDecision.SelectionHash, owner.ExecutionFence,
+                    currentDecision.StateVersion))
+                throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+            if (await store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken).ConfigureAwait(false) != owner)
+                throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+            var latestDecision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
+                .ConfigureAwait(false);
+            if (latestDecision.StateVersion != decision.StateVersion ||
+                latestDecision.SelectionHash != decision.SelectionHash ||
+                latestDecision.State.Fence != owner.ExecutionFence || !latestDecision.State.CanDispatch)
+                throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+        }
         await RequireUnchangedAuthorizedSelectionAsync(
             context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
         return new RuntimeOwnerContext(
             1, actor.Issuer, actor.Subject, owner.TenantId, projectId, runId, sessionId,
-            workPlanItem.AgentId, workPlanItem.ModelSelectionReference, owner.RuntimeTurnId,
+            agentId, modelSelectionReference, owner.RuntimeTurnId,
             selection.Selection.ProjectRevision, selection.Selection.ProjectConfigurationRevision,
             selection.Selection.PlatformRuntimeRevision, selection.Selection.ContextRevision,
             owner.AcceptedSelectionHash.ToLowerInvariant(), owner.ExecutionFence, owner.LogicalTurnOrdinal,
             owner.StateVersion, decision.StateVersion)
         {
-            WorkflowStepId = workPlanItem.WorkflowStepId,
+            WorkflowStepId = workflowStepId,
             ModelCredentialReference = modelSelection.CredentialReference,
             ModelSourceMode = modelSelection.SourceMode,
             ModelBindingPin = runAdmission?.ModelBindingPin ?? modelSelection.ModelBindingPin,
@@ -94,6 +154,37 @@ public static partial class CoordinationEndpoints
             CopilotSoftCreditLimit = budgetLimits.CopilotSoftCreditLimit,
             CopilotHardCreditLimit = budgetLimits.CopilotHardCreditLimit
         };
+    }
+
+    internal static bool MatchesFixedRuntimeAssociation(
+        MafExecutionFixedWorkAssociation association,
+        WorkPlanSnapshot snapshot,
+        WorkPlanRunSelectionContext selectionContext,
+        SessionIdentity parent,
+        string childSessionId,
+        string acceptedSelectionHash,
+        long executionFence,
+        long decisionStateVersion)
+    {
+        if (association.AcceptedSelectionHash != acceptedSelectionHash ||
+            association.ExecutionFence != executionFence ||
+            association.DecisionStateVersion != decisionStateVersion)
+            return false;
+        var step = snapshot.Workflow.Definition.Steps.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, association.StepId, StringComparison.Ordinal));
+        if (step?.FixedWork is not { } specification)
+            return false;
+        var expected = MafExecutionPlanner.CreateFixedWorkAssociation(
+            snapshot, selectionContext, parent, step, acceptedSelectionHash, executionFence,
+            decisionStateVersion, association.ActivationRevision, childSessionId);
+        return specification.Title == association.Specification.Title &&
+            specification.Task == association.Specification.Task &&
+            specification.RoleId == association.Specification.RoleId &&
+            specification.Phase == association.Specification.Phase &&
+            specification.IsolationChoice == association.Specification.IsolationChoice &&
+            specification.DeclaredOutputs.SequenceEqual(
+                association.Specification.DeclaredOutputs, StringComparer.Ordinal) &&
+            (expected with { Specification = association.Specification }) == association;
     }
 
     private static RuntimeAcceptedModelSelection ReadModelSelection(
