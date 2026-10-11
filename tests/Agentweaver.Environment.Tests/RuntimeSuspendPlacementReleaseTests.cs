@@ -207,7 +207,7 @@ public sealed class RuntimeSuspendPlacementReleaseTests
             volume.ResourceGeneration, data ?? volume.DataGeneration, phase ?? volume.Phase,
             volume.LastOperation, volume.Specification, resource ?? volume.Resource, volume.ProviderBinding);
 
-    private static Fixture Create()
+    internal static Fixture Create()
     {
         var now = DateTimeOffset.UtcNow;
         var fence = new EnvironmentGenerationFence(new("tenant", "project", "run", "environment"), 1);
@@ -285,7 +285,7 @@ public sealed class RuntimeSuspendPlacementReleaseTests
         return new(request, lease, volume, new(flush, JsonSerializer.SerializeToElement(host, JsonOptions)));
     }
 
-    private sealed record Fixture(RuntimeSuspendPlacementReleaseRequest Request, SandboxLeaseSnapshot Lease,
+    internal sealed record Fixture(RuntimeSuspendPlacementReleaseRequest Request, SandboxLeaseSnapshot Lease,
         EnvironmentWorkspaceVolumeSnapshot Volume, WorkspaceVolumeFlushEvidence Evidence);
 
     private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider

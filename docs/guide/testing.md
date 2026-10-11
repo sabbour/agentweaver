@@ -54,6 +54,15 @@ They cover trusted next-generation evidence, replay without another producer cal
 The shared client checks original actor delivery, owner-bound resolution, no-store, and incomplete-result rejection.
 The evidence migration is checked against model metadata without a database connection.
 The related PostgreSQL case is compiled separately; these pure results do not prove SQL execution or mounted CSI durability.
+The staged resume checks compare the saved source and exact new mount, then require the actual Host hash and verified next Network generation.
+Controlled Kubernetes reads reject foreign Service owners, selectors, and DNS names before the pre-configuration request.
+The historical-read and lifecycle rollback/replay cases compile but require their separate PostgreSQL run.
+Bootstrap contract checks bind the saved server configuration, current registration, server-issued attempt, and exact delivery/loss proof.
+Controlled placement cases check authority loss at each reservation, attachment, and provider boundary.
+They preserve retained Storage and data, release no-effect leases, detach attempted mounts, and retain resources when provisioning already occurred.
+The schema checks compare migration metadata with the current owner-effects model, without applying SQL or changing grants.
+Those cases do not prove durable bootstrap restart, concurrent replacement, old-grant rejection, or native cache reconstruction.
+These source results do not prove native TLS, mounted restore contents, Cilium traffic enforcement, or deployed resume.
 
 | Test suite | What it exercises | What it does not prove |
 | --- | --- | --- |

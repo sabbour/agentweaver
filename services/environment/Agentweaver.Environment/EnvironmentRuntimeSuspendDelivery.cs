@@ -94,8 +94,8 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         var endpoint = placement.ConfigureEndpoint;
         if (endpoint.AbsolutePath != "/runtime/v1/configure")
             throw new RuntimeAuthorizationException("runtime_suspend_host_version_unavailable");
-        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeHostSuspendReceipt>(
-            client, new Uri(endpoint.GetLeftPart(UriPartial.Authority) + "/"), "/runtime/v1/suspend",
+        var receipt = await SendToHostAsync<RuntimeHostSuspendReceipt>(
+            placement, "/runtime/v1/suspend",
             actor, bound, cancellationToken).ConfigureAwait(false);
         ValidateSuspendReceipt(receipt, bound, timeProvider.GetUtcNow());
         var flush = receipt.WorkspaceFlush ??

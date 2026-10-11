@@ -182,6 +182,73 @@ It does not rewrite the original attachment or immutable provider selection.
 Workspace retention and reclaim rules remain unchanged.
 Pure checks cover these source contracts; PostgreSQL and mounted CSI execution require their separate acceptance runs.
 
+## Retained Workspace resume
+
+The Environment source first prepares and verifies the retained Workspace.
+Those two authenticated, no-store steps do not require a new Runtime registration or a configured model session.
+Both retain the original expiring actor and ask Core to confirm the exact saved operation.
+
+`POST /internal/runtime/resume/prepare` accepts `RuntimeWorkspaceResumeRequest`.
+It contains the complete source manifest, saved Host receipt, and exact flush transition revision.
+The optional `RestoredWorkspace` must be absent.
+Environment checks the recorded flush, released source Sandbox, retained volume, and unchanged accepted provider selection.
+Historical flush reads require the current active owner lock and an exact older lifecycle from that same owner.
+An old lifecycle does not gain permission to change current state.
+
+Prepare advances the Environment lifecycle once with a stable operation key.
+Core and Projects authority are checked after database waits and before that transition commits, including replay.
+Environment reapplies the same accepted Network rules with the source policy generation plus one.
+The recorded previous policy generation must equal the manifest's source generation.
+It provisions a new Sandbox with the retained Storage resource and data generation, then verifies the actual mount.
+The response contains the exact new lease, Workspace attachment, and transition revision.
+This is placement evidence, not verified Workspace content or permission to dispatch.
+Core saves that complete response before requesting the second step.
+
+`POST /internal/runtime/resume/verify` requires that saved `RestoredWorkspace`.
+Environment compares it with a fresh owner-scoped mount and Sandbox observation.
+It calls the new Host's read-only `/runtime/v1/workspace/resume` operation.
+The actual tree hash must equal the manifest hash.
+Environment then repeats the placement, Network object, and current-operation checks.
+Only the final receipt contains both the native content proof and verified new Network generation.
+Core must obtain it before advancing its execution fence, registering the new Runtime, restoring the existing cache, or dispatching.
+Provider-checkpoint and guest-snapshot restoration remain explicitly unsupported on this path.
+
+The new Host address comes from the owned Kubernetes Sandbox Service and its exact singleton Pod.
+Environment checks the Service owner, DNS name, selector, Pod UID, and Pod address.
+It connects to that observed Pod address while retaining normal TLS verification for the Service DNS name.
+This permits the pre-configuration read without requiring a readiness-gated DNS address.
+It does not bypass certificate validation or create another Service.
+The original configured owner/profile remains the source of the observation address and MCP setting.
+The saved provider request retains the resume source, so later bootstrap reads reconstruct the new address after restart.
+No caller or new placement-specific configuration supplies that address.
+
+After Core advances its execution fence, `POST /internal/runtime/resume/bootstrap` starts the new Runtime.
+It requires Core's phase-4 request, current registration, exact saved mount, and server-issued resume attempt.
+Environment reads the acknowledged server configuration from the protected Events material route.
+The saved configuration contains no credential values; no caller supplies replacement configuration.
+Events returns its exact bytes only after current Core and registration checks.
+Public event streams expose neither those bytes nor their private object reference.
+
+Environment uses the existing Broker delivery and Host activation paths.
+It stores each attempt's immutable request and complete receipt in the existing `owner_effects` table.
+The `RuntimeResumeBootstrap` migration changes only that table's check constraints.
+It adds no table or grant, and service startup never applies it.
+Attempts for one resume operation run in order.
+Owner and lease locks cover database changes, not calls back into Environment.
+Receipt replay still requires fresh Core, registration, placement, Host state, and native cache checks.
+A saved receipt alone cannot authorize dispatch.
+
+An acknowledged delivery followed by a fresh Host `Missing` state produces an explicit state-loss outcome.
+A timeout or generic refusal does not authorize replacement.
+Core must revoke the exact old registration under current authority before issuing a replacement attempt.
+Each attempt has distinct bootstrap, consume, and exchange IDs under the same durable resume operation.
+Ordinary Runtime bindings omit the resume fields and keep their existing hashes.
+The Core replacement path and Host journal-based cache recovery require their separate implementation and acceptance.
+Until that recovery succeeds, Core must not treat a missing cache or lost Host state as readiness.
+
+The pure checks cover request, receipt, actor, authority, attempt identity, explicit loss proof, schema metadata, and controlled Kubernetes routing behavior.
+They do not prove PostgreSQL execution, native TLS, actual remount contents, Cilium traffic enforcement, or a deployed resume.
+
 ## Workspace, network, and readiness
 
 Provisioning accepts a Workspace volume ID and exact resource/data generations,

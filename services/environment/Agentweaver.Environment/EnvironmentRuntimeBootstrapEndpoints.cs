@@ -9,6 +9,22 @@ public static class EnvironmentRuntimeBootstrapEndpoints
 {
     public static IEndpointRouteBuilder MapEnvironmentRuntimeBootstrap(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapPost("/internal/runtime/resume/bootstrap", async (
+            RuntimeResumeBootstrapRequest request, HttpContext context,
+            EnvironmentRuntimeBootstrapDelivery delivery, TimeProvider timeProvider, CancellationToken token) =>
+            await ExecuteAsync(context, timeProvider, async actor =>
+            {
+                try
+                {
+                    var receipt = await delivery.BootstrapResumeAsync(request, actor, token).ConfigureAwait(false);
+                    return new RuntimeResumeBootstrapOutcome(receipt, null).ValidateFor(request);
+                }
+                catch (RuntimeResumeBootstrapStateLostException loss)
+                {
+                    return new RuntimeResumeBootstrapOutcome(null, loss.Receipt).ValidateFor(request);
+                }
+            }, token).ConfigureAwait(false))
+            .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/v1/activate", async (
             RuntimeHostConfigureRequest request, HttpContext context,
             EnvironmentRuntimeBootstrapDelivery delivery, TimeProvider timeProvider, CancellationToken token) =>

@@ -184,7 +184,8 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         var scope = RequireScope(principal);
         var identity = scope.ForSession(sessionId);
         ValidateInput(input);
-        if (input.Payload is PolicyEvaluationSessionPayload or ProducedRunCaptureSessionPayload)
+        if (input.Payload is PolicyEvaluationSessionPayload or ProducedRunCaptureSessionPayload or
+            RuntimeConfigurationSessionPayload)
             throw new SessionAccessDeniedException(
                 "This event requires trusted owner writer provenance.");
         if (SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload).Any(
@@ -213,6 +214,9 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             CacheReferenceSessionPayload cache when
                 references is [{ Material: { Kind: SessionMaterialKind.SdkCache } } stored] =>
                 stored == cache.Cache,
+            RuntimeConfigurationSessionPayload configuration when
+                references is [{ Material: { Kind: SessionMaterialKind.RuntimeConfiguration } } stored] =>
+                stored == configuration.Configuration,
             ToolCallSessionPayload toolCall when
                 toolCall.State == "completed" &&
                 toolCall.Arguments is null &&
@@ -225,7 +229,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             _ => false
         };
         if (!validMaterialPayload)
-            throw new ArgumentException("Only typed execution turn, SDK cache, or reviewed tool result material is accepted.");
+            throw new ArgumentException("Only typed execution turn, SDK cache, Runtime configuration, or reviewed tool result material is accepted.");
         return AppendCoreAsync(RequireScope(principal).ForSession(sessionId), input,
             cancellationToken, validateBeforeCommit, persistMaterial);
     }

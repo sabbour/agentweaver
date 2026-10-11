@@ -567,6 +567,38 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             store.CompleteWorkspaceVolumeFlushAsync(
                 retry.OperationId, fence, true, conflict, true, CancellationToken.None));
         Assert.Equal("environment_volume_flush_evidence_conflict", exception.Code);
+        var advanced = await store.TransitionAsync(
+            new(owner, fence.LifecycleGeneration, EnvironmentLifecycleState.Active, "resume-generation"),
+            CancellationToken.None);
+        Assert.Equal(evidence.Receipt, (await store.GetRetainedWorkspaceVolumeFlushEvidenceAsync(
+            advanced.Snapshot.Fence, fence, volumeId, completed.TargetTransitionRevision,
+            CancellationToken.None))!.Receipt);
+        await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            store.GetWorkspaceVolumeFlushEvidenceAsync(
+                fence, volumeId, completed.TargetTransitionRevision, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.GetRetainedWorkspaceVolumeFlushEvidenceAsync(fence, advanced.Snapshot.Fence,
+                volumeId, completed.TargetTransitionRevision, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ResumeLifecycleGuardRollsBackANewTransitionAndRejectsItsReplay()
+    {
+        var store = fixture.CreateStore();
+        var owner = NewOwner();
+        var source = (await RegisterAsync(store, owner)).Snapshot.Fence;
+        var request = new EnvironmentLifecycleTransitionRequest(
+            owner, source.LifecycleGeneration, EnvironmentLifecycleState.Active, "resume-current-operation");
+        Task DenyAsync(CancellationToken _) =>
+            throw new RuntimeAuthorizationException("runtime_resume_authority_stale");
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            store.TransitionAsync(request, CancellationToken.None, DenyAsync));
+        Assert.Equal(source, (await store.GetAsync(owner, CancellationToken.None))!.Fence);
+        var completed = await store.TransitionAsync(request, CancellationToken.None);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            store.TransitionAsync(request, CancellationToken.None, DenyAsync));
+        Assert.Equal(completed.Snapshot.Fence, (await store.GetAsync(owner, CancellationToken.None))!.Fence);
+        Assert.True((await store.TransitionAsync(request, CancellationToken.None)).Replayed);
     }
 
     [Fact]

@@ -22,6 +22,38 @@ Workspace detach and Sandbox lease cases reject authority lost immediately befor
 Compilation alone does not prove that case ran.
 These checks do not prove native cache capture, mounted flush durability, placement retirement, or a complete suspend/resume flow.
 
+Run the bounded resume and affected pure source checks:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --filter "FullyQualifiedName~RuntimeWorkspaceResumeTests|FullyQualifiedName~RuntimeResumeBootstrapTests|FullyQualifiedName~RuntimeSuspendPlacementReleaseTests|FullyQualifiedName~RuntimeWorkspaceSuspendHttpClientTests|FullyQualifiedName~EnvironmentEgressManagerTests|FullyQualifiedName~AgentSandboxProviderTests|FullyQualifiedName~SandboxBuildTestProductionWiringTests" `
+  --no-restore --verbosity quiet
+```
+
+These cases distinguish a new mount receipt from actual content verification.
+They reject changed source manifests, data, cache acknowledgments, target mounts, tree hashes, and Network generations.
+The original actor and tenant must reach both stages and the native verifier.
+Expired actors, denied or changed Core responses, and missing no-store responses are rejected.
+Bootstrap cases check exact acknowledged configuration bytes, attempt IDs, and the revoked prior registration.
+They reject a changed delivery, attempt, registration, or Host loss proof.
+Missing owner composition cannot reach Broker delivery.
+The exact source-manager case reaches its first lifecycle-effect boundary; changed selection, source lease, flush, Host receipt, or volume fails before it.
+That boundary test does not prove successful placement or the complete bootstrap producer.
+The separate producer case runs the actual Environment bootstrap, placement, Sandbox, and Network managers with controlled owner, provider, Events, and Host responses.
+It checks saved configuration delivery, full activation, exact replay, Host state loss, changed live receipts, and actor expiry after the probe.
+Placement cases revoke resume authority after reservation, before saving the provider request, before attachment, before provisioning, and after provisioning.
+Before provisioning, the owner completes the no-effect lease and detaches any attempted attachment without changing retained Storage or data.
+After provisioning, the owner retains the exact returned resource for recovery rather than claiming that no effect occurred.
+Those controlled responses do not prove native PostgreSQL, SDK, or Kubernetes execution.
+Migration cases check the new owner-effect constraints and unchanged table shape without executing SQL.
+Controlled Kubernetes reads check the actual Pod address and owned Service before configuration.
+Foreign Service owners, selectors, and DNS names cannot provide a Runtime endpoint.
+The PostgreSQL cases separately check current-owner-authorized historical flush reads and lifecycle rollback or replay denial.
+Those cases compile but require their separately approved execution.
+Durable bootstrap restart, concurrent attempt replacement, and old-grant refusal require separate native PostgreSQL checks.
+Full Host restart recovery also requires actual journal-based cache reconstruction and exact-version deployed acceptance.
+None of these pure results proves native TLS, real remount contents, Cilium traffic enforcement, or a complete deployed resume.
+
 Run the focused Sandbox source tests from the repository root:
 
 ```powershell

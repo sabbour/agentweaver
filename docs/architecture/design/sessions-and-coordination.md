@@ -329,7 +329,7 @@ stateDiagram-v2
     state "Suspended" as Suspended
     state "Validating resume" as Validating
     state "Environment ready" as EnvironmentReady
-    state "Network intent verified" as NetworkReady
+    state "Workspace and Network verified" as NetworkReady
     state "Interrupted" as Interrupted
     [*] --> Running
     Running --> Fenced: suspend requested
@@ -347,9 +347,9 @@ stateDiagram-v2
     Suspended --> Validating: resume requested
     Interrupted --> Validating: recovery requested
     Interrupted --> Validating: new operation after required transport becomes available
-    Validating --> EnvironmentReady: manifest references agree
+    Validating --> EnvironmentReady: references agree; retained volume remounted
     Validating --> Interrupted: generation or reference mismatch
-    EnvironmentReady --> NetworkReady: restore or reprovision and verify egress
+    EnvironmentReady --> NetworkReady: hash actual remount; verify new Network generation
     NetworkReady --> Running: advance fence and admit turns
 ```
 
@@ -391,8 +391,27 @@ workspace volume. The separate storage entry mitigates
 6. Resume checks identities, journal and checkpoint references, storage and lifecycle
    generations, and the current fence. An incompatible conversation cache takes the
    journal-rebuild path; a mismatched storage or environment generation blocks dispatch.
-7. It restores an eligible guest or provisions a new one, reapplies and verifies network
-   intent, then advances the fence and resumes at the recorded workflow boundary.
+7. It restores an eligible guest or provisions a new one with the exact retained volume.
+   Core saves the complete new mount response before requesting native content verification.
+   The Host hashes that actual remount; Environment repeats current owner and Network checks.
+   Only then does Core advance its execution fence and register the new Runtime.
+8. Environment reads the acknowledged server configuration through the protected Events owner.
+   The existing Broker and Host paths deliver fresh credentials and activate the exact new registration.
+   Environment persists the complete attempt receipt and rechecks current Host state and native cache evidence.
+   Only successful activation and recovery permit dispatch at the recorded workflow boundary.
+
+The [Environment source path](../environment-sandbox.md#retained-workspace-resume)
+uses separate prepare and verify requests, with no new Runtime-registration prerequisite.
+It verifies a tree hash and reapplies the same accepted Network rules with the next policy generation.
+Provider-checkpoint and guest-snapshot restoration are not implemented by that source path.
+The post-fence bootstrap uses a server-issued attempt ID stored in the immutable Runtime registration.
+Retries reconcile the same attempt and its saved receipt.
+An acknowledged delivery and a fresh, exact Host missing-state proof can authorize Core to replace that attempt.
+Core first revokes the exact prior registration; a timeout alone never causes replacement.
+Replacement keeps the durable resume operation, accepted selection, retained Workspace, and execution fence unchanged.
+It uses new credential operations, not saved credential values.
+Missing or incompatible SDK caches must reconstruct context from the authenticated journal before dispatch.
+The current Environment source does not claim that the full Core replacement and Host reconstruction path is complete.
 
 A provider can suspend or move an environment without a prior Agentweaver request.
 Its lifecycle event enters reconciliation under the same fence. If the required

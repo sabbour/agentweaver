@@ -282,7 +282,29 @@ namespace Agentweaver.Environment.Migrations
                         {
                             t.HasCheckConstraint("ck_environment_owner_effects_buildtest_command", "effect_kind <> 'BuildTestCommand' OR (\r\n    operation = 'Execute'\r\n    AND resource_id IS NOT NULL\r\n    AND expected_provider_seam = 'Sandbox'\r\n    AND expected_provider_id IS NOT NULL\r\n    AND expected_provider_resource_id IS NOT NULL\r\n    AND target_provider_seam IS NULL\r\n    AND target_provider_id IS NULL\r\n    AND target_provider_resource_id IS NULL\r\n    AND policy_generation IS NULL\r\n    AND expected_previous_policy_generation IS NULL\r\n    AND expected_transition_revision IS NULL\r\n    AND expected_resource_generation IS NULL\r\n    AND expected_data_generation IS NULL\r\n    AND target_transition_revision IS NULL\r\n    AND target_resource_generation IS NULL\r\n    AND target_data_generation IS NULL\r\n    AND target_volume_state IS NULL\r\n    AND specification_json IS NOT NULL\r\n    AND expected_provider_binding_json IS NOT NULL\r\n    AND target_provider_binding_json IS NOT NULL\r\n)");
 
-                            t.HasCheckConstraint("ck_environment_owner_effects_kind", "effect_kind IN ('NetworkPolicy', 'WorkspaceVolume', 'BuildTestCommand')");
+                            t.HasCheckConstraint("ck_environment_owner_effects_kind", "effect_kind IN ('NetworkPolicy', 'WorkspaceVolume', 'BuildTestCommand', 'RuntimeResumeBootstrap')");
+
+                            t.HasCheckConstraint("ck_environment_owner_effects_runtime_resume_bootstrap",
+                                """
+                                effect_kind <> 'RuntimeResumeBootstrap' OR (
+                                    operation = 'Activate' AND resource_id IS NOT NULL
+                                    AND expected_provider_seam = 'Sandbox' AND expected_provider_id IS NOT NULL
+                                    AND expected_provider_resource_id IS NOT NULL AND expected_provider_resource_id = resource_id
+                                    AND target_provider_seam IS NULL AND target_provider_id IS NULL
+                                    AND target_provider_resource_id IS NULL AND policy_generation IS NULL
+                                    AND expected_previous_policy_generation IS NULL
+                                    AND expected_transition_revision IS NULL AND expected_resource_generation IS NULL
+                                    AND expected_data_generation IS NULL AND target_transition_revision IS NULL
+                                    AND target_resource_generation IS NULL AND target_data_generation IS NULL
+                                    AND target_volume_state IS NULL AND flush_evidence_json IS NULL
+                                    AND specification_json IS NOT NULL AND expected_provider_binding_json IS NOT NULL
+                                    AND effect_state IN ('Reserved', 'Completed', 'Stale')
+                                    AND ((effect_state = 'Completed' AND target_provider_binding_json IS NOT NULL
+                                          AND completed_at IS NOT NULL)
+                                         OR (effect_state IN ('Reserved', 'Stale') AND target_provider_binding_json IS NULL
+                                             AND completed_at IS NULL))
+                                )
+                                """);
 
                             t.HasCheckConstraint("ck_environment_owner_effects_lifecycle_generation", "lifecycle_generation > 0");
 

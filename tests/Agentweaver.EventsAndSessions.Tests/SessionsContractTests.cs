@@ -44,6 +44,7 @@ public sealed class SessionsContractTests
                 1,
                 AddressedMessagePurpose.Handoff),
             CapturePayload(),
+            new RuntimeConfigurationSessionPayload(null),
         };
 
         Assert.Equal(Enum.GetValues<SessionEventKind>(),

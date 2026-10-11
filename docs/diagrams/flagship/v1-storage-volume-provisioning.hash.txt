@@ -2,11 +2,11 @@
   "version": 2,
   "source": {
     "file": "v1-storage-volume-provisioning.json",
-    "sha256": "8a9b64996a866185846b577abcd77a0950314e4cf2274bfab13deedb75c45381"
+    "sha256": "02091ae9cc0d1d042b1e2e48c2e49d31bc433fba30d6c39089c0581176056efa"
   },
   "drawio": {
     "file": "v1-storage-volume-provisioning.drawio",
-    "sha256": "2043e46376a90f9fe9f3f11f0dfe2b83bdaa70ceee44a52bfd5ebd6f357c95b3"
+    "sha256": "1b74fb590d8fd83e7762f8d83c49796b5d1e4586c273eb9dc2754ae9265451f3"
   },
   "renderer": {
     "renderer": "draw.io Desktop",
@@ -17,6 +17,6 @@
   },
   "png": {
     "file": "v1-storage-volume-provisioning.png",
-    "sha256": "52d3c60002215810c57c846c38030519e59099cf1bcf4149486688716150c22e"
+    "sha256": "ce15899cd586d00514a1baf61ec8b7aa21561fa41b0198299da30af6d457a1da"
   }
 }

@@ -965,7 +965,7 @@ internal static partial class GatewayOpenApi
         ["SessionEventEnvelope"] = Obj(["schemaVersion", "eventVersion", "eventId", "identity", "position", "occurredAt", "kind", "payload", "objectReferences"],
             ("schemaVersion", Int()), ("eventVersion", Int()), ("eventId", Uuid()), ("identity", Ref("SessionIdentity")),
             ("position", Int()), ("occurredAt", Date()),
-            ("kind", Enum("turn", "toolCall", "policyEvaluation", "decisionAccepted", "effectAccepted", "artifactReference", "cacheReference", "addressedMessage")),
+            ("kind", Enum("turn", "toolCall", "policyEvaluation", "decisionAccepted", "effectAccepted", "artifactReference", "cacheReference", "addressedMessage", "runtimeConfiguration")),
             ("payload", Ref("SessionEventPayload")), ("objectReferences", Arr(Ref("StoredSessionObjectReference")))),
         ["SessionEventPayload"] = new Dictionary<string, object>
         {
@@ -974,6 +974,7 @@ internal static partial class GatewayOpenApi
                 Ref("TurnSessionPayload"), Ref("ToolCallSessionPayload"), Ref("PolicyEvaluationSessionPayload"),
                 Ref("AcceptedDecisionSessionPayload"), Ref("AcceptedEffectSessionPayload"), Ref("ArtifactReferenceSessionPayload"),
                 Ref("CacheReferenceSessionPayload"), Ref("AddressedMessageSessionPayload"),
+                Ref("RuntimeConfigurationSessionPayload"),
             },
         },
         ["TurnSessionPayload"] = Obj(["kind", "role", "content"], ("kind", Const("turn")), ("role", Str()), ("content", Ref("SessionObjectReference"))),
@@ -988,6 +989,9 @@ internal static partial class GatewayOpenApi
         ["ArtifactReferenceSessionPayload"] = Obj(["kind", "artifact"], ("kind", Const("artifact_reference")), ("artifact", Ref("SessionObjectReference"))),
         ["CacheReferenceSessionPayload"] = Obj(["kind", "cache", "runtimeVersion", "bindingId"],
             ("kind", Const("cache_reference")), ("cache", Ref("SessionObjectReference")), ("runtimeVersion", Str()), ("bindingId", Str())),
+        ["RuntimeConfigurationSessionPayload"] = Obj(["kind", "configuration"],
+            ("kind", Const("runtime_configuration")),
+            ("configuration", new Dictionary<string, object> { ["type"] = "null" })),
         ["AddressedMessageSessionPayload"] = Obj(["kind", "messageId", "sender", "recipient", "threadId", "threadSequence", "purpose"],
             ("kind", Const("addressed_message")), ("messageId", Uuid()), ("sender", Ref("SessionIdentity")),
             ("recipient", Ref("SessionIdentity")), ("threadId", Uuid()), ("threadSequence", Int()),

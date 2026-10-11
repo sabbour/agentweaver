@@ -56,7 +56,8 @@ public sealed class EnvironmentLifecycleStore(
 
     public async Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
         EnvironmentLifecycleTransitionRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         var fingerprint = LifecycleFingerprint(request);
@@ -76,6 +77,8 @@ public sealed class EnvironmentLifecycleStore(
                 throw new EnvironmentLifecycleException(
                     "environment_idempotency_conflict",
                     "The Environment lifecycle idempotency key was already used for a different transition.");
+            if (beforeCommitCheck is not null)
+                await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new(
                 new EnvironmentLifecycleSnapshot(
@@ -181,6 +184,8 @@ public sealed class EnvironmentLifecycleStore(
             await operation.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (beforeCommitCheck is not null)
+            await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new(snapshot, Replayed: false);
     }
@@ -1029,21 +1034,34 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
-    public async Task<WorkspaceVolumeFlushEvidence?> GetWorkspaceVolumeFlushEvidenceAsync(
+    public Task<WorkspaceVolumeFlushEvidence?> GetWorkspaceVolumeFlushEvidenceAsync(
         EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        long targetTransitionRevision,
+        CancellationToken cancellationToken) =>
+        GetRetainedWorkspaceVolumeFlushEvidenceAsync(
+            environmentFence, environmentFence, volumeId, targetTransitionRevision, cancellationToken);
+
+    public async Task<WorkspaceVolumeFlushEvidence?> GetRetainedWorkspaceVolumeFlushEvidenceAsync(
+        EnvironmentGenerationFence currentFence,
+        EnvironmentGenerationFence sourceFence,
         string volumeId,
         long targetTransitionRevision,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(environmentFence);
+        ArgumentNullException.ThrowIfNull(currentFence);
+        ArgumentNullException.ThrowIfNull(sourceFence);
+        if (sourceFence.Owner != currentFence.Owner ||
+            sourceFence.LifecycleGeneration > currentFence.LifecycleGeneration)
+            throw new ArgumentException("Retained workspace evidence must belong to the current Environment owner.");
         ArgumentException.ThrowIfNullOrWhiteSpace(volumeId);
         if (targetTransitionRevision < 1)
             throw new ArgumentOutOfRangeException(nameof(targetTransitionRevision));
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        await AcquireOwnerLockAsync(connection, transaction, environmentFence.Owner, cancellationToken)
+        await AcquireOwnerLockAsync(connection, transaction, currentFence.Owner, cancellationToken)
             .ConfigureAwait(false);
-        await RequireActiveInTransactionAsync(connection, transaction, environmentFence, cancellationToken)
+        await RequireActiveInTransactionAsync(connection, transaction, currentFence, cancellationToken)
             .ConfigureAwait(false);
         WorkspaceVolumeOperation? operation;
         await using (var command = new NpgsqlCommand($"""
@@ -1063,13 +1081,13 @@ public sealed class EnvironmentLifecycleStore(
               AND resource_id = @volume_id AND target_transition_revision = @target_transition_revision
             """, connection, transaction))
         {
-            AddOwnerParameters(command, environmentFence.Owner);
-            command.Parameters.AddWithValue("lifecycle_generation", environmentFence.LifecycleGeneration);
+            AddOwnerParameters(command, currentFence.Owner);
+            command.Parameters.AddWithValue("lifecycle_generation", sourceFence.LifecycleGeneration);
             command.Parameters.AddWithValue("volume_id", volumeId);
             command.Parameters.AddWithValue("target_transition_revision", targetTransitionRevision);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             operation = await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-                ? ReadWorkspaceVolumeOperation(reader, environmentFence.Owner) : null;
+                ? ReadWorkspaceVolumeOperation(reader, currentFence.Owner) : null;
         }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return operation?.FlushEvidence;

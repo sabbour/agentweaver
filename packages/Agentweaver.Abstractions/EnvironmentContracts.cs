@@ -488,7 +488,8 @@ public interface IEnvironmentLifecycleStore
 
     Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
         EnvironmentLifecycleTransitionRequest request,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null);
 
     Task<EnvironmentNetworkEffectReservation> ReserveNetworkEffectAsync(
         EnvironmentGenerationFence fence,
@@ -716,6 +717,14 @@ public interface IEnvironmentLifecycleStore
         long targetTransitionRevision,
         CancellationToken cancellationToken) =>
         throw new NotSupportedException("The Environment owner cannot read durable workspace flush evidence.");
+
+    Task<WorkspaceVolumeFlushEvidence?> GetRetainedWorkspaceVolumeFlushEvidenceAsync(
+        EnvironmentGenerationFence currentFence,
+        EnvironmentGenerationFence sourceFence,
+        string volumeId,
+        long targetTransitionRevision,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("The Environment owner cannot read retained workspace flush evidence.");
 
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeReleaseAsync(
         EnvironmentGenerationFence environmentFence,

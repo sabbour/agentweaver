@@ -21,6 +21,78 @@ namespace Agentweaver.EventsAndSessions.Tests;
 public sealed class SessionsEndpointFakeTests
 {
     [Theory]
+    [InlineData("/internal/runtime/resume/configuration", false)]
+    [InlineData("/internal/runtime/resume/configuration", true)]
+    [InlineData("/internal/sessions/session-1/runtime-configuration", false)]
+    [InlineData("/internal/sessions/session-1/runtime-configuration", true)]
+    public async Task ConfigurationRoutesRejectHttpAndForwardedHttpsBeforeReadingPrivateBody(string path, bool https)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication("test")
+            .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>("test", _ => { });
+        builder.Services.AddAuthorization();
+        await using var app = builder.Build();
+        UnexpectedBodyReadStream? body = null;
+        app.Use(async (context, next) =>
+        {
+            context.Request.Scheme = https ? "https" : "http";
+            body = new UnexpectedBodyReadStream();
+            context.Request.Body = body;
+            await next();
+        });
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapSessionMaterialEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var response = await client.PostAsync(path, new StringContent("private accepted configuration"));
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Contains("runtime_configuration_direct_https_required", await response.Content.ReadAsStringAsync());
+        Assert.NotNull(body);
+        Assert.False(body.WasRead);
+    }
+
+    [Fact]
+    public void PublicReplayHidesConfigurationKeysDigestsBindingsAndReferences()
+    {
+        var hash = new string('a', 64);
+        var reference = new SessionObjectReference(
+            new ObjectKey("private/configuration/opaque-key"),
+            SessionMaterialValidation.Purpose(SessionMaterialKind.RuntimeConfiguration), 2)
+        {
+            Material = new(1, SessionMaterialKind.RuntimeConfiguration, "tenant-1", hash,
+                Guid.NewGuid(), 1, 1, new string('b', 64), "sdk-v1", "runtime-v1", "model:selected", "model")
+        };
+        var json = JsonSerializer.Serialize(new
+        {
+            schemaVersion = SessionsContractVersions.CurrentSchemaVersion,
+            eventVersion = SessionsContractVersions.CurrentEventVersion,
+            eventId = Guid.NewGuid(),
+            identity = new SessionIdentity("project-1", "run-1", "session-1"),
+            position = 1,
+            occurredAt = DateTimeOffset.UtcNow,
+            payload = (SessionEventPayload)new RuntimeConfigurationSessionPayload(reference),
+            objectReferences = new[]
+            {
+                new StoredSessionObjectReference(reference, new("events-owner", DateTimeOffset.UtcNow.AddDays(1)))
+            }
+        }, CreateJsonOptions());
+        var recorded = JsonSerializer.Deserialize<SessionEventEnvelope>(json, CreateJsonOptions())!;
+        var projected = PublicSessionEventProjection.Project(new SessionEventPage([recorded], null, false));
+        var result = Assert.Single(projected.Events);
+        Assert.Null(Assert.IsType<RuntimeConfigurationSessionPayload>(result.Payload).Configuration);
+        Assert.Empty(result.ObjectReferences);
+        var publicJson = JsonSerializer.Serialize(projected, CreateJsonOptions());
+        Assert.DoesNotContain(reference.Key.Value, publicJson);
+        Assert.DoesNotContain(hash, publicJson);
+        Assert.DoesNotContain(reference.Material.RuntimeInstanceId.ToString("D"), publicJson);
+        Assert.Equal(publicJson,
+            JsonSerializer.Serialize(PublicSessionEventProjection.Project(projected), CreateJsonOptions()));
+    }
+
+    [Theory]
     [InlineData("/internal/sessions/session-1/remote-tool-results")]
     [InlineData("/internal/sessions/session-1/remote-tool-results/read")]
     public async Task ReviewedRemoteToolResultRoutesRejectHttpBeforeReadingBody(string path)
