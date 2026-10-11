@@ -132,7 +132,13 @@ verified reference; Core neither creates nor verifies it.
 
 The Orchestrator owner candidate persists these tasks and dependencies and exposes
 run-scoped routes under `/api/projects/{projectId}/runs/{runId}/backlog` for graph
-reads, task creation/state/archive, dependency edits, and claims. Mutations carry the
+reads, task creation/state/archive, dependency edits, and claims.
+The owner migrator applies the packaged 016 backlog resource during initialization.
+It also adds this resource to existing version-19 and version-20 schemas that lack it.
+Graph edits use table permissions, not schema ownership or migration-history writes.
+The restricted-role PostgreSQL test creates tasks and adds and removes a dependency.
+It rejects task deletion, table truncation, schema changes, and migration-history writes.
+Mutations carry the
 expected graph revision; task state and archive operations also carry the task
 revision, while claims include an idempotency key. A claim locks graph and task rows
 before accepted-run and decision state, then commits the task's exact revision with
@@ -564,9 +570,15 @@ Changing the input preserves the event ID but changes its input hash.
 The internal snapshot store persists and resolves exact snapshot references.
 It rejects conflicting reuse of a snapshot ID and checks the stored digest and
 identity fields on every read. The embedded 018 SQL resource rejects row updates
-and deletes. The normal owner migration path does not yet apply that resource.
-PostgreSQL tests apply it directly and check persistence, conflicts, corruption,
-and rejected row changes.
+and deletes. The normal owner migration path applies this resource and the 016 backlog resource.
+It accepts existing version-19 and version-20 schemas without those resources and preserves their original migration history.
+Verification requires both migration records, their tables, and the enabled snapshot update/delete trigger.
+Column checks use PostgreSQL catalogs, so read-only verification does not require permissions on unrelated owner tables.
+Version 17 remains unregistered and is rejected.
+PostgreSQL tests use the normal migration path and check persistence, conflicts, corruption, and rejected row changes.
+The restricted snapshot role can select and insert snapshots and read migration history.
+It cannot update, delete, truncate, disable the trigger, create tables, or write migration history.
+These permissions support exact snapshot replay without schema ownership.
 
 `ReviewedRemoteToolResultVerifier` rebuilds the call from the current runtime
 registration, accepted Projects selection, selected immutable snapshot, and exact
@@ -582,6 +594,10 @@ not permission to send a request or disclose a result.
 
 ```mermaid
 classDiagram
+    class CoordinationOwnerMigrator {
+        +Apply016BacklogAnd018Snapshots
+        +VerifyRegisteredTablesAndTrigger
+    }
     class ReviewedRemoteToolSnapshot {
         +ConnectionConfigurationAndReview
         +SnapshotDigest
@@ -616,6 +632,7 @@ classDiagram
         +OpaqueContent
     }
     ReviewedRemoteToolSnapshot --> ReviewedRemoteToolSnapshotReference : exact identity
+    CoordinationOwnerMigrator ..> ReviewedRemoteToolSnapshotStore : initialize and verify table
     ReviewedRemoteToolSnapshotReference ..> ReviewedRemoteToolSnapshotStore : exact row lookup
     ReviewedRemoteToolSnapshot --> ReviewedRemoteToolCall : reviewed input
     RemoteToolCallExecutionBinding --> ReviewedRemoteToolCall : execution input
