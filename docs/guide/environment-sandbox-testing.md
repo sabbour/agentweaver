@@ -38,6 +38,15 @@ Bootstrap cases check exact acknowledged configuration bytes, attempt IDs, and t
 Resume preparation rejects missing or changed configuration acknowledgments before any owner request or Environment effect.
 These resume-only checks do not require configuration acknowledgments in ordinary suspend receipts.
 They reject a changed delivery, attempt, registration, or Host loss proof.
+Journal-rebuild contract cases keep the old cache acknowledgment and current Host facts separate.
+They check exact checkpoint, flushed position, digest format, attempt, and the explicit pending-cache state.
+Native-cache receipts reject a journal-rebuild proof; unknown recovery modes and cache states are denied.
+The prefix digest accepts legitimate gaps from interleaved sessions and authenticated fork history.
+It rejects changed source configuration or cache references, missing required events, duplicate IDs, invalid ordering, and oversized prefixes.
+Digest validation alone does not prove authenticated page completion or material bytes.
+Host producer tests must separately reject page, cursor, owner, transport, and byte-hash failures without using later journal records.
+Pending cache means no new native cache is claimed until a real authorized turn captures and persists genuine SDK files.
+Suspend before such files exist must fail explicitly, not manufacture cache evidence.
 Missing owner composition cannot reach Broker delivery.
 The exact source-manager case reaches its first lifecycle-effect boundary; changed selection, source lease, flush, Host receipt, or volume fails before it.
 That boundary test does not prove successful placement or the complete bootstrap producer.

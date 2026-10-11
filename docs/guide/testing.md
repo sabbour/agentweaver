@@ -59,6 +59,9 @@ Controlled Kubernetes reads reject foreign Service owners, selectors, and DNS na
 The historical-read and lifecycle rollback/replay cases compile but require their separate PostgreSQL run.
 Bootstrap contract checks bind the saved server configuration, current registration, server-issued attempt, and exact delivery/loss proof.
 Resume preparation rejects missing or changed private configuration before owner calls; ordinary suspend receipt validation remains unchanged.
+Journal-rebuild receipts bind the saved journal boundary and current attempt while marking native cache as pending until a real authorized turn.
+The ordered prefix checks allow run-wide position gaps and reject changed source references, duplicate events, invalid order, and excessive size.
+These contract checks do not prove native cache persistence, authenticated pagination, or material-byte recovery.
 Controlled placement cases check authority loss at each reservation, attachment, and provider boundary.
 They preserve retained Storage and data, release no-effect leases, detach attempted mounts, and retain resources when provisioning already occurred.
 The schema checks compare migration metadata with the current owner-effects model, without applying SQL or changing grants.

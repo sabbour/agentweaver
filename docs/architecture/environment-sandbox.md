@@ -237,16 +237,36 @@ The `RuntimeResumeBootstrap` migration changes only that table's check constrain
 It adds no table or grant, and service startup never applies it.
 Attempts for one resume operation run in order.
 Owner and lease locks cover database changes, not calls back into Environment.
-Receipt replay still requires fresh Core, registration, placement, Host state, and native cache checks.
+Receipt replay still requires fresh Core, registration, placement, Host state, and recovery-evidence checks.
 A saved receipt alone cannot authorize dispatch.
+
+Recovery distinguishes `native-cache` from `journal-rebuild`.
+The native path validates the exact compatible saved cache.
+If the cache is missing or incompatible, the Host may rebuild history from the authenticated saved session journal.
+It must keep the exact checkpoint and flushed position, check every page, and reject changed source references.
+Run-wide positions can have valid gaps in a session-visible page.
+Existing fork visibility remains controlled by Events; unrelated session history is not a fallback.
+Authorization, transport, configuration, hash, and fence failures do not permit recovery from another source.
+
+`JournalRebuild` keeps the original source cache acknowledgment separate from the current Host facts.
+It records the saved checkpoint, upper position, ordered journal digest, and current resume attempt.
+The native cache state is `PendingUntilAuthorizedTurn`.
+This means that a new native cache was not captured or proved during resume.
+The pinned SDK does not establish a supported client-filesystem checkpoint before a real turn.
+The next real authorized turn uses the existing native cache capture and Events write path.
+Suspend before genuine native files exist fails explicitly as `runtime_sdk_cache_unavailable`.
+The Host must not create placeholder files, send a synthetic turn, or report an empty cache as successful persistence.
+Replay and Host replacement use the same saved journal boundary, not a later journal.
+The shared digest validates returned references; authenticated producer reads must verify bytes and page completion.
 
 An acknowledged delivery followed by a fresh Host `Missing` state produces an explicit state-loss outcome.
 A timeout or generic refusal does not authorize replacement.
 Core must revoke the exact old registration under current authority before issuing a replacement attempt.
 Each attempt has distinct bootstrap, consume, and exchange IDs under the same durable resume operation.
 Ordinary Runtime bindings omit the resume fields and keep their existing hashes.
-The Core replacement path and Host journal-based cache recovery require their separate implementation and acceptance.
-Until that recovery succeeds, Core must not treat a missing cache or lost Host state as readiness.
+The Core replacement and Host journal-recovery paths require separate runtime acceptance.
+Missing or incomplete saved journal evidence cannot establish readiness.
+Lost Host state still requires the exact replacement proof.
 
 The pure checks cover request, receipt, actor, authority, attempt identity, explicit loss proof, schema metadata, and controlled Kubernetes routing behavior.
 They do not prove PostgreSQL execution, native TLS, actual remount contents, Cilium traffic enforcement, or a deployed resume.

@@ -790,6 +790,17 @@ The immutable registration revision stores the attempt without a same-phase upda
 `RuntimeResumeBootstrapStateLossReceipt` requires a matching delivery receipt and fresh Host `Missing` proof.
 The shared bootstrap client returns a valid receipt or throws `RuntimeResumeBootstrapStateLostException` with that validated proof.
 Generic denials, timeouts, historical delivery, and saved Host receipts alone cannot authorize replacement or dispatch.
+`RuntimeHostResumeCacheReceipt` preserves the original source cache acknowledgment in both recovery modes.
+`native-cache` requires the compatible saved cache facts and forbids `JournalRebuild`.
+`journal-rebuild` requires `RuntimeResumeJournalRebuildReceipt` with the exact saved checkpoint, flushed position, digest, and active attempt.
+Its only supported native-cache state is `PendingUntilAuthorizedTurn`; it contains no new cache acknowledgment.
+The current Host source facts do not need to match the old cache's SDK or Runtime version.
+The shared digest covers the ordered authenticated session-visible prefix, including valid run-wide position gaps.
+The producer must verify saved-boundary pagination, material bytes, current authority, and source configuration and cache references.
+A receipt hash alone is not independent proof of those reads.
+Missing required journal evidence blocks readiness; owner, transport, configuration, hash, and fence failures cannot trigger another-source fallback.
+The next real authorized turn uses the existing native cache commit path.
+Suspend before genuine native files exist fails explicitly without a cache success receipt.
 These source contracts do not prove native TLS, PostgreSQL, mounted contents, or deployed dispatch.
 
 `Environment:RuntimeBootstrap:Profiles` configures exact owner/profile/provider
