@@ -882,6 +882,11 @@ function ProjectConfigurationPage() {
       request: Parameters<typeof gatewayClient.importSkillContent>[2],
     ) => apiCall((token, tenantSelector) =>
       gatewayClient.importSkillContent(token, scope, request, tenantSelector), null),
+    listSkillInventory: (
+      scope: string,
+      request: Parameters<typeof gatewayClient.listProjectSkillInventory>[2],
+    ) => apiCall((token, tenantSelector) =>
+      gatewayClient.listProjectSkillInventory(token, scope, request, tenantSelector), null),
     updateSkillAssignment: (
       scope: string,
       skillId: string,

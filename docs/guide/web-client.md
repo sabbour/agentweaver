@@ -157,7 +157,12 @@ revision, and selected agents from the project's current cast. A returned
 configuration revision is checked before it replaces the editor's current
 revision; assignment is disabled while the editor has unsaved changes. The UI
 reports the saved assignment but does not claim that a runtime loaded it.
-Runtime-loaded status is unavailable from the current public API. The
+The read-only imported skill inventory calls the owner-backed
+`GET /projects/:projectId/skills` route with the current tenant selector and
+opaque continuation cursors. It displays owner-reported assignments, stored
+revision metadata, source provenance, and revocation state; permission errors
+remain visible. Inventory metadata does not prove that a runtime loaded a
+skill. Runtime-loaded status is unavailable from the current public API. The
 selected-source and Gateway routes are present in v1. Their deployment and
 live availability are not established by this client.
 

@@ -252,6 +252,10 @@ describe('Gateway API client', () => {
       order: 0,
       agentIds: ['agent-1'],
     }, 'tenant-1');
+    await client.listProjectSkillInventory('token', 'project/1', {
+      cursor: 'cursor/opaque',
+      pageSize: 25,
+    }, 'tenant-1');
 
     expect(fetcher.mock.calls.map(([url, init]) => [
       String(url),
@@ -291,6 +295,7 @@ describe('Gateway API client', () => {
         order: 0,
         agentIds: ['agent-1'],
       }, 'tenant-1', 'no-store'],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skills?cursor=cursor%2Fopaque&pageSize=25', 'GET', undefined, 'tenant-1', 'no-store'],
     ]);
     for (const [, init] of fetcher.mock.calls) {
       expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer token');

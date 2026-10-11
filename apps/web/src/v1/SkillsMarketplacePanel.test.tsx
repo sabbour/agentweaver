@@ -9,6 +9,7 @@ import type {
 import type {
   MarketplaceBrowsePage,
   MarketplaceSource,
+  SkillContentInventoryPage,
   SkillContentPreview,
 } from './contracts';
 import type {
@@ -64,6 +65,13 @@ function createActions(overrides: Partial<SkillsMarketplaceActions> = {}): Skill
     browseSource: vi.fn().mockResolvedValue(browsePage),
     previewMarketplaceSkill: vi.fn().mockResolvedValue(preview),
     importMarketplaceSkill: vi.fn().mockResolvedValue(importedSkill),
+    listSkillInventory: vi.fn().mockResolvedValue({
+      configurationRevision: 4,
+      assignments: [],
+      revisions: [],
+      pageSize: 25,
+      nextCursor: null,
+    } satisfies SkillContentInventoryPage),
     previewSkillContent: vi.fn().mockResolvedValue(preview),
     importSkillContent: vi.fn().mockResolvedValue(importedSkill),
     updateSkillAssignment: vi.fn().mockResolvedValue({
@@ -112,6 +120,95 @@ describe('Skills and marketplace panel', () => {
     expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Add source' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByRole('button', { name: 'Import skill to project' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('shows paginated owner skill inventory without claiming runtime load state', async () => {
+    const assignment = {
+      skillId: 'skill-1',
+      enabled: true,
+      order: 0,
+      revision: 3,
+      contentDigest: 'sha256:sample',
+      agentIds: ['agent-1'],
+    };
+    const firstPage = {
+      configurationRevision: 12,
+      assignments: [assignment],
+      revisions: [{
+        skillId: 'skill-1',
+        revision: 3,
+        name: 'Sample skill',
+        description: 'A sample',
+        contentDigest: 'sha256:sample',
+        resourceCount: 1,
+        totalBytes: 32,
+        createdByActorId: 'actor-1',
+        createdAt: '2026-10-10T00:00:00Z',
+        sourceId: 'source-1',
+        sourceRevision: '7',
+        requestedRef: 'main',
+        resolvedCommitSha: '0123456789abcdef',
+        selectedPath: 'skills/sample',
+        isRevoked: false,
+        revokedByActorId: null,
+        revokedAt: null,
+      }],
+      pageSize: 25,
+      nextCursor: 'cursor/opaque',
+    } satisfies SkillContentInventoryPage;
+    const secondPage = {
+      ...firstPage,
+      revisions: [{
+        ...firstPage.revisions[0],
+        skillId: 'skill-2',
+        revision: 1,
+        name: 'Revoked skill',
+        sourceId: null,
+        sourceRevision: null,
+        requestedRef: null,
+        resolvedCommitSha: null,
+        selectedPath: null,
+        isRevoked: true,
+        revokedByActorId: 'actor-2',
+        revokedAt: '2026-10-10T01:00:00Z',
+      }],
+      nextCursor: null,
+    } satisfies SkillContentInventoryPage;
+    const actions = createActions({
+      listSkillInventory: vi.fn()
+        .mockResolvedValueOnce(firstPage)
+        .mockResolvedValueOnce(secondPage),
+    });
+    renderPanel(actions);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load skill inventory' }));
+    await screen.findByText('Enabled for agents: agent-1');
+    expect(screen.getByText('Marketplace source source-1 · source revision 7 · commit 0123456789abcdef · skills/sample'))
+      .toBeTruthy();
+    expect(screen.getByText(/does not show whether a runtime loaded a skill/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next inventory page' }));
+    await screen.findByText('Revoked skill');
+    expect(screen.getByText(/revision 1 · revoked/)).toBeTruthy();
+    expect(actions.listSkillInventory).toHaveBeenNthCalledWith(1, 'project-1', {
+      cursor: undefined,
+      pageSize: 25,
+    });
+    expect(actions.listSkillInventory).toHaveBeenNthCalledWith(2, 'project-1', {
+      cursor: 'cursor/opaque',
+      pageSize: 25,
+    });
+  });
+
+  it('shows owner errors when skill inventory cannot be read', async () => {
+    const actions = createActions({
+      listSkillInventory: vi.fn().mockRejectedValue(new Error('project owner permission required')),
+    });
+    renderPanel(actions);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load skill inventory' }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('project owner permission required');
   });
 
   it('previews and imports a selected source skill at the pinned commit', async () => {
