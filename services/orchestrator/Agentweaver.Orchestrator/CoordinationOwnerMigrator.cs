@@ -48,7 +48,7 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is not (>= 1 and <= 15) and not (19 or 20)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 15) and not (19 or 20 or 21)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -64,7 +64,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(14) && !applied.Contains(13)) ||
             (applied.Contains(15) && !applied.Contains(14)) ||
             (applied.Contains(19) && !applied.Contains(15)) ||
-            (applied.Contains(20) && !applied.Contains(19)))
+            (applied.Contains(20) && !applied.Contains(19)) ||
+            (applied.Contains(21) && !applied.Contains(20)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         foreach (var version in Enumerable.Range(1, 15).Where(version => !applied.Contains(version)))
         {
@@ -134,6 +135,22 @@ public static class CoordinationOwnerMigrator
                 await record.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        if (!applied.Contains(21))
+        {
+            await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
+                "Agentweaver.Orchestrator.Migrations.021_row_lock_record_updates.sql")
+                ?? throw new InvalidOperationException("The row-lock record update guard migration resource is missing.");
+            using var text = new StreamReader(resource);
+            var sql = (await text.ReadToEndAsync(cancellationToken))
+                .Replace("{schema}", quotedSchema, StringComparison.Ordinal);
+            await using (var migration = new NpgsqlCommand(sql, connection, transaction))
+                await migration.ExecuteNonQueryAsync(cancellationToken);
+            await using (var record = new NpgsqlCommand(
+                $"INSERT INTO {quotedSchema}.coordination_schema_migrations (version) VALUES (21)",
+                connection, transaction))
+                await record.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -164,7 +181,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 19, 20)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 19, 20, 21)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -214,7 +231,18 @@ public static class CoordinationOwnerMigrator
                         AND column_name = 'workspace_seed' AND data_type = 'bytea'),
                 EXISTS (SELECT 1 FROM pg_constraint
                     WHERE conrelid = to_regclass(@checkpoints)
-                        AND conname = 'fk_maf_checkpoint_parent' AND contype = 'f')
+                        AND conname = 'fk_maf_checkpoint_parent' AND contype = 'f'),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 21) = 1,
+                EXISTS (SELECT 1 FROM pg_catalog.pg_trigger
+                    WHERE tgrelid = to_regclass(@decisions) AND tgname = 'coordinator_decisions_no_update'
+                      AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 19
+                      AND tgenabled = 'O' AND NOT tgisinternal
+                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0),
+                EXISTS (SELECT 1 FROM pg_catalog.pg_trigger
+                    WHERE tgrelid = to_regclass(@checkpoints) AND tgname = 'maf_workflow_checkpoints_no_update'
+                      AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 19
+                      AND tgenabled = 'O' AND NOT tgisinternal
+                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0)
             """, connection);
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
@@ -244,6 +272,7 @@ public static class CoordinationOwnerMigrator
             "mafExecutionOutputWitnesses", NpgsqlDbType.Text, $"{schema}.maf_execution_output_witnesses");
         command.Parameters.AddWithValue(
             "sessionConsistencyManifests", NpgsqlDbType.Text, $"{schema}.session_consistency_manifests");
+        command.Parameters.AddWithValue("updateGuard", NpgsqlDbType.Text, $"{schema}.reject_row_lock_record_update()");
         command.Parameters.AddWithValue(
             "treeCommands", NpgsqlDbType.Text, $"{schema}.coordination_tree_commands");
         command.Parameters.AddWithValue(
@@ -280,7 +309,8 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(45, 5).Any(column => !reader.GetBoolean(column)) ||
             Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
-            !reader.GetBoolean(55) || !reader.GetBoolean(56))
+            !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
+            Enumerable.Range(57, 3).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

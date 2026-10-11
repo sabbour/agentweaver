@@ -1719,16 +1719,25 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             return;
         }
 
-        await using var update = new NpgsqlCommand($"""
-            UPDATE "{_schema}".coordinator_decisions
-            SET state_version = @version
+        await using var append = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id,
+                 actor_issuer, actor_subject, execution_fence, state_version,
+                 action_kind, idempotency_key, command_hash, decision_state, decision)
+            SELECT project_id, run_id, session_id, request_id, @decision,
+                   actor_issuer, actor_subject, execution_fence, @version,
+                   action_kind, idempotency_key || '-v' || @version::text,
+                   command_hash, decision_state, decision
+            FROM "{_schema}".coordinator_decisions
             WHERE project_id = @project AND run_id = @run AND session_id = @session
+            ORDER BY state_version DESC LIMIT 1
             """, connection);
-        update.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _root.ProjectId);
-        update.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _root.RunId);
-        update.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _root.SessionId);
-        update.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, stateVersion);
-        await update.ExecuteNonQueryAsync();
+        append.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _root.ProjectId);
+        append.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _root.RunId);
+        append.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _root.SessionId);
+        append.Parameters.AddWithValue("version", NpgsqlDbType.Bigint, stateVersion);
+        append.Parameters.AddWithValue("decision", NpgsqlDbType.Uuid, Guid.NewGuid());
+        Assert.Equal(1, await append.ExecuteNonQueryAsync());
     }
 
     private async Task<string> ReadAcceptedSelectionHashAsync()

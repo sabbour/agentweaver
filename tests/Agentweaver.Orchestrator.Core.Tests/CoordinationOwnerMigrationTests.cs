@@ -6,7 +6,7 @@ using Xunit;
 namespace Agentweaver.Orchestrator.Core.Tests;
 
 [Collection("Coordination PostgreSQL")]
-public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture fixture) : IAsyncLifetime
+public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgresFixture fixture) : IAsyncLifetime
 {
     private readonly string _schema = "coordination_upgrade_" + Guid.NewGuid().ToString("N");
 
@@ -88,7 +88,7 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
         await using var verify = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".coordination_schema_migrations
             """, verifyConnection);
-        Assert.Equal(17L, await verify.ExecuteScalarAsync());
+        Assert.Equal(18L, await verify.ExecuteScalarAsync());
     }
 
     [Fact]

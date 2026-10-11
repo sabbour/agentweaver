@@ -7,6 +7,14 @@ Open WorkPlan link and a recovered checkpoint association, not runtime permissio
 The runtime-owner context matcher separately checks the confirmed Fixed step.
 Compilation does not prove PostgreSQL execution.
 
+Two pure tests read the embedded Core and Sessions update-guard migrations.
+They check the exact five tables, unconditional rejection, and unchanged deletion rules.
+Five PostgreSQL cases check restricted-role inserts, row locks, update rejection, and trigger-disable rejection.
+Another 25 PostgreSQL cases check startup rejection of missing, disabled, wrong-function, column-limited, and conditional triggers.
+These 30 PostgreSQL cases compile but have not run for this source change.
+Checkpoint corruption and size-limit cases insert malformed fixtures directly.
+Decision-version cases append new decisions instead of changing saved rows.
+
 The shared Broker coordination test reserves seven child slots: four registered
 children, including its Fixed child, plus three confirmed WorkPlan items.
 It keeps the two-active-child limit and checks that one more active child is rejected.
