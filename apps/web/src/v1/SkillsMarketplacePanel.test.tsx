@@ -297,6 +297,58 @@ describe('Skills and marketplace panel', () => {
     expect(nextKey).not.toBe(firstKey);
   });
 
+  it('ignores a late preview while actions reload the same source revision', async () => {
+    let resolvePreview!: (value: SkillContentPreview) => void;
+    let resolveSources!: (value: MarketplaceSource[]) => void;
+    const pendingPreview = new Promise<SkillContentPreview>((resolve) => {
+      resolvePreview = resolve;
+    });
+    const pendingSources = new Promise<MarketplaceSource[]>((resolve) => {
+      resolveSources = resolve;
+    });
+    const actions = createActions({
+      listSources: vi.fn().mockResolvedValue([source]),
+      browseSource: vi.fn().mockResolvedValue(browsePage),
+      previewMarketplaceSkill: vi.fn().mockReturnValue(pendingPreview),
+    });
+    const rendered = renderPanel(actions);
+
+    await screen.findByText('example/skills · main · revision 7 · active');
+    fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
+    await screen.findByText('0123456789abcdef');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
+    await waitFor(() => expect(actions.previewMarketplaceSkill).toHaveBeenCalledTimes(1));
+
+    const reloadedActions = createActions({ listSources: vi.fn().mockReturnValue(pendingSources) });
+    rendered.rerender(
+      <SkillsMarketplacePanel
+        projectId="project-1"
+        configurationRevision={4}
+        assignments={[]}
+        agents={[{ agentId: 'agent-1', displayName: 'Agent One' }]}
+        actions={reloadedActions}
+      />,
+    );
+
+    expect(screen.queryByLabelText('Marketplace skill preview')).toBeNull();
+    expect(screen.queryByText('0123456789abcdef')).toBeNull();
+    expect(screen.getByText('Loading marketplace sources…')).toBeTruthy();
+    await act(async () => {
+      resolvePreview(preview);
+      await pendingPreview;
+    });
+    expect(screen.queryByLabelText('Marketplace skill preview')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Import selected source skill' })).toBeNull();
+
+    await act(async () => {
+      resolveSources([source]);
+      await pendingSources;
+    });
+    await screen.findByText('example/skills · main · revision 7 · active');
+    expect(screen.queryByLabelText('Marketplace skill preview')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Import selected source skill' })).toBeNull();
+  });
+
   it('does not accept a source import receipt that differs from its preview', async () => {
     const actions = createActions({
       listSources: vi.fn().mockResolvedValue([source]),

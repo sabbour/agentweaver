@@ -236,6 +236,7 @@ export function SkillsMarketplacePanel({
   onConfigurationChanged,
 }: SkillsMarketplacePanelProps) {
   const activeProjectId = useRef(projectId);
+  const activeActions = useRef(actions);
   const sourceRequest = useRef(0);
   const browseRequest = useRef(0);
   const skillRequest = useRef(0);
@@ -319,8 +320,20 @@ export function SkillsMarketplacePanel({
   }, [actions, clearMarketplaceBrowse, projectId]);
 
   useLayoutEffect(() => {
-    if (activeProjectId.current === projectId) return;
+    if (activeProjectId.current === projectId) {
+      if (activeActions.current === actions) return;
+      activeActions.current = actions;
+      sourceRequest.current += 1;
+      setSources(null);
+      setSourcesProjectId(null);
+      setSourceError(null);
+      setSourceNotice(null);
+      clearMarketplaceBrowse();
+      return;
+    }
+
     activeProjectId.current = projectId;
+    activeActions.current = actions;
     sourceRequest.current += 1;
     skillRequest.current += 1;
     setSources(null);
@@ -346,7 +359,6 @@ export function SkillsMarketplacePanel({
 
   useEffect(() => {
     if (!actions) return;
-    clearMarketplaceBrowse();
     const scope = projectId;
     const requestId = ++sourceRequest.current;
     void listMarketplaceSources(actions, scope).then((result) => {
@@ -360,7 +372,7 @@ export function SkillsMarketplacePanel({
       setSourcesProjectId(scope);
       setSourceError(messageForError(reason));
     });
-  }, [actions, clearMarketplaceBrowse, projectId]);
+  }, [actions, projectId]);
 
   if (assignmentSnapshot.projectId !== projectId ||
       (configurationRevision !== null &&
