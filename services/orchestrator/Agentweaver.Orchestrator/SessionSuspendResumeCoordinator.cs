@@ -39,8 +39,9 @@ internal enum SessionSuspendResumeOperationPhase
 
 internal static class SessionSuspendResumePhaseMachine
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
@@ -559,7 +560,8 @@ internal sealed class SessionSuspendResumeCoordinator
     {
         try
         {
-            return JsonSerializer.Deserialize<SessionSuspendResumeProgress>(value)
+            return JsonSerializer.Deserialize<SessionSuspendResumeProgress>(
+                value, SessionSuspendResumePhaseMachine.JsonOptions)
                 ?? throw new CoordinationException(
                     "suspend_resume_progress_invalid", StatusCodes.Status503ServiceUnavailable);
         }
@@ -568,6 +570,21 @@ internal sealed class SessionSuspendResumeCoordinator
             throw new CoordinationException(
                 "suspend_resume_progress_invalid", StatusCodes.Status503ServiceUnavailable, exception);
         }
+    }
+
+    internal static SessionSuspendResumeProgress ReadFenceAdvancedProgress(
+        SessionSuspendResumeOperationRecord operation)
+    {
+        if (operation.Kind != SessionSuspendResumeOperationKind.Resume ||
+            operation.Phase != SessionSuspendResumeOperationPhase.FenceAdvanced ||
+            operation.PhaseVersion != 4)
+            throw new CoordinationException(
+                "runtime_resume_bootstrap_request_invalid", StatusCodes.Status503ServiceUnavailable);
+        var progress = DeserializeProgress(operation.Progress);
+        if (progress.ResumeExecutionFence != operation.OwnerExecutionFence)
+            throw new CoordinationException(
+                "runtime_resume_bootstrap_request_invalid", StatusCodes.Status503ServiceUnavailable);
+        return progress;
     }
 
     internal async Task<SessionSuspendResumeOperationRecord> BeginResumeAsync(
@@ -781,6 +798,7 @@ internal sealed class SessionSuspendResumeCoordinator
 
             if (operation.Phase == SessionSuspendResumeOperationPhase.FenceAdvanced)
             {
+                saved = ReadFenceAdvancedProgress(operation);
                 var bootstrapRequest = await CreateResumeBootstrapRequestAsync(
                     context, operation, saved, registrations, cancellationToken).ConfigureAwait(false);
                 await RequireResumeBootstrapCurrentAsync(
@@ -840,8 +858,10 @@ internal sealed class SessionSuspendResumeCoordinator
         verification.ValidateFor(sourceRequest);
         placement.ValidateFor(sourceRequest);
         var resume = sourceRequest with { PhaseVersion = operation.PhaseVersion };
-        var registration = await registrations.RegisterAsync(
+        var registration = await registrations.ReplaceAfterResumeFenceAsync(
             context,
+            sourceRequest.SourceRelease.HostReceipt.Registration,
+            operation.OperationId,
             operation.Identity.ProjectId,
             operation.Identity.RunId,
             operation.Identity.SessionId,

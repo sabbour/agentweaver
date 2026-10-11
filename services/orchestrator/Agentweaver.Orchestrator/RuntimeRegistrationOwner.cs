@@ -67,20 +67,46 @@ internal sealed class RuntimeRegistrationOwner(
             expected.Revision == long.MaxValue)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
 
-        var current = await registrations.ReadAsync(
-            expected.RuntimeInstanceId, cancellationToken).ConfigureAwait(false)
-            ?? throw new RuntimeAuthorizationException("runtime_registration_unknown");
-        var revoked = expected with
-        {
-            Revision = checked(expected.Revision + 1),
-            State = RuntimeRegistrationState.Revoked
-        };
-        if (current == revoked)
-            return current;
-        if (current != expected)
-            throw new RuntimeAuthorizationException("runtime_registration_stale");
         return await registrations.RevokeAsync(
             expected.RuntimeInstanceId, expected.Revision, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<RuntimeRegistration> ReplaceAfterResumeFenceAsync(
+        HttpContext context,
+        RuntimeRegistration releasedRegistration,
+        Guid operationId,
+        string projectId,
+        string runId,
+        string sessionId,
+        RegisterRuntimeRequest request,
+        CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.Validate(releasedRegistration);
+        if (operationId == Guid.Empty ||
+            releasedRegistration.State != RuntimeRegistrationState.Active ||
+            releasedRegistration.Revision == long.MaxValue ||
+            releasedRegistration.Binding.ExecutionFence == long.MaxValue ||
+            releasedRegistration.Binding.ProjectId != projectId ||
+            releasedRegistration.Binding.RunId != runId ||
+            releasedRegistration.Binding.SessionId != sessionId)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+
+        var expectedExecutionFence = checked(releasedRegistration.Binding.ExecutionFence + 1);
+        var derived = await DeriveCurrentBindingAsync(
+            context, projectId, runId, sessionId, request, cancellationToken).ConfigureAwait(false);
+        RequireNextFenceReplacement(releasedRegistration, derived.Binding, expectedExecutionFence);
+        var replacement = await registrations.ReplaceAsync(
+            releasedRegistration, operationId, derived.Binding, derived.ExpiresAt, cancellationToken,
+            async token =>
+            {
+                var current = await DeriveCurrentBindingAsync(
+                    context, projectId, runId, sessionId, request, token).ConfigureAwait(false);
+                RequireSame(derived, current);
+            }).ConfigureAwait(false);
+        var final = await DeriveCurrentBindingAsync(
+            context, projectId, runId, sessionId, request, cancellationToken).ConfigureAwait(false);
+        RequireSame(derived, final);
+        return replacement;
     }
 
     public async Task<RuntimeRegistration> ReadCurrentAsync(
@@ -282,6 +308,23 @@ internal sealed class RuntimeRegistrationOwner(
     private static void RequireSame(DerivedBinding expected, DerivedBinding current)
     {
         if (current != expected)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+    }
+
+    private static void RequireNextFenceReplacement(
+        RuntimeRegistration released,
+        RuntimeBinding replacement,
+        long expectedExecutionFence)
+    {
+        var source = released.Binding;
+        if (replacement.ExecutionFence != expectedExecutionFence ||
+            replacement.ActorIssuer != source.ActorIssuer ||
+            replacement.ActorId != source.ActorId ||
+            replacement.TenantId != source.TenantId ||
+            replacement.ProjectId != source.ProjectId ||
+            replacement.RunId != source.RunId ||
+            replacement.SessionId != source.SessionId ||
+            replacement.AcceptedSelectionHash != source.AcceptedSelectionHash)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 

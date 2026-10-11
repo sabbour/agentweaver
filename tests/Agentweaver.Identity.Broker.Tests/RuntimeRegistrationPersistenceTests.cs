@@ -29,8 +29,10 @@ public sealed class RuntimeRegistrationPersistenceTests(PostgresContainerFixture
         Assert.Equal(2, revoked.Revision);
         Assert.Equal(revoked, await new RuntimeRegistrationStore(source, "runtime_test", TimeProvider.System)
             .ReadAsync(registered.RuntimeInstanceId, CancellationToken.None));
+        Assert.Equal(revoked, await store.RevokeAsync(
+            registered.RuntimeInstanceId, 1, CancellationToken.None));
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
-            store.RevokeAsync(registered.RuntimeInstanceId, 1, CancellationToken.None));
+            store.RevokeAsync(registered.RuntimeInstanceId, 2, CancellationToken.None));
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             store.RegisterAsync(binding, expiresAt, CancellationToken.None));
 
@@ -45,6 +47,76 @@ public sealed class RuntimeRegistrationPersistenceTests(PostgresContainerFixture
             """, connection);
         var skipped = await Assert.ThrowsAsync<PostgresException>(() => skip.ExecuteNonQueryAsync());
         Assert.Contains("advance by one", skipped.MessageText);
+    }
+
+    [Fact]
+    public async Task ReplacementRevokesSourceAndReplaysOneCurrentRegistration()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await using var source = NpgsqlDataSource.Create(connectionString);
+        await CreateSchemaAsync(source);
+        var store = new RuntimeRegistrationStore(source, "runtime_test", TimeProvider.System);
+        var originalBinding = Binding();
+        var replacementBinding = originalBinding with { ExecutionFence = 2 };
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(2);
+        var original = await store.RegisterAsync(originalBinding, expiresAt, CancellationToken.None);
+        var operationId = Guid.NewGuid();
+
+        var replacements = await Task.WhenAll(
+            Enumerable.Range(0, 4).Select(_ => store.ReplaceAsync(
+                original, operationId, replacementBinding, expiresAt, CancellationToken.None)));
+
+        Assert.All(replacements, replacement => Assert.Equal(replacements[0], replacement));
+        var revoked = original with
+        {
+            Revision = original.Revision + 1,
+            State = RuntimeRegistrationState.Revoked
+        };
+        Assert.Equal(revoked, await store.ReadAsync(original.RuntimeInstanceId, CancellationToken.None));
+        Assert.Equal(revoked, await store.RevokeAsync(
+            original.RuntimeInstanceId, original.Revision, CancellationToken.None));
+        Assert.Equal(replacements[0], await store.ReadAsync(
+            replacements[0].RuntimeInstanceId, CancellationToken.None));
+
+        await using var connection = await source.OpenConnectionAsync();
+        await using var count = new NpgsqlCommand(
+            "SELECT count(*) FROM runtime_test.runtime_registration_revisions", connection);
+        Assert.Equal(3L, await count.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task ReplacementCanFinishFromExactPriorRevocationButRejectsStaleSource()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await using var source = NpgsqlDataSource.Create(connectionString);
+        await CreateSchemaAsync(source);
+        var store = new RuntimeRegistrationStore(source, "runtime_test", TimeProvider.System);
+        var originalBinding = Binding();
+        var replacementBinding = originalBinding with { ExecutionFence = 2 };
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(2);
+        var original = await store.RegisterAsync(originalBinding, expiresAt, CancellationToken.None);
+        var revoked = await store.RevokeAsync(original.RuntimeInstanceId, original.Revision, CancellationToken.None);
+        var operationId = Guid.NewGuid();
+        var stale = original with { Binding = originalBinding with { EnvironmentId = "other-environment" } };
+
+        var staleFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            store.ReplaceAsync(stale, operationId, replacementBinding, expiresAt, CancellationToken.None));
+        Assert.Equal("runtime_registration_stale", staleFailure.Code);
+
+        var replacement = await store.ReplaceAsync(
+            original, operationId, replacementBinding, expiresAt, CancellationToken.None);
+        Assert.Equal(replacement, await store.ReplaceAsync(
+            original, operationId, replacementBinding, expiresAt, CancellationToken.None));
+        Assert.Equal(revoked, await store.ReadAsync(original.RuntimeInstanceId, CancellationToken.None));
+
+        var changedTarget = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            store.ReplaceAsync(
+                original,
+                operationId,
+                replacementBinding with { EnvironmentId = "other-environment" },
+                expiresAt,
+                CancellationToken.None));
+        Assert.Equal("runtime_registration_conflict", changedTarget.Code);
     }
 
     [Fact]
