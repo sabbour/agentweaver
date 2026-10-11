@@ -9,6 +9,7 @@ sequenceDiagram
     participant C as Projects & Config
     participant P as Provider catalog
     participant DB as PostgreSQL
+    Note over C,P: Startup requires an existing, source-reviewed catalog snapshot. Profile rendering does not verify or create it.
     O->>C: Accept run ID, expected revisions, immutable context
     C->>DB: Recheck active membership and Orchestrator role; lock run ID and project/platform heads
     DB-->>C: Project configuration and platform defaults at expected revisions
@@ -21,6 +22,32 @@ sequenceDiagram
     C-->>O: Effective run-selection context (not a resource pin)
     Note over O,P: After provisioning, the consumer negotiates a real resource and pins its identity, generation, and capabilities.
 ```
+
+## Selected runtime profile
+
+The separate source renderer under `deploy/k8s/profiles/projects-config/`
+targets only the existing 1.x environment. The ordinary Broker and Probe
+compositions do not include it. Missing operator inputs stop rendering.
+The profile requires the Projects runtime identity, passwordless PostgreSQL
+with `VerifyFull`, explicit authentication authority and audience, an immutable
+product image, reviewed image user/group, and an existing Projects-only TLS Secret.
+It exposes private HTTPS and leaves system certificate trust unchanged.
+
+The provider catalog owner must supply an existing immutable, nonempty ConfigMap
+in the same namespace and its reviewed source commit.
+The ConfigMap uses relative catalog keys, such as `Registrations__0__ProviderId`.
+The profile prefixes them with `ProjectsConfig__ProviderCatalog__`, so they
+cannot replace database, authentication, or HTTPS listener settings.
+The existing .NET loader still validates the catalog; no second resolver or
+empty catalog is generated.
+Object existence, contents, immutability, source binding, and suitability for
+the accepted owner flows remain deployment prerequisites.
+Rendering a structurally valid reference does not prove those facts.
+
+This profile does not create roles, grant rights, apply migrations, or add
+Blob credentials or provider selections. It does not publish or deploy an image.
+Applied migrations, runtime authorization, trusted TLS, and healthy owner flows
+still require separate approval and evidence.
 
 ## API surface
 
