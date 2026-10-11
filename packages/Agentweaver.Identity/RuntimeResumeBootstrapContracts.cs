@@ -84,7 +84,8 @@ public sealed record RuntimeResumeBootstrapRequest(
             RuntimeContractValidation.Hash(result.Bytes) != expected.Reference.Material!.Sha256)
             throw new RuntimeAuthorizationException("runtime_resume_configuration_changed");
         using var document = JsonDocument.Parse(result.Bytes);
-        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+            document.RootElement.GetRawText().Length > AddressedMessageValidation.MaximumPayloadLength)
             throw new RuntimeAuthorizationException("runtime_resume_configuration_invalid");
         return result;
     }
@@ -177,21 +178,22 @@ public sealed class RuntimeResumeBootstrapHttpClient(HttpClient client, Uri envi
         return result.ValidateFor(request);
     }
 
-    public sealed class RuntimeResumeConfigurationHttpClient(HttpClient client, Uri eventsOwnerAddress)
-    {
-        private readonly Uri _owner = RuntimeOwnerHttpTransport.RequireOwnerAddress(eventsOwnerAddress);
+}
 
-        public async Task<SessionMaterialReadResult> ReadAsync(
-            RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
-        {
-            request.Validate();
-            var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<SessionMaterialReadResult>(
-                client, _owner, "/internal/runtime/resume/configuration", actor, request,
-                2 * SessionMaterialValidation.MaximumBytes, false, cancellationToken).ConfigureAwait(false)
-                ?? throw new RuntimeAuthorizationException("runtime_resume_configuration_unavailable");
-            if (!actor.Bearer.IsUsable())
-                throw new RuntimeAuthorizationException("runtime_resume_actor_expired");
-            return request.ValidateConfiguration(result);
-        }
+public sealed class RuntimeResumeConfigurationHttpClient(HttpClient client, Uri eventsOwnerAddress)
+{
+    private readonly Uri _owner = RuntimeOwnerHttpTransport.RequireOwnerAddress(eventsOwnerAddress);
+
+    public async Task<SessionMaterialReadResult> ReadAsync(
+        RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
+    {
+        request.Validate();
+        var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<SessionMaterialReadResult>(
+            client, _owner, "/internal/runtime/resume/configuration", actor, request,
+            2 * SessionMaterialValidation.MaximumBytes, false, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_resume_configuration_unavailable");
+        if (!actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_resume_actor_expired");
+        return request.ValidateConfiguration(result);
     }
 }

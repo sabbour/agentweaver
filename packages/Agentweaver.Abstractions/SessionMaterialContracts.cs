@@ -161,6 +161,13 @@ public static class SessionMaterialValidation
             if (request.ModelId is not null)
                 RequireIdentifier(request.ModelId);
         }
+        if (request.Kind == SessionMaterialKind.RuntimeConfiguration)
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(request.Bytes);
+            if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object ||
+                document.RootElement.GetRawText().Length > AddressedMessageValidation.MaximumPayloadLength)
+                throw new ArgumentException("A bounded accepted Runtime configuration object is required.");
+        }
     }
 
     public static void Validate(SessionObjectReference reference)
