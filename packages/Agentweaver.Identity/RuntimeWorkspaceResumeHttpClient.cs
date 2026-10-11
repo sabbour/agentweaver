@@ -42,6 +42,7 @@ public sealed record RuntimeWorkspaceResumeRequest(
             SourceManifest.WorkspaceProviderCheckpointId is not null ||
             SourceManifest.GuestSnapshotResource is not null)
             throw new RuntimeAuthorizationException("runtime_resume_content_unsupported");
+        RuntimeResumeBootstrapRequest.RequireConfigurationAcknowledgment(host);
         if (RestoredWorkspace is not null)
             ValidateWorkspace(RestoredWorkspace);
         return this;

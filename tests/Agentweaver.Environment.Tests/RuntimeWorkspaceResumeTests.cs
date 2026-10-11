@@ -152,6 +152,39 @@ public sealed class RuntimeWorkspaceResumeTests
     }
 
     [Theory]
+    [InlineData("missing")]
+    [InlineData("hash")]
+    [InlineData("position")]
+    public async Task MissingOrChangedConfigurationIsRejectedBeforeAnyResumeOwnerOrEnvironmentEffect(string fault)
+    {
+        var source = Request();
+        var host = source.SourceRelease.HostReceipt;
+        var acknowledgment = host.ConfigurationAcknowledgment!;
+        host = host with
+        {
+            ConfigurationAcknowledgment = fault == "missing" ? null : acknowledgment with
+            {
+                Position = fault == "position" ? host.CacheAcknowledgment.Position : acknowledgment.Position,
+                Reference = fault == "hash" ? acknowledgment.Reference with
+                {
+                    Material = acknowledgment.Reference.Material! with { Sha256 = new string('a', 64) }
+                } : acknowledgment.Reference
+            }
+        };
+        var request = source with { SourceRelease = source.SourceRelease with { HostReceipt = host } };
+        using var handler = new ResponseHandler(new { });
+        using var http = new HttpClient(handler);
+        var client = new RuntimeWorkspaceResumeHttpClient(http, new("https://environment.test/"));
+        var manager = new EnvironmentRuntimeWorkspaceResumeManager(null!, null!, null!, null!, null!, null!, null!);
+        var expected = fault == "missing" ? "runtime_resume_configuration_missing" : "runtime_resume_configuration_changed";
+        Assert.Equal(expected, (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            client.PrepareAsync(request, Actor(), CancellationToken.None))).Code);
+        Assert.Equal(expected, (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            manager.PrepareAsync(request, Actor(), CancellationToken.None))).Code);
+        Assert.Null(handler.Path);
+    }
+
+    [Theory]
     [InlineData("exact")]
     [InlineData("denied")]
     [InlineData("changed-echo")]
@@ -200,13 +233,33 @@ public sealed class RuntimeWorkspaceResumeTests
     internal static RuntimeWorkspaceResumeRequest Request()
     {
         var fixture = RuntimeSuspendPlacementReleaseTests.Create();
-        var host = fixture.Request.HostReceipt;
+        var host = WithConfigurationAcknowledgment(fixture.Request.HostReceipt);
         var manifest = new SessionSuspendResumeManifest(1, host.ManifestId, new("project", "run", "session"),
             SessionSuspendResumeManifestState.Suspended, host.WorkspaceFlush!.EnvironmentFence, 1,
             host.CacheAcknowledgment, new(new("project", "run", "session"), "coordinator-execution",
                 "checkpoint", 1, "plan", 1), 9, host.WorkspaceFlush.Volume, host.WorkspaceFlush.Resource,
             8, host.WorkspaceFlush.TreeSha256, null, null, null, 1, []);
-        return new RuntimeWorkspaceResumeRequest(1, Guid.NewGuid(), 2, manifest, fixture.Request).Validate();
+        return new RuntimeWorkspaceResumeRequest(1, Guid.NewGuid(), 2, manifest,
+            fixture.Request with { HostReceipt = host }).Validate();
+    }
+
+    internal static RuntimeHostSuspendReceipt WithConfigurationAcknowledgment(RuntimeHostSuspendReceipt host)
+    {
+        var hash = RuntimeContractValidation.Hash("{}"u8);
+        var reference = new SessionObjectReference(
+            new ObjectKey("private/runtime/configuration"),
+            SessionMaterialValidation.Purpose(SessionMaterialKind.RuntimeConfiguration), 2)
+        {
+            Material = host.CacheAcknowledgment.Reference.Material! with
+            {
+                Kind = SessionMaterialKind.RuntimeConfiguration, Sha256 = hash
+            }
+        };
+        return host with
+        {
+            SourceGrant = host.SourceGrant with { ConfigurationHash = hash },
+            ConfigurationAcknowledgment = new(1, host.CacheAcknowledgment.Identity, Guid.NewGuid(), 8, reference)
+        };
     }
 
     internal static EnvironmentRuntimeWorkspaceContext Workspace(RuntimeWorkspaceResumeRequest request)

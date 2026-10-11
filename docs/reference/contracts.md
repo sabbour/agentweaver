@@ -773,6 +773,8 @@ The staged Environment resume contract uses these authenticated, no-store routes
 | `POST /runtime/v1/configure/resume-state` | The Host returns `RuntimeResumeHostStateReceipt` for the exact operation, manifest, registration, and attempt. Valid states are `BootstrapPresent`, `Activated`, and `Missing`; an omitted or unknown state is rejected. |
 
 The request and both Environment clients belong to `Agentweaver.Identity`.
+Resume validates the source's private configuration acknowledgment before owner calls or Environment effects.
+Ordinary suspend receipt validation remains unchanged; missing configuration cannot authorize resume.
 Prepare and verify use Core phase versions 2 and 3.
 The target lifecycle is the source plus one; Storage resource and data generations do not change.
 The final Network generation is the source plus one, not a default readiness counter.

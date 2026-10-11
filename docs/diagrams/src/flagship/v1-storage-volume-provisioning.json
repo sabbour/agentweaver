@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Storage volumes, replacement, and Sandbox attachment",
-  "alt": "Environment provisions a generation-pinned Azure Files claim and negotiates the selected Sandbox mount. Suspend saves trusted mounted flush evidence before release and exact detach. Resume prepares a new Sandbox with the same Storage resource and data generation. Core saves that exact mount before the Host hashes its actual tree and Environment repeats Network and owner checks. Post-fence bootstrap uses saved server configuration, a server-issued attempt, and fresh Host state and cache evidence. A saved receipt or generic failure cannot permit dispatch. These source contracts do not prove live durability, native TLS, or Azure erasure.",
+  "alt": "Environment provisions a generation-pinned Azure Files claim and negotiates the selected Sandbox mount. Suspend saves trusted mounted flush evidence before release and exact detach. Resume validates saved private configuration before owner calls or effects. It prepares a new Sandbox with the same Storage resource and data generation. Core saves that exact mount before the Host hashes its actual tree and Environment repeats Network and owner checks. Post-fence bootstrap uses saved server configuration, a server-issued attempt, and fresh Host state and cache evidence. A saved receipt or generic failure cannot permit dispatch. These source contracts do not prove live durability, native TLS, or Azure erasure.",
   "autonumber": true,
   "participants": [
     {
@@ -218,7 +218,7 @@
       "type": "message",
       "from": "storage-caller",
       "to": "sandbox",
-      "label": "After saved manifest and release/detach: prepare same volume/data; save mount, then verify",
+      "label": "After manifest, private configuration, and release/detach checks: prepare same volume/data; save mount, then verify",
       "line": "solid",
       "arrow": "filled"
     },
