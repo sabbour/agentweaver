@@ -73,6 +73,16 @@ internal static partial class SourceControlEndpoints
         var run = await ReadPinnedSourceControlRunAsync(
             context, reference.ProjectId, reference.RunId, reference.SessionId,
             options, projects, decisions, sourceControlOwner, cancellationToken).ConfigureAwait(false);
+        ValidateBuildTestInputRun(source, reference, run);
+        await RequireCurrentSourceControlRunAsync(
+            context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static void ValidateBuildTestInputRun(
+        SandboxBuildTestWorkspaceSource source,
+        SandboxBuildTestCheckpointReference reference,
+        SourceControlRunContext run)
+    {
         ValidateBuildTestSourceOwner(
             source, run.Actor, run.Identity, run.Selection.Authorization.TenantId,
             SourceControlOwnerStore.HashSelection(run.Selection.Selection), run.Pin, reference.ExecutionFence);
@@ -80,8 +90,6 @@ internal static partial class SourceControlEndpoints
             source.AcceptedSelectionHash != reference.AcceptedSelectionHash)
             throw new CoordinationException(
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
-        await RequireCurrentSourceControlRunAsync(
-            context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
     }
 
     internal static SandboxBuildTestWorkspaceSource CreateBuildTestWorkspaceSource(

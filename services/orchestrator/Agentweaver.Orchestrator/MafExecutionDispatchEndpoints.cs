@@ -124,23 +124,16 @@ public static partial class CoordinationEndpoints
                     association.DecisionStateVersion != decision.StateVersion))
                 throw new CoordinationException(
                     "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
-            if (checkpoint is not null &&
-                checkpoint.State.BuildTestIntents.Values.Any(intent =>
-                    intent.Identity != identity || intent.ExecutionFence != decision.State.Fence ||
-                    intent.AcceptedSelectionHash != decision.SelectionHash ||
-                    checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
-                        MafExecutionTaskStatus.Running && intent.DecisionStateVersion != decision.StateVersion))
-                throw new CoordinationException(
-                    "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
-
             if (checkpoint is not null)
                 foreach (var intent in checkpoint.State.BuildTestIntents.Values)
                 {
+                    var authorizationReference = CreateBuildTestDispatchAuthorizationReference(
+                        intent, checkpoint.State.Progress, identity, decision);
                     if (request.BuildTestWorkspaces?.TryGetValue(intent.StepId, out var locator) == true)
                         SourceControlEndpoints.RequireSameBuildTestWorkspace(intent.EffectiveWorkspaceSource, locator);
                     if (intent.EffectiveWorkspaceSource is { } source)
                         await SourceControlEndpoints.RequireCurrentBuildTestInputAsync(
-                            context, source, intent.CheckpointReference(), options, projects, decisions,
+                            context, source, authorizationReference, options, projects, decisions,
                             context.RequestServices.GetRequiredService<SourceControlOwnerStore>(), cancellationToken)
                             .ConfigureAwait(false);
                 }
@@ -1110,6 +1103,22 @@ public static partial class CoordinationEndpoints
                 WallTimeLimitReached = wallTimeLimitReached || IsWallTimeLimitReached()
             });
         }, cancellationToken);
+
+    internal static SandboxBuildTestCheckpointReference CreateBuildTestDispatchAuthorizationReference(
+        MafExecutionBuildTestIntent intent,
+        MafExecutionProgress progress,
+        SessionIdentity identity,
+        CoordinatorDecisionCurrentState decision)
+    {
+        if (intent.Identity != identity || intent.ExecutionFence != decision.State.Fence ||
+            intent.AcceptedSelectionHash != decision.SelectionHash ||
+            progress.NonModelSteps.GetValueOrDefault(intent.StepId) == MafExecutionTaskStatus.Running &&
+                intent.DecisionStateVersion != decision.StateVersion)
+            throw new CoordinationException(
+                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+
+        return intent.CheckpointReference() with { DecisionStateVersion = decision.StateVersion };
+    }
 
     internal static MafExecutionCheckpoint? PrepareRunningCheckpoint(
         MafExecutionCheckpointSnapshot? latest,

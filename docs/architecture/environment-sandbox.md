@@ -296,6 +296,10 @@ It stores the command, input metadata, origin reference, and seed before returni
 The owner rechecks the accepted selection, decision, and fence after preparation awaits.
 Retry reads the saved intent before seed creation and does not recapture a changed checkout.
 A conflicting workspace locator or changed owner is an error; it cannot replace saved input.
+Completed input can remain in a later accepted decision without changing its saved origin.
+Dispatch still checks the current source owner, selection, and fence.
+Running input cannot continue under a different decision version.
+Workspace preparation errors use the existing Source Control response and stop checkpoint creation.
 Later checkpoints retain only the typed origin reference.
 The JSON checkpoint limit remains 4 MiB.
 The seed limit remains 67,188,876 bytes.

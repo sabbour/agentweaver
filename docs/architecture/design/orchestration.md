@@ -382,6 +382,9 @@ MAF keeps the confirmed command unchanged and stores verified source metadata as
 The original checkpoint transaction stores that input and exact seed bytes before Environment reservation.
 The effective version 2 command hash binds the source input.
 Retry reuses the saved input without recapturing the checkout; conflicting locators and changed source owners are errors.
+Completed BuildTest input retains its original decision version while dispatch checks the current source owner and decision.
+Running input still requires its original decision version.
+Unavailable or changed workspaces return the existing Source Control error, not an unhandled server error.
 An explicit source in a confirmed command remains exact.
 This handoff does not connect provider preparation helpers or complete output export.
 Preparation must match the WorkPlan's existing Sandbox pin.

@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["environment", "admission-core"],
-      "label": "Source Control prepares owned repository input. Core saves its binding and seed beside the unchanged command. Retry reuses saved input."
+      "label": "Completed input allows later decisions; running input does not. Saved input, current owner checks, and workspace errors remain."
     },
     {
       "type": "message",

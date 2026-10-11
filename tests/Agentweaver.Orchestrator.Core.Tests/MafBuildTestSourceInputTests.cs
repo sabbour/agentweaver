@@ -6,12 +6,133 @@ using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
 using Agentweaver.SourceControl;
+using Microsoft.AspNetCore.Http;
 using Xunit;
 
 namespace Agentweaver.Orchestrator.Core.Tests;
 
 public sealed class MafBuildTestSourceInputTests
 {
+    [Fact]
+    public void CompletedSourceInputSurvivesALaterDecisionWithoutChangingItsOrigin()
+    {
+        var fixture = Fixture();
+        var source = Produce(fixture);
+        var intent = fixture.Intent.AttachWorkspaceInput(source, fixture.Seed.Bytes.ToImmutableArray());
+        var initial = new MafExecutionCheckpointSnapshot(new("root", "initial"),
+            new(1, intent.WorkPlanId, intent.DecisionStateVersion, MafExecutionProgress.Empty));
+        var running = CoordinationEndpoints.PrepareBuildTestCheckpoint(initial, intent)!;
+        var completed = CoordinationEndpoints.PrepareBuildTestCompletionCheckpoint(
+            new(new("root", intent.CheckpointId), running), intent,
+            MafBuildTestExecutionTests.Operation(intent))!;
+        var nextDecisionVersion = intent.DecisionStateVersion + 1;
+        var current = new CoordinatorDecisionCurrentState(
+            CoordinatorDecisionState.Create(intent.ExecutionFence), nextDecisionVersion, intent.AcceptedSelectionHash);
+        var authorizationReference = CoordinationEndpoints.CreateBuildTestDispatchAuthorizationReference(
+            intent, completed.Progress, intent.Identity, current);
+        var currentRun = fixture.Run with { DecisionStateVersion = nextDecisionVersion };
+
+        SourceControlEndpoints.ValidateBuildTestInputRun(source, authorizationReference, currentRun);
+        var advanced = completed with
+        {
+            Revision = completed.Revision + 1,
+            DecisionStateVersion = nextDecisionVersion
+        };
+        MafExecutionCheckpointContract.ValidateTransition(completed, advanced);
+
+        Assert.Equal(MafExecutionTaskStatus.Succeeded, advanced.Progress.NonModelSteps[intent.StepId]);
+        Assert.Equal(nextDecisionVersion, authorizationReference.DecisionStateVersion);
+        Assert.Equal(intent.CheckpointReference(), intent.WorkspaceSeedReference!.Origin);
+        Assert.Equal(intent.DecisionStateVersion, advanced.BuildTestIntents[intent.StepId].DecisionStateVersion);
+        Assert.Equal(completed.BuildTestReceipts[intent.StepId], advanced.BuildTestReceipts[intent.StepId]);
+        Assert.True(MafExecutionCheckpointContract.BuildTestIntentsMatch(
+            intent, advanced.BuildTestIntents[intent.StepId]));
+    }
+
+    [Fact]
+    public void RunningSourceInputCannotUseALaterDispatchDecision()
+    {
+        var fixture = Fixture();
+        var intent = fixture.Intent.AttachWorkspaceInput(Produce(fixture), fixture.Seed.Bytes.ToImmutableArray());
+        var progress = MafExecutionProgress.Empty with
+        {
+            NonModelSteps = MafExecutionProgress.Empty.NonModelSteps.SetItem(intent.StepId, MafExecutionTaskStatus.Running)
+        };
+        var current = new CoordinatorDecisionCurrentState(
+            CoordinatorDecisionState.Create(intent.ExecutionFence),
+            intent.DecisionStateVersion + 1, intent.AcceptedSelectionHash);
+
+        var failure = Assert.Throws<CoordinationException>(() =>
+            CoordinationEndpoints.CreateBuildTestDispatchAuthorizationReference(
+                intent, progress, intent.Identity, current));
+
+        Assert.Equal("maf_execution_dispatch_stale", failure.Code);
+    }
+
+    [Theory]
+    [InlineData("fence")]
+    [InlineData("selection")]
+    public void CompletedSourceInputStillRequiresCurrentDispatchAuthority(string change)
+    {
+        var fixture = Fixture();
+        var intent = fixture.Intent;
+        var progress = MafExecutionProgress.Empty with
+        {
+            NonModelSteps = MafExecutionProgress.Empty.NonModelSteps.SetItem(intent.StepId, MafExecutionTaskStatus.Succeeded)
+        };
+        var current = new CoordinatorDecisionCurrentState(
+            CoordinatorDecisionState.Create(intent.ExecutionFence + (change == "fence" ? 1 : 0)),
+            intent.DecisionStateVersion + 1,
+            change == "selection" ? new string('b', 64) : intent.AcceptedSelectionHash);
+
+        var failure = Assert.Throws<CoordinationException>(() =>
+            CoordinationEndpoints.CreateBuildTestDispatchAuthorizationReference(
+                intent, progress, intent.Identity, current));
+
+        Assert.Equal("maf_execution_dispatch_stale", failure.Code);
+    }
+
+    [Fact]
+    public void SourceInputReadCannotOutliveItsDispatchDecision()
+    {
+        var fixture = Fixture();
+        var source = Produce(fixture);
+        var reference = fixture.Intent.CheckpointReference() with
+        {
+            DecisionStateVersion = fixture.Intent.DecisionStateVersion + 1
+        };
+
+        var failure = Assert.Throws<CoordinationException>(() =>
+            SourceControlEndpoints.ValidateBuildTestInputRun(source, reference,
+                fixture.Run with { DecisionStateVersion = reference.DecisionStateVersion + 1 }));
+
+        Assert.Equal("source_control_run_binding_changed", failure.Code);
+    }
+
+    [Theory]
+    [InlineData(GitWorkspaceFailureCode.WorkspaceUnavailable, 404)]
+    [InlineData(GitWorkspaceFailureCode.CorruptWorkspace, 409)]
+    [InlineData(GitWorkspaceFailureCode.PathConflict, 409)]
+    public async Task WorkspacePreparationFailureUsesTheBoundedDispatchErrorAndStopsContinuation(
+        GitWorkspaceFailureCode code, int expectedStatus)
+    {
+        var appendedCheckpoints = 0;
+        var result = await CoordinationEndpoints.ExecuteAsync(async () =>
+        {
+            await Task.FromException(new GitWorkspaceException(code, "Private workspace diagnostic."));
+            appendedCheckpoints++;
+            return Results.Ok();
+        }, CancellationToken.None);
+
+        Assert.Equal(expectedStatus, Assert.IsAssignableFrom<IStatusCodeHttpResult>(result).StatusCode);
+        var value = Assert.IsAssignableFrom<IValueHttpResult>(result).Value;
+        var body = JsonSerializer.SerializeToElement(value);
+        Assert.Equal("source_control_workspace_" + code.ToString().ToLowerInvariant(),
+            body.GetProperty("error").GetString());
+        Assert.DoesNotContain("Private workspace diagnostic.", body.GetRawText());
+        Assert.Equal(0, appendedCheckpoints);
+    }
+
     [Fact]
     public void VerifiedSourceOwnerInputDoesNotEnrichTheConfirmedCommand()
     {
