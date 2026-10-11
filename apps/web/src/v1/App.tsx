@@ -862,6 +862,18 @@ function ProjectConfigurationPage() {
       request: Parameters<typeof gatewayClient.browseMarketplaceSource>[3],
     ) => apiCall((token, tenantSelector) =>
       gatewayClient.browseMarketplaceSource(token, scope, sourceId, request, tenantSelector), null),
+    previewMarketplaceSkill: (
+      scope: string,
+      sourceId: string,
+      request: Parameters<typeof gatewayClient.previewMarketplaceSkillContent>[3],
+    ) => apiCall((token, tenantSelector) =>
+      gatewayClient.previewMarketplaceSkillContent(token, scope, sourceId, request, tenantSelector), null),
+    importMarketplaceSkill: (
+      scope: string,
+      sourceId: string,
+      request: Parameters<typeof gatewayClient.importMarketplaceSkillContent>[3],
+    ) => apiCall((token, tenantSelector) =>
+      gatewayClient.importMarketplaceSkillContent(token, scope, sourceId, request, tenantSelector), null),
     previewSkillContent: (candidate: Parameters<typeof gatewayClient.previewSkillContent>[1]) =>
       apiCall((token, tenantSelector) =>
         gatewayClient.previewSkillContent(token, candidate, tenantSelector), null),

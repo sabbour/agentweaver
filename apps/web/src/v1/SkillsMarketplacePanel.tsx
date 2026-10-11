@@ -5,6 +5,9 @@ import { GatewayError } from './api';
 import type {
   MarketplaceBrowsePage,
   MarketplaceBrowseRequest,
+  MarketplaceSkillCandidate,
+  MarketplaceSkillContentImportRequest,
+  MarketplaceSkillContentPreviewRequest,
   MarketplaceSource,
   MarketplaceSourceInput,
   MarketplaceSourceUpdateInput,
@@ -41,6 +44,16 @@ export interface SkillsMarketplaceActions {
     sourceId: string,
     request: MarketplaceBrowseRequest,
   ): Promise<MarketplaceBrowsePage>;
+  previewMarketplaceSkill(
+    projectId: string,
+    sourceId: string,
+    request: MarketplaceSkillContentPreviewRequest,
+  ): Promise<SkillContentPreview>;
+  importMarketplaceSkill(
+    projectId: string,
+    sourceId: string,
+    request: MarketplaceSkillContentImportRequest,
+  ): Promise<SkillContentImportReceipt>;
   previewSkillContent(candidate: SkillContentCandidateRequest): Promise<SkillContentPreview>;
   importSkillContent(
     projectId: string,
@@ -72,6 +85,17 @@ type SourceDraft = {
 };
 
 type SourceLoadState = 'loading' | 'loaded' | 'unavailable';
+
+type MarketplaceSkillSelection = {
+  projectId: string;
+  sourceId: string;
+  sourceRevision: number;
+  resolvedCommitSha: string;
+  selectedPath: string;
+  candidateName: string;
+  query: string;
+  page: number;
+};
 
 function messageForError(reason: unknown): string {
   if (reason instanceof GatewayError) {
@@ -122,6 +146,33 @@ async function listMarketplaceSources(
     throw new Error('Projects & Config returned an invalid marketplace source list.');
   }
   return result;
+}
+
+function validateSkillPreview(result: SkillContentPreview): void {
+  if (!result || typeof result.name !== 'string' || !result.name ||
+      typeof result.description !== 'string' ||
+      typeof result.contentDigest !== 'string' || !result.contentDigest ||
+      !Number.isSafeInteger(result.resourceCount) || result.resourceCount < 0 ||
+      !Number.isSafeInteger(result.totalBytes) || result.totalBytes < 0) {
+    throw new Error('The Skills owner returned an invalid preview receipt.');
+  }
+}
+
+function validateSkillImportReceipt(
+  result: SkillContentImportReceipt,
+  preview: SkillContentPreview,
+): void {
+  if (!result || typeof result.skillId !== 'string' || !result.skillId ||
+      !Number.isSafeInteger(result.revision) || result.revision < 1 ||
+      typeof result.name !== 'string' || !result.name ||
+      typeof result.description !== 'string' ||
+      result.name !== preview.name ||
+      result.description !== preview.description ||
+      result.contentDigest !== preview.contentDigest ||
+      result.resourceCount !== preview.resourceCount ||
+      result.totalBytes !== preview.totalBytes) {
+    throw new Error('The Skills owner returned an import receipt that does not match the preview.');
+  }
 }
 
 function relativeFilePath(file: File): string {
@@ -185,9 +236,13 @@ export function SkillsMarketplacePanel({
   onConfigurationChanged,
 }: SkillsMarketplacePanelProps) {
   const activeProjectId = useRef(projectId);
+  const activeActions = useRef(actions);
   const sourceRequest = useRef(0);
   const browseRequest = useRef(0);
   const skillRequest = useRef(0);
+  const marketplaceRequest = useRef(0);
+  const marketplaceBusyRef = useRef<'preview' | 'import' | null>(null);
+  const marketplaceImportKey = useRef<string | null>(null);
   const folderInputRef = useCallback((input: HTMLInputElement | null) => {
     input?.setAttribute('webkitdirectory', '');
   }, []);
@@ -201,7 +256,14 @@ export function SkillsMarketplacePanel({
   const [selectedSourceId, setSelectedSourceId] = useState('');
   const [browseQuery, setBrowseQuery] = useState('');
   const [browsePage, setBrowsePage] = useState<MarketplaceBrowsePage | null>(null);
+  const [browseResultQuery, setBrowseResultQuery] = useState<string | null>(null);
   const [browsing, setBrowsing] = useState(false);
+  const [marketplaceSelection, setMarketplaceSelection] = useState<MarketplaceSkillSelection | null>(null);
+  const [marketplacePreview, setMarketplacePreview] = useState<SkillContentPreview | null>(null);
+  const [marketplaceBusy, setMarketplaceBusy] = useState<'preview' | 'import' | null>(null);
+  const [marketplaceError, setMarketplaceError] = useState<string | null>(null);
+  const [marketplaceNotice, setMarketplaceNotice] = useState<string | null>(null);
+  const [marketplaceImportComplete, setMarketplaceImportComplete] = useState(false);
   const [skillError, setSkillError] = useState<string | null>(null);
   const [skillNotice, setSkillNotice] = useState<string | null>(null);
   const [skillBusy, setSkillBusy] = useState<string | null>(null);
@@ -209,6 +271,7 @@ export function SkillsMarketplacePanel({
   const [candidate, setCandidate] = useState<SkillContentCandidateRequest | null>(null);
   const [preview, setPreview] = useState<SkillContentPreview | null>(null);
   const [importReceipt, setImportReceipt] = useState<SkillContentImportReceipt | null>(null);
+  const [importReceiptKind, setImportReceiptKind] = useState<'local' | 'marketplace' | null>(null);
   const [pendingImportKey, setPendingImportKey] = useState<string | null>(null);
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
   const [assignmentSnapshot, setAssignmentSnapshot] = useState<{
@@ -217,9 +280,29 @@ export function SkillsMarketplacePanel({
     skills: readonly ProjectSkillAssignment[];
   }>({ projectId, revision: configurationRevision, skills: assignments });
 
+  const clearMarketplaceSelection = useCallback(() => {
+    marketplaceRequest.current += 1;
+    marketplaceBusyRef.current = null;
+    marketplaceImportKey.current = null;
+    setMarketplaceSelection(null);
+    setMarketplacePreview(null);
+    setMarketplaceBusy(null);
+    setMarketplaceError(null);
+    setMarketplaceNotice(null);
+    setMarketplaceImportComplete(false);
+  }, []);
+  const clearMarketplaceBrowse = useCallback(() => {
+    browseRequest.current += 1;
+    setBrowsePage(null);
+    setBrowseResultQuery(null);
+    setBrowsing(false);
+    clearMarketplaceSelection();
+  }, [clearMarketplaceSelection]);
+
   const refreshSources = useCallback(async () => {
     if (!actions) return;
 
+    clearMarketplaceBrowse();
     const scope = projectId;
     const requestId = ++sourceRequest.current;
     try {
@@ -234,13 +317,24 @@ export function SkillsMarketplacePanel({
       setSourcesProjectId(scope);
       setSourceError(messageForError(reason));
     }
-  }, [actions, projectId]);
+  }, [actions, clearMarketplaceBrowse, projectId]);
 
   useLayoutEffect(() => {
-    if (activeProjectId.current === projectId) return;
+    if (activeProjectId.current === projectId) {
+      if (activeActions.current === actions) return;
+      activeActions.current = actions;
+      sourceRequest.current += 1;
+      setSources(null);
+      setSourcesProjectId(null);
+      setSourceError(null);
+      setSourceNotice(null);
+      clearMarketplaceBrowse();
+      return;
+    }
+
     activeProjectId.current = projectId;
+    activeActions.current = actions;
     sourceRequest.current += 1;
-    browseRequest.current += 1;
     skillRequest.current += 1;
     setSources(null);
     setSourcesProjectId(null);
@@ -249,17 +343,19 @@ export function SkillsMarketplacePanel({
     setSourceDrafts({});
     setNewSource(sourceDraft());
     setSelectedSourceId('');
-    setBrowsePage(null);
-    setBrowsing(false);
+    clearMarketplaceBrowse();
     setSkillError(null);
     setSkillNotice(null);
+    setMarketplaceError(null);
+    setMarketplaceNotice(null);
+    setImportReceiptKind(null);
     setSelectedFiles([]);
     setCandidate(null);
     setPreview(null);
     setImportReceipt(null);
     setPendingImportKey(null);
     setSelectedAgentIds([]);
-  }, [actions, assignments, configurationRevision, projectId]);
+  }, [actions, assignments, clearMarketplaceBrowse, configurationRevision, projectId]);
 
   useEffect(() => {
     if (!actions) return;
@@ -295,9 +391,24 @@ export function SkillsMarketplacePanel({
   const currentBrowsePage = browsePage &&
       selectedSource &&
       browsePage.sourceId === selectedSource.sourceId &&
-      browsePage.sourceRevision === selectedSource.revision
+      browsePage.sourceRevision === selectedSource.revision &&
+      browseResultQuery === browseQuery.trim()
     ? browsePage
     : null;
+  const currentMarketplaceSelection = marketplaceSelection &&
+      currentBrowsePage &&
+      marketplaceSelection.projectId === projectId &&
+      marketplaceSelection.sourceId === currentBrowsePage.sourceId &&
+      marketplaceSelection.sourceRevision === currentBrowsePage.sourceRevision &&
+      marketplaceSelection.resolvedCommitSha === currentBrowsePage.resolvedCommitSha &&
+      marketplaceSelection.query === browseQuery.trim() &&
+      marketplaceSelection.page === currentBrowsePage.page &&
+      currentBrowsePage.candidates.some((item) =>
+        item.location === marketplaceSelection.selectedPath &&
+        item.name === marketplaceSelection.candidateName)
+    ? marketplaceSelection
+    : null;
+  const currentMarketplacePreview = currentMarketplaceSelection ? marketplacePreview : null;
   const currentAssignments = assignmentSnapshot.projectId === projectId
     ? assignmentSnapshot.skills
     : assignments;
@@ -316,8 +427,10 @@ export function SkillsMarketplacePanel({
 
   const addSource = async (event: FormEvent) => {
     event.preventDefault();
-    if (!actions || !projectId || !newSource.repository.trim()) return;
+    if (!actions || !projectId || !newSource.repository.trim() ||
+        marketplaceBusyRef.current === 'import') return;
     const scope = projectId;
+    clearMarketplaceBrowse();
     setSourceBusy('create');
     setSourceError(null);
     setSourceNotice(null);
@@ -338,9 +451,10 @@ export function SkillsMarketplacePanel({
 
   const updateSource = async (event: FormEvent, source: MarketplaceSource) => {
     event.preventDefault();
-    if (!actions || source.state !== 'active') return;
+    if (!actions || source.state !== 'active' || marketplaceBusyRef.current === 'import') return;
     const scope = projectId;
     const draft = sourceDrafts[source.sourceId] ?? sourceDraft(source);
+    clearMarketplaceBrowse();
     setSourceBusy(`update:${source.sourceId}`);
     setSourceError(null);
     setSourceNotice(null);
@@ -362,8 +476,9 @@ export function SkillsMarketplacePanel({
   };
 
   const removeSource = async (source: MarketplaceSource) => {
-    if (!actions || source.state !== 'active') return;
+    if (!actions || source.state !== 'active' || marketplaceBusyRef.current === 'import') return;
     const scope = projectId;
+    clearMarketplaceBrowse();
     setSourceBusy(`remove:${source.sourceId}`);
     setSourceError(null);
     setSourceNotice(null);
@@ -382,17 +497,20 @@ export function SkillsMarketplacePanel({
   };
 
   const browse = async (page: number) => {
-    if (!actions || !selectedSource || selectedSource.state !== 'active') return;
+    if (!actions || !selectedSource || selectedSource.state !== 'active' ||
+        marketplaceBusyRef.current === 'import') return;
     const scope = projectId;
     const source = selectedSource;
+    clearMarketplaceBrowse();
     const requestId = ++browseRequest.current;
+    const query = browseQuery.trim();
     setBrowsing(true);
     setSourceError(null);
     setBrowsePage(null);
     try {
       const result = await actions.browseSource(scope, source.sourceId, {
         expectedSourceRevision: source.revision,
-        query: browseQuery.trim() || undefined,
+        query: query || undefined,
         page,
         pageSize: 25,
       });
@@ -405,6 +523,7 @@ export function SkillsMarketplacePanel({
         throw new Error('Projects & Config returned browse results for a different source revision or page.');
       }
       setBrowsePage(result);
+      setBrowseResultQuery(query);
     } catch (reason) {
       if (activeProjectId.current === scope && browseRequest.current === requestId)
         setSourceError(messageForError(reason));
@@ -414,8 +533,98 @@ export function SkillsMarketplacePanel({
     }
   };
 
+  const previewMarketplaceSkill = async (item: MarketplaceSkillCandidate) => {
+    if (!actions || !selectedSource || !currentBrowsePage ||
+        skillBusy !== null || marketplaceBusyRef.current !== null) return;
+    const scope = projectId;
+    const source = selectedSource;
+    const page = currentBrowsePage;
+    if (page.candidates.every((candidate) =>
+      candidate.location !== item.location || candidate.name !== item.name)) return;
+
+    clearMarketplaceSelection();
+    const requestId = marketplaceRequest.current;
+    const selection: MarketplaceSkillSelection = {
+      projectId: scope,
+      sourceId: source.sourceId,
+      sourceRevision: page.sourceRevision,
+      resolvedCommitSha: page.resolvedCommitSha,
+      selectedPath: item.location,
+      candidateName: item.name,
+      query: browseQuery.trim(),
+      page: page.page,
+    };
+    marketplaceBusyRef.current = 'preview';
+    setMarketplaceBusy('preview');
+    setMarketplaceSelection(selection);
+    setMarketplaceError(null);
+    setMarketplaceNotice(null);
+    try {
+      const result = await actions.previewMarketplaceSkill(scope, source.sourceId, {
+        expectedSourceRevision: page.sourceRevision,
+        resolvedCommitSha: page.resolvedCommitSha,
+        selectedPath: item.location,
+      });
+      if (activeProjectId.current !== scope || marketplaceRequest.current !== requestId) return;
+      validateSkillPreview(result);
+      setMarketplacePreview(result);
+      setMarketplaceNotice('The Skills owner validated this source skill at the selected commit. No files were sent by the browser.');
+    } catch (reason) {
+      if (activeProjectId.current === scope && marketplaceRequest.current === requestId)
+        setMarketplaceError(messageForError(reason));
+    } finally {
+      if (activeProjectId.current === scope && marketplaceRequest.current === requestId) {
+        marketplaceBusyRef.current = null;
+        setMarketplaceBusy(null);
+      }
+    }
+  };
+
+  const importMarketplaceSkill = async () => {
+    if (!actions || !selectedSource || !currentMarketplaceSelection ||
+        !currentMarketplacePreview || skillBusy !== null ||
+        marketplaceBusyRef.current !== null || marketplaceImportComplete) return;
+    const scope = projectId;
+    const selection = currentMarketplaceSelection;
+    const selectedPreview = currentMarketplacePreview;
+    const requestId = marketplaceRequest.current;
+    marketplaceBusyRef.current = 'import';
+    setMarketplaceBusy('import');
+    setMarketplaceError(null);
+    setMarketplaceNotice(null);
+    try {
+      let idempotencyKey = marketplaceImportKey.current;
+      if (!idempotencyKey) {
+        idempotencyKey = makeIdempotencyKey();
+        marketplaceImportKey.current = idempotencyKey;
+      }
+      const request: MarketplaceSkillContentImportRequest = {
+        expectedSourceRevision: selection.sourceRevision,
+        resolvedCommitSha: selection.resolvedCommitSha,
+        selectedPath: selection.selectedPath,
+        idempotencyKey,
+        expectedContentDigest: selectedPreview.contentDigest,
+      };
+      const result = await actions.importMarketplaceSkill(scope, selection.sourceId, request);
+      if (activeProjectId.current !== scope || marketplaceRequest.current !== requestId) return;
+      validateSkillImportReceipt(result, selectedPreview);
+      setImportReceipt(result);
+      setImportReceiptKind('marketplace');
+      setMarketplaceImportComplete(true);
+      setMarketplaceNotice(`The Skills owner imported ${result.name} at revision ${result.revision}.`);
+    } catch (reason) {
+      if (activeProjectId.current === scope && marketplaceRequest.current === requestId)
+        setMarketplaceError(messageForError(reason));
+    } finally {
+      if (activeProjectId.current === scope && marketplaceRequest.current === requestId) {
+        marketplaceBusyRef.current = null;
+        setMarketplaceBusy(null);
+      }
+    }
+  };
+
   const previewLocalSkill = async () => {
-    if (!actions || selectedFiles.length === 0) return;
+    if (!actions || selectedFiles.length === 0 || marketplaceBusyRef.current !== null) return;
     const scope = projectId;
     const requestId = ++skillRequest.current;
     setSkillBusy('preview');
@@ -424,17 +633,14 @@ export function SkillsMarketplacePanel({
     setCandidate(null);
     setPreview(null);
     setImportReceipt(null);
+    setImportReceiptKind(null);
     setPendingImportKey(null);
     try {
       const nextCandidate = await buildCandidate(selectedFiles);
       if (activeProjectId.current !== scope || skillRequest.current !== requestId) return;
       const result = await actions.previewSkillContent(nextCandidate);
       if (activeProjectId.current !== scope || skillRequest.current !== requestId) return;
-      if (!result.contentDigest || !result.name ||
-          !Number.isSafeInteger(result.resourceCount) || result.resourceCount < 0 ||
-          !Number.isSafeInteger(result.totalBytes) || result.totalBytes < 0) {
-        throw new Error('The Skills owner returned an invalid preview receipt.');
-      }
+      validateSkillPreview(result);
       setCandidate(nextCandidate);
       setPreview(result);
       setSkillNotice('The Skills owner validated these files without importing them.');
@@ -448,7 +654,7 @@ export function SkillsMarketplacePanel({
   };
 
   const importLocalSkill = async () => {
-    if (!actions || !candidate || !preview || importReceipt) return;
+    if (!actions || !candidate || !preview || importReceipt || marketplaceBusyRef.current !== null) return;
     const scope = projectId;
     const requestId = ++skillRequest.current;
     setSkillBusy('import');
@@ -466,12 +672,9 @@ export function SkillsMarketplacePanel({
         candidate,
       });
       if (activeProjectId.current !== scope || skillRequest.current !== requestId) return;
-      if (!result.skillId || result.revision < 1 ||
-          result.contentDigest !== preview.contentDigest ||
-          result.resourceCount !== preview.resourceCount) {
-        throw new Error('The Skills owner returned an import receipt that does not match the preview.');
-      }
+      validateSkillImportReceipt(result, preview);
       setImportReceipt(result);
+      setImportReceiptKind('local');
       setSkillNotice(`The Skills owner imported ${result.name} at revision ${result.revision}.`);
     } catch (reason) {
       if (activeProjectId.current === scope && skillRequest.current === requestId)
@@ -491,7 +694,7 @@ export function SkillsMarketplacePanel({
   const assignImportedSkill = async (event: FormEvent) => {
     event.preventDefault();
     if (!actions || !importReceipt || currentConfigurationRevision === null ||
-        selectedAgentIds.length === 0) return;
+        selectedAgentIds.length === 0 || marketplaceBusyRef.current !== null) return;
     if (assignmentDisabledReason) {
       setSkillError(assignmentDisabledReason);
       return;
@@ -570,8 +773,10 @@ export function SkillsMarketplacePanel({
         <h3 id="marketplace-sources-heading">Marketplace sources</h3>
         {sourceError && <MessageBar intent="error" role="alert"><MessageBarBody>{sourceError}</MessageBarBody></MessageBar>}
         {sourceNotice && <MessageBar intent="success"><MessageBarBody>{sourceNotice}</MessageBarBody></MessageBar>}
+        {marketplaceError && <MessageBar intent="error" role="alert"><MessageBarBody>{marketplaceError}</MessageBarBody></MessageBar>}
+        {marketplaceNotice && <MessageBar intent="success"><MessageBarBody>{marketplaceNotice}</MessageBarBody></MessageBar>}
         <p className="v1-muted">
-          Sources must be public GitHub repositories. Browse results pin a source revision and resolved commit. Browsing reads current-page manifests only; it does not import resource files.
+          Sources must be public GitHub repositories. Browse results pin a source revision and resolved commit. Preview and import read the selected content at that exact commit; the browser does not send source files.
         </p>
         {sourceLoadState === 'loading' && <Spinner label="Loading marketplace sources…" />}
         {sourceLoadState === 'unavailable' && (
@@ -609,13 +814,14 @@ export function SkillsMarketplacePanel({
                       {source.repository} · {source.requestedRef} · revision {source.revision} · {source.state}
                     </p>
                     <div className="v1-actions">
-                      <Button appearance="secondary" type="submit" disabled={!actions || busy || source.state !== 'active' || !draft.repository.trim()}>
+                      <Button appearance="secondary" type="submit" disabled={!actions || busy ||
+                        marketplaceBusy === 'import' || source.state !== 'active' || !draft.repository.trim()}>
                         {sourceBusy === `update:${source.sourceId}` ? 'Saving…' : 'Save source'}
                       </Button>
                       <Button
                         appearance="secondary"
                         type="button"
-                        disabled={!actions || busy || source.state !== 'active'}
+                        disabled={!actions || busy || marketplaceBusy === 'import' || source.state !== 'active'}
                         onClick={() => void removeSource(source)}
                       >
                         {sourceBusy === `remove:${source.sourceId}` ? 'Removing…' : 'Remove source'}
@@ -644,10 +850,12 @@ export function SkillsMarketplacePanel({
             </Field>
           </div>
           <div className="v1-actions">
-            <Button appearance="primary" type="submit" disabled={!actions || sourceBusy !== null || !newSource.repository.trim()}>
+            <Button appearance="primary" type="submit" disabled={!actions || sourceBusy !== null ||
+              marketplaceBusy === 'import' || !newSource.repository.trim()}>
               {sourceBusy === 'create' ? 'Adding…' : 'Add source'}
             </Button>
-            <Button appearance="secondary" type="button" disabled={!actions || sourceBusy !== null} onClick={() => {
+            <Button appearance="secondary" type="button" disabled={!actions || sourceBusy !== null ||
+              marketplaceBusy === 'import'} onClick={() => {
               setSourceError(null);
               void refreshSources();
             }}>
@@ -667,9 +875,9 @@ export function SkillsMarketplacePanel({
               value={currentSelectedSourceId}
               onChange={(event) => {
                 setSelectedSourceId(event.currentTarget.value);
-                setBrowsePage(null);
+                clearMarketplaceBrowse();
               }}
-              disabled={!currentSources?.length}
+              disabled={!currentSources?.length || marketplaceBusy === 'import'}
             >
               <option value="">Select a source</option>
               {currentSources?.map((source) => (
@@ -684,11 +892,16 @@ export function SkillsMarketplacePanel({
               <Input
                 value={browseQuery}
                 maxLength={128}
-                onChange={(_, data) => setBrowseQuery(data.value)}
+                disabled={marketplaceBusy === 'import'}
+                onChange={(_, data) => {
+                  setBrowseQuery(data.value);
+                  clearMarketplaceBrowse();
+                }}
               />
             </Field>
             <div className="v1-actions">
-              <Button appearance="primary" type="submit" disabled={!actions || !selectedSource || browsing}>
+              <Button appearance="primary" type="submit" disabled={!actions || !selectedSource ||
+                browsing || marketplaceBusy === 'import'}>
                 {browsing ? 'Browsing…' : 'Browse skills'}
               </Button>
             </div>
@@ -709,20 +922,26 @@ export function SkillsMarketplacePanel({
                     <h4>{item.name}</h4>
                     <p className="v1-muted">{item.location || 'Repository root'}</p>
                     {item.description && <p>{item.description}</p>}
-                    <Button appearance="secondary" disabled aria-describedby="marketplace-import-unavailable">
-                      Import source skill
+                    <Button
+                      appearance="secondary"
+                      aria-label={`Preview ${item.name}`}
+                      disabled={!actions || marketplaceBusy !== null || skillBusy !== null}
+                      onClick={() => void previewMarketplaceSkill(item)}
+                    >
+                      {marketplaceBusy === 'preview' &&
+                        currentMarketplaceSelection?.selectedPath === item.location
+                        ? 'Previewing…'
+                        : 'Preview source skill'}
                     </Button>
                   </article>
                 ))}
               </div>
             )}
-            <p id="marketplace-import-unavailable" className="v1-warning">
-              Source import is unavailable. The owner does not yet expose a selected-content preview that returns the pinned manifest and resources for Skills validation.
-            </p>
             <div className="v1-actions">
               <Button
                 appearance="secondary"
-                disabled={!actions || browsing || currentBrowsePage.page <= 1}
+                disabled={!actions || browsing || marketplaceBusy === 'import' ||
+                  currentBrowsePage.page <= 1}
                 onClick={() => void browse(currentBrowsePage.page - 1)}
               >
                 Previous page
@@ -730,13 +949,49 @@ export function SkillsMarketplacePanel({
               <span className="v1-muted">Page {currentBrowsePage.page} · {currentBrowsePage.pageSize} per page</span>
               <Button
                 appearance="secondary"
-                disabled={!actions || browsing || !currentBrowsePage.hasMore}
+                disabled={!actions || browsing || marketplaceBusy === 'import' ||
+                  !currentBrowsePage.hasMore}
                 onClick={() => void browse(currentBrowsePage.page + 1)}
               >
                 Next page
               </Button>
             </div>
           </div>
+        )}
+        {marketplaceBusy === 'preview' && (
+          <Spinner label="Previewing the selected skill at its pinned commit…" />
+        )}
+        {currentMarketplaceSelection && currentMarketplacePreview && (
+          <div className="v1-stack" aria-label="Marketplace skill preview">
+            <h4>Preview {currentMarketplaceSelection.candidateName}</h4>
+            <p className="v1-muted">
+              {currentMarketplaceSelection.selectedPath || 'Repository root'} · source revision {currentMarketplaceSelection.sourceRevision} · commit <code>{currentMarketplaceSelection.resolvedCommitSha}</code>
+            </p>
+            <div className="v1-detail-list">
+              <div><dt>Validated skill</dt><dd>{currentMarketplacePreview.name}</dd></div>
+              <div><dt>Resources</dt><dd>{currentMarketplacePreview.resourceCount}</dd></div>
+              <div><dt>Content digest</dt><dd><code>{currentMarketplacePreview.contentDigest}</code></dd></div>
+              <div><dt>Total bytes</dt><dd>{currentMarketplacePreview.totalBytes}</dd></div>
+            </div>
+            <Button
+              appearance="primary"
+              type="button"
+              disabled={!actions || skillBusy !== null || marketplaceBusy !== null ||
+                marketplaceImportComplete}
+              onClick={() => void importMarketplaceSkill()}
+            >
+              {marketplaceBusy === 'import' ? 'Importing…' :
+                marketplaceImportComplete ? 'Source skill imported' : 'Import selected source skill'}
+            </Button>
+          </div>
+        )}
+        {marketplaceBusy === 'import' && (
+          <Spinner label="Importing the selected source skill…" />
+        )}
+        {importReceiptKind === 'marketplace' && importReceipt && (
+          <p>
+            Imported <strong>{importReceipt.name}</strong> · revision {importReceipt.revision} · digest <code>{importReceipt.contentDigest}</code>
+          </p>
         )}
       </section>
 
@@ -754,13 +1009,14 @@ export function SkillsMarketplacePanel({
             type="file"
             multiple
             aria-label="Skill folder or files"
-            disabled={!actions || skillBusy !== null}
+            disabled={!actions || skillBusy !== null || marketplaceBusy !== null}
             onChange={(event) => {
-              if (skillBusy !== null) return;
+              if (skillBusy !== null || marketplaceBusy !== null) return;
               setSelectedFiles(Array.from(event.currentTarget.files ?? []));
               setCandidate(null);
               setPreview(null);
               setImportReceipt(null);
+              setImportReceiptKind(null);
               setPendingImportKey(null);
               setSkillError(null);
               setSkillNotice(null);
@@ -772,7 +1028,8 @@ export function SkillsMarketplacePanel({
           <Button
             appearance="primary"
             type="button"
-            disabled={!actions || selectedFiles.length === 0 || skillBusy !== null}
+            disabled={!actions || selectedFiles.length === 0 || skillBusy !== null ||
+              marketplaceBusy !== null}
             onClick={() => void previewLocalSkill()}
           >
             {skillBusy === 'preview' ? 'Checking files…' : 'Validate skill files'}
@@ -780,7 +1037,8 @@ export function SkillsMarketplacePanel({
           <Button
             appearance="secondary"
             type="button"
-            disabled={!actions || !preview || !candidate || skillBusy !== null || importReceipt !== null}
+            disabled={!actions || !preview || !candidate || skillBusy !== null ||
+              marketplaceBusy !== null || importReceipt !== null}
             onClick={() => void importLocalSkill()}
           >
             {skillBusy === 'import' ? 'Importing…' : importReceipt ? 'Imported' : 'Import skill to project'}
@@ -794,7 +1052,7 @@ export function SkillsMarketplacePanel({
             <div><dt>Total bytes</dt><dd>{preview.totalBytes}</dd></div>
           </div>
         )}
-        {importReceipt && (
+        {importReceipt && importReceiptKind === 'local' && (
           <p>
             Imported <strong>{importReceipt.name}</strong> · revision {importReceipt.revision} · digest <code>{importReceipt.contentDigest}</code>
           </p>
@@ -855,6 +1113,7 @@ export function SkillsMarketplacePanel({
                 type="submit"
                 disabled={!actions || currentConfigurationRevision === null ||
                   selectedAgentIds.length === 0 || agents.length === 0 || skillBusy !== null ||
+                  marketplaceBusy !== null ||
                   assignmentDisabledReason !== undefined && assignmentDisabledReason !== null}
               >
                 {skillBusy === 'assignment' ? 'Saving assignment…' : 'Assign to selected agents'}

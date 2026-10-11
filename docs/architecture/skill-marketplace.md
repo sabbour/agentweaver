@@ -202,14 +202,15 @@ preview/import. The first-party MCP catalog is built from that same OpenAPI
 document. The Gateway remains a forwarder; these contracts do not prove a joined
 or deployed owner implementation.
 
-The retained Web project settings page uses those routes for source management
-and pinned browse. It supports local file preview/import and assignment to agents
-in the current project cast. The page does not yet use the selected-content
-preview/import routes, so Marketplace source import remains disabled. The API also
-has no actor-safe runtime-loaded status producer. The page reports that gap
-instead of inferring runtime use from an assignment or accepted run configuration.
-These checked-in sources do not establish that the services or the complete
-journey have been published or deployed.
+The retained Web project settings page uses the source management and pinned
+browse routes, then offers explicit selected-source preview and import. The
+source request contains no file bytes; the owner receipt must match the preview
+digest before the imported skill can be assigned to agents in the current
+project cast. Local file preview/import remains a separate path. The API has no
+actor-safe runtime-loaded status producer; the page reports that gap instead of
+inferring runtime use from an assignment or accepted run configuration. The
+source and Gateway routes are present in v1; deployment and live availability
+are not established by this client integration.
 
 ## Validation
 

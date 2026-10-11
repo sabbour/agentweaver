@@ -34,7 +34,7 @@ function run(command, args, { cwd = root, timeout = 30_000 } = {}) {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed (${result.status}): ${result.stderr.trim()}`);
+    throw new Error(`${command} ${args.join(' ')} failed (${result.status}):\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   }
   return result.stdout.trim();
 }
