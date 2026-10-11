@@ -69,6 +69,7 @@ exact `413` rejection before uploading its body. The one-MiB limit is unchanged.
 | Blob tests | Azure SDK requests, streamed data, create-only writes, and missing-object results through a fake HTTP transport. | Live credentials, permissions, durability, or cloud access. |
 | Telemetry tests | In-process OpenTelemetry setup and Azure Monitor exporter behavior through an injected transport. | Azure Monitor ingestion. |
 | Azure tooling tests | Target, source, digest, command, and acceptance guards through fake `az` and `git` executors. | A live Azure call or provisioned resource. |
+| P1 PostgreSQL initializer source tests | Canonical database grant comparisons, pre-write rejection, five exact principal mappings and memberships, function ownership and EXECUTE grants, ordered role-stage checks, partial-stage receipts, and original-error preservation when the failure receipt fails. The existing Foundation Probe test project compiles the same dependency-free helper used by the initializer. | Initializer execution, PostgreSQL catalog or transaction behavior, live Entra principal creation, installed mutation guards, runtime identity proof, or deployment. |
 | Foundation Probe tests | Receipt and token checks, provider pins, exact-version Key Vault read, owned Blob cleanup, PostgreSQL effects, and trace evidence. | Azure resource access or Identity broker redemption. |
 | AgentHost tests | Actual native SDK transport, authenticated configure/refresh/A2A, exact replay, current owner/source rejection, guarded effects, turn content, idle-boundary priority, accounting acknowledgment, cache recovery, and exact startup-time ceilings. CI separately measures the compressed amd64 OCI image and starts its image-owned pinned runtime with non-executable private mounts, without network or a model call. | Automatic scheduling, deployed TLS/Sandbox placement, live OAuth/entitlement, paid model execution, or publication. |
 
@@ -81,6 +82,13 @@ rejected. Merge settlement coverage cancels the caller after GitHub accepts the 
 checks that the merged SHA remains durable and can be replayed from another host.
 
 ## Run tests
+
+Run the bounded initializer source tests with
+`dotnet test tests/Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresInitializerTests`.
+This selection does not start the project's PostgreSQL containers.
+Both initializer execution blocks remain active.
+See the [operator source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
+before interpreting these checks as evidence.
 
 Shared-model and run-admission source tests cover reference-versus-model-ID resolution,
 configuration revision/hash mismatch, disabled models, accepted connection binding,

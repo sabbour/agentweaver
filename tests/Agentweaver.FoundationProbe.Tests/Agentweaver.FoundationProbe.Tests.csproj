@@ -16,6 +16,8 @@
     <ProjectReference Include="..\..\tools\Agentweaver.FoundationProbe\Agentweaver.FoundationProbe.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\..\tools\P1PostgresInitializer\InitializerChecks.cs"
+             Link="P1PostgresInitializer\InitializerChecks.cs" />
     <None Include="..\..\tools\Agentweaver.FoundationProbe\schema\001_probe_effects.sql"
           Link="schema\001_probe_effects.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
