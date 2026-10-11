@@ -701,11 +701,88 @@ public sealed record WorkspaceVolumeFlushRequest(
     long ExpectedDataGeneration,
     string IdempotencyKey)
 {
+    public WorkspaceVolumeProviderBindingSnapshot? ProviderBinding { get; init; }
+
     public WorkspaceVolumeFlushRequest Validate()
     {
         WorkspaceVolumeOperationValidation.Validate(
             Spec, ResourceGeneration, EnvironmentFence, Resource, ExpectedDataGeneration, IdempotencyKey);
+        if (ExpectedDataGeneration == long.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(ExpectedDataGeneration));
+        _ = ProviderBinding?.ValidateFor(Resource);
         return this;
+    }
+}
+
+public sealed record WorkspaceVolumeFlushReceipt(
+    int ContractVersion,
+    EnvironmentGenerationFence EnvironmentFence,
+    WorkspaceVolumeReference Volume,
+    ProviderResourceRef Resource,
+    long ExpectedDataGeneration,
+    long DataGeneration,
+    string IdempotencyKey,
+    string? TreeSha256,
+    string? ProviderCheckpointId)
+{
+    public WorkspaceVolumeFlushReceipt Validate()
+    {
+        ArgumentNullException.ThrowIfNull(EnvironmentFence);
+        ArgumentNullException.ThrowIfNull(Volume);
+        ArgumentNullException.ThrowIfNull(Resource);
+        Volume.Validate();
+        _ = WorkspaceVolumeIdentity.Validate(IdempotencyKey, nameof(IdempotencyKey));
+        if (ContractVersion != 1 ||
+            EnvironmentFence.LifecycleGeneration < 1 ||
+            EnvironmentFence.Owner.ProjectId != Volume.ProjectId ||
+            Resource.Seam != ProviderSeam.Storage ||
+            string.IsNullOrWhiteSpace(Resource.ProviderId) ||
+            string.IsNullOrWhiteSpace(Resource.ResourceId) ||
+            Resource.Generation != Volume.ResourceGeneration ||
+            ExpectedDataGeneration < 0 ||
+            ExpectedDataGeneration == long.MaxValue ||
+            DataGeneration != ExpectedDataGeneration + 1)
+            throw new ArgumentException("The workspace flush receipt has invalid owner or generation evidence.");
+        if ((TreeSha256 is null) == (ProviderCheckpointId is null))
+            throw new ArgumentException("A workspace flush requires exactly one tree hash or provider checkpoint.");
+        if (TreeSha256 is { } hash && !SessionSuspendResumeManifestValidation.IsSha256(hash))
+            throw new ArgumentException("The workspace flush tree hash must be a lowercase SHA-256 digest.");
+        if (ProviderCheckpointId is { } checkpoint &&
+            !SessionSuspendResumeManifestValidation.IsIdentifier(checkpoint, 256))
+            throw new ArgumentException("The workspace flush provider checkpoint is invalid.");
+        return this;
+    }
+
+    public WorkspaceVolumeFlushReceipt ValidateFor(WorkspaceVolumeFlushRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.Validate();
+        Validate();
+        if (EnvironmentFence != request.EnvironmentFence ||
+            Volume.ProjectId != request.Spec.ProjectId ||
+            Volume.VolumeId != request.Spec.VolumeId ||
+            Volume.ResourceGeneration != request.ResourceGeneration ||
+            Resource != request.Resource ||
+            ExpectedDataGeneration != request.ExpectedDataGeneration ||
+            IdempotencyKey != request.IdempotencyKey)
+            throw new ArgumentException("The workspace flush receipt does not match the exact requested operation.");
+        return this;
+    }
+}
+
+public sealed record WorkspaceVolumeFlushEvidence(
+    WorkspaceVolumeFlushReceipt Receipt,
+    JsonElement? RuntimeHostReceipt)
+{
+    public WorkspaceVolumeFlushEvidence Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Receipt);
+        Receipt.Validate();
+        if (RuntimeHostReceipt is { } host &&
+            (host.ValueKind != JsonValueKind.Object ||
+             System.Text.Encoding.UTF8.GetByteCount(host.GetRawText()) > 128 * 1024))
+            throw new ArgumentException("Runtime host evidence must be a bounded JSON object.");
+        return this with { RuntimeHostReceipt = RuntimeHostReceipt?.Clone() };
     }
 }
 
@@ -897,6 +974,12 @@ public interface IWorkspaceVolumeProvider
     Task<WorkspaceVolumeReleaseReceipt> ReleaseAsync(
         WorkspaceVolumeReleaseRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<WorkspaceVolumeFlushReceipt> FlushAsync(
+        WorkspaceVolumeFlushRequest request,
+        Func<WorkspaceVolumeFlushRequest, CancellationToken, Task<WorkspaceVolumeFlushReceipt>> trustedMountedFlush,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("The Storage provider has no verified workspace flush operation.");
 }
 
 public static class WorkspaceVolumeCapabilities

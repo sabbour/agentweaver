@@ -301,6 +301,8 @@ public sealed record EnvironmentWorkspaceVolumeTransitionReservation
     public EnvironmentWorkspaceVolumeOperation Operation { get; }
     public EnvironmentWorkspaceVolumeTransitionState TransitionState { get; }
     public bool Replayed { get; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public WorkspaceVolumeFlushEvidence? FlushEvidence { get; init; }
 }
 
 public sealed record EnvironmentWorkspaceVolumeTransitionResult
@@ -388,6 +390,8 @@ public sealed record EnvironmentWorkspaceVolumeTransitionResult
     public EnvironmentWorkspaceVolumeOperation Operation { get; }
     public EnvironmentWorkspaceVolumeTransitionState TransitionState { get; }
     public bool Replayed { get; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public WorkspaceVolumeFlushEvidence? FlushEvidence { get; init; }
 }
 
 public enum EnvironmentNetworkEffectKind
@@ -689,6 +693,16 @@ public interface IEnvironmentLifecycleStore
         bool effectVerified,
         bool durableFlushVerified,
         CancellationToken cancellationToken);
+
+    Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeFlushAsync(
+        Guid operationId,
+        EnvironmentGenerationFence environmentFence,
+        bool effectMayHaveApplied,
+        WorkspaceVolumeFlushEvidence? evidence,
+        bool effectVerified,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null) =>
+        throw new NotSupportedException("The Environment owner cannot persist verified workspace flush evidence.");
 
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeFlushReconciledAsync(
         Guid operationId,
