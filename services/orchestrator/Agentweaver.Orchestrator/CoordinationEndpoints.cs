@@ -837,7 +837,9 @@ public static partial class CoordinationEndpoints
                 request.RevisedPlan,
                 selectionContext,
                 request.RequestId,
-                selection.Authorization.ActorId);
+                selection.Authorization.ActorId,
+                CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(
+                    selection.Selection.Snapshot).MaxRevisionAttempts);
             transition = await EnforceRunChildLimitAsync(
                 transition,
                 current.State,

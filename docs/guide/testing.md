@@ -57,6 +57,13 @@ Controlled TCP tests separately exercise the actual SDK permission notification,
 Prompt tests check actual catalog/provider wire fields, missing-capacity denial, accepted narrowing, immutable source pins, and cached resume under increased or decreased capacity.
 Capability-wire tests do not prove live token enforcement or truncation.
 
+Managed correction tests cover optional-step skips without success receipts and required BuildTest blocking.
+Decision tests cover exact revision limits, invalid proposals, gate replay, fence changes, and saved or older envelopes.
+Fixed-work tests compare the exact child association, accepted model, plan, outputs, selection hash, fence, and decision version.
+Route tests check registration-read authorization and readiness rejection for anonymous, foreign-tenant, wrong-audience, and stale-registration requests.
+These tests use controlled owners and SDK responses.
+They do not prove live PostgreSQL reads, native execution, private TLS, or deployment.
+
 The positive Broker fixture prepares its guarded native turn through the current Orchestrator owner and persisted MAF checkpoint.
 One real Events host provides pricing, accounting, and session material; the controlled SDK supplies native completion evidence, not a paid model call.
 

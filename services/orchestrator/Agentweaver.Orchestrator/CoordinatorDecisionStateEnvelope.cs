@@ -30,7 +30,8 @@ internal sealed record CoordinatorDecisionStateEnvelope(
     WorkPlanSelectionContextEnvelope? CandidateSelectionContext,
     WorkPlanScopeDiff? LastScopeDiff,
     CoordinatorGateRequest? PendingGate,
-    ImmutableArray<CoordinatorGateDecisionReceipt> DecisionReceipts)
+    ImmutableArray<CoordinatorGateDecisionReceipt> DecisionReceipts,
+    int WorkPlanRevisionAttempts = 0)
 {
     public const int CurrentVersion = 1;
 
@@ -68,7 +69,8 @@ internal sealed record CoordinatorDecisionStateEnvelope(
                 state.CandidateWorkPlan, candidateSelectionContext),
             state.LastScopeDiff,
             state.PendingGate,
-            state.DecisionReceipts);
+            state.DecisionReceipts,
+            state.WorkPlanRevisionAttempts);
     }
 
     public CoordinatorDecisionStateEnvelopeRestoreResult Restore(
@@ -159,7 +161,8 @@ internal sealed record CoordinatorDecisionStateEnvelope(
             candidate.Snapshot,
             scopeDiff,
             PendingGate,
-            DecisionReceipts);
+            DecisionReceipts,
+            WorkPlanRevisionAttempts);
         return new CoordinatorDecisionStateEnvelopeRestoreResult(
             restored.Value,
             restored.Issues);

@@ -1679,7 +1679,6 @@ internal sealed partial class CoordinationOwnerStore
         RequireWriter(session, actor);
         RequireCurrentActiveSession(session, run);
         if (session.NodeKind != "child_work" ||
-            session.WorkPlanItemId is null ||
             session.TurnState != "active" ||
             session.LogicalTurnOrdinal < 1 ||
             session.StateVersion < 1)

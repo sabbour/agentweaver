@@ -727,7 +727,8 @@ internal sealed class CoordinatorDecisionOwnerStore
             currentState.CandidateWorkPlan,
             currentState.LastScopeDiff,
             pendingGate: null,
-            decisionReceipts: currentState.DecisionReceipts);
+            decisionReceipts: currentState.DecisionReceipts,
+            workPlanRevisionAttempts: currentState.WorkPlanRevisionAttempts);
         if (!nextStateResult.IsValid || nextStateResult.Value is null)
             throw InvalidPersistedState();
         var nextState = nextStateResult.Value;
