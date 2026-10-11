@@ -108,6 +108,14 @@ owner persists accepted definitions and decisions, exact-request gate state, wor
 position, and MAF checkpoints in its own PostgreSQL schema. The full dispatch engine
 remains a separate slice.
 
+Accepted WorkPlan revisions increment a persisted attempt count.
+The owner enforces the accepted `maxRevisionAttempts` limit before accepting another revision.
+A zero limit permits no revisions.
+Invalid proposals and rejected transitions do not consume an attempt.
+An exact request replay returns its saved decision without another increment.
+Gate-answer replay, owner-fence changes, and checkpoint recovery retain the count.
+Older decision envelopes without this field restore with a zero count.
+
 The Core models a project-scoped, revisioned backlog dependency graph. It rejects
 cross-project, self, missing, duplicate, and cyclic edges; only unclaimed, unarchived,
 non-provisional tasks can have their dependencies edited. Effective edge changes
@@ -335,19 +343,21 @@ flowchart TD
     F --> D
     D --> G["Propose step-snapped WorkPlan"]
     G -->     V{"Step identity, coverage, joins, eligibility, pins, bounds, and outputs valid?"}
-    V -->|"No: structured reasons"| R["Bounded WorkPlan revision"]
+    V -->|"No: structured reasons"| R["Correct invalid proposal"]
     R --> G
-    R -->|"Attempts exhausted"| Z["Hold for human guidance"]
     V -->|"Yes; conflicts serialized"| H["Confirm generated workflow or scope change"]
-    H --> S["Snapshot executable definition"]
+    H --> N["Save decision and revision count"]
+    N --> S["Snapshot executable definition"]
     S --> M["Bind steps to MAF executors"]
     M --> O["Open step: child work and join"]
     M --> T["Fixed work and platform gates"]
     O --> X["Checkpointed execution"]
     T --> X
     X --> J["Journal decisions and effects"]
-    X --> Y["Replan with diff and gate"]
-    Y --> G
+    X --> Y["Request WorkPlan revision"]
+    Y --> L{"Accepted revision limit reached?"}
+    L -->|"Yes"| Z["Hold for human guidance"]
+    L -->|"No"| G
 ```
 
 The accepted definition is snapshotted for the run, then bound to real MAF executors.
@@ -360,6 +370,16 @@ Command, argument-order, profile, path, or output-bound changes require scope co
 The validated WorkPlan requires a pinned Sandbox with the BuildTest command capability,
 even when it contains no model work.
 A legacy BuildTest step without a typed command remains valid but cannot execute.
+
+An optional platform step with no executor can be skipped when its dependencies are satisfied.
+The frontier does not save a successful result or manufacture a BuildTest receipt for that skip.
+An available optional executor still runs.
+A required step without an executor keeps the workflow incomplete and blocks its dependents.
+
+Fixed-work runtime reads resolve the retained checkpoint association for the exact child session.
+They compare its workflow, plan, task, outputs, agent, model, provider, selection hash, fence, and decision version.
+They recheck the current owner, decision, association, and accepted selection after remote reads.
+This path does not relax the existing model or provider checks for open work.
 
 Before dispatch, the checkpoint stores the operation ID, exact command, accepted
 execution and collector options, and expected Environment binding.

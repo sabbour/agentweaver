@@ -1,4 +1,7 @@
 using System.Collections.Immutable;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
 using Xunit;
 
@@ -474,6 +477,107 @@ public sealed class CoordinatorDecisionFlowTests
             "Only the requested workflow behavior changes.",
             "Existing provider pins remain authoritative.",
             clarifyingQuestions.IsDefault ? [] : clarifyingQuestions);
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void WorkPlanRevisionsStopAtTheExactAcceptedLimit(int maximum)
+    {
+        var state = ConfirmedPlanState();
+        for (var attempt = 0; attempt < maximum; attempt++)
+        {
+            var revised = CoordinatorDecisionFlow.ReviseWorkPlan(
+                state, state.ConfirmedWorkPlan!.Plan, WorkflowTestData.SelectionContext(),
+                $"revision-{attempt}", Owner, maximum);
+            Assert.True(revised.IsSuccess);
+            state = revised.State!;
+            Assert.Equal(attempt + 1, state.WorkPlanRevisionAttempts);
+        }
+
+        var blocked = CoordinatorDecisionFlow.ReviseWorkPlan(
+            state, state.ConfirmedWorkPlan!.Plan, WorkflowTestData.SelectionContext(),
+            "revision-over-limit", Owner, maximum);
+
+        Assert.False(blocked.IsSuccess);
+        Assert.Equal(maximum, state.WorkPlanRevisionAttempts);
+        Assert.Contains(blocked.Issues, issue =>
+            issue.Code == WorkflowValidationCode.WorkPlanLimitExceeded);
+    }
+
+    [Fact]
+    public void InvalidRevisionDoesNotConsumeAnAttempt()
+    {
+        var state = ConfirmedPlanState();
+        var invalid = CoordinatorDecisionFlow.ReviseWorkPlan(
+            state, WorkflowTestData.Plan(WorkflowTestData.Item("first", stepId: "missing")),
+            WorkflowTestData.SelectionContext(), "invalid-revision", Owner, 1);
+
+        Assert.False(invalid.IsSuccess);
+        Assert.Equal(0, state.WorkPlanRevisionAttempts);
+        var valid = CoordinatorDecisionFlow.ReviseWorkPlan(
+            state, state.ConfirmedWorkPlan!.Plan, WorkflowTestData.SelectionContext(),
+            "valid-revision", Owner, 1);
+        Assert.True(valid.IsSuccess);
+        Assert.Equal(1, valid.State!.WorkPlanRevisionAttempts);
+    }
+
+    [Fact]
+    public void RevisionGateReplayAndFenceAdvancePreserveTheAttemptCount()
+    {
+        var revised = CoordinatorDecisionFlow.ReviseWorkPlan(
+            ConfirmedPlanState(),
+            WorkflowTestData.Plan(WorkflowTestData.Item("first"), WorkflowTestData.Item("second")),
+            WorkflowTestData.SelectionContext(), "scope-revision", Owner, 1);
+        Assert.True(revised.IsSuccess);
+        var pending = revised.State!;
+        Assert.Equal(1, pending.WorkPlanRevisionAttempts);
+        var answer = Answer(pending.PendingGate!.RequestId, Owner, pending.Fence, CoordinatorGateChoices.Approve);
+        var accepted = pending.ApplyGateAnswer(answer);
+        var replay = accepted.State.ApplyGateAnswer(answer);
+
+        Assert.Equal(CoordinatorGateAnswerStatus.AlreadyApplied, replay.Status);
+        Assert.Same(accepted.State, replay.State);
+        Assert.Equal(1, replay.State.WorkPlanRevisionAttempts);
+        var advanced = replay.State.AdvanceFence(4);
+        Assert.Equal(1, advanced.WorkPlanRevisionAttempts);
+        Assert.False(CoordinatorDecisionFlow.ReviseWorkPlan(
+            advanced, advanced.ConfirmedWorkPlan!.Plan, WorkflowTestData.SelectionContext(),
+            "after-fence", Owner, 1).IsSuccess);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RevisionCountSurvivesSavedEnvelopeAndLegacyEnvelopeDefaultsToZero(bool legacy)
+    {
+        var context = WorkflowTestData.SelectionContext();
+        var state = ConfirmedPlanState();
+        var revised = CoordinatorDecisionFlow.ReviseWorkPlan(
+            state, state.ConfirmedWorkPlan!.Plan, context, "saved-revision", Owner, 1);
+        Assert.True(revised.IsSuccess);
+        var binding = new CoordinatorDecisionBinding(
+            "https://issuer.test/", Owner, "tenant-1", "project-1", "run-1", "root",
+            new string('A', 64), 1, 1, 1, "context-1", state.Fence);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var document = JsonSerializer.SerializeToNode(CoordinatorDecisionStateEnvelope.Capture(
+            revised.State!, binding, context), options)!.AsObject();
+        if (legacy)
+            document.Remove("workPlanRevisionAttempts");
+        var envelope = document.Deserialize<CoordinatorDecisionStateEnvelope>(options)!;
+
+        var restored = envelope.Restore(binding, _ => context.IsolationProviderBinding);
+
+        Assert.True(restored.IsValid, string.Join("; ", restored.Issues.Select(issue => issue.Message)));
+        Assert.Equal(legacy ? 0 : 1, restored.State!.WorkPlanRevisionAttempts);
+        Assert.Equal(legacy, CoordinatorDecisionFlow.ReviseWorkPlan(
+            restored.State, restored.State.ConfirmedWorkPlan!.Plan, context,
+            "after-restart", Owner, 1).IsSuccess);
+        var invalid = (envelope with { WorkPlanRevisionAttempts = -1 })
+            .Restore(binding, _ => context.IsolationProviderBinding);
+        Assert.False(invalid.IsValid);
+        Assert.Contains(invalid.Issues, issue => issue.Path == "decisionState.workPlanRevisionAttempts");
+    }
 
     private static AuthorizedWorkflowCatalog Catalog(
         WorkflowDefinition defaultWorkflow,

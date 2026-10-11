@@ -317,16 +317,20 @@ public sealed class CoordinatorDecisionState
         WorkPlanSnapshot? candidateWorkPlan,
         WorkPlanScopeDiff? lastScopeDiff,
         CoordinatorGateRequest? pendingGate,
-        ImmutableArray<CoordinatorGateDecisionReceipt> decisionReceipts) =>
+        ImmutableArray<CoordinatorGateDecisionReceipt> decisionReceipts,
+        int workPlanRevisionAttempts = 0) =>
         (Fence, OutcomeSpec, OutcomeConfirmed, NextClarifyingQuestionIndex, SelectedWorkflow, WorkflowConfirmed,
-            ConfirmedWorkPlan, CandidateWorkPlan, LastScopeDiff, PendingGate, DecisionReceipts) =
+            ConfirmedWorkPlan, CandidateWorkPlan, LastScopeDiff, PendingGate, DecisionReceipts,
+            WorkPlanRevisionAttempts) =
         (fence, outcomeSpec, outcomeConfirmed, nextClarifyingQuestionIndex, selectedWorkflow, workflowConfirmed,
-            confirmedWorkPlan, candidateWorkPlan, lastScopeDiff, pendingGate, decisionReceipts);
+            confirmedWorkPlan, candidateWorkPlan, lastScopeDiff, pendingGate, decisionReceipts,
+            workPlanRevisionAttempts);
 
     public long Fence { get; }
     public CoordinatorOutcomeSpecSnapshot? OutcomeSpec { get; }
     public bool OutcomeConfirmed { get; }
     public int NextClarifyingQuestionIndex { get; }
+    public int WorkPlanRevisionAttempts { get; }
     public WorkflowDefinitionSnapshot? SelectedWorkflow { get; }
     public bool WorkflowConfirmed { get; }
     public WorkPlanSnapshot? ConfirmedWorkPlan { get; }
@@ -363,7 +367,8 @@ public sealed class CoordinatorDecisionState
         WorkPlanSnapshot? candidateWorkPlan,
         WorkPlanScopeDiff? lastScopeDiff,
         CoordinatorGateRequest? pendingGate,
-        ImmutableArray<CoordinatorGateDecisionReceipt> decisionReceipts)
+        ImmutableArray<CoordinatorGateDecisionReceipt> decisionReceipts,
+        int workPlanRevisionAttempts = 0)
     {
         var issues = ImmutableArray.CreateBuilder<WorkflowValidationIssue>();
         if (fence <= 0)
@@ -377,6 +382,10 @@ public sealed class CoordinatorDecisionState
             issues.Add(Issue(WorkflowValidationCode.InvalidDecisionGate,
                 "decisionState.nextClarifyingQuestionIndex",
                 "Clarifying-question progress must be within the outcome specification."));
+        if (workPlanRevisionAttempts < 0)
+            issues.Add(Issue(WorkflowValidationCode.InvalidDecisionGate,
+                "decisionState.workPlanRevisionAttempts",
+                "Work-plan revision attempts cannot be negative."));
         if (outcomeConfirmed && nextClarifyingQuestionIndex != questionCount)
             issues.Add(Issue(WorkflowValidationCode.OutcomeConfirmationRequired,
                 "decisionState.outcome",
@@ -483,7 +492,8 @@ public sealed class CoordinatorDecisionState
                 candidateWorkPlan,
                 lastScopeDiff,
                 pendingGate,
-                decisionReceipts));
+                decisionReceipts,
+                workPlanRevisionAttempts));
     }
 
     public CoordinatorDecisionState AdvanceFence(long fence)
@@ -611,7 +621,8 @@ public sealed class CoordinatorDecisionState
         bool setLastScopeDiff = false,
         CoordinatorGateRequest? pendingGate = null,
         bool clearPendingGate = false,
-        ImmutableArray<CoordinatorGateDecisionReceipt>? decisionReceipts = null) =>
+        ImmutableArray<CoordinatorGateDecisionReceipt>? decisionReceipts = null,
+        int? workPlanRevisionAttempts = null) =>
         new(
             fence ?? Fence,
             setOutcomeSpec ? outcomeSpec : OutcomeSpec,
@@ -623,7 +634,8 @@ public sealed class CoordinatorDecisionState
             setCandidateWorkPlan ? candidateWorkPlan : CandidateWorkPlan,
             setLastScopeDiff ? lastScopeDiff : LastScopeDiff,
             clearPendingGate ? null : pendingGate ?? PendingGate,
-            decisionReceipts ?? DecisionReceipts);
+            decisionReceipts ?? DecisionReceipts,
+            workPlanRevisionAttempts ?? WorkPlanRevisionAttempts);
 
     private CoordinatorDecisionState ApplyAcceptedDecision(
         CoordinatorGateRequest gate,
@@ -977,7 +989,8 @@ public static class CoordinatorDecisionFlow
         WorkPlan? revisedPlan,
         WorkPlanRunSelectionContext? selectionContext,
         string? requestId,
-        string? authorizedActorId)
+        string? authorizedActorId,
+        int? maximumRevisionAttempts = null)
     {
         if (!CanStartTransition(state, "workPlanRevision", out var blocked))
             return Failure<CoordinatorWorkPlanRevision>(blocked);
@@ -987,6 +1000,13 @@ public static class CoordinatorDecisionFlow
                 WorkflowValidationCode.WorkPlanConfirmationRequired,
                 "workPlan",
                 "A confirmed work plan is required before it can be revised."));
+        if (maximumRevisionAttempts is { } maximum &&
+            state.WorkPlanRevisionAttempts >= maximum ||
+            state.WorkPlanRevisionAttempts == int.MaxValue)
+            return Failure<CoordinatorWorkPlanRevision>(Issue(
+                WorkflowValidationCode.WorkPlanLimitExceeded,
+                "runLimits.maxRevisionAttempts",
+                "The accepted work-plan revision attempt limit has been reached."));
 
         var validated = WorkPlanValidator.ValidateAndSnapshot(
             state.SelectedWorkflow,
@@ -1023,13 +1043,15 @@ public static class CoordinatorDecisionFlow
                 candidateWorkPlan: null,
                 setCandidateWorkPlan: true,
                 lastScopeDiff: diff,
-                setLastScopeDiff: true)
+                setLastScopeDiff: true,
+                workPlanRevisionAttempts: checked(state.WorkPlanRevisionAttempts + 1))
             : state.Copy(
                 candidateWorkPlan: candidate,
                 setCandidateWorkPlan: true,
                 lastScopeDiff: diff,
                 setLastScopeDiff: true,
-                pendingGate: gate);
+                pendingGate: gate,
+                workPlanRevisionAttempts: checked(state.WorkPlanRevisionAttempts + 1));
 
         return Success(
             next,

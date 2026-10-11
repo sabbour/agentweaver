@@ -29,6 +29,7 @@ internal sealed class RuntimeRegistrationOwner(
     CoordinationOwnerStore sessions,
     CoordinatorDecisionOwnerStore decisions,
     CoordinatorRunSelectionContextStore selectionContexts,
+    PostgresMafCheckpointStore checkpoints,
     RuntimeRegistrationStore registrations,
     RuntimeEnvironmentContextClient environment,
     TimeProvider timeProvider)
@@ -229,7 +230,7 @@ internal sealed class RuntimeRegistrationOwner(
         HttpContext context, string projectId, string runId, string sessionId, CancellationToken cancellationToken) =>
         CoordinationEndpoints.ReadRuntimeOwnerContextCoreAsync(
             projectId, runId, sessionId, context, options, projects, sessions, decisions,
-            selectionContexts, cancellationToken);
+            selectionContexts, checkpoints, cancellationToken);
 
     private void ValidatePlacement(
         RuntimeOwnerContext owner, RegisterRuntimeRequest request, EnvironmentRuntimeBootstrapContext placement)
