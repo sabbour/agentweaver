@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -58,7 +58,11 @@ export async function measureAgentHostImage(indexBytes, readEntry, source) {
     throw new Error('The image platform, non-root owner, executable, or clean-source labels do not match.');
   return {
     kind: 'agenthost-image', schemaVersion: 1, sourceSha: source.sha, sourceTree: source.tree,
-    image: { digest: descriptor.digest, configDigest: manifest.config.digest, platform: 'linux/amd64', compressedPullBytes },
+    image: {
+      digest: descriptor.digest, configDigest: manifest.config.digest, platform: 'linux/amd64', compressedPullBytes,
+      ...(config.config.Labels['org.opencontainers.image.version'] !== undefined
+        ? { version: config.config.Labels['org.opencontainers.image.version'] } : {}),
+    },
     measurement: 'platform-manifest plus unique config and gzip-layer blob bytes',
   };
 }
@@ -91,32 +95,45 @@ async function readTarEntry(archive, entry, retain) {
   };
 }
 
-function git(args) {
-  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true });
+export function measureAgentHostArchiveSync(archive, repoRoot) {
+  return JSON.parse(execFileSync(process.execPath, [
+    fileURLToPath(import.meta.url), '--stdout', resolve(archive), resolve(repoRoot),
+  ], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
+}
+
+function git(args, repoRoot = root) {
+  const result = spawnSync('git', args, { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
   if (result.error || result.status !== 0) throw new Error('Cannot read the exact Git image source.');
   return result.stdout.trim();
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    if (process.argv.length !== 4)
-      throw new Error('Usage: measure-agenthost-image.mjs <gzip-OCI-archive> <receipt.json>');
+    const stdout = process.argv[2] === '--stdout';
+    if (process.argv.length !== (stdout ? 5 : 4))
+      throw new Error('Usage: measure-agenthost-image.mjs <gzip-OCI-archive> <receipt.json> | --stdout <gzip-OCI-archive> <source-root>');
+    const repoRoot = stdout ? resolve(process.argv[4]) : root;
     const inputs = [
       'Directory.Build.props', '.dockerignore',
       'packages/Agentweaver.Abstractions', 'packages/Agentweaver.Identity',
-      'packages/Agentweaver.AgentRuntime', 'packages/Agentweaver.Telemetry',
+      'packages/Agentweaver.AgentRuntime', 'packages/Agentweaver.Providers',
+      'packages/Agentweaver.SourceControl', 'packages/Agentweaver.Telemetry',
       'services/agenthost/Agentweaver.AgentHost',
     ];
-    if (git(['status', '--porcelain', '--untracked-files=normal', '--', ...inputs]))
+    if (git(['status', '--porcelain', '--untracked-files=normal', ...(stdout ? [] : ['--', ...inputs])], repoRoot))
       throw new Error('A clean Git working tree is required before writing an image receipt.');
-    const source = { sha: git(['rev-parse', 'HEAD']), tree: git(['rev-parse', 'HEAD^{tree}']) };
-    const archive = resolve(process.argv[2]);
+    const source = { sha: git(['rev-parse', 'HEAD'], repoRoot), tree: git(['rev-parse', 'HEAD^{tree}'], repoRoot) };
+    const archive = resolve(process.argv[stdout ? 3 : 2]);
     const receipt = await measureAgentHostImage(
       await readTarEntry(archive, 'index.json', true), (entry, retain) => readTarEntry(archive, entry, retain), source);
-    const destination = resolve(process.argv[3]);
-    mkdirSync(dirname(destination), { recursive: true });
-    writeFileSync(destination, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx' });
-    console.log(`Measured ${receipt.image.compressedPullBytes} compressed OCI pull bytes: ${receipt.image.digest}`);
+    if (stdout) {
+      console.log(JSON.stringify(receipt));
+    } else {
+      const destination = resolve(process.argv[3]);
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx' });
+      console.log(`Measured ${receipt.image.compressedPullBytes} compressed OCI pull bytes: ${receipt.image.digest}`);
+    }
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

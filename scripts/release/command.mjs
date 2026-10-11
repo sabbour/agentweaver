@@ -5,6 +5,10 @@ function operationName(bin, args) {
     return 'docker.manifest-read';
   if (bin === 'docker' && ['login', 'load', 'inspect', 'tag', 'push'].includes(args[0]))
     return `docker.${args[0]}`;
+  if (bin === 'docker' && args[0] === 'image' && args[1] === 'inspect')
+    return 'docker.image-inspect';
+  if (bin === 'docker' && args[0] === 'run' && args.at(-1) === '--verify-native-runtime')
+    return 'docker.runtime-verify';
   if (bin === 'gh' && args[0] === 'api') return 'github.api';
   if (bin === 'dotnet' && args[0] === 'nuget' && args[1] === 'push') return 'nuget.push';
   if (bin === 'git' && ['rev-parse', 'status'].includes(args[0])) return 'git.source-read';
@@ -15,6 +19,7 @@ export function runPublicationCommand(bin, args, input, spawn = spawnSync) {
   const operation = operationName(bin, args);
   const result = spawn(bin, args, {
     input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+    ...(operation === 'docker.runtime-verify' ? { timeout: 60_000 } : {}),
   });
   if (result.error || result.status !== 0) {
     const stderr = String(result.stderr ?? '').slice(0, 8192);
