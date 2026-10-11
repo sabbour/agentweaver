@@ -13,6 +13,8 @@ internal sealed record RuntimeSessionRecovery(
     SessionMaterialReadResult? Cache,
     IReadOnlyList<(string Role, string Content)> Turns)
 {
+    internal RuntimeResumeJournalRebuildReceipt? JournalRebuild { get; init; }
+
     internal bool CacheMatches(RuntimeRegistration registration, string sdkVersion, string runtimeVersion,
         string modelId, int? maxPromptTokens = null)
     {

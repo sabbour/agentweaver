@@ -1,5 +1,7 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 
@@ -10,6 +12,10 @@ public sealed class RuntimeSessionMaterialHttpClient(
 {
     private readonly Uri _address = RuntimeOwnerHttpTransport.RequireOwnerAddress(eventsAddress);
     private static readonly UTF8Encoding Utf8 = new(false, throwOnInvalidBytes: true);
+    private static readonly JsonSerializerOptions JournalJson = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+    };
 
     internal async Task<SessionMaterialAcknowledgment> WriteTurnContentAsync(
         AuthorizedRuntimeSession session, Guid eventId, string role, string content, CancellationToken cancellationToken)
@@ -171,6 +177,138 @@ public sealed class RuntimeSessionMaterialHttpClient(
         return new(identity, binding.TenantId, cache, turns);
     }
 
+    internal async Task<RuntimeSessionRecovery> ReadResumeCacheAsync(
+        RuntimeRegistration registration,
+        RuntimeResumeBootstrapRequest request,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        if (registration != request.Registration)
+            throw new RuntimeAuthorizationException("runtime_resume_registration_stale");
+        var binding = registration.Binding;
+        var identity = request.Resume.SourceManifest.Identity;
+        var expected = request.Resume.SourceManifest.CacheAcknowledgment
+            ?? throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
+        var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<SessionMaterialReadResult>(
+            client, _address,
+            $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/material/{expected.EventId:D}/SdkCache",
+            actor, null, 2 * SessionMaterialValidation.MaximumBytes, allowNotFound: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (result is null)
+            return new(identity, binding.TenantId, null, Array.Empty<(string Role, string Content)>());
+
+        ValidateRead(result, identity, expected.EventId, SessionMaterialKind.SdkCache);
+        if (!RuntimeWorkspaceResumeHttpClient.SameJson(result.Material, expected))
+            throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
+        return new(identity, binding.TenantId, result, Array.Empty<(string Role, string Content)>());
+    }
+
+    internal async Task<RuntimeSessionRecovery> ReadJournalRebuildAsync(
+        RuntimeRegistration registration,
+        RuntimeResumeBootstrapRequest request,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        if (registration != request.Registration)
+            throw new RuntimeAuthorizationException("runtime_resume_registration_stale");
+        var binding = registration.Binding;
+        var source = request.Resume.SourceManifest;
+        var identity = source.Identity;
+        var throughPosition = source.FlushedJournalPosition
+            ?? throw new RuntimeAuthorizationException("runtime_resume_journal_source_missing");
+        if (binding.ProjectId != identity.ProjectId || binding.RunId != identity.RunId ||
+            binding.SessionId != identity.SessionId)
+            throw new RuntimeAuthorizationException("runtime_resume_journal_scope_invalid");
+
+        var prefix = ImmutableArray.CreateBuilder<SessionEventEnvelope>();
+        var turns = new List<(string Role, string Content)>();
+        var eventIds = new HashSet<Guid>();
+        var cursors = new HashSet<string>(StringComparer.Ordinal);
+        var totalPrefixBytes = 2L;
+        long totalContentBytes = 0;
+        long lastPosition = 0;
+        string? cursor = null;
+        var reachedBoundary = false;
+        while (!reachedBoundary)
+        {
+            var path = $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/events?limit=100";
+            if (cursor is not null)
+                path += $"&cursor={Uri.EscapeDataString(cursor)}";
+            var page = await RuntimeOwnerHttpTransport.SendBoundedAsync<SessionEventPage>(
+                client, _address, path, actor, null,
+                4 * SessionMaterialValidation.MaximumBytes, allowNotFound: false, cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw new RuntimeAuthorizationException("runtime_journal_page_invalid");
+            if (page.Events.IsDefault)
+                throw new RuntimeAuthorizationException("runtime_journal_page_invalid");
+
+            foreach (var recorded in page.Events)
+            {
+                if (recorded is null || recorded.Identity.ProjectId != identity.ProjectId ||
+                    recorded.Identity.RunId != identity.RunId || recorded.EventId == Guid.Empty ||
+                    recorded.Position <= lastPosition)
+                    throw new RuntimeAuthorizationException("runtime_journal_page_invalid");
+                lastPosition = recorded.Position;
+                if (recorded.Position > throughPosition)
+                {
+                    reachedBoundary = true;
+                    break;
+                }
+                if (!eventIds.Add(recorded.EventId))
+                    throw new RuntimeAuthorizationException("runtime_journal_page_invalid");
+
+                var envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(recorded, JournalJson).Length;
+                totalPrefixBytes += envelopeBytes + (prefix.Count == 0 ? 0 : 1);
+                if (totalPrefixBytes > SessionMaterialValidation.MaximumBytes)
+                    throw new RuntimeAuthorizationException("runtime_resume_journal_prefix_too_large");
+                prefix.Add(recorded);
+
+                if (recorded.Payload is not TurnSessionPayload turn)
+                    continue;
+                if (turn.Role is not ("user" or "assistant"))
+                    throw new RuntimeAuthorizationException("runtime_journal_role_invalid");
+                var material = await ReadRecordedAsync(
+                    recorded.Identity, recorded.EventId, SessionMaterialKind.TurnContent, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!RuntimeWorkspaceResumeHttpClient.SameJson(material.Material.Reference, turn.Content) ||
+                    material.Material.Position != recorded.Position ||
+                    material.Material.Reference.Material!.TenantId != binding.TenantId ||
+                    material.Bytes.Length > SessionMaterialValidation.MaximumBytes - totalContentBytes)
+                    throw new RuntimeAuthorizationException("runtime_journal_turn_invalid");
+                totalContentBytes += material.Bytes.Length;
+                try
+                {
+                    turns.Add((turn.Role, Utf8.GetString(material.Bytes)));
+                }
+                catch (DecoderFallbackException)
+                {
+                    throw new RuntimeAuthorizationException("runtime_journal_turn_invalid");
+                }
+            }
+
+            if (reachedBoundary || !page.HasMore)
+                break;
+            if (page.NextCursor is not { Length: > 0 } next ||
+                !cursors.Add(next) || page.Events.Length == 0)
+                throw new RuntimeAuthorizationException("runtime_journal_cursor_invalid");
+            cursor = next;
+        }
+
+        var immutablePrefix = prefix.ToImmutable();
+        var checkpoint = source.Checkpoint
+            ?? throw new RuntimeAuthorizationException("runtime_resume_journal_source_missing");
+        var receipt = new RuntimeResumeJournalRebuildReceipt(
+            checkpoint,
+            throughPosition,
+            RuntimeResumeJournalRebuildReceipt.ComputeJournalSha256(request, immutablePrefix),
+            request.ResumeAttemptId,
+            RuntimeResumeNativeCacheState.PendingUntilAuthorizedTurn).ValidateFor(request);
+        return new RuntimeSessionRecovery(identity, binding.TenantId, null, turns)
+        {
+            JournalRebuild = receipt
+        };
+    }
+
     internal async Task<SessionMaterialReadResult?> ReadOptionalTurnAsync(
         RuntimeRegistration registration, SdkSessionFacts facts, Guid eventId,
         CancellationToken cancellationToken)
@@ -208,10 +346,12 @@ public sealed class RuntimeSessionMaterialHttpClient(
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_route_unavailable");
         if (kind == SessionMaterialKind.RuntimeConfiguration)
             throw new RuntimeAuthorizationException("runtime_configuration_route_unavailable");
-        var result = await RuntimeOwnerHttpTransport.SendAsync<SessionMaterialReadResult>(
+        var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<SessionMaterialReadResult>(
             client, _address,
             $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/material/{eventId:D}/{kind}",
-            actor, null, cancellationToken).ConfigureAwait(false);
+            actor, null, 2 * SessionMaterialValidation.MaximumBytes,
+            allowNotFound: false, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_material_read_invalid");
         ValidateRead(result, identity, eventId, kind);
         return result;
     }

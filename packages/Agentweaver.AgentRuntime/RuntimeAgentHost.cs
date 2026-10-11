@@ -207,7 +207,15 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                     resumeBootstrap.Resume.SourceManifest.CacheAcknowledgment
                         ?? throw new RuntimeAuthorizationException("runtime_resume_cache_unavailable"),
                     configuredSession.Facts,
-                    "native-cache").ValidateFor(resumeBootstrap);
+                    configuredSession.RecoveryMode switch
+                    {
+                        RuntimeSessionRecoveryMode.NativeCache => "native-cache",
+                        RuntimeSessionRecoveryMode.JournalRebuild => "journal-rebuild",
+                        _ => throw new RuntimeAuthorizationException("runtime_resume_cache_unavailable")
+                    })
+                {
+                    JournalRebuild = configuredSession.JournalRebuildReceipt
+                }.ValidateFor(resumeBootstrap);
             }
             _configuredAt ??= _time.GetUtcNow();
             var source = _usageSource ??= new(_http, _options.OrchestratorAddress, retained);

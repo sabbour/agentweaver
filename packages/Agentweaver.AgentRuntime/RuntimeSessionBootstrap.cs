@@ -91,6 +91,8 @@ public sealed class RuntimeSessionBootstrap(
             await RequireUnchangedAsync(registration, cancellationToken);
             var sourceProof = SourceProof(source);
             AuthorizedRuntimeSession? authorized = null;
+            RuntimeSessionRecovery? recovery = null;
+            Func<CancellationToken, Task<RuntimeSessionRecovery>>? journalFallback = null;
             async Task RequireSkillContentCurrentAsync(CancellationToken token)
             {
                 var current = await skillContent.ReadAsync(registration, token).ConfigureAwait(false);
@@ -122,9 +124,25 @@ public sealed class RuntimeSessionBootstrap(
             await RequireSourceAuthorityAsync(cancellationToken);
             if (resumeBootstrap is not null && material is null)
                 throw new RuntimeAuthorizationException("runtime_resume_cache_unavailable");
-            var expectedCache = resumeBootstrap?.Resume.SourceManifest.CacheAcknowledgment;
-            var recovery = material is null ? null :
-                await material.ReadRecoveryAsync(registration, cancellationToken, expectedCache).ConfigureAwait(false);
+            if (material is not null)
+            {
+                if (resumeBootstrap is null)
+                    recovery = await material.ReadRecoveryAsync(
+                        registration, cancellationToken).ConfigureAwait(false);
+                else
+                {
+                    recovery = await material.ReadResumeCacheAsync(
+                        registration, resumeBootstrap, cancellationToken).ConfigureAwait(false);
+                    journalFallback = async token =>
+                    {
+                        await RequireSourceAuthorityAsync(token).ConfigureAwait(false);
+                        var journal = await material.ReadJournalRebuildAsync(
+                            registration, resumeBootstrap, token).ConfigureAwait(false);
+                        await RequireSourceAuthorityAsync(token).ConfigureAwait(false);
+                        return journal;
+                    };
+                }
+            }
             await RequireSourceAuthorityAsync(cancellationToken);
             session = await sessions.CreateAsync(
                 registration, modelReference, modelCredential.Credential, RequireSourceAuthorityAsync,
@@ -132,9 +150,10 @@ public sealed class RuntimeSessionBootstrap(
                 actions is null ? null : (request, token) =>
                     actions.RequireAsync(request, RequireSourceAuthorityAsync, token),
                 capturedMcpServer,
-                requireNativeCache: resumeBootstrap is not null);
-            if (resumeBootstrap is not null && session.RecoveryMode != RuntimeSessionRecoveryMode.NativeCache)
-                throw new RuntimeAuthorizationException("runtime_resume_native_cache_required");
+                journalFallback);
+            if (resumeBootstrap is not null &&
+                session.RecoveryMode is not (RuntimeSessionRecoveryMode.NativeCache or RuntimeSessionRecoveryMode.JournalRebuild))
+                throw new RuntimeAuthorizationException("runtime_resume_cache_unavailable");
             await RequireSourceAuthorityAsync(cancellationToken);
             authorized = new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,
                 session, modelCredential, owner, broker, actor, timeProvider, actions, requireReadiness,
