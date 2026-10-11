@@ -137,7 +137,8 @@ public sealed record RuntimeWorkspaceResumeVerificationReceipt(
     public RuntimeWorkspaceResumeVerificationReceipt ValidateFor(RuntimeWorkspaceResumeRequest request)
     {
         request.Validate();
-        ArgumentNullException.ThrowIfNull(HostReceipt);
+        if (HostReceipt is null)
+            throw new RuntimeAuthorizationException("runtime_resume_verification_receipt_invalid");
         HostReceipt.ValidateFor(request);
         if (request.RestoredWorkspace is null ||
             ContractVersion != 1 || OperationId != request.OperationId ||
@@ -165,6 +166,8 @@ public sealed class RuntimeWorkspaceResumeHttpClient(HttpClient client, Uri envi
             client, _owner, "/internal/runtime/resume/prepare", actor, request,
             SessionMaterialValidation.MaximumBytes, false, cancellationToken).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_resume_prepare_unavailable");
+        if (!actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_resume_actor_expired");
         return result.ValidateFor(request);
     }
 
@@ -179,6 +182,8 @@ public sealed class RuntimeWorkspaceResumeHttpClient(HttpClient client, Uri envi
             client, _owner, "/internal/runtime/resume/verify", actor, request,
             SessionMaterialValidation.MaximumBytes, false, cancellationToken).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_resume_verify_unavailable");
+        if (!actor.Bearer.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_resume_actor_expired");
         return result.ValidateFor(request);
     }
 
