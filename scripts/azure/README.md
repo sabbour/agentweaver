@@ -22,6 +22,23 @@ No Azure account, credentials, or cluster connection is necessary.
 Tests use fake transports and generated local fixtures.
 The only real Azure CLI test reads local CLI version information.
 
+## Limited P1 runtime identities
+
+`infra/bicep/p1-runtime-identities.bicep` is separate from the full foundation deployment.
+It uses the existing resource group location and the `aw-v1-p0-aks` OIDC issuer.
+Before applying it, verify that the resource group and cluster locations match.
+It creates only the Projects & Config, Environment, Knowledge, Events & Sessions,
+and Orchestrator runtime identities and their exact ServiceAccount federations.
+Every federation names its service in `agentweaver-v1-p0` and accepts only
+`api://AzureADTokenExchange`.
+Supply the existing resource group tags and the exact reviewed source SHA.
+
+This template defines no Azure role assignment, database grant, migration,
+certificate, server, storage account, cluster, or node pool change.
+It does not alter Broker, Probe, or migration identities.
+Applying it requires approval for these five identities and workload links.
+A created identity does not prove database access or a ready service.
+
 ## System pool autoscaling
 
 Both templates enable autoscaling on the existing `system` pool with explicit

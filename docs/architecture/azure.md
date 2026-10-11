@@ -83,6 +83,23 @@ AKS supplies a separate `appRoutingIdentity` with `resourceId`, `clientId`, and 
 
 AKS also enables the Key Vault CSI provider and secret rotation with `enableSecretRotation: 'true'` and `rotationPollInterval: '2m'`. These values are template settings; the addon has not been activated in Azure.
 
+## Limited P1 runtime identity setup
+
+`infra/bicep/p1-runtime-identities.bicep` is separate from the P0 foundation shown above.
+It uses the existing resource group location and the existing AKS OIDC issuer.
+The resource group and cluster locations must match before deployment.
+Its fixed service list is Projects & Config, Environment, Knowledge,
+Events & Sessions, and Orchestrator.
+Each identity trusts only its named ServiceAccount in `agentweaver-v1-p0`.
+
+The template creates no Azure resource role assignment, database grant,
+migration identity, certificate, storage account, server, cluster, or node pool.
+It does not reuse or change Broker and Probe privileges.
+The output provides observed runtime client and principal IDs for workload configuration.
+Identity creation and federation do not prove database access or service readiness.
+The [operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities)
+describes the separate approval boundary.
+
 ## Network and acceptance checks
 
 The canonical Identity PostgreSQL grant definition includes the four runtime
