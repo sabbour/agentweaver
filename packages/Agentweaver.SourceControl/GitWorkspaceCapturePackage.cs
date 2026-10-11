@@ -38,6 +38,7 @@ public sealed record GitWorkspaceCaptureDocument(
 public static class GitWorkspaceCapturePackage
 {
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("AWSCAP01");
+    private static readonly byte[] DocumentMagic = Encoding.ASCII.GetBytes("AWSCAPT2");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         MaxDepth = 32,
@@ -131,6 +132,65 @@ public static class GitWorkspaceCapturePackage
             Hash(patchBytes),
             package,
             Hash(package));
+    }
+
+    public static byte[] SerializeDocument(GitWorkspaceCaptureDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var manifest = ParseManifest(document.ManifestBytes);
+        if (!JsonSerializer.SerializeToUtf8Bytes(document.Manifest, JsonOptions)
+                .AsSpan().SequenceEqual(document.ManifestBytes) ||
+            Hash(document.ManifestBytes) != document.ManifestSha256 ||
+            document.PatchBytes.Length > ProducedRunCaptureLimits.MaximumDiffBytes ||
+            Hash(document.PatchBytes) != document.PatchSha256)
+            throw new ArgumentException("The captured output document is inconsistent.", nameof(document));
+        VerifyPackage(document.PackageBytes, manifest, document.PackageSha256);
+
+        var length = checked(ProducedRunCaptureLimits.DocumentHeaderBytes +
+            document.ManifestBytes.Length + document.PatchBytes.Length + document.PackageBytes.Length);
+        var bytes = new byte[length];
+        DocumentMagic.CopyTo(bytes, 0);
+        BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(8, 4), (uint)document.ManifestBytes.Length);
+        BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(12, 4), (uint)document.PatchBytes.Length);
+        BinaryPrimitives.WriteUInt64BigEndian(bytes.AsSpan(16, 8), (ulong)document.PackageBytes.Length);
+        var offset = ProducedRunCaptureLimits.DocumentHeaderBytes;
+        document.ManifestBytes.CopyTo(bytes, offset);
+        offset += document.ManifestBytes.Length;
+        document.PatchBytes.CopyTo(bytes, offset);
+        offset += document.PatchBytes.Length;
+        document.PackageBytes.CopyTo(bytes, offset);
+        return bytes;
+    }
+
+    public static GitWorkspaceCaptureDocument ParseDocument(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < ProducedRunCaptureLimits.DocumentHeaderBytes ||
+            bytes.Length > ProducedRunCaptureLimits.MaximumDocumentBytes ||
+            !bytes[..DocumentMagic.Length].SequenceEqual(DocumentMagic))
+            throw new ArgumentException("The captured output document header is invalid.", nameof(bytes));
+        var manifestLength = BinaryPrimitives.ReadUInt32BigEndian(bytes.Slice(8, 4));
+        var patchLength = BinaryPrimitives.ReadUInt32BigEndian(bytes.Slice(12, 4));
+        var packageLength = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(16, 8));
+        if (manifestLength is 0 or > ProducedRunCaptureLimits.MaximumManifestBytes ||
+            patchLength > ProducedRunCaptureLimits.MaximumDiffBytes ||
+            packageLength is < ProducedRunCaptureLimits.PackageHeaderBytes or
+                > ProducedRunCaptureLimits.MaximumPackageBytes ||
+            (ulong)bytes.Length != ProducedRunCaptureLimits.DocumentHeaderBytes +
+                (ulong)manifestLength + patchLength + packageLength)
+            throw new ArgumentException("The captured output document section lengths are invalid.", nameof(bytes));
+
+        var offset = ProducedRunCaptureLimits.DocumentHeaderBytes;
+        var manifestBytes = bytes.Slice(offset, (int)manifestLength).ToArray();
+        offset += (int)manifestLength;
+        var patchBytes = bytes.Slice(offset, (int)patchLength).ToArray();
+        offset += (int)patchLength;
+        var packageBytes = bytes.Slice(offset, (int)packageLength).ToArray();
+        var manifest = ParseManifest(manifestBytes);
+        var packageHash = Hash(packageBytes);
+        VerifyPackage(packageBytes, manifest, packageHash);
+        return new(
+            manifest, manifestBytes, Hash(manifestBytes),
+            patchBytes, Hash(patchBytes), packageBytes, packageHash);
     }
 
     public static GitWorkspaceCapturedOutputManifest ParseManifest(ReadOnlySpan<byte> bytes)

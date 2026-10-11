@@ -15,6 +15,9 @@ public static class ProducedRunCaptureLimits
     public const int PackageFileLengthBytes = 8;
     public const int MaximumPackageBytes =
         MaximumTotalFileBytes + MaximumFiles * PackageFileLengthBytes + PackageHeaderBytes;
+    public const int DocumentHeaderBytes = 24;
+    public const int MaximumDocumentBytes =
+        DocumentHeaderBytes + MaximumManifestBytes + MaximumDiffBytes + MaximumPackageBytes;
 }
 
 public sealed record ProducedRunCaptureIdentity(string CaptureId, Guid EventId);

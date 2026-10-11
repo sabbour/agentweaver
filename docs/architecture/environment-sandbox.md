@@ -329,6 +329,19 @@ Stored operation updates, request fingerprints, and Core terminal receipts valid
 Reconciliation restores the freshly verified seed only after it matches the stored command metadata.
 Version 2 still requires the actual validated bytes before execution; metadata alone is not executable input.
 
+Source Control includes a full output-document foundation for version 2.
+Its `AWSCAPT2` format retains the manifest, Git patch, and binary file package.
+The 24-byte header declares each section length; existing section limits bound the complete document.
+Parsing rejects invalid lengths, extra bytes, invalid file digests, and malformed packages.
+Serialization also checks the saved manifest and section digests.
+
+The source can construct an output document from the accepted seed and a complete file inventory.
+It rejects missing baseline files, changed undeclared files, and outputs that differ from their declared evidence.
+It uses a private Git index and disables hooks, filters, external diff commands, and network protocols.
+The shared prepared-repository path retains the existing owner-scoped hash.
+The saved managed tests cover document encoding only, not preparation receipts or Git output execution.
+These foundations do not connect or prove the provider, image helper, or owner acknowledgement flow.
+
 The Kubernetes client adds a bounded native WebSocket exchange for fixed preparation and collector containers.
 It retains the existing service-account handler and trusted server certificate.
 The helper must identify the exact Pod UID and request fingerprint before the client sends seed bytes.

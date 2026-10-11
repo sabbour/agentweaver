@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -40,6 +41,62 @@ public sealed record SandboxBuildTestBindingPreparation(
                 StringComparison.Ordinal))
             throw new ArgumentException("The BuildTest preparation does not match its session or pinned profile.");
         return this;
+    }
+
+    [System.Text.Json.Serialization.JsonUnmappedMemberHandling(
+        System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
+    public sealed record SandboxBuildTestWorkspaceRequest(
+        Guid OperationId,
+        string ImmutableHash,
+        string RequestFingerprint,
+        SandboxBuildTestCheckpointReference Checkpoint,
+        SandboxBuildTestWorkspaceSource Source,
+        string WorkspaceMountPath,
+        bool PreparingWorkspace,
+        ImmutableArray<SandboxBuildTestOutputObligation> Outputs)
+    {
+        public SandboxBuildTestWorkspaceRequest Validate()
+        {
+            ArgumentNullException.ThrowIfNull(Source);
+            _ = Source.Validate();
+            _ = new SandboxBuildTestOutputCollectorRequest(
+                OperationId, ImmutableHash, RequestFingerprint, Checkpoint, WorkspaceMountPath,
+                SandboxBuildTestLimits.MaximumFileOutputBytes, Outputs).Validate();
+            if (Source.Identity.ProjectId != Checkpoint.ProjectId ||
+                Source.Identity.RunId != Checkpoint.RunId ||
+                Source.Identity.SessionId != Checkpoint.SessionId ||
+                Source.AcceptedSelectionHash != Checkpoint.AcceptedSelectionHash)
+                throw new ArgumentException("The workspace request does not match its accepted source.");
+            return this;
+        }
+    }
+
+    public sealed record SandboxBuildTestWorkspacePreparationReceipt(
+        Guid OperationId,
+        string ImmutableHash,
+        string RequestFingerprint,
+        SandboxBuildTestCheckpointReference Checkpoint,
+        string PodUid,
+        string RepositoryRelativePath,
+        string SeedSha256,
+        string BaselineTreeSha)
+    {
+        public SandboxBuildTestWorkspacePreparationReceipt Validate(
+            SandboxBuildTestAcceptedCommand command,
+            string requestFingerprint,
+            SandboxBuildTestPodReference pod)
+        {
+            _ = command.ValidateMetadata();
+            _ = pod.Validate();
+            var source = command.WorkspaceSource ??
+                throw new ArgumentException("A workspace preparation receipt requires version 2 source input.");
+            if (OperationId != command.OperationId || ImmutableHash != command.ImmutableHash ||
+                RequestFingerprint != requestFingerprint || Checkpoint != command.Checkpoint ||
+                PodUid != pod.Uid || RepositoryRelativePath != source.PreparedRepositoryRelativePath ||
+                SeedSha256 != source.SeedSha256 || BaselineTreeSha != source.BaselineTreeSha)
+                throw new ArgumentException("The preparation receipt differs from its accepted workspace.");
+            return this;
+        }
     }
 
     public static string ComputeExecutionOptionsSha256(
