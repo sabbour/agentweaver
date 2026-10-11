@@ -89,4 +89,4 @@ It selects product preparation and matching ordinary publication.
 Both frozen Probe jobs reject a conflicting platform selection before downloading artifacts.
 The protected `v1-publication` environment remains required for ordinary publication.
 
-The source has no platform release composition or deployment gate. Release preparation does not prove Azure acceptance.
+The source contains a prepared platform release composition, not an actual deployment or live acceptance gate. Release preparation does not prove Azure acceptance.
