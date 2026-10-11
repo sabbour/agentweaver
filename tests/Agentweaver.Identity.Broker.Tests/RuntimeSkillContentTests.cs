@@ -125,6 +125,44 @@ public sealed class RuntimeSkillContentTests
     }
 
     [Fact]
+    public async Task NativeSdkReadsAcceptedSkillResourceAtAdvertisedProviderPath()
+    {
+        await using var sdk = new ControlledCopilotRuntime();
+        var registration = RuntimeCopilotSessionTests.Registration();
+        var projection = Projection(registration);
+        var resource = Assert.Single(Assert.Single(projection.Skills).Resources);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await using var session = await RuntimeCopilotSessionTests.Factory(sdk).CreateAsync(
+            registration,
+            registration.Binding.ModelSelectionReference!,
+            RuntimeCopilotSessionTests.SdkCredential(),
+            _ => Task.CompletedTask,
+            timeout.Token,
+            projection);
+
+        var listed = await sdk.InvokeSdkCallbackAsync(
+            "skillProvider.list",
+            new { sessionId = session.Facts.SdkSessionId },
+            timeout.Token);
+        var descriptor = Assert.Single(listed.GetProperty("skills").EnumerateArray());
+        var read = await sdk.InvokeSdkCallbackAsync(
+            "skillProvider.read",
+            new { sessionId = session.Facts.SdkSessionId, name = descriptor.GetProperty("name").GetString() },
+            timeout.Token);
+        var markdown = read.GetProperty("markdown").GetString()!;
+        var advertisedPath = Assert.Single(markdown.Split('`'), path =>
+            path.StartsWith("/workspace/", StringComparison.Ordinal));
+
+        var nativeResource = await sdk.InvokeNativeFilesAsync(
+            "sessionFs.readFile", advertisedPath, null, timeout.Token);
+        var content = nativeResource.GetProperty("content").GetString()!;
+
+        Assert.Equal(Encoding.UTF8.GetString(resource.Content.AsSpan()), content);
+        Assert.Equal(resource.Content.AsSpan().ToArray(), Encoding.UTF8.GetBytes(content));
+    }
+
+    [Fact]
     public async Task NativeSessionEnablesOnlyTheAcceptedSkillProvider()
     {
         await using var sdk = new ControlledCopilotRuntime();

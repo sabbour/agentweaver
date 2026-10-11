@@ -58,15 +58,24 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET, POST /api/projects/{projectId}/skill-marketplaces/sources` | List or add revisioned project skill sources. |
 | `PUT, DELETE /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}` | Update or tombstone a source using its expected revision. |
 | `GET /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/browse` | Resolve a source ref to a commit and return a bounded, filtered, paged manifest index. |
+| `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview` | Validate selected source bytes from an exact source revision, commit SHA, and path, then return the Skills preview and digest. |
+| `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import` | Import selected bytes with the expected content digest and idempotency key into the existing Skills content store. |
 
 Revision conflicts and a reused run ID with a different request return conflict responses. Invalid configuration and run-selection context return client errors; missing projects and inaccessible tenant-owned projects do not disclose their existence.
 
 Marketplace source CRUD, source revisioning, and commit-pinned browse are
 documented in the [skill marketplace source contract](./skill-marketplace.md).
 Browse reads only current-page `SKILL.md` descriptions. The separate Skills
-owner supplies selected-content preview, immutable import receipts, and runtime
-assignment; Projects does not create a second content loader or catalog
-authority.
+content and assignment services remain the only content authority. The
+Projects source-selected preview/import adapter reads the selected manifest
+and bounded resources at the browse result's exact commit. It then passes those
+bytes to the Skills validator and importer. The request includes source
+provenance, expected digest, idempotency key, and expected skill revision.
+Imported content uses the existing immutable object store and assignment
+service. Projects does not create another loader or catalog. These
+preview/import mappings belong to the Projects producer candidate. They do not
+show that Gateway, MCP, retained Web import, or a runtime-loaded status producer
+is available.
 
 ### Reviewed casting proposals and explicit transfers
 

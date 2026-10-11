@@ -7,7 +7,7 @@ The v1 tests use in-memory providers, fake Azure SDK transports, and disposable 
 | Orchestrator Core tests | Typed outcome/workflow/plan/revision validation, workflow grammar and step DAG validation, bounded WorkPlan eligibility and joins, deterministic UTC daily/weekly/monthly occurrence evaluation, stable schedule idempotency inputs, bounded structured GitHub event predicates and regex safety, project-scoped backlog graph edits and cycle checks, revision-fenced readiness for merge-complete and verified non-merge completion, MAF witness serialization and current-capture inventory regressions for late non-empty captures and multiple captures, pinned model/provider selection checks, structured scope diffs, AGT Policy provider validation and evaluation, negotiation/pinning, deny-by-default and project-policy narrowing, plus action-guard grant scope/fence checks, immutable owner receipt persistence, journal-ACK ordering, current-grant revalidation, and no-effect behavior on evidence failure. Its PostgreSQL integration tests cover persisted backlog edits, concurrent claim arbitration, idempotent replay after store restart, rollback of claim/root/decision intent, and rollback when current authority is lost immediately before commit or replay commit. The source-only Guardrails candidate uses controlled classifiers, authority and journal doubles to cover ordered seam/run/resource pin consistency, invalid null/default shapes, content SHA-256 binding, typed stage/content support, AGT deny monotonicity, timeout/failure, revocation, redaction, and append response-loss/replay. | Current network authorization in backlog routes, production task-to-whole-plan evidence association/output-proof verification, automatic workflow initiation, live model output, full child dispatch, deployed authorization, production Prompt Shields transport, a trusted Guardrails journal/current-authority adapter, MAF gate wiring, or protected-effect call-site enforcement. |
 | Source Control tests | Real temporary-Git workspace isolation and recovery, controlled GitHub HTTP behavior including exact open-PR reuse and exact-head check evidence, raw-byte HMAC and repository binding, strict Broker redemption, immutable provider-pin restore, typed approval-linked merge-grant state, native PostgreSQL repository locking and webhook-delivery replay/conflict, plus Orchestrator audience rejection of direct GitHub POST before Projects or owner effects. | A deployed Source Control service, trusted unattended webhook relay, live GitHub/Identity calls, or automatic workflow execution from a webhook. |
 | Optional runtime-owner startup tests | Start a local Orchestrator endpoint host with and without the optional runtime registration owner. Public suspend/resume routes retain request-body and authorization metadata; the missing-owner internal runtime check is not mapped. | Live registration authority, a deployed runtime owner, or successful suspend/resume effects. |
-| Accepted-run skill reader tests | Controlled Projects HTTP responses cover original bearer/tenant forwarding, exact registration and selection hashes/revisions, ordered agent assignments, immutable content/resource hashes, legacy unpinned denial, no-store/error responses, and revocation during the content wait. Existing reviewed-snapshot reader tests retain byte-stable selections and current-authority checks. | A deployed skill owner, deployed runtime route/SDK loader, live skill loading, or complete skill-import management. |
+| Accepted-run skill reader tests | Controlled Projects HTTP responses cover original bearer/tenant forwarding, exact registration and selection hashes/revisions, ordered agent assignments, immutable content/resource hashes, legacy unpinned denial, no-store/error responses, and revocation during the content wait. Existing reviewed-snapshot reader tests retain byte-stable selections and current-authority checks. A controlled native SDK test calls the actual `skillProvider.list` and `skillProvider.read` callbacks, extracts the advertised `/workspace/...` resource path, reads it through `sessionFs.readFile`, and checks exact UTF-8 content and bytes. | A deployed skill owner, deployed runtime route/SDK loader, live skill loading, or complete skill-import management. |
 | Provider tests | Catalog validation, cardinality, overrides, capability negotiation, and run pinning. | Resource provisioning or network-policy enforcement. |
 | Azure Files provider tests | Environment-scoped generation PVC identities, pinned Kubernetes API target, requested/configured StorageClass matching, effective reclaim-policy enforcement, claim/PV ownership checks, reclaim/delete UID preconditions, exact release receipts and retry outcomes, Azure Files mount options, Kubernetes quantity normalization, and credential-free request bodies through fake Kubernetes transports. | A live Kubernetes API/CSI driver, Azure Files durability or data erasure, Sandbox attachment, or durable flush. |
 | Environment workspace-volume tests | Real PostgreSQL owner CAS and replay, pinned provider binding, fresh Projects authorization, retry-safe no-effect rejections and HTTP status mapping, Release rejection while bound or attached, uncertain Release retry with the same idempotency key, Replace cleanup leases/retries, stale-fence rejection, and truthful blocked/pending cleanup outcomes through fake providers and Projects clients. | A deployed Environment service, live Kubernetes/CSI behavior, Azure Files data erasure, Sandbox mounting, or durable flush. |
@@ -281,6 +281,32 @@ Live Xunit output identifies current native requests and cleanup if the case rea
 The focused Copilot lifecycle cases cover cookie/subject/state rejection before exchange, callback replay,
 concurrent refresh, transient recovery, permanent rejection, uncertain rotation, account change, and current Core revocation.
 These cases use disposable PostgreSQL and controlled external transports, not live OAuth or paid model calls.
+
+## Public BuildTest dispatch
+
+The public suite covers six scenarios: successful completion, lost acknowledgment, command failure, revoked authority, foreign binding, and a stale decision.
+It uses broker-issued tokens, current Projects authority, real disposable PostgreSQL checkpoints, and controlled Environment responses.
+After plan confirmation, it pins and prepares a real temporary Git workspace through the public SourceControl actions.
+Before a completed response, it writes the required artifact and calls the existing authenticated SourceControl output-capture action.
+It requires an admitted capture and compares the captured file bytes and digest with the Environment collector evidence.
+This positive check uses an empty Git baseline; it does not prove capture from a populated repository or automatic production capture.
+The first lost-acknowledgment response and all four negative scenarios create no output capture.
+This explicit fixture action does not prove automatic production capture.
+It retains the accepted command across execution, recovery, and replay.
+Completion compares saved session and checkpoint IDs, then checks the revision, work plan, and decision state.
+
+The separate Core case `ExecutionWitnessAppendUsesProductionCheckpointStoreBinding` appends a newer real checkpoint, then rejects the older witness snapshot.
+It checks the canonical witness store, not a race in the public dispatch handler.
+
+A passing public suite reports **six executed, six passed, and zero failures, skips, or warnings**.
+Compilation or coverage alone is not a successful run.
+These cases do not prove live Kubernetes, paid model execution, deployed services, native SDK execution, or the complete BuildTest provider flow.
+
+After the Release build, run:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release --filter FullyQualifiedName=Agentweaver.Identity.Broker.Tests.ProjectsConfigBrokerAuthorizationTests.PublicBuildTestDispatchRetainsItsIntentAndRejectsChangedAuthority --collect "XPlat Code Coverage" --logger "trx;LogFileName=public-buildtest-dispatch.trx" --results-directory artifacts\tests\public-buildtest-dispatch
+```
 
 ## P1 retained-surface harness candidates
 
