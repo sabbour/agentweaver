@@ -339,6 +339,13 @@ public sealed partial class RuntimeResumeBootstrapTests
     public async Task SourceManagerRequiresExactRetainedSelectionFlushAndVolumeBeforeAnyLifecycleEffect(string fault)
     {
         var fixture = RuntimeSuspendPlacementReleaseTests.Create();
+        fixture = fixture with
+        {
+            Request = fixture.Request with
+            {
+                HostReceipt = RuntimeWorkspaceResumeTests.WithConfigurationAcknowledgment(fixture.Request.HostReceipt)
+            }
+        };
         var original = RuntimeWorkspaceResumeTests.Request();
         var request = original with
         {
@@ -435,19 +442,6 @@ public sealed partial class RuntimeResumeBootstrapTests
     {
         var source = RuntimeWorkspaceResumeTests.Request();
         var host = source.SourceRelease.HostReceipt;
-        var hash = RuntimeContractValidation.Hash("{}"u8);
-        var cache = host.CacheAcknowledgment.Reference.Material!;
-        var reference = new SessionObjectReference(
-            new ObjectKey("private/runtime/configuration"), SessionMaterialValidation.Purpose(SessionMaterialKind.RuntimeConfiguration), 2)
-        {
-            Material = cache with { Kind = SessionMaterialKind.RuntimeConfiguration, Sha256 = hash }
-        };
-        host = host with
-        {
-            SourceGrant = host.SourceGrant with { ConfigurationHash = hash },
-            ConfigurationAcknowledgment = new(1, host.CacheAcknowledgment.Identity, Guid.NewGuid(), 8, reference)
-        };
-        source = source with { SourceRelease = source.SourceRelease with { HostReceipt = host } };
         var workspace = RuntimeWorkspaceResumeTests.Workspace(source);
         var image = new SandboxImageIdentity("sha256:" + new string('b', 64), "linux/amd64", 1);
         workspace = workspace with { Placement = workspace.Placement with { Image = image } };

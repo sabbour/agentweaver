@@ -191,6 +191,8 @@ Both retain the original expiring actor and ask Core to confirm the exact saved 
 `POST /internal/runtime/resume/prepare` accepts `RuntimeWorkspaceResumeRequest`.
 It contains the complete source manifest, saved Host receipt, and exact flush transition revision.
 The optional `RestoredWorkspace` must be absent.
+Resume requires the exact private configuration acknowledgment before any owner call or Environment effect.
+Ordinary suspend receipts retain their existing validation; a receipt without saved configuration cannot authorize resume.
 Environment checks the recorded flush, released source Sandbox, retained volume, and unchanged accepted provider selection.
 Historical flush reads require the current active owner lock and an exact older lifecycle from that same owner.
 An old lifecycle does not gain permission to change current state.

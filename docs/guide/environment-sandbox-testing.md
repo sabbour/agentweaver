@@ -35,6 +35,8 @@ They reject changed source manifests, data, cache acknowledgments, target mounts
 The original actor and tenant must reach both stages and the native verifier.
 Expired actors, denied or changed Core responses, and missing no-store responses are rejected.
 Bootstrap cases check exact acknowledged configuration bytes, attempt IDs, and the revoked prior registration.
+Resume preparation rejects missing or changed configuration acknowledgments before any owner request or Environment effect.
+These resume-only checks do not require configuration acknowledgments in ordinary suspend receipts.
 They reject a changed delivery, attempt, registration, or Host loss proof.
 Missing owner composition cannot reach Broker delivery.
 The exact source-manager case reaches its first lifecycle-effect boundary; changed selection, source lease, flush, Host receipt, or volume fails before it.
