@@ -13,7 +13,8 @@ public sealed class RuntimeSessionBootstrap(
     SandboxImageIdentity? expectedImage = null,
     RuntimeSessionMaterialHttpClient? material = null,
     RuntimeActionHttpClient? actions = null,
-    Func<RuntimeRegistration, CancellationToken, Task>? requireReadiness = null)
+    Func<RuntimeRegistration, CancellationToken, Task>? requireReadiness = null,
+    RuntimeMcpServerEndpoint? capturedMcpServer = null)
 {
     public async Task<AuthorizedRuntimeSession> ConfigureAsync(
         ReadOnlyMemory<byte> configuration,
@@ -25,7 +26,8 @@ public sealed class RuntimeSessionBootstrap(
         if (consumeOperationId == Guid.Empty || exchangeOperationId == Guid.Empty ||
             consumeOperationId == exchangeOperationId ||
             bootstrap.Purpose != RuntimeCredentialPurpose.Configure ||
-            RuntimeContractValidation.Hash(configuration.Span) != bootstrap.ConfigurationHash)
+            RuntimeContractValidation.Hash(configuration.Span) != bootstrap.ConfigurationHash ||
+            capturedMcpServer is { IsValid: false })
             throw new RuntimeAuthorizationException("runtime_configuration_invalid");
 
         var registration = await owner.ReadCurrentAsync(
@@ -112,7 +114,8 @@ public sealed class RuntimeSessionBootstrap(
                 cancellationToken, acceptedSkills, recovery,
                 actions is null ? null : (action, input, toolInvocation, token) =>
                     actions.RequireAsync(registration, action, input, RequireSourceAuthorityAsync, token,
-                        isToolInvocation: toolInvocation));
+                        isToolInvocation: toolInvocation),
+                capturedMcpServer);
             await RequireSourceAuthorityAsync(cancellationToken);
             authorized = new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,
                 session, modelCredential, owner, broker, actor, timeProvider, actions, requireReadiness,

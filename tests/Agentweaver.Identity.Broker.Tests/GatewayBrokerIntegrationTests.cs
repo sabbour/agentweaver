@@ -92,6 +92,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var revocationPageArmed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var revocationPageRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseRevocationPage = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        string? replayPageOverride = null;
         async Task<HttpResponseMessage> HandleOwnerRequestAsync(
             GatewayOwner owner,
             HttpRequestMessage request,
@@ -154,6 +155,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             if (owner != GatewayOwner.Events)
                 return JsonResponse(HttpStatusCode.NotImplemented, """{"code":"unexpected_owner_request"}""");
 
+            if (replayPageOverride is { } replayOverride)
+                return JsonResponse(HttpStatusCode.OK, replayOverride);
+
             var query = QueryHelpers.ParseQuery(uri.Query);
             var cursor = query.TryGetValue("cursor", out var cursorValues)
                 ? cursorValues.SingleOrDefault()
@@ -166,11 +170,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             if (cursor == "gateway-cursor-io-after-start")
                 return JsonResponse(
                     HttpStatusCode.OK,
-                    """{"events":[{"eventId":"00000000-0000-0000-0000-000000000002"}],"nextCursor":"gateway-cursor-io-after-start-next"}""");
+                    GatewayEventsJournalFixture.SerializePage(new SessionEventPage(
+                        [events.FirstEvent], "gateway-cursor-io-after-start-next", HasMore: true)));
             if (cursor == "gateway-cursor-invalid-owner")
                 return JsonResponse(
                     HttpStatusCode.OK,
-                    """{"events":[{"eventId":"00000000-0000-0000-0000-000000000001"}],"nextCursor":"gateway-cursor-invalid-owner"}""");
+                    GatewayEventsJournalFixture.SerializePage(new SessionEventPage(
+                        [events.FirstEvent], "gateway-cursor-invalid-owner", HasMore: false)));
             if (cursor == events.FirstCursor && revocationPageArmed.Task.IsCompleted)
             {
                 revocationPageRequested.TrySetResult();
@@ -621,6 +627,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal("owner_timeout", problem.RootElement.GetProperty("code").GetString());
         }
 
+        replayPageOverride = """
+            {"events":[{"schemaVersion":1,"eventVersion":2,"eventId":"11111111-1111-1111-1111-111111111111","identity":{"projectId":"PROJECT","runId":"gateway-events-run","sessionId":"gateway-session"},"position":4,"occurredAt":"2026-10-10T00:00:00Z","kind":"toolCall","payload":{"kind":"tool_call","callId":"remote_tool_call_secret-hash","toolName":"remote_tool_secret-hash","state":"completed","arguments":null,"result":null},"objectReferences":[]}],"nextCursor":"private-result-cursor","hasMore":false}
+            """.Replace("PROJECT", project.ProjectId, StringComparison.Ordinal);
+        using (var privateReplay = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"/api/v1/projects/{project.ProjectId}/runs/{runId}/events"))
+        {
+            AddBearerAndTenant(privateReplay, runToken, TenantId);
+            using var privateReplayResponse = await gateway.Client.SendAsync(privateReplay);
+            Assert.Equal(HttpStatusCode.BadGateway, privateReplayResponse.StatusCode);
+            var privateReplayBody = await privateReplayResponse.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("remote_tool_", privateReplayBody, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret-hash", privateReplayBody, StringComparison.Ordinal);
+            using var privateReplayProblem = JsonDocument.Parse(privateReplayBody);
+            Assert.Equal(
+                "events_page_contract_invalid",
+                privateReplayProblem.RootElement.GetProperty("code").GetString());
+        }
+        replayPageOverride = null;
+
         using (var replay = new HttpRequestMessage(
             HttpMethod.Get,
             $"/api/v1/projects/{project.ProjectId}/runs/{runId}/events?cursor={Uri.EscapeDataString(events.FirstCursor)}&limit=5"))
@@ -628,7 +654,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             AddBearerAndTenant(replay, runToken, TenantId);
             using var replayResponse = await gateway.Client.SendAsync(replay);
             Assert.Equal(HttpStatusCode.OK, replayResponse.StatusCode);
-            using var replayDocument = JsonDocument.Parse(await replayResponse.Content.ReadAsStringAsync());
+            var replayBody = await replayResponse.Content.ReadAsStringAsync();
+            Assert.Equal(
+                Encoding.UTF8.GetByteCount(replayBody),
+                replayResponse.Content.Headers.ContentLength);
+            using var replayDocument = JsonDocument.Parse(replayBody);
             var replayedEvents = replayDocument.RootElement.GetProperty("events");
             Assert.Equal(2, replayedEvents.GetArrayLength());
             Assert.Equal(events.SecondEvent.EventId, replayedEvents[0].GetProperty("eventId").GetGuid());

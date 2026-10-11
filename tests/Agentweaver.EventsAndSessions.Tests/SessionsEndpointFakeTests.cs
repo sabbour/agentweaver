@@ -1,7 +1,10 @@
 using System.Security.Claims;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
+using Agentweaver.Identity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -17,6 +20,150 @@ namespace Agentweaver.EventsAndSessions.Tests;
 
 public sealed class SessionsEndpointFakeTests
 {
+    [Theory]
+    [InlineData("/internal/sessions/session-1/remote-tool-results")]
+    [InlineData("/internal/sessions/session-1/remote-tool-results/read")]
+    public async Task ReviewedRemoteToolResultRoutesRejectHttpBeforeReadingBody(string path)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication("test")
+            .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>("test", _ => { });
+        builder.Services.AddAuthorization();
+        await using var app = builder.Build();
+        UnexpectedBodyReadStream? body = null;
+        app.Use(async (context, next) =>
+        {
+            body = new UnexpectedBodyReadStream();
+            context.Request.Body = body;
+            await next();
+        });
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapReviewedRemoteToolResultMaterialEndpoints();
+        await app.StartAsync();
+
+        using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new ByteArrayContent("private result"u8.ToArray())
+        };
+        using var response = await client.SendAsync(request);
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("runtime_remote_tool_result_https_required",
+            document.RootElement.GetProperty("error").GetString());
+        Assert.NotNull(body);
+        Assert.False(body.WasRead);
+    }
+
+    [Fact]
+    public async Task RunReplayHidesRecordedRemoteToolResultDetails()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication("test")
+            .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>("test", _ => { });
+        builder.Services.AddAuthorization();
+        var proof = CreateRemoteToolResultProof();
+        var journal = new FakeJournal
+        {
+            RunReplayPage = new(
+                [CreateRemoteToolResultEvent(proof)], "opaque-cursor", HasMore: false)
+        };
+        builder.Services.AddSingleton<ICoordinationOwnerClient, FakeCoordinationOwnerClient>();
+        builder.Services.AddSingleton<ISessionsJournal>(journal);
+        builder.Services.AddSingleton<ISessionsProviderBinder, FakeBinder>();
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapEventsAndSessionsEndpoints();
+        await app.StartAsync();
+
+        using var client = app.GetTestClient();
+        using var createResponse = await client.PostAsync("/internal/sessions/session-1", content: null);
+        Assert.Equal(System.Net.HttpStatusCode.ServiceUnavailable, createResponse.StatusCode);
+        using var response = await client.GetAsync("/internal/projects/project-1/runs/run-1/events");
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == System.Net.HttpStatusCode.OK, responseText);
+        using var document = JsonDocument.Parse(responseText);
+        var item = Assert.Single(document.RootElement.GetProperty("events").EnumerateArray());
+        var payload = item.GetProperty("payload");
+        Assert.Equal("tool_call", payload.GetProperty("kind").GetString());
+        Assert.Equal("external-tool", payload.GetProperty("toolName").GetString());
+        Assert.Equal(item.GetProperty("eventId").GetGuid().ToString("N"), payload.GetProperty("callId").GetString());
+        Assert.Equal("completed", payload.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("arguments").ValueKind);
+        Assert.Equal(JsonValueKind.Null, payload.GetProperty("result").ValueKind);
+        Assert.Empty(item.GetProperty("objectReferences").EnumerateArray());
+        Assert.DoesNotContain("remote_tool_", responseText, StringComparison.Ordinal);
+        Assert.DoesNotContain("native-call-1", responseText, StringComparison.Ordinal);
+        Assert.DoesNotContain("""{"query":"x"}""", responseText, StringComparison.Ordinal);
+        Assert.DoesNotContain(proof.CallInputHash, responseText, StringComparison.Ordinal);
+        Assert.DoesNotContain(proof.ArgumentsDigest, responseText, StringComparison.Ordinal);
+        Assert.DoesNotContain(proof.SnapshotBinding.CatalogDigest, responseText, StringComparison.Ordinal);
+        Assert.DoesNotContain(proof.Snapshot.SnapshotDigest, responseText, StringComparison.Ordinal);
+        Assert.DoesNotContain(SessionMaterialValidation.RemoteToolResultProofHash(proof), responseText,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(proof.GrantId, responseText, StringComparison.Ordinal);
+        Assert.DoesNotContain(proof.PolicyReceiptId.ToString("D"), responseText, StringComparison.Ordinal);
+        Assert.DoesNotContain("remote result", responseText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GenericSessionMaterialRouteRejectsRemoteToolResultsBeforeOwnerAccess()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication("test")
+            .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>("test", _ => { });
+        builder.Services.AddAuthorization();
+        var projects = new FakeProjectsAuthorizationContextClient();
+        builder.Services.AddSingleton<IProjectsAuthorizationContextClient>(projects);
+        builder.Services.AddSingleton(new SessionMaterialApplicationService(
+            null!, projects, null!, null!, null!, TimeProvider.System));
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapSessionMaterialEndpoints();
+        await app.StartAsync();
+
+        var proof = CreateRemoteToolResultProof();
+        var request = new SessionMaterialWriteRequest(
+            1,
+            SessionMaterialValidation.RemoteToolResultEventId(proof),
+            proof.RuntimeInstanceId,
+            proof.RegistrationRevision,
+            proof.ExecutionFence,
+            SessionMaterialKind.RemoteToolResult,
+            "remote result"u8.ToArray())
+        {
+            RemoteToolResultProof = proof
+        };
+        using var client = app.GetTestClient();
+        using var response = await client.PostAsJsonAsync(
+            "/internal/sessions/session-1/material", request);
+
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "runtime_remote_tool_result_write_requires_orchestrator",
+            document.RootElement.GetProperty("error").GetString());
+        Assert.Equal(0, projects.CallCount);
+
+        using var readResponse = await client.GetAsync(
+            $"/internal/sessions/session-1/material/{request.EventId:D}/remoteToolResult");
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, readResponse.StatusCode);
+        Assert.True(readResponse.Headers.CacheControl?.NoStore);
+        using var readDocument = JsonDocument.Parse(await readResponse.Content.ReadAsStringAsync());
+        Assert.Equal(
+            "runtime_remote_tool_result_read_requires_orchestrator",
+            readDocument.RootElement.GetProperty("error").GetString());
+        Assert.Equal(1, projects.CallCount);
+    }
+
     [Fact]
     public async Task EndpointUsesFakeJournalAndReturnsOnlyBoundedPersistenceFailure()
     {
@@ -147,6 +294,7 @@ public sealed class SessionsEndpointFakeTests
     {
         public SessionProviderBinding? CreatedBinding { get; private set; }
         public (string ProjectId, string RunId)? LastRunScope { get; private set; }
+        public SessionEventPage? RunReplayPage { get; init; }
 
         public Task<SessionRecord> CreateSessionAsync(
             ClaimsPrincipal principal,
@@ -199,7 +347,7 @@ public sealed class SessionsEndpointFakeTests
             ClaimsPrincipal principal,
             SessionRunEventPageRequest request,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult(new SessionEventPage([], null, HasMore: false));
+            Task.FromResult(RunReplayPage ?? new SessionEventPage([], null, HasMore: false));
 
         public IAsyncEnumerable<SessionEventDelivery> SubscribeAsync(
             ClaimsPrincipal principal,
@@ -234,6 +382,226 @@ public sealed class SessionsEndpointFakeTests
                 Scheme.Name);
             return Task.FromResult(AuthenticateResult.Success(
                 new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name)));
+        }
+    }
+
+    private sealed class FakeProjectsAuthorizationContextClient : IProjectsAuthorizationContextClient
+    {
+        public int CallCount { get; private set; }
+
+        public Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
+            HttpContext context, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CallCount++;
+            return Task.FromResult(new ProjectsAuthorizationContextResponse(
+                1,
+                "https://identity.test",
+                "actor-1",
+                "tenant-1",
+                1,
+                "project-1",
+                "run-1",
+                []));
+        }
+    }
+
+    private static SessionEventEnvelope CreateRemoteToolResultEvent(RemoteToolResultProof proof)
+    {
+        var bytes = "remote result"u8.ToArray();
+        var reference = new SessionObjectReference(
+            new ObjectKey("session-material/test/remote-result"),
+            SessionMaterialValidation.Purpose(SessionMaterialKind.RemoteToolResult),
+            bytes.Length)
+        {
+            Material = new(
+                1,
+                SessionMaterialKind.RemoteToolResult,
+                proof.TenantId,
+                RuntimeContractValidation.Hash(bytes),
+                proof.RuntimeInstanceId,
+                proof.RegistrationRevision,
+                proof.ExecutionFence,
+                proof.AcceptedSelectionHash,
+                "sdk-v1",
+                "runtime-v1",
+                "accepted-model",
+                "model")
+            {
+                RemoteToolResultProof = proof
+            }
+        };
+        SessionMaterialValidation.Validate(reference);
+        var eventId = SessionMaterialValidation.RemoteToolResultEventId(proof);
+        var json = JsonSerializer.Serialize(new
+        {
+            schemaVersion = SessionsContractVersions.CurrentSchemaVersion,
+            eventVersion = SessionsContractVersions.CurrentEventVersion,
+            eventId,
+            identity = new { proof.ProjectId, proof.RunId, proof.SessionId },
+            position = 1,
+            occurredAt = DateTimeOffset.UtcNow,
+            kind = "toolCall",
+            payload = new
+            {
+                kind = "tool_call",
+                callId = SessionMaterialValidation.RemoteToolResultCallId(proof),
+                toolName = SessionMaterialValidation.RemoteToolResultToolName(proof),
+                state = "completed",
+                arguments = (SessionObjectReference?)null,
+                result = reference
+            },
+            objectReferences = new[]
+            {
+                new StoredSessionObjectReference(
+                    reference, new SessionObjectRetention("events-owner", DateTimeOffset.UtcNow.AddDays(1)))
+            }
+        }, CreateJsonOptions());
+        var sessionEvent = JsonSerializer.Deserialize<SessionEventEnvelope>(json, CreateJsonOptions())
+            ?? throw new InvalidOperationException("Test event JSON could not be decoded.");
+        Assert.Equal(eventId, sessionEvent.EventId);
+        Assert.False(sessionEvent.ObjectReferences.IsDefault);
+        var storedReference = Assert.Single(sessionEvent.ObjectReferences).Reference;
+        AssertReferenceMatches(reference, storedReference);
+        var toolCall = Assert.IsType<ToolCallSessionPayload>(sessionEvent.Payload);
+        var resultReference = Assert.IsType<SessionObjectReference>(toolCall.Result);
+        Assert.NotSame(storedReference, resultReference);
+        AssertReferenceMatches(reference, resultReference);
+        Assert.True(SessionEventPayloadValidation.SupportsEventVersion(
+            sessionEvent.EventVersion, sessionEvent.Payload));
+        _ = SessionEventPayloadValidation.ValidateAndGetReferences(sessionEvent.Payload);
+        return sessionEvent;
+    }
+
+    private static void AssertReferenceMatches(
+        SessionObjectReference expected, SessionObjectReference actual)
+    {
+        Assert.Equal(expected.Key.Value, actual.Key.Value);
+        Assert.Equal(expected.Purpose, actual.Purpose);
+        Assert.Equal(expected.ByteLength, actual.ByteLength);
+        Assert.Equal(expected.Material is null, actual.Material is null);
+        if (expected.Material is not { } expectedMaterial)
+            return;
+
+        var actualMaterial = Assert.IsType<SessionMaterialBinding>(actual.Material);
+        Assert.Equal(
+            expectedMaterial with { RemoteToolResultProof = null },
+            actualMaterial with { RemoteToolResultProof = null });
+        if (expectedMaterial.RemoteToolResultProof is { } expectedProof)
+            Assert.True(SessionMaterialValidation.SameRemoteToolResultProof(
+                expectedProof, actualMaterial.RemoteToolResultProof));
+        else
+            Assert.Null(actualMaterial.RemoteToolResultProof);
+    }
+
+    private static JsonSerializerOptions CreateJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        return options;
+    }
+
+    private static RemoteToolResultProof CreateRemoteToolResultProof()
+    {
+        var callEventId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var runtimeInstanceId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        const string projectId = "project-1";
+        const string runId = "run-1";
+        const string sessionId = "session-1";
+        return new(
+            1,
+            callEventId,
+            new string('c', 64),
+            "native-call-1",
+            new ReviewedRemoteToolSnapshotReference(
+                projectId,
+                Guid.Parse("44444444-4444-4444-4444-444444444444"),
+                new string('a', 64),
+                "agent",
+                "node"),
+            new(
+                "connection",
+                1,
+                2,
+                3,
+                "Enabled",
+                new string('b', 64),
+                "https://mcp.example.test/api",
+                "https://mcp.example.test/resource",
+                "None",
+                null,
+                "StreamableHttp20250618",
+                null,
+                null,
+                null,
+                "catalog-1",
+                new string('d', 64),
+                "remote.lookup",
+                "tool-1",
+                new string('e', 64),
+                "schema-1",
+                new string('f', 64),
+                "tool.read",
+                "runtime.execution",
+                new string('9', 64)),
+            "remote.lookup",
+            """{"query":"x"}""",
+            new string('8', 64),
+            runtimeInstanceId,
+            1,
+            "https://identity.test",
+            "actor-1",
+            "tenant-1",
+            projectId,
+            runId,
+            sessionId,
+            "step-1",
+            1,
+            1,
+            1,
+            "context-1",
+            new string('a', 64),
+            1,
+            "tool.read",
+            "runtime.execution",
+            1,
+            true,
+            callEventId.ToString("N"),
+            "1",
+            callEventId,
+            PolicyEvaluationOutcome.Allow,
+            PolicyEvaluationReasonCode.Allowed,
+            SessionMaterialResultContentClass.Structured);
+    }
+
+    private sealed class UnexpectedBodyReadStream : Stream
+    {
+        public bool WasRead { get; private set; }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => Fail<int>();
+        public override int Read(Span<byte> buffer) => Fail<int>();
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default) => Fail<ValueTask<int>>();
+        public override Task<int> ReadAsync(
+            byte[] buffer, int offset, int count, CancellationToken cancellationToken) => Fail<Task<int>>();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        private T Fail<T>()
+        {
+            WasRead = true;
+            throw new InvalidOperationException("A disabled private-result route read the request body.");
         }
     }
 }

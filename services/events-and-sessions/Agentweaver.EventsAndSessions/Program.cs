@@ -197,6 +197,7 @@ if (materialContainer is not null)
     app.MapSessionMaterialEndpoints();
     app.MapProducedRunCaptureEndpoints();
 }
+app.MapReviewedRemoteToolResultMaterialEndpoints();
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 app.MapGet("/health/ready", async (CancellationToken ct) =>
 {

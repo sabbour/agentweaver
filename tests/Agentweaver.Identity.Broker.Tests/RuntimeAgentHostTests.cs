@@ -32,10 +32,15 @@ public sealed class RuntimeAgentHostTests
         var source = fixture.SourceClient();
         await using var session = await fixture.ConfigureSessionAsync(material, timeout.Token);
         await session.RegisterUsageAsync(source, timeout.Token);
+        var turnReceipt = await session.CommitTurnContentAsync(
+            material, Guid.NewGuid(), "user", "A normal user turn.", timeout.Token);
+        Assert.Null(turnReceipt.Reference.Material!.RemoteToolResultProof);
         var proof = new RuntimeHostSessionProof(1, session.Registration, session.SourceGrant.GrantId,
             session.SourceGrant.Revision, RuntimeCredentialPurpose.Observe);
         await session.SendNativeTurnAsync(fixture.Message(proof), material, source, timeout.Token);
         await session.CommitNativeCacheAsync(material, Guid.NewGuid(), timeout.Token);
+        Assert.All(fixture.Material.Where(item => item.Kind == SessionMaterialKind.SdkCache),
+            item => Assert.Null(item.RemoteToolResultProof));
         Assert.Equal(2, fixture.Material.Count(item => item.Kind == SessionMaterialKind.SdkCache));
         var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
         var receipt = await session.SuspendAsync(
@@ -414,6 +419,57 @@ public sealed class RuntimeAgentHostTests
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.ReadinessAsync(timeout.Token))).Code);
         Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Fact]
+    public async Task ConfigureCannotSubstituteEnvironmentBoundMcpServerBeforeNativeSessionCreation()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var endpoint = new RuntimeMcpServerEndpoint("reviewed-tools", new("https://tools.example.test/mcp"));
+        fixture.Readiness = fixture.Readiness with
+        {
+            Placement = fixture.Readiness.Placement with { McpServer = endpoint }
+        };
+        await fixture.DeliverAsync(timeout.Token);
+
+        var substituted = endpoint with { HttpsUrl = new("https://attacker.example.test/mcp") };
+        var mismatch = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.ConfigureAsync(fixture.Configure with { McpServer = substituted },
+                fixture.Actor, timeout.Token));
+        Assert.Equal("runtime_mcp_server_binding_invalid", mismatch.Code);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.create");
+
+        var unavailable = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.ConfigureAsync(fixture.Configure with { McpServer = endpoint },
+                fixture.Actor, timeout.Token));
+        Assert.Equal("runtime_mcp_tool_interception_unavailable", unavailable.Code);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.create");
+    }
+
+    [Fact]
+    public async Task DedicatedRemoteToolResultClientDoesNotSendWithoutApprovedTlsProfile()
+    {
+        await using var fixture = new HostFixture();
+        var requests = 0;
+        using var httpClient = new HttpClient(new Handler((_, _) =>
+        {
+            requests++;
+            return Task.FromException<HttpResponseMessage>(
+                new InvalidOperationException("The unavailable route must not send a request."));
+        }));
+        var material = new RuntimeSessionMaterialHttpClient(
+            httpClient, new Uri("https://events.test/"), fixture.Actor);
+
+        var writeFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            material.WriteRemoteToolResultAsync(
+                null!, "private result"u8.ToArray(), CancellationToken.None));
+        var readFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            material.ReadRemoteToolResultAsync(null!, CancellationToken.None));
+
+        Assert.Equal("runtime_remote_tool_result_route_unavailable", writeFailure.Code);
+        Assert.Equal("runtime_remote_tool_result_route_unavailable", readFailure.Code);
+        Assert.Equal(0, requests);
     }
 
     [Fact]

@@ -512,12 +512,17 @@ and deletes. The normal owner migration path does not yet apply that resource.
 PostgreSQL tests apply it directly and check persistence, conflicts, corruption,
 and rejected row changes.
 
-The result envelope retains opaque content and matching execution metadata.
-Its constructor does not verify a current grant or a durable Events acknowledgment.
-This source does not add Projects configuration references, selection resolution,
-a current connection read, credential use, or native remote dispatch.
-Those checks must be integrated before any protected remote request can be sent.
-A matching data object is not permission to send a request.
+`ReviewedRemoteToolResultVerifier` rebuilds the call from the current runtime
+registration, accepted Projects selection, selected immutable snapshot, and exact
+arguments. It verifies the reserved native action grant and receipt before it
+returns proof verification. The HTTP verifier route currently fails closed before
+reading a proof body: authenticated HTTP requests receive
+`runtime_remote_tool_result_https_required`, and authenticated HTTPS requests
+receive `runtime_remote_tool_result_route_unavailable`. An approved direct
+mutual-TLS profile and certificate pins are not configured. Events result-byte write/read routes and the dedicated
+runtime client also return unavailable; no result bytes are durably acknowledged
+or read. Native remote-tool dispatch remains disabled. A matching proof object is
+not permission to send a request or disclose a result.
 
 ```mermaid
 classDiagram

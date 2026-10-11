@@ -408,6 +408,27 @@ public sealed class RuntimeCopilotSessionTests
     }
 
     [Fact]
+    public async Task ConfiguredMcpServerFailsClosedUntilNativeToolInterceptionIsAvailable()
+    {
+        await using var external = new ControlledCopilotRuntime();
+        var registration = Registration();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            Factory(external).CreateAsync(
+                registration,
+                registration.Binding.ModelSelectionReference!,
+                SdkCredential(),
+                _ => Task.CompletedTask,
+                timeout.Token,
+                mcpServer: new RuntimeMcpServerEndpoint(
+                    "reviewed-remote", new Uri("https://mcp.example.test/mcp"))));
+
+        Assert.Equal("runtime_mcp_tool_interception_unavailable", failure.Code);
+        Assert.Empty(external.Requests);
+    }
+
+    [Fact]
     public async Task CreationAuthorityIsRequiredAfterSdkPreparationAndBeforeSessionCreation()
     {
         await using var external = new ControlledCopilotRuntime();
@@ -613,7 +634,8 @@ internal static class RuntimeCopilotSessionFactoryTestExtensions
         Func<CancellationToken, Task> requireCreationAuthority,
         CancellationToken cancellationToken,
         RuntimeSessionRecovery? recovery = null,
-        Func<string, ReadOnlyMemory<byte>, bool, CancellationToken, Task>? requireActionAuthority = null)
+        Func<string, ReadOnlyMemory<byte>, bool, CancellationToken, Task>? requireActionAuthority = null,
+        RuntimeMcpServerEndpoint? mcpServer = null)
     {
         var binding = registration.Binding;
         var acceptedSkills = new SkillRuntimeContentProjectionV1(
@@ -630,7 +652,7 @@ internal static class RuntimeCopilotSessionFactoryTestExtensions
             binding.AcceptedSelectionHash,
             []);
         return factory.CreateAsync(
-            registration, modelSelectionReference, credential,
-            requireCreationAuthority, cancellationToken, acceptedSkills, recovery, requireActionAuthority);
+            registration, modelSelectionReference, credential, requireCreationAuthority,
+            cancellationToken, acceptedSkills, recovery, requireActionAuthority, mcpServer);
     }
 }
