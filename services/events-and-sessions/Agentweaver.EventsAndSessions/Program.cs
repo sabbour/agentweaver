@@ -5,6 +5,7 @@ using Agentweaver.EventsAndSessions.Cost;
 using Azure.Core;
 using Agentweaver.Providers;
 using Agentweaver.Telemetry;
+using Agentweaver.Identity;
 using Agentweaver.ObjectStore.AzureBlob;
 using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.Authentication;
@@ -159,6 +160,37 @@ builder.Services.AddSingleton(catalogResult.Value!);
 builder.Services.AddSingleton(resolver);
 var nativeUsageEnabled = builder.Services.AddNativeUsageConsumer(builder.Configuration);
 var materialContainer = builder.Configuration["EventsAndSessions:SessionMaterial:ContainerUri"];
+var remoteToolTlsSection = builder.Configuration.GetSection("EventsAndSessions:RemoteToolResults:Tls");
+if (remoteToolTlsSection.Exists())
+{
+    if (materialContainer is null)
+        throw new InvalidOperationException("Remote tool result TLS requires the configured session material store.");
+    var tlsOptions = (remoteToolTlsSection.Get<RuntimeServiceTlsOptions>()
+        ?? throw new InvalidOperationException("The remote tool result TLS profile is required."))
+        .Validate("EventsAndSessions", "Orchestrator");
+    var endpointUrl = builder.Configuration["Kestrel:Endpoints:RemoteToolResults:Url"];
+    if (!Uri.TryCreate(endpointUrl, UriKind.Absolute, out var endpoint) ||
+        endpoint.Scheme != Uri.UriSchemeHttps || endpoint.Port != tlsOptions.ListenerPort)
+        throw new InvalidOperationException("Configure the dedicated HTTPS RemoteToolResults Kestrel endpoint.");
+    builder.Services.AddSingleton(tlsOptions);
+    builder.Services.AddSingleton(_ =>
+        new RuntimeServiceTlsIdentity(tlsOptions, "EventsAndSessions", "Orchestrator"));
+    builder.Services.AddHttpClient<ReviewedRemoteToolResultOwnerClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
+        .ConfigurePrimaryHttpMessageHandler(services =>
+            services.GetRequiredService<RuntimeServiceTlsIdentity>().CreateHandler());
+    builder.Services.AddScoped<ReviewedRemoteToolResultMaterialService>();
+    builder.WebHost.ConfigureKestrel(server =>
+        server.Configure(builder.Configuration.GetSection("Kestrel")).Endpoint("RemoteToolResults", endpoint =>
+        {
+            var tls = server.ApplicationServices.GetRequiredService<RuntimeServiceTlsIdentity>();
+            endpoint.HttpsOptions.ServerCertificate = tls.Certificate;
+            endpoint.HttpsOptions.SslProtocols = RuntimeServiceTlsIdentity.AllowedProtocols;
+            endpoint.HttpsOptions.ClientCertificateMode =
+                Microsoft.AspNetCore.Server.Kestrel.Https.ClientCertificateMode.RequireCertificate;
+            endpoint.HttpsOptions.CheckCertificateRevocation = true;
+            endpoint.HttpsOptions.ClientCertificateValidation = tls.AcceptClientCertificate;
+        }));
+}
 if (materialContainer is not null)
 {
     if (!Uri.TryCreate(materialContainer, UriKind.Absolute, out var containerUri) ||

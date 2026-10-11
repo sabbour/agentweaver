@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -43,9 +42,13 @@ internal interface IReviewedRemoteToolResultWriter
 {
     // Return only after the result bytes and their Events reference have been durably acknowledged.
     Task<SessionMaterialAcknowledgment> WriteAndAcknowledgeAsync(
+        HttpContext context,
         RemoteToolResultProof proof,
         ReadOnlyMemory<byte> resultBytes,
         CancellationToken cancellationToken);
+
+    Task<SessionMaterialReadResult?> ReadOptionalAsync(
+        HttpContext context, RemoteToolResultProof proof, CancellationToken cancellationToken);
 }
 
 internal interface IReviewedRemoteToolExecutionAuthority
@@ -167,13 +170,25 @@ internal sealed class ReviewedRemoteToolAgent(
             call, snapshot, admission, SessionMaterialResultContentClass.TextOnly);
         SessionMaterialValidation.ValidateRemoteToolResultProof(proofTemplate);
 
+        var saved = await results.ReadOptionalAsync(context, proofTemplate, cancellationToken).ConfigureAwait(false);
+        if (saved is not null)
+        {
+            var recordedProof = RemoteToolResultReceiptValidation.ValidateRead(saved, proofTemplate);
+            await RequireCurrentAuthorityAsync(
+                context, registration, snapshot, invocation, admission, request, cancellationToken)
+                .ConfigureAwait(false);
+            return new(call.EventId, saved.Material.EventId, call.InputHash,
+                saved.Bytes.ToArray(), recordedProof.ContentClass);
+        }
+
         var serializedCall = transport.SerializeCall(snapshot, call)
             ?? throw new RuntimeAuthorizationException("runtime_remote_tool_call_serialization_invalid");
         if (serializedCall.Length is <= 0 or > SessionMaterialValidation.MaximumBytes)
             throw new RuntimeAuthorizationException("runtime_remote_tool_call_size_invalid");
         var outboundBytes = serializedCall.ToArray();
 
-        await RequireCurrentAuthorityAsync(context, registration, snapshot, invocation, cancellationToken)
+        await RequireCurrentAuthorityAsync(
+            context, registration, snapshot, invocation, admission, request, cancellationToken)
             .ConfigureAwait(false);
         var transportResult = await transport.SendAsync(
             snapshot, outboundBytes, cancellationToken).ConfigureAwait(false);
@@ -182,17 +197,18 @@ internal sealed class ReviewedRemoteToolAgent(
             !Enum.IsDefined(transportResult.ContentClass))
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_size_invalid");
 
-        var finalAdmission = await authority.VerifyAsync(
-            context, admission, cancellationToken).ConfigureAwait(false);
-        RequireAdmission(finalAdmission, request);
-        await RequireCurrentAuthorityAsync(context, registration, snapshot, invocation, cancellationToken)
+        await RequireCurrentAuthorityAsync(
+            context, registration, snapshot, invocation, admission, request, cancellationToken)
             .ConfigureAwait(false);
 
         var proof = CreateProof(call, snapshot, admission, transportResult.ContentClass);
         SessionMaterialValidation.ValidateRemoteToolResultProof(proof);
         var acknowledgment = await results.WriteAndAcknowledgeAsync(
-            proof, resultBytes, cancellationToken).ConfigureAwait(false);
-        ValidateAcknowledgment(acknowledgment, proof, resultBytes);
+            context, proof, resultBytes, cancellationToken).ConfigureAwait(false);
+        RemoteToolResultReceiptValidation.ValidateAcknowledgment(acknowledgment, proof, resultBytes);
+        await RequireCurrentAuthorityAsync(
+            context, registration, snapshot, invocation, admission, request, cancellationToken)
+            .ConfigureAwait(false);
 
         return new(
             call.EventId,
@@ -207,6 +223,8 @@ internal sealed class ReviewedRemoteToolAgent(
         RuntimeRegistration expectedRegistration,
         ReviewedRemoteToolSnapshot expectedSnapshot,
         ReviewedRemoteToolInvocation invocation,
+        RuntimeActionAdmission admission,
+        RuntimeActionRequest request,
         CancellationToken cancellationToken)
     {
         var currentRegistration = await authority.ReadCurrentRegistrationAsync(
@@ -223,6 +241,8 @@ internal sealed class ReviewedRemoteToolAgent(
             currentSelection.Selection, invocation, cancellationToken).ConfigureAwait(false);
         if (!SameSnapshot(currentSnapshot, expectedSnapshot))
             throw new RuntimeAuthorizationException("runtime_remote_tool_snapshot_changed");
+        var currentAdmission = await authority.VerifyAsync(context, admission, cancellationToken).ConfigureAwait(false);
+        RequireAdmission(currentAdmission, request);
     }
 
     private async Task<ReviewedRemoteToolSnapshot> ResolveSelectedSnapshotAsync(
@@ -398,36 +418,6 @@ internal sealed class ReviewedRemoteToolAgent(
             snapshot.Permission.ActionId,
             snapshot.Permission.Purpose,
             snapshot.Permission.Digest);
-    }
-
-    private static void ValidateAcknowledgment(
-        SessionMaterialAcknowledgment acknowledgment,
-        RemoteToolResultProof proof,
-        byte[] resultBytes)
-    {
-        ArgumentNullException.ThrowIfNull(acknowledgment);
-        var resultEventId = SessionMaterialValidation.RemoteToolResultEventId(proof);
-        var reference = acknowledgment.Reference;
-        var material = reference?.Material;
-        if (acknowledgment.ContractVersion != 1 ||
-            acknowledgment.Identity != new SessionIdentity(proof.ProjectId, proof.RunId, proof.SessionId) ||
-            acknowledgment.EventId != resultEventId ||
-            acknowledgment.Position <= 0 ||
-            reference is null ||
-            reference.Purpose != SessionMaterialValidation.Purpose(SessionMaterialKind.RemoteToolResult) ||
-            reference.ByteLength != resultBytes.Length ||
-            material is null ||
-            material.ContractVersion != 1 ||
-            material.Kind != SessionMaterialKind.RemoteToolResult ||
-            material.RuntimeInstanceId != proof.RuntimeInstanceId ||
-            material.RegistrationRevision != proof.RegistrationRevision ||
-            material.ExecutionFence != proof.ExecutionFence ||
-            material.AcceptedSelectionHash != proof.AcceptedSelectionHash ||
-            material.TenantId != proof.TenantId ||
-            material.Sha256 != Convert.ToHexStringLower(SHA256.HashData(resultBytes)) ||
-            !SessionMaterialValidation.SameRemoteToolResultProof(material.RemoteToolResultProof, proof))
-            throw new RuntimeAuthorizationException("runtime_remote_tool_result_acknowledgment_invalid");
-        SessionMaterialValidation.Validate(reference);
     }
 
     private static bool SameSnapshot(

@@ -465,6 +465,26 @@ Run cursors are opaque and bound to the project/run; session cursors are additio
 bound to the session. Callers should return either token unchanged on replay or
 reconnect.
 
+### Private reviewed tool result material
+
+`RemoteToolResultProof` binds the full reviewed call, snapshot, actor and tenant,
+accepted revisions, registration and fence, and native action admission.
+`RemoteToolResultVerificationReceipt` contains the derived result event and exact proof digest.
+These values are not caller-granted authority.
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /internal/runtime/remote-tool-results/verify` | Orchestrator checks the configured native mutual-TLS peer before reading the proof. It reconstructs the current selected call and verifies native action admission and the reserved tool slot. |
+| `POST /internal/sessions/{sessionId}/remote-tool-results` | Events accepts typed `RemoteToolResult` material only from its configured Orchestrator TLS peer, with the original current actor. It stores bytes before the journal reference and returns a fully bound `SessionMaterialAcknowledgment`. |
+| `POST /internal/sessions/{sessionId}/remote-tool-results/read` | Events accepts a call proof, verifies the committed result and current authority, and returns bounded bytes with their acknowledgment. Missing recorded material returns `404`; changed material or authority is not treated as missing. |
+
+All handled responses use `no-store`.
+Generic material routes and public event routes do not grant private result access.
+The shared receipt validator requires exact event, identity, runtime binding, proof,
+source, length, and SHA-256.
+A read template may adopt only the recorded content class; all other proof fields remain exact.
+See the [TLS configuration and unproven acceptance boundary](../architecture/events-sessions#private-result-tls-configuration).
+
 The service also exposes protected internal addressed-message routes:
 
 | Method and path | Contract |

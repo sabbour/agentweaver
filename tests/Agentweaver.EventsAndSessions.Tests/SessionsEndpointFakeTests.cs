@@ -111,6 +111,110 @@ public sealed class SessionsEndpointFakeTests
         Assert.DoesNotContain("remote result", responseText, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("/internal/sessions/session-1/remote-tool-results", false)]
+    [InlineData("/internal/sessions/session-1/remote-tool-results/read", false)]
+    [InlineData("/internal/sessions/session-1/remote-tool-results", true)]
+    [InlineData("/internal/sessions/session-1/remote-tool-results/read", true)]
+    public async Task ReviewedResultHttpsFlagDoesNotAuthorizeBodyReadOrCertificateLoading(string path, bool configured)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication("test")
+            .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>("test", _ => { });
+        builder.Services.AddAuthorization();
+        var certificateResolved = false;
+        if (configured)
+        {
+            builder.Services.AddSingleton(new RuntimeServiceTlsOptions { ListenerPort = 9443 });
+            builder.Services.AddSingleton<RuntimeServiceTlsIdentity>(_ =>
+            {
+                certificateResolved = true;
+                throw new InvalidOperationException("Native TLS must be checked before resolving the certificate.");
+            });
+        }
+        await using var app = builder.Build();
+        UnexpectedBodyReadStream? body = null;
+        app.Use(async (context, next) =>
+        {
+            context.Request.Scheme = "https";
+            context.Connection.LocalPort = 9443;
+            body = new UnexpectedBodyReadStream();
+            context.Request.Body = body;
+            await next();
+        });
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapReviewedRemoteToolResultMaterialEndpoints();
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new ByteArrayContent("private proof and bytes"u8.ToArray())
+        };
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(configured ? System.Net.HttpStatusCode.Forbidden : System.Net.HttpStatusCode.ServiceUnavailable,
+            response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(configured ? "runtime_remote_tool_result_https_required" : "runtime_remote_tool_result_route_unavailable",
+            document.RootElement.GetProperty("error").GetString());
+        Assert.NotNull(body);
+        Assert.False(body.WasRead);
+        Assert.False(certificateResolved);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReviewedResultOwnerClientRequiresExactProofAcknowledgment(bool changed)
+    {
+        var proof = CreateRemoteToolResultProof();
+        var handler = new ReviewedResultHandler(request =>
+        {
+            Assert.Equal(new Uri("https://orchestrator.example:9443/internal/runtime/remote-tool-results/verify"),
+                request.RequestUri);
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("original-actor", request.Headers.Authorization?.Parameter);
+            Assert.Equal(proof.TenantId, Assert.Single(request.Headers.GetValues("X-Agentweaver-Tenant")));
+            return new(System.Net.HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = JsonContent.Create(new RemoteToolResultVerificationReceipt(
+                    1, SessionMaterialValidation.RemoteToolResultEventId(proof),
+                    changed ? new string('0', 64) : SessionMaterialValidation.RemoteToolResultProofHash(proof))),
+                Headers = { CacheControl = new() { NoStore = true } }
+            };
+        });
+        using var client = new HttpClient(handler);
+        var owner = new ReviewedRemoteToolResultOwnerClient(client, new RuntimeServiceTlsOptions
+        {
+            LocalServiceName = "EventsAndSessions",
+            LocalServicePrincipalId = "11111111-1111-1111-1111-111111111111",
+            LocalCertificatePemPath = Path.Combine(Path.GetTempPath(), "unused-service.pem"),
+            LocalPrivateKeyPemPath = Path.Combine(Path.GetTempPath(), "unused-service-key.pem"),
+            LocalCertificateSha256 = new string('a', 64),
+            ListenerPort = 9443,
+            PeerServiceName = "Orchestrator",
+            PeerServicePrincipalId = "22222222-2222-2222-2222-222222222222",
+            PeerOwnerAddress = "https://orchestrator.example:9443/",
+            PeerCertificateSha256Pins = [new string('b', 64)]
+        });
+        var actor = new RuntimeActorAuthorization(
+            new SecretCredential("original-actor", DateTimeOffset.UtcNow.AddMinutes(1)), proof.TenantId);
+
+        if (changed)
+        {
+            var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                owner.VerifyAsync(proof, actor, CancellationToken.None));
+            Assert.Equal("runtime_remote_tool_result_verification_invalid", failure.Code);
+        }
+        else
+            await owner.VerifyAsync(proof, actor, CancellationToken.None);
+    }
+
     [Fact]
     public async Task GenericSessionMaterialRouteRejectsRemoteToolResultsBeforeOwnerAccess()
     {
@@ -572,6 +676,12 @@ public sealed class SessionsEndpointFakeTests
             PolicyEvaluationOutcome.Allow,
             PolicyEvaluationReasonCode.Allowed,
             SessionMaterialResultContentClass.Structured);
+    }
+
+    private sealed class ReviewedResultHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(send(request));
     }
 
     private sealed class UnexpectedBodyReadStream : Stream

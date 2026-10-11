@@ -92,6 +92,169 @@ public sealed class ReviewedRemoteToolAgentTests
             invoke.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
+    [Fact]
+    public async Task MatchingSavedResultReplaysWithoutSerializingSendingOrWriting()
+    {
+        var rig = CreateRig();
+        rig.Results.SavedResult = proof =>
+        {
+            var recorded = proof with { ContentClass = SessionMaterialResultContentClass.Mixed };
+            var bytes = "saved-result"u8.ToArray();
+            return new(CreateAcknowledgment(recorded, bytes), bytes);
+        };
+
+        var result = await rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None);
+
+        Assert.Equal("saved-result"u8.ToArray(), result.Content.ToArray());
+        Assert.Equal(SessionMaterialResultContentClass.Mixed, result.ContentClass);
+        Assert.Equal(1, rig.Results.ReadCount);
+        Assert.Equal(0, rig.Transport.SerializeCount);
+        Assert.Equal(0, rig.Transport.SendCount);
+        Assert.Equal(0, rig.Results.WriteCount);
+        Assert.Equal(2, rig.Authority.VerifyCount);
+    }
+
+    [Theory]
+    [InlineData("bytes")]
+    [InlineData("length")]
+    [InlineData("digest")]
+    [InlineData("event")]
+    [InlineData("position")]
+    [InlineData("session")]
+    [InlineData("runtime")]
+    [InlineData("revision")]
+    [InlineData("fence")]
+    [InlineData("selection")]
+    [InlineData("tenant")]
+    [InlineData("actor")]
+    [InlineData("arguments")]
+    [InlineData("snapshot")]
+    [InlineData("permission")]
+    [InlineData("content-class")]
+    public async Task SavedResultRejectsChangedBytesOrBindingBeforeExternalDispatch(string changed)
+    {
+        var rig = CreateRig();
+        rig.Results.SavedResult = proof =>
+        {
+            var bytes = "saved-result"u8.ToArray();
+            var acknowledgment = CreateAcknowledgment(proof, bytes);
+            var material = acknowledgment.Reference.Material!;
+            acknowledgment = changed switch
+            {
+                "event" => acknowledgment with { EventId = Guid.NewGuid() },
+                "position" => acknowledgment with { Position = 0 },
+                "session" => acknowledgment with { Identity = new("project-1", "run-1", "other-session") },
+                _ => acknowledgment
+            };
+            material = changed switch
+            {
+                "digest" => material with { Sha256 = new string('f', 64) },
+                "runtime" => material with { RuntimeInstanceId = Guid.NewGuid() },
+                "revision" => material with { RegistrationRevision = material.RegistrationRevision + 1 },
+                "fence" => material with { ExecutionFence = material.ExecutionFence + 1 },
+                "selection" => material with { AcceptedSelectionHash = new string('f', 64) },
+                "tenant" => material with { TenantId = "other-tenant" },
+                "actor" => material with { RemoteToolResultProof = proof with { ActorId = "other-actor" } },
+                "arguments" => material with
+                {
+                    RemoteToolResultProof = proof with { CanonicalArgumentsJson = """{"query":"other"}""" }
+                },
+                "snapshot" => material with
+                {
+                    RemoteToolResultProof = proof with
+                    {
+                        SnapshotBinding = proof.SnapshotBinding with { ConnectionRowRevision = 99 }
+                    }
+                },
+                "permission" => material with
+                {
+                    RemoteToolResultProof = proof with { ActionId = "tool.write" }
+                },
+                "content-class" => material with
+                {
+                    RemoteToolResultProof = proof with { ContentClass = (SessionMaterialResultContentClass)99 }
+                },
+                _ => material
+            };
+            acknowledgment = acknowledgment with
+            {
+                Reference = acknowledgment.Reference with
+                {
+                    Material = material,
+                    ByteLength = changed == "length" ? bytes.Length + 1 : bytes.Length
+                }
+            };
+            return new(acknowledgment, changed == "bytes" ? "changed"u8.ToArray() : bytes);
+        };
+
+        if (changed == "content-class")
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None));
+        else
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None));
+
+        Assert.Equal(0, rig.Transport.SerializeCount);
+        Assert.Equal(0, rig.Transport.SendCount);
+        Assert.Equal(0, rig.Results.WriteCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AuthorityChangeDuringSavedReadDeniesReplayOrNewDispatch(bool saved)
+    {
+        var rig = CreateRig();
+        rig.Results.SavedResult = proof =>
+        {
+            rig.Authority.RegistrationChanged = true;
+            var bytes = "saved-result"u8.ToArray();
+            return saved ? new(CreateAcknowledgment(proof, bytes), bytes) : null;
+        };
+
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None));
+
+        Assert.Equal(0, rig.Transport.SendCount);
+        Assert.Equal(0, rig.Results.WriteCount);
+    }
+
+    [Fact]
+    public async Task AuthorityChangeDuringAcknowledgmentDeniesReturningNewResult()
+    {
+        var rig = CreateRig();
+        var invoke = rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None);
+        var write = await rig.Results.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        rig.Authority.RegistrationChanged = true;
+        rig.Results.Acknowledgment.TrySetResult(CreateAcknowledgment(write.Proof, write.Bytes));
+
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => invoke.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Theory]
+    [InlineData(2, 0, 0)]
+    [InlineData(3, 1, 0)]
+    [InlineData(4, 1, 1)]
+    public async Task CurrentNativeGrantIsRequiredAfterWaitsBeforeDispatchWriteAndReturn(
+        int failAtVerification, int expectedSends, int expectedWrites)
+    {
+        var rig = CreateRig();
+        rig.Authority.FailAtVerification = failAtVerification;
+        var invoke = rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None);
+        if (expectedWrites != 0)
+        {
+            var write = await rig.Results.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            rig.Results.Acknowledgment.TrySetResult(CreateAcknowledgment(write.Proof, write.Bytes));
+        }
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            invoke.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Equal("runtime_action_denied", failure.Code);
+        Assert.Equal(expectedSends, rig.Transport.SendCount);
+        Assert.Equal(expectedWrites, rig.Results.WriteCount);
+    }
+
     private static Rig CreateRig()
     {
         var snapshot = CreateSnapshot();
@@ -231,10 +394,12 @@ public sealed class ReviewedRemoteToolAgentTests
         public Exception? AuthorizationFailure { get; set; }
         public RuntimeActionRequest? AuthorizedRequest { get; private set; }
         public int VerifyCount { get; private set; }
+        public bool RegistrationChanged { get; set; }
+        public int? FailAtVerification { get; set; }
 
         public Task<RuntimeRegistration> ReadCurrentRegistrationAsync(
             HttpContext context, Guid runtimeInstanceId, CancellationToken cancellationToken) =>
-            Task.FromResult(registration);
+            Task.FromResult(RegistrationChanged ? registration with { Revision = registration.Revision + 1 } : registration);
 
         public Task<AuthorizedRunSelection> ReadAcceptedSelectionWithAuthorityAsync(
             HttpContext context, string projectId, string runId, CancellationToken cancellationToken) =>
@@ -260,6 +425,8 @@ public sealed class ReviewedRemoteToolAgentTests
             HttpContext context, RuntimeActionAdmission admission, CancellationToken cancellationToken)
         {
             VerifyCount++;
+            if (VerifyCount == FailAtVerification)
+                return Task.FromException<RuntimeActionAdmission>(new RuntimeAuthorizationException("runtime_action_denied"));
             return Task.FromResult(admission);
         }
     }
@@ -299,12 +466,15 @@ public sealed class ReviewedRemoteToolAgentTests
     private sealed class TestResultWriter : IReviewedRemoteToolResultWriter
     {
         public int WriteCount { get; private set; }
+        public int ReadCount { get; private set; }
+        public Func<RemoteToolResultProof, SessionMaterialReadResult?>? SavedResult { get; set; }
         public TaskCompletionSource<(RemoteToolResultProof Proof, byte[] Bytes)> WriteStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<SessionMaterialAcknowledgment> Acknowledgment { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task<SessionMaterialAcknowledgment> WriteAndAcknowledgeAsync(
+            HttpContext context,
             RemoteToolResultProof proof,
             ReadOnlyMemory<byte> resultBytes,
             CancellationToken cancellationToken)
@@ -313,6 +483,13 @@ public sealed class ReviewedRemoteToolAgentTests
             var bytes = resultBytes.ToArray();
             WriteStarted.TrySetResult((proof, bytes));
             return await Acknowledgment.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        public Task<SessionMaterialReadResult?> ReadOptionalAsync(
+            HttpContext context, RemoteToolResultProof proof, CancellationToken cancellationToken)
+        {
+            ReadCount++;
+            return Task.FromResult(SavedResult?.Invoke(proof));
         }
     }
 

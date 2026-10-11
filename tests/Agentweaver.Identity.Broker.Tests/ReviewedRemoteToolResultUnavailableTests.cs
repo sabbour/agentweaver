@@ -2,6 +2,7 @@ extern alias OrchestratorHost;
 
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using Agentweaver.Identity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -16,6 +17,71 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class ReviewedRemoteToolResultUnavailableTests
 {
+    [Theory]
+    [InlineData(false, System.Net.HttpStatusCode.ServiceUnavailable, "runtime_remote_tool_result_route_unavailable")]
+    [InlineData(true, System.Net.HttpStatusCode.Forbidden, "runtime_remote_tool_result_https_required")]
+    public async Task HttpsFlagWithoutNativeTlsCannotReadProofOrLoadTheServiceCertificate(
+        bool configured, System.Net.HttpStatusCode expectedStatus, string expectedCode)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication("test")
+            .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>("test", _ => { });
+        builder.Services.AddAuthorization();
+        var certificateResolved = false;
+        if (configured)
+        {
+            builder.Services.AddSingleton(new RuntimeServiceTlsOptions
+            {
+                LocalServiceName = "Orchestrator",
+                LocalServicePrincipalId = "11111111-1111-1111-1111-111111111111",
+                LocalCertificatePemPath = Path.Combine(Path.GetTempPath(), "unused-service.pem"),
+                LocalPrivateKeyPemPath = Path.Combine(Path.GetTempPath(), "unused-service-key.pem"),
+                LocalCertificateSha256 = new string('a', 64),
+                ListenerPort = 9443,
+                PeerServiceName = "EventsAndSessions",
+                PeerServicePrincipalId = "22222222-2222-2222-2222-222222222222",
+                PeerOwnerAddress = "https://events.example:9443/",
+                PeerCertificateSha256Pins = [new string('b', 64)]
+            });
+            builder.Services.AddSingleton<RuntimeServiceTlsIdentity>(_ =>
+            {
+                certificateResolved = true;
+                throw new InvalidOperationException("The native-TLS denial must precede certificate loading.");
+            });
+        }
+        await using var app = builder.Build();
+        UnexpectedBodyReadStream? body = null;
+        app.Use(async (context, next) =>
+        {
+            context.Request.Scheme = "https";
+            context.Connection.LocalPort = 9443;
+            body = new UnexpectedBodyReadStream();
+            context.Request.Body = body;
+            await next();
+        });
+        app.UseAuthentication();
+        app.UseAuthorization();
+        OrchestratorHost::Agentweaver.Orchestrator.ReviewedRemoteToolResultEndpoints
+            .MapReviewedRemoteToolResultEndpoints(app);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/internal/runtime/remote-tool-results/verify")
+        {
+            Content = new ByteArrayContent("private proof"u8.ToArray())
+        };
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var document = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(expectedCode, document.RootElement.GetProperty("error").GetString());
+        Assert.NotNull(body);
+        Assert.False(body.WasRead);
+        Assert.False(certificateResolved);
+    }
+
     [Fact]
     public async Task OrchestratorVerifierRejectsHttpBeforeReadingProofBody()
     {

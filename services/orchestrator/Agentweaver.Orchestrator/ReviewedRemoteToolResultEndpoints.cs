@@ -3,6 +3,8 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
+using Microsoft.AspNetCore.Connections.Features;
+using Microsoft.AspNetCore.Http.Features;
 
 namespace Agentweaver.Orchestrator;
 
@@ -94,6 +96,7 @@ internal sealed class ReviewedRemoteToolResultVerifier(
         var currentSnapshot = await snapshots.ResolveAsync(proof.Snapshot, cancellationToken).ConfigureAwait(false);
         if (currentSnapshot is null || currentSnapshot.SnapshotDigest != snapshot.SnapshotDigest)
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_snapshot_changed");
+        await actions.VerifyAsync(context, admission, cancellationToken).ConfigureAwait(false);
 
         return new(
             1,
@@ -248,13 +251,34 @@ public static class ReviewedRemoteToolResultEndpoints
     {
         endpoints.MapPost(
             "/internal/runtime/remote-tool-results/verify",
-            (HttpContext context) =>
+            (HttpContext context, CancellationToken cancellationToken) =>
             {
                 context.Response.Headers.CacheControl = "no-store";
-                var error = context.Request.IsHttps
-                    ? "runtime_remote_tool_result_route_unavailable"
-                    : "runtime_remote_tool_result_https_required";
-                return Results.Json(new { error }, statusCode: StatusCodes.Status503ServiceUnavailable);
+                if (!context.Request.IsHttps ||
+                    context.RequestServices.GetService<RuntimeServiceTlsOptions>() is not { } tlsOptions)
+                {
+                    var error = context.Request.IsHttps
+                        ? "runtime_remote_tool_result_route_unavailable"
+                        : "runtime_remote_tool_result_https_required";
+                    return Task.FromResult<IResult>(Results.Json(
+                        new { error }, statusCode: StatusCodes.Status503ServiceUnavailable));
+                }
+                return ExecuteAsync(context, async () =>
+                {
+                    var protocol = context.Features.Get<ITlsHandshakeFeature>()?.Protocol;
+                    RuntimeServiceTlsIdentity.RequireDirectTls(
+                        context.Request.IsHttps, protocol, context.Connection.LocalPort, tlsOptions.ListenerPort);
+                    var tls = context.RequestServices.GetRequiredService<RuntimeServiceTlsIdentity>();
+                    tls.RequirePeerConnection(context.Request.IsHttps, protocol, context.Connection.LocalPort,
+                        context.Features.Get<ITlsConnectionFeature>()?.ClientCertificate);
+                    if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } limit)
+                        limit.MaxRequestBodySize = 2 * SessionMaterialValidation.MaximumBytes;
+                    var proof = await context.Request.ReadFromJsonAsync<RemoteToolResultProof>(
+                        cancellationToken: cancellationToken).ConfigureAwait(false)
+                        ?? throw new ArgumentException("A reviewed remote tool result proof is required.");
+                    return await context.RequestServices.GetRequiredService<ReviewedRemoteToolResultVerifier>()
+                        .VerifyAsync(context, proof, cancellationToken).ConfigureAwait(false);
+                });
             })
             .RequireAuthorization();
         return endpoints;
@@ -279,6 +303,15 @@ public static class ReviewedRemoteToolResultEndpoints
         catch (ArgumentException)
         {
             return Results.BadRequest(new { error = "runtime_remote_tool_result_invalid" });
+        }
+        catch (JsonException)
+        {
+            return Results.BadRequest(new { error = "runtime_remote_tool_result_invalid" });
+        }
+        catch (BadHttpRequestException failure)
+        {
+            return Results.Json(new { error = "runtime_remote_tool_result_request_invalid" },
+                statusCode: failure.StatusCode);
         }
         catch (HttpRequestException)
         {

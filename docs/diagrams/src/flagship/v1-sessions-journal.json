@@ -1,19 +1,19 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Native Sessions journal, accepted facts, and owner delivery",
-  "alt": "Events & Sessions commits journal facts and serves ordered replay. Orchestrator rechecks current Projects authority, accepted decision, persisted selection context, work item, turn, and Environment placement after waits. Typed TurnContent and SdkCache material uses the existing Object Store. Events stores bytes before journal references, rechecks authority after waits and retries, and checks digest and length before historical disclosure. Observe credentials alone do not authorize material writes. AgentHost guards actual native SDK turns and registered tools with committed Policy receipts, prioritizes immediate work at native idle boundaries, and waits for immutable Cost accounting before acknowledgment. Compatible opaque SDK caches resume through the native SDK; missing or incompatible caches rebuild authenticated journal context without effect replay. Native packages load from the read-only image distribution, not private session state. Environment supplies the first three startup timestamps under its retained lease, and AgentHost supplies actual configured and ready timestamps. These source contracts do not prove deployment or paid model execution.",
+  "title": "Session journal and private reviewed tool results",
+  "alt": "Events & Sessions verifies the run's provider binding before committing a session. Private tool result routes require direct mutual TLS and the original current actor. Orchestrator verifies the full selected call and native action admission. Events stores bytes before journal references and acknowledgments. Saved reads require exact proof, source, length and digest, with current checks before return. Public replay hides private result references and bytes. Native remote-tool dispatch remains disabled; this source does not prove deployment or a real remote call.",
   "autonumber": true,
   "participants": [
     {
-      "id": "caller",
-      "label": "Authorized\ncaller",
-      "subLabel": "GUID sub + project_id + run_id",
-      "icon": "globe",
-      "fluentIcon": "person",
+      "id": "core",
+      "label": "Orchestrator\nprivate result caller",
+      "subLabel": "Configured mutual-TLS peer",
+      "icon": "server",
+      "fluentIcon": "api",
       "badge": {
-        "text": "client",
-        "tone": "neutral"
+        "text": "service",
+        "tone": "teal"
       }
     },
     {
@@ -53,40 +53,19 @@
   "steps": [
     {
       "type": "message",
-      "from": "caller",
+      "from": "core",
       "to": "api",
-      "label": "POST /internal/sessions/{sessionId}",
+      "label": "Create an authorized run session",
       "line": "solid",
       "arrow": "filled"
-    },
-    {
-      "type": "note",
-      "over": ["caller", "api", "postgres"],
-      "label": "Issuer/audience, GUID sub, active project/run grant. Runtime uses workload identity; privileged --migrate is separate."
     },
     {
       "type": "message",
       "from": "api",
       "to": "provider",
-      "label": "Resolve default or permitted project override",
+      "label": "Verify exact Sessions provider and resource",
       "line": "solid",
       "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "provider",
-      "to": "postgres",
-      "label": "Verify owned schema; negotiate live database identity",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "provider",
-      "to": "api",
-      "label": "Confirmed provider, revision, resource generation, capabilities",
-      "line": "dashed",
-      "arrow": "open"
     },
     {
       "type": "message",
@@ -97,65 +76,39 @@
       "arrow": "filled"
     },
     {
-      "type": "message",
-      "from": "api",
-      "to": "caller",
-      "label": "201 Created after commit: SessionRecord",
-      "line": "dashed",
-      "arrow": "open"
-    },
-    {
       "type": "note",
-      "over": ["caller", "api", "postgres"],
-      "label": "Later append, replay, and subscribe verify the exact stored pin; changed or missing bindings fail closed."
+      "over": ["core", "api"],
+      "label": "Private routes: mutual TLS before body reads. The original actor, current run and tool grant remain required."
     },
     {
       "type": "message",
-      "from": "caller",
+      "from": "core",
       "to": "api",
-      "label": "POST session events or typed material",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "note",
-      "over": ["caller", "api", "postgres"],
-      "label": "Receipt ID only; generic append denied. Owner and Events recheck writer/selection and session/run fence after waits/retries; Allow needs exact active grant."
-    },
-    {
-      "type": "activation",
-      "participant": "api",
-      "action": "start"
-    },
-    {
-      "type": "message",
-      "from": "api",
-      "to": "postgres",
-      "label": "Recheck authority; commit event, refs, sequence, and outbox",
+      "label": "Write bounded result bytes with full call proof",
       "line": "solid",
       "arrow": "filled"
     },
     {
       "type": "message",
-      "from": "postgres",
+      "from": "api",
+      "to": "core",
+      "label": "Verify selected call, native action and SDK source",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "core",
       "to": "api",
-      "label": "Commit before returning durable event",
+      "label": "Current proof digest and result event",
       "line": "dashed",
       "arrow": "open"
     },
     {
       "type": "message",
       "from": "api",
-      "to": "caller",
-      "label": "Committed event/material ACK; identical retry returns original",
-      "line": "dashed",
-      "arrow": "open"
-    },
-    {
-      "type": "message",
-      "from": "caller",
-      "to": "api",
-      "label": "GET /internal/projects/{projectId}/runs/{runId}/events[/live]",
+      "to": "provider",
+      "label": "Store and verify actual bytes first",
       "line": "solid",
       "arrow": "filled"
     },
@@ -163,47 +116,54 @@
       "type": "message",
       "from": "api",
       "to": "postgres",
-      "label": "Read durable events after cursor; poll for live subscription",
+      "label": "Commit event and reference under current authority",
       "line": "solid",
       "arrow": "filled"
     },
     {
       "type": "message",
       "from": "api",
-      "to": "caller",
-      "label": "Page or NDJSON: session event + opaque nextCursor",
+      "to": "core",
+      "label": "Full acknowledgment; exact retry retains original",
       "line": "dashed",
       "arrow": "open"
     },
     {
-      "type": "activation",
-      "participant": "api",
-      "action": "end"
+      "type": "message",
+      "from": "core",
+      "to": "api",
+      "label": "Read saved result before remote dispatch",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "core",
+      "label": "Exact proof, source, length and digest; recheck before return",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "core",
+      "to": "api",
+      "label": "Read authorized run event page or stream",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "api",
+      "to": "core",
+      "label": "Ordered public events; private results omitted",
+      "line": "dashed",
+      "arrow": "open"
     },
     {
       "type": "note",
-      "over": ["caller", "api", "postgres"],
-      "label": "API/UI/MCP: scoped replay, not transcript text. Gates need fresh owner snapshots; accepted messages and local echoes are not completion."
-    },
-    {
-      "type": "note",
-      "over": ["caller", "api", "postgres"],
-      "label": "Knowledge receipts are project facts, not session events. Orchestrator validates its owner outbox before fenced turn-boundary delivery; receipt is not approval."
-    },
-    {
-      "type": "note",
-      "over": ["caller", "api", "postgres"],
-      "label": "Turns: accounting before answer.\nSuspend: Core operation/version checks before stopping turns and cache ACK.\nMissing Workspace proof blocks completion."
-    },
-    {
-      "type": "note",
-      "over": ["caller", "api", "postgres"],
-      "label": "Retained lease: scheduled/imageReady/started; host: configured/ready. Actual compressed OCI bytes; time ceilings, no size cap."
-    },
-    {
-      "type": "note",
-      "over": ["caller", "api", "postgres"],
-      "label": "Native packages: read-only image /app/native. Private session state: /state and /tmp remain noexec; opaque SDK caches keep authenticated recovery."
+      "over": ["core", "api", "postgres"],
+      "label": "Current checks repeat after waits and retries. Native remote-tool dispatch stays disabled; live TLS acceptance remains open."
     }
   ]
 }
