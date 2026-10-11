@@ -22,6 +22,7 @@ The Identity Service remains a ClusterIP Service.
 | `migrations/identity-broker/` | Separate migration ServiceAccount, one-shot Job, and PostgreSQL/token egress policy. |
 | `routing/identity-broker/` | Explicit Gateway namespace/policy, native certificates, HTTPS Gateway, HTTPRoute, backend TLS policy, and narrow Broker ingress. |
 | `acceptance/foundation-probe/` | #1784 executable Job and its own scoped egress overlay. |
+| `profiles/projects-config/` | Separately selected Projects runtime source renderer; requires existing catalog and TLS references and explicit runtime inputs. |
 
 The runtime listens with HTTPS on port 8443. Its ClusterIP Service exposes
 port 443. Cilium permits health probes from the node and requests only from
@@ -29,6 +30,37 @@ same-namespace pods labeled `agentweaver.io/identity-client: "true"`.
 It permits DNS, Entra token exchange, the configured upstream OIDC hosts,
 the exact PostgreSQL host, and the exact Key Vault host. The migration policy
 permits DNS, Entra token exchange, and PostgreSQL only.
+
+## Selected Projects runtime profile
+
+The ordinary Broker base and Foundation Probe do not include this profile.
+`profiles/projects-config/render.mjs` reads operator-reviewed JSON and prints
+a Kubernetes `List`. It never runs a cloud command or applies that output.
+The example leaves the image, image user/group, TLS Secret, catalog reference,
+catalog source commit, authority, and audience unset. Missing inputs stop rendering.
+
+The profile fixes the existing Projects identity and passwordless database mapping.
+It exposes only private HTTPS on port 8443 with system trust unchanged.
+It requires an existing Projects-only PEM Secret and a nonzero immutable
+`ghcr.io/sabbour/agentweaver.projects.config` product digest.
+The image user and group must match the reviewed image.
+
+The catalog owner must supply an existing, immutable, nonempty ConfigMap
+in `agentweaver-v1-p0`, reviewed against the exact `providerCatalog.sourceCommit`.
+Its keys are relative catalog keys, such as `Registrations__0__Id`.
+The renderer adds `ProjectsConfig__ProviderCatalog__` through `envFrom.prefix`.
+Catalog keys cannot replace database, authentication, or HTTPS listener settings.
+The real .NET catalog loader remains responsible for catalog validation.
+Rendering checks the reference and commit format, not object existence,
+catalog contents, immutability, source binding, or production suitability.
+Those checks remain prerequisites for any separately approved deployment.
+
+The profile neither creates that catalog nor changes provider selections.
+It adds no Blob permission, credential, custom certificate trust, database grant,
+migration job, or public route. Existing database roles, applied migrations,
+runtime rights, trusted TLS, and healthy owner flows remain unverified here.
+See [Projects & Config](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/projects-config.md)
+for the startup and acceptance boundary.
 
 ## Managed routing candidate
 
