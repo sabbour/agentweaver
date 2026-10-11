@@ -53,6 +53,36 @@ internal sealed class MafBuildTestEnvironmentClient(
         }).ConfigureAwait(false);
     }
 
+    internal Task<byte[]> ReadWorkspaceCaptureAsync(
+        RuntimeActorAuthorization actor, MafExecutionBuildTestIntent intent,
+        SandboxBuildTestWorkspaceCaptureReference reference, CancellationToken cancellationToken) =>
+        ExecuteAsync(() => RuntimeOwnerHttpTransport.ReadBuildTestCaptureAsync(
+            client, options.EnvironmentOwnerAddress, OperationPath(intent) + "/workspace-capture",
+            actor, reference, cancellationToken));
+
+    internal Task<SandboxBuildTestOperationSnapshot> AcknowledgeWorkspaceCaptureAsync(
+        RuntimeActorAuthorization actor, MafExecutionBuildTestIntent intent,
+        ProducedRunCaptureJournalEntry acknowledgment, CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            var result = await RuntimeOwnerHttpTransport.SendAsync<SandboxBuildTestOperationResult>(
+                client, options.EnvironmentOwnerAddress, OperationPath(intent) + "/workspace-capture/acknowledge",
+                actor, new SandboxBuildTestWorkspaceCaptureAcknowledgmentRequest(
+                    intent.ToApiRequest(), acknowledgment), cancellationToken).ConfigureAwait(false);
+            var operation = result.Operation ??
+                throw new CoordinationException("maf_execution_build_test_owner_contract_invalid",
+                    StatusCodes.Status502BadGateway);
+            if (MafBuildTestCommandContract.Classify(intent, operation) != MafExecutionTaskStatus.Succeeded ||
+                operation.WorkspaceCaptureAcknowledgment != acknowledgment)
+                throw new CoordinationException("maf_execution_workspace_capture_acknowledgment_conflict",
+                    StatusCodes.Status502BadGateway);
+            return operation;
+        });
+
+    private static string OperationPath(MafExecutionBuildTestIntent intent) =>
+        OwnerPath(intent.Identity.ProjectId, intent.Identity.RunId, intent.ExpectedBinding.Fence.Owner.EnvironmentId) +
+        "/commands/" + intent.OperationId.ToString("D");
+
     private static string OwnerPath(string projectId, string runId, string environmentId) =>
         $"/api/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
         $"/environments/{Uri.EscapeDataString(environmentId)}/sandbox/build-test";

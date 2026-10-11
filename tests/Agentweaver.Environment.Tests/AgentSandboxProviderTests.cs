@@ -12,7 +12,7 @@ using Xunit;
 
 namespace Agentweaver.Environment.Tests;
 
-public sealed class AgentSandboxProviderTests
+public sealed partial class AgentSandboxProviderTests
 {
     [Theory]
     [InlineData(null, null, true)]
@@ -478,11 +478,24 @@ public sealed class AgentSandboxProviderTests
     {
         private readonly Dictionary<string, JsonNode> _resources = new(StringComparer.Ordinal);
         private JsonNode? _podList;
+        public Dictionary<string, string> Logs { get; } = new(StringComparer.Ordinal);
 
         public int CreateCount { get; private set; }
         public List<bool> DeleteUidPreconditions { get; } = [];
         public string? LastSandboxClaimsNamespace { get; private set; }
         public bool FailNextClaimCreate { get; set; }
+
+        public JsonNode GetPod(SandboxBuildTestPodReference pod) =>
+            _resources[$"api/v1/namespaces/{pod.KubernetesNamespace}/pods/{pod.Name}"];
+
+        public void AddResource(string path, JsonNode resource) => _resources.Add(path, resource);
+
+        public void EnableBuildTestWorkspace()
+        {
+            _resources["api/v1/namespaces/agentweaver/persistentvolumeclaims/workspace-claim"]
+                ["spec"] = new JsonObject { ["accessModes"] = new JsonArray("ReadWriteMany") };
+            _resources["version"] = JsonNode.Parse("""{"major":"1","minor":"30","gitVersion":"v1.30.0"}""")!;
+        }
 
         public FakeKubernetesHandler()
         {
@@ -645,6 +658,11 @@ public sealed class AgentSandboxProviderTests
             var path = request.RequestUri!.AbsolutePath.TrimStart('/');
             if (request.Method == HttpMethod.Get)
             {
+                if (path.EndsWith("/log", StringComparison.Ordinal))
+                {
+                    var body = Logs.GetValueOrDefault(request.RequestUri.PathAndQuery, "");
+                    return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+                }
                 if (path == "api/v1/namespaces/agentweaver/pods")
                     return JsonResponse(HttpStatusCode.OK, _podList ?? new JsonObject { ["items"] = new JsonArray() });
                 if (path.EndsWith("/sandboxclaims", StringComparison.Ordinal))
@@ -686,7 +704,14 @@ public sealed class AgentSandboxProviderTests
                     FailNextClaimCreate = false;
                     return new HttpResponseMessage(HttpStatusCode.InternalServerError);
                 }
+                if (request.RequestUri.Query == "?dryRun=All")
+                {
+                    body["metadata"]!["uid"] = "dry-run-uid";
+                    body["metadata"]!["resourceVersion"] = "1";
+                    return JsonResponse(HttpStatusCode.Created, body);
+                }
                 body["metadata"]!["uid"] = $"resource-uid-{++CreateCount}";
+                body["metadata"]!["resourceVersion"] = "1";
                 var name = body["metadata"]!["name"]!.GetValue<string>();
                 _resources[$"{path}/{Uri.EscapeDataString(name)}"] = body.DeepClone();
                 return JsonResponse(HttpStatusCode.Created, body);
@@ -700,6 +725,15 @@ public sealed class AgentSandboxProviderTests
                 var expectedUid = patch[0]!["value"]!.GetValue<string>();
                 if (current["metadata"]!["uid"]!.GetValue<string>() != expectedUid)
                     return new HttpResponseMessage(HttpStatusCode.Conflict);
+                if (current["kind"]!.GetValue<string>() == "Pod")
+                {
+                    Assert.Equal(current["metadata"]!["resourceVersion"]!.GetValue<string>(),
+                        patch[1]!["value"]!.GetValue<string>());
+                    Assert.Equal(current["spec"]!["schedulingGates"]![0]!["name"]!.GetValue<string>(),
+                        patch[2]!["value"]!.GetValue<string>());
+                    current["spec"]!["schedulingGates"]!.AsArray().RemoveAt(0);
+                    return JsonResponse(HttpStatusCode.OK, current);
+                }
                 current["metadata"]!["annotations"]!["agentweaver.dev/provider-binding"] =
                     patch[1]!["value"]!.GetValue<string>();
                 return new HttpResponseMessage(HttpStatusCode.OK);

@@ -8,8 +8,8 @@ namespace Agentweaver.Providers.Sandbox.AgentSandbox;
 
 public sealed partial class KubernetesAgentSandboxClient
 {
-    public const string WorkspacePreparationContainer = "buildtest-workspace-prepare";
-    public const string WorkspaceCaptureContainer = "buildtest-workspace-collector";
+    public const string WorkspacePreparationContainer = SandboxBuildTestLimits.WorkspacePreparationContainerName;
+    public const string WorkspaceCaptureContainer = SandboxBuildTestLimits.WorkspaceCaptureContainerName;
     private const string WorkspaceIoProtocol = "v5.channel.k8s.io";
     private const int MaximumWorkspaceIoFrameBytes = 32 * 1024;
 
@@ -19,7 +19,8 @@ public sealed partial class KubernetesAgentSandboxClient
         ImmutableArray<byte> input,
         bool preparingWorkspace,
         int maximumOutputBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ImmutableArray<string>? executionCommand = null)
     {
         ArgumentNullException.ThrowIfNull(pod);
         _ = pod.Validate();
@@ -27,7 +28,12 @@ public sealed partial class KubernetesAgentSandboxClient
         ValidatePathSegment(pod.Name, nameof(pod.Name));
         if (requestFingerprint is not { Length: 64 } || !requestFingerprint.All(Uri.IsHexDigit) ||
             input.IsDefault || input.Length > ProducedRunCaptureLimits.MaximumPackageBytes ||
-            maximumOutputBytes is < 1 or > ProducedRunCaptureLimits.MaximumPackageBytes)
+            maximumOutputBytes is < 1 or > ProducedRunCaptureLimits.MaximumDocumentBytes ||
+            executionCommand is { } command && (command.IsDefaultOrEmpty ||
+                command.Length > SandboxBuildTestLimits.MaximumArguments ||
+                command.Any(argument => argument is null ||
+                    argument.Length > SandboxBuildTestLimits.MaximumCollectorRequestBytes * 2 ||
+                    argument.Any(char.IsControl))))
             throw new ArgumentException("The bounded BuildTest workspace exchange is invalid.");
 
         RequirePodUid(await GetAsync(
@@ -35,7 +41,10 @@ public sealed partial class KubernetesAgentSandboxClient
             pod.Uid);
         var container = preparingWorkspace ? WorkspacePreparationContainer : WorkspaceCaptureContainer;
         var path = NamespacedResourcePath(string.Empty, "pods", pod.KubernetesNamespace, pod.Name) +
-            "/attach?container=" + container + "&stdin=true&stdout=true&stderr=true&tty=false";
+            (executionCommand is null ? "/attach" : "/exec") +
+            "?container=" + container + "&stdin=true&stdout=true&stderr=true&tty=false";
+        if (executionCommand is { } arguments)
+            path += string.Concat(arguments.Select(argument => "&command=" + Uri.EscapeDataString(argument)));
         var address = new UriBuilder(new Uri(_httpClient.BaseAddress!, path))
         {
             Scheme = "wss"
@@ -100,7 +109,7 @@ public sealed partial class KubernetesAgentSandboxClient
             if (received.MessageType == WebSocketMessageType.Close)
             {
                 if (socket.CloseStatus != WebSocketCloseStatus.NormalClosure ||
-                    channel is not null || !inputSent || readyOffset != ready.Length)
+                    channel is not null || !inputSent || readyOffset != ready.Length || !statusSeen)
                     throw WorkspaceIoFailure("kubernetes_workspace_io_incomplete", preparingWorkspace);
                 await socket.CloseOutputAsync(
                     WebSocketCloseStatus.NormalClosure, string.Empty, cancellationToken).ConfigureAwait(false);

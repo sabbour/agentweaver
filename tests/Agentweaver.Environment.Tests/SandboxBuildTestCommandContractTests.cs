@@ -656,7 +656,7 @@ public sealed class SandboxBuildTestCommandContractTests
             output,
             null,
             null,
-            fixture.Command.Outputs.IsEmpty ? null : collectorPolicy,
+            fixture.Command.Outputs.IsEmpty && fixture.Command.WorkspaceSource is null ? null : collectorPolicy,
             null,
             [],
             null,

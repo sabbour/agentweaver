@@ -5,6 +5,8 @@ COPY Directory.Build.props ./
 COPY packages/Agentweaver.Abstractions/ packages/Agentweaver.Abstractions/
 COPY packages/Agentweaver.Identity/ packages/Agentweaver.Identity/
 COPY packages/Agentweaver.AgentRuntime/ packages/Agentweaver.AgentRuntime/
+COPY packages/Agentweaver.Providers/ packages/Agentweaver.Providers/
+COPY packages/Agentweaver.SourceControl/ packages/Agentweaver.SourceControl/
 COPY packages/Agentweaver.Telemetry/ packages/Agentweaver.Telemetry/
 COPY services/agenthost/Agentweaver.AgentHost/ services/agenthost/Agentweaver.AgentHost/
 RUN dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj --locked-mode && \
@@ -26,6 +28,8 @@ RUN curl --fail --location --proto '=https' --tlsv1.2 \
     mkdir /private-state /workspace
 
 FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0.12-noble@sha256:0fa044f682cb7d93a5a90401a00c626c66f7b00b86922be9441f869eae039f80
+RUN apt-get update && apt-get install --no-install-recommends --yes git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /publish/ ./
 COPY --from=build --chown=1654:1654 /private-state/ /state/

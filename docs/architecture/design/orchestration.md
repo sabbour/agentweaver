@@ -428,7 +428,15 @@ Completed BuildTest input retains its original decision version while dispatch c
 Running input still requires its original decision version.
 Unavailable or changed workspaces return the existing Source Control error, not an unhandled server error.
 An explicit source in a confirmed command remains exact.
-This handoff does not connect provider preparation helpers or complete output export.
+Version 2 prepares the repository in the exact native command Pod before execution.
+After success, its separate collector retains the full baseline and declared output bytes from that prepared path.
+Environment stores exact references while Source Control retains the full pending document.
+Core uses the existing Events produced-output admission and verifies the acknowledged capture again in its final owner transaction.
+The terminal receipt retains preparation, full output, and journal references.
+A missing acknowledgment cannot complete the step.
+Retained pending or admitted bytes support retry without another native export or command execution.
+Environment verifies the canonical acknowledgment through Core before deleting the exact native Pods.
+These source paths do not establish native Kubernetes or complete workflow acceptance.
 Preparation must match the WorkPlan's existing Sandbox pin.
 The Environment owner address uses the existing
 `Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress` configuration.

@@ -256,6 +256,14 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
                 "buildtest_operation_unknown",
                 "The exact BuildTest operation is not reserved.");
         var previous = DeserializeState(existing);
+        if (previous.Operation.WorkspaceCaptureAcknowledgment is null &&
+            operation.WorkspaceCaptureAcknowledgment is not null)
+        {
+            await RequireActiveOwnerAsync(
+                connection, transaction, operation.ExpectedBinding.Fence, cancellationToken).ConfigureAwait(false);
+            await RequireCurrentSandboxAndWorkspaceAsync(
+                connection, transaction, operation.ExpectedBinding, cancellationToken).ConfigureAwait(false);
+        }
         if (existing.EffectKind != "BuildTestCommand" ||
             existing.Fingerprint != operation.RequestFingerprint ||
             !SameJson(previous.AcceptedCommand, state.AcceptedCommand) ||
@@ -637,17 +645,27 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
             attempts.Contains($"{role}:observed", StringComparer.Ordinal);
     }
 
-    private static bool IsAllowedOperationTransition(
+    internal static bool IsAllowedOperationTransition(
         SandboxBuildTestOperationSnapshot previous,
         SandboxBuildTestOperationSnapshot next)
     {
+        if (previous.WorkspacePreparation is not null && !SameJson(previous.WorkspacePreparation, next.WorkspacePreparation) ||
+            previous.WorkspaceCapture is not null && !SameJson(previous.WorkspaceCapture, next.WorkspaceCapture) ||
+            previous.WorkspaceCaptureAcknowledgment is not null &&
+                previous.WorkspaceCaptureAcknowledgment != next.WorkspaceCaptureAcknowledgment)
+            return false;
         var wasTerminal = previous.Status is SandboxBuildTestOperationStatus.Completed or
             SandboxBuildTestOperationStatus.Failed or
             SandboxBuildTestOperationStatus.Interrupted or
             SandboxBuildTestOperationStatus.Stale;
-        return wasTerminal
-            ? SameJson(previous with { UpdatedAt = next.UpdatedAt }, next)
-            : Enum.IsDefined(next.Status);
+        if (!wasTerminal)
+            return Enum.IsDefined(next.Status);
+        if (previous.Status == SandboxBuildTestOperationStatus.Completed &&
+            previous.WorkspaceCapture is not null &&
+            previous.WorkspaceCaptureAcknowledgment is null &&
+            next.WorkspaceCaptureAcknowledgment is not null)
+            previous = previous with { WorkspaceCaptureAcknowledgment = next.WorkspaceCaptureAcknowledgment };
+        return SameJson(previous with { UpdatedAt = next.UpdatedAt }, next);
     }
 
     private static bool SameCheckpoint(

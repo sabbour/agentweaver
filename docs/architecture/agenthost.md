@@ -443,6 +443,14 @@ Unsupported platforms and invalid inputs return explicit nonzero exits.
 Command logs cannot substitute for this file receipt.
 See [Environment BuildTest](./environment-sandbox#buildtest-command-and-output-collection) for admission, reconciliation, and terminal classification.
 
+`--build-test-workspace-collector-v2` uses the same trusted Linux collector without starting the SDK or a model session.
+It prepares the exact accepted repository through the shared Source Control package before the command runs.
+After command success, it seals the complete native baseline and declared output bytes through descriptor-safe reads.
+Its private state is not mounted by the command container.
+The Kubernetes exchange returns full binary output, not container logs.
+Sealed bytes survive retries in that Pod until Environment verifies the canonical Events acknowledgment and releases the exact Pods.
+This source path and its managed checks are not native Kubernetes execution evidence.
+
 ## Native suspend evidence
 
 `POST /runtime/v1/suspend/native-evidence` requires the current signed runtime proof and exact HTTPS audience.

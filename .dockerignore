@@ -8,4 +8,5 @@
 .vs
 node_modules
 artifacts
+Temp
 .tmp-agenthost-*
