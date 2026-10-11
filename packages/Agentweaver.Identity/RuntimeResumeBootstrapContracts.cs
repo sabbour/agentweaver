@@ -116,6 +116,89 @@ public sealed record RuntimeResumeBootstrapRequest(
     }
 }
 
+public enum RuntimeResumeNativeCacheState
+{
+    Unspecified,
+    PendingUntilAuthorizedTurn
+}
+
+public sealed record RuntimeResumeJournalRebuildReceipt(
+    SessionSuspendResumeCheckpointReference Checkpoint,
+    long ThroughPosition,
+    string JournalSha256,
+    Guid ResumeAttemptId,
+    RuntimeResumeNativeCacheState NativeCacheState)
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+    };
+
+    public RuntimeResumeJournalRebuildReceipt ValidateFor(RuntimeResumeBootstrapRequest request)
+    {
+        request.Validate();
+        var source = request.Resume.SourceManifest;
+        if (!RuntimeWorkspaceResumeHttpClient.SameJson(Checkpoint, source.Checkpoint) ||
+            ThroughPosition != source.FlushedJournalPosition ||
+            ResumeAttemptId != request.ResumeAttemptId ||
+            NativeCacheState != RuntimeResumeNativeCacheState.PendingUntilAuthorizedTurn)
+            throw new RuntimeAuthorizationException("runtime_resume_journal_receipt_invalid");
+        RuntimeContractValidation.ValidateHash(JournalSha256);
+        return this;
+    }
+
+    public static string ComputeJournalSha256(
+        RuntimeResumeBootstrapRequest request, IReadOnlyList<SessionEventEnvelope> prefix)
+    {
+        request.Validate();
+        ArgumentNullException.ThrowIfNull(prefix);
+        var source = request.Resume.SourceManifest;
+        var cache = source.CacheAcknowledgment!;
+        var configuration = RuntimeResumeBootstrapRequest.RequireConfigurationAcknowledgment(
+            request.Resume.SourceRelease.HostReceipt);
+        var eventIds = new HashSet<Guid>();
+        long lastPosition = 0;
+        var foundCache = false;
+        var foundConfiguration = false;
+        foreach (var recorded in prefix)
+        {
+            if (recorded is null || recorded.Identity.ProjectId != source.Identity.ProjectId ||
+                recorded.Identity.RunId != source.Identity.RunId ||
+                recorded.Position <= lastPosition || recorded.Position > source.FlushedJournalPosition ||
+                recorded.EventId == Guid.Empty || !eventIds.Add(recorded.EventId) ||
+                recorded.SchemaVersion != SessionsContractVersions.CurrentSchemaVersion ||
+                recorded.Payload is null || recorded.ObjectReferences.IsDefault ||
+                !SessionEventPayloadValidation.SupportsEventVersion(recorded.EventVersion, recorded.Payload))
+                throw new RuntimeAuthorizationException("runtime_resume_journal_prefix_invalid");
+            SessionEventPayloadValidation.ValidateAndGetReferences(recorded.Payload);
+            lastPosition = recorded.Position;
+            if (recorded.EventId == cache.EventId)
+            {
+                foundCache = recorded.Identity == source.Identity && recorded.Position == cache.Position &&
+                    recorded.Payload is CacheReferenceSessionPayload saved &&
+                    RuntimeWorkspaceResumeHttpClient.SameJson(saved.Cache, cache.Reference);
+                if (!foundCache)
+                    throw new RuntimeAuthorizationException("runtime_resume_journal_prefix_invalid");
+            }
+            if (recorded.EventId == configuration.EventId)
+            {
+                foundConfiguration = recorded.Identity == source.Identity &&
+                    recorded.Position == configuration.Position &&
+                    recorded.Payload is RuntimeConfigurationSessionPayload saved &&
+                    RuntimeWorkspaceResumeHttpClient.SameJson(saved.Configuration, configuration.Reference);
+                if (!foundConfiguration)
+                    throw new RuntimeAuthorizationException("runtime_resume_journal_prefix_invalid");
+            }
+        }
+        if (!foundCache || !foundConfiguration)
+            throw new RuntimeAuthorizationException("runtime_resume_journal_source_missing");
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(prefix, JsonOptions);
+        if (bytes.Length > SessionMaterialValidation.MaximumBytes)
+            throw new RuntimeAuthorizationException("runtime_resume_journal_prefix_too_large");
+        return RuntimeContractValidation.Hash(bytes);
+    }
+}
+
 public sealed record RuntimeHostResumeCacheReceipt(
     int ContractVersion,
     Guid OperationId,
@@ -125,6 +208,9 @@ public sealed record RuntimeHostResumeCacheReceipt(
     SdkSessionFacts Source,
     string RecoveryMode)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeResumeJournalRebuildReceipt? JournalRebuild { get; init; }
+
     public RuntimeHostResumeCacheReceipt ValidateFor(RuntimeResumeBootstrapRequest request)
     {
         request.Validate();
@@ -133,12 +219,21 @@ public sealed record RuntimeHostResumeCacheReceipt(
         RuntimeUsageSourceReceiptContract.ValidateSource(request.Registration, Source);
         if (ContractVersion != 1 || OperationId != request.Resume.OperationId ||
             SourceManifestId != request.Resume.SourceManifest.ManifestId ||
-            Registration != request.Registration || RecoveryMode != "native-cache" ||
-            !RuntimeWorkspaceResumeHttpClient.SameJson(CacheAcknowledgment, saved) ||
-            Source.SdkVersion != material.SdkVersion || Source.RuntimeVersion != material.RuntimeVersion ||
-            Source.ModelSelectionReference != material.ModelSelectionReference ||
-            Source.ModelId != material.ModelId || Source.AcceptedSelectionHash != material.AcceptedSelectionHash ||
-            Source.MaxPromptTokens != material.MaxPromptTokens)
+            Registration != request.Registration ||
+            !RuntimeWorkspaceResumeHttpClient.SameJson(CacheAcknowledgment, saved))
+            throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
+        if (RecoveryMode == "native-cache")
+        {
+            if (JournalRebuild is not null ||
+                Source.SdkVersion != material.SdkVersion || Source.RuntimeVersion != material.RuntimeVersion ||
+                Source.ModelSelectionReference != material.ModelSelectionReference ||
+                Source.ModelId != material.ModelId || Source.AcceptedSelectionHash != material.AcceptedSelectionHash ||
+                Source.MaxPromptTokens != material.MaxPromptTokens)
+                throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
+        }
+        else if (RecoveryMode == "journal-rebuild" && JournalRebuild is not null)
+            JournalRebuild.ValidateFor(request);
+        else
             throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
         return this;
     }

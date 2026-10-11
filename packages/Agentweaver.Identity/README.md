@@ -103,6 +103,15 @@ Neither stage requires an already configured Runtime.
 The optional observed Runtime endpoint pins the Pod address while retaining normal HTTPS Service-name verification.
 These contracts do not prove a mounted restore, native TLS, or a deployed resume.
 
+`RuntimeHostResumeCacheReceipt` keeps the original suspended cache acknowledgment as source evidence.
+The native-cache path requires compatible recorded cache facts.
+The journal-rebuild path requires the saved checkpoint, journal boundary, digest, and current resume attempt.
+Its `PendingUntilAuthorizedTurn` state does not claim that a new native cache was captured.
+The shared digest helper checks ordered, unique, bounded events and exact source configuration and cache references.
+Events assigns positions across the run, so gaps in a session-visible prefix are valid.
+The producer must use the authenticated saved session route, including its existing fork visibility.
+These receipt checks do not independently verify returned material bytes or page completeness.
+
 The configure and observation credential purposes are separate. Default JSON and
 diagnostic strings omit credential values. These contracts alone do not establish
 a runtime channel or prove SDK provenance.
