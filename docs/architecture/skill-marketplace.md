@@ -197,9 +197,10 @@ pinned browse, selected-content preview/import, inline Skills preview/import,
 project assignment, and metadata-only inventory reads to these Projects owner
 paths. Its OpenAPI contract includes the owner DTOs, exact required source
 revision query values, optional inventory cursor/page-size parameters with their
-bounds, and 3 MiB limits for inline preview/import only. The first-party MCP
-catalog is built from that same OpenAPI document. The Gateway remains a forwarder;
-these contracts do not prove a joined or deployed owner implementation.
+bounds, and 3 MiB request-body limits for both inline and selected-source
+preview/import. The first-party MCP catalog is built from that same OpenAPI
+document. The Gateway remains a forwarder; these contracts do not prove a joined
+or deployed owner implementation.
 
 The retained Web project settings page uses those routes for source management
 and pinned browse. It supports local file preview/import and assignment to agents

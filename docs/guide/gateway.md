@@ -24,10 +24,10 @@ manage sources, browse pinned sources, preview and import Skills, and update
 project assignments. They also read project skill inventory as metadata. The
 Gateway preserves the owner's status and JSON body. It forwards the bearer and
 optional tenant selector. Inline skill preview and import bodies are each limited
-to 3 MiB. Marketplace-selected preview and import instead send the source revision,
-resolved commit, selected path, and (for import) the previewed digest and
-idempotency key. The owner reads the selected files at that commit; these requests
-do not upload file bytes through the Gateway.
+to 3 MiB. Marketplace-selected preview and import have the same 3 MiB request-body
+limit. They send the source revision, resolved commit, selected path, and (for
+import) the previewed digest and idempotency key. The owner reads the selected
+files at that commit; these requests do not upload file bytes through the Gateway.
 
 Marketplace browse requires `expectedSourceRevision`. The selected-content
 preview and import routes reject query parameters. Source tombstone requires

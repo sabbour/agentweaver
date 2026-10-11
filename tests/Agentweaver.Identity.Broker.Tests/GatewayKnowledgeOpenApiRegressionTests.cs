@@ -348,7 +348,18 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         Assert.Equal(
             3L * 1024 * 1024,
             gateway.GetRequestSizeLimit("/api/v1/projects/{projectId}/skills/import")?.MaxRequestBodySize);
-        foreach (var operationId in new[] { "previewSkillContent", "importProjectSkill" })
+        Assert.Equal(
+            3L * 1024 * 1024,
+            gateway.GetRequestSizeLimit(
+                "/api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview")?.MaxRequestBodySize);
+        Assert.Equal(
+            3L * 1024 * 1024,
+            gateway.GetRequestSizeLimit(
+                "/api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import")?.MaxRequestBodySize);
+        foreach (var operationId in new[]
+        {
+            "previewSkillContent", "importProjectSkill", "previewMarketplaceSkill", "importMarketplaceSkill",
+        })
         {
             Assert.Equal(
                 3 * 1024 * 1024,

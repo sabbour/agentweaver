@@ -1005,12 +1005,13 @@ These requests contain no file bytes and accept no query parameters. Projects &
 Config fetches selected files at the supplied resolved commit, checks current
 actor and project authority, and rechecks the source revision. Gateway forwards
 the validated bearer and optional tenant selector and preserves owner statuses
-and response bodies. Owner Problem Details report invalid requests/content as
-`400`, missing projects or sources as `404`, stale source/skill revisions,
-digest changes, or idempotency conflicts as `409`, oversized source data as
-`422`, content-store integrity errors as `500`, malformed upstream data as `502`,
-unavailable source/content storage as `503`, and upstream timeouts as `504`.
-Runtime-loaded status is not part of these contracts.
+and response bodies. Gateway limits these request bodies to 3 MiB, matching the
+inline preview and import routes. Owner Problem Details report invalid requests
+or content as `400`, missing projects or sources as `404`, stale source/skill
+revisions, digest changes, or idempotency conflicts as `409`, oversized source
+data as `422`, content-store integrity errors as `500`, malformed upstream data
+as `502`, unavailable source/content storage as `503`, and upstream timeouts as
+`504`. Runtime-loaded status is not part of these contracts.
 
 `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` lists stored skill
 revision metadata and exact current assignments. It includes unassigned and

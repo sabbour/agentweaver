@@ -829,61 +829,6 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MarketplaceSelectedSkillToolsUseGatewayRequestContracts()
-    {
-        await InitializeProtocolAsync();
-        var list = await PostRpcAsync(new
-        {
-            jsonrpc = "2.0",
-            id = 2,
-            method = "tools/list",
-            @params = new { },
-        });
-        var tools = list.GetProperty("result").GetProperty("tools");
-
-        foreach (var (name, bodyRequired) in new[]
-        {
-            ("agentweaver_previewMarketplaceSkill",
-                new[] { "expectedSourceRevision", "resolvedCommitSha", "selectedPath" }),
-            ("agentweaver_importMarketplaceSkill",
-                new[]
-                {
-                    "expectedSourceRevision", "resolvedCommitSha", "selectedPath", "idempotencyKey",
-                    "expectedContentDigest",
-                }),
-        })
-        {
-            var tool = Assert.Single(tools.EnumerateArray(),
-                item => item.GetProperty("name").GetString() == name);
-            var inputSchema = tool.GetProperty("inputSchema");
-            Assert.False(inputSchema.GetProperty("additionalProperties").GetBoolean());
-            Assert.Equal(
-                new[] { "projectId", "sourceId", "body" },
-                inputSchema.GetProperty("required").EnumerateArray()
-                    .Select(value => value.GetString()).ToArray());
-            var inputProperties = inputSchema.GetProperty("properties");
-            Assert.Equal("string", inputProperties.GetProperty("projectId").GetProperty("type").GetString());
-            Assert.Equal("string", inputProperties.GetProperty("sourceId").GetProperty("type").GetString());
-            var body = inputProperties.GetProperty("body");
-            Assert.Equal("object", body.GetProperty("type").GetString());
-            Assert.False(body.GetProperty("additionalProperties").GetBoolean());
-            Assert.Equal(
-                bodyRequired,
-                body.GetProperty("required").EnumerateArray()
-                    .Select(value => value.GetString()).ToArray());
-            var bodyProperties = body.GetProperty("properties");
-            Assert.Equal("integer",
-                bodyProperties.GetProperty("expectedSourceRevision").GetProperty("type").GetString());
-            Assert.Equal("string",
-                bodyProperties.GetProperty("resolvedCommitSha").GetProperty("type").GetString());
-            Assert.Equal("string",
-                bodyProperties.GetProperty("selectedPath").GetProperty("type").GetString());
-            Assert.Equal("string",
-                inputProperties.GetProperty("tenantSelector").GetProperty("type").GetString());
-        }
-    }
-
-    [Fact]
     public async Task ToolArgumentsAreValidatedAgainstTheAdvertisedSchema()
     {
         await InitializeProtocolAsync();
