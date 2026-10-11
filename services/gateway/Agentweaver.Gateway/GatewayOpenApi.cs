@@ -27,6 +27,8 @@ internal static partial class GatewayOpenApi
             ["updateMarketplaceSource"] = C("UpdateMarketplaceSourceRequest", "MarketplaceSource", "200"),
             ["removeMarketplaceSource"] = C(null, "MarketplaceSource", "200"),
             ["browseMarketplaceSource"] = C(null, "MarketplaceBrowsePage", "200"),
+            ["previewMarketplaceSkill"] = C("MarketplaceSkillPreviewRequest", "SkillContentPreview", "200"),
+            ["importMarketplaceSkill"] = C("MarketplaceSkillImportRequest", "SkillContentImportReceipt", "200"),
             ["previewSkillContent"] = C("PreviewSkillContentRequest", "SkillContentPreview", "200"),
             ["importProjectSkill"] = C("ImportSkillContentRequest", "SkillContentImportReceipt", "200"),
             ["updateProjectSkillAssignment"] = C("UpdateSkillAssignmentRequest", "VersionedProjectConfiguration", "200"),
@@ -251,6 +253,20 @@ internal static partial class GatewayOpenApi
                 "The owner hides foreign projects and memberships found inactive or stale during the inventory recheck. " +
                 "Inactive membership rejected during initial caller resolution returns 403.");
         }
+        else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
+        {
+            responses["400"] = ProblemResponse(
+                "The owner rejected the request or found invalid selected skill content.");
+            responses["404"] = ProblemResponse("The owner did not find the project or marketplace source.");
+            responses["409"] = ProblemResponse(
+                route.OperationId == "importMarketplaceSkill"
+                    ? "The source or skill revision, content digest, or import idempotency key conflicts."
+                    : "The marketplace source revision changed.");
+            responses["422"] = ProblemResponse("The selected marketplace source exceeds the owner's size limits.");
+            responses["503"] = ProblemResponse("The marketplace source or skill content store is unavailable.");
+            if (route.OperationId == "importMarketplaceSkill")
+                responses["500"] = ProblemResponse("The owner reported a skill content store integrity error.");
+        }
 
         var description =
             $"Owner: {route.Owner}. The Gateway forwards the validated bearer and does not infer identity " +
@@ -264,6 +280,14 @@ internal static partial class GatewayOpenApi
                 "after the read and permits archived projects. The opaque cursor uses stable SkillId-ascending " +
                 "order in C collation, then revision-descending order. It does not make multiple pages a " +
                 "snapshot. Query rejection and authorization statuses remain owner-defined and pass through unchanged.";
+        }
+        else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
+        {
+            description +=
+                " The owner reads selected source bytes at the supplied resolved commit and path, then rechecks " +
+                "the source revision and current actor/project authority. Preview returns validation metadata " +
+                "and a content digest, not the source bytes. Import also requires the expected digest and " +
+                "idempotency key and returns the owner's immutable revision receipt with source provenance.";
         }
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
@@ -461,6 +485,15 @@ internal static partial class GatewayOpenApi
             ("sourceId", Uuid()), ("sourceRevision", Int()), ("requestedRef", Str()),
             ("resolvedCommitSha", Str()), ("candidates", Arr(Ref("MarketplaceBrowseCandidate"))),
             ("total", Int()), ("page", Int()), ("pageSize", Int()), ("hasMore", Bool())),
+        ["MarketplaceSkillPreviewRequest"] = StrictObj(
+            ["expectedSourceRevision", "resolvedCommitSha", "selectedPath"],
+            ("expectedSourceRevision", Int()), ("resolvedCommitSha", Str()), ("selectedPath", Str())),
+        ["MarketplaceSkillImportRequest"] = StrictObj(
+            ["expectedSourceRevision", "resolvedCommitSha", "selectedPath", "idempotencyKey",
+                "expectedContentDigest"],
+            ("expectedSourceRevision", Int()), ("resolvedCommitSha", Str()), ("selectedPath", Str()),
+            ("idempotencyKey", Str()), ("expectedContentDigest", Str()),
+            ("skillId", NullableStr()), ("expectedRevision", NullableInt())),
         ["ProjectSkillInventoryAssignment"] = StrictObj(
             ["skillId", "enabled", "order", "revision", "contentDigest", "agentIds"],
             ("skillId", Str()), ("enabled", Bool()), ("order", Int()), ("revision", NullableInt()),

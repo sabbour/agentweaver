@@ -985,6 +985,34 @@ and returns its receipt. The request supplies the expected digest, an idempotenc
 key, and optional expected revision and source provenance. A repeated key with
 different request data or a stale revision returns a conflict.
 
+Marketplace-selected content uses separate owner routes and versioned Gateway
+aliases:
+
+- `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview`
+  (Gateway: `POST /api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview`)
+  accepts `expectedSourceRevision`,
+  `resolvedCommitSha`, and `selectedPath`. It returns validation metadata and a
+  content digest, not the selected file bytes.
+- `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import`
+  (Gateway: `POST /api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import`)
+  accepts the same source selection plus
+  `idempotencyKey` and the previewed `expectedContentDigest`. Optional `skillId`
+  and `expectedRevision` target an existing skill revision. The owner returns
+  the persisted revision receipt and records source provenance from its current
+  source row and the pinned commit/path.
+
+These requests contain no file bytes and accept no query parameters. Projects &
+Config fetches selected files at the supplied resolved commit, checks current
+actor and project authority, and rechecks the source revision. Gateway forwards
+the validated bearer and optional tenant selector and preserves owner statuses
+and response bodies. Gateway limits these request bodies to 3 MiB, matching the
+inline preview and import routes. Owner Problem Details report invalid requests
+or content as `400`, missing projects or sources as `404`, stale source/skill
+revisions, digest changes, or idempotency conflicts as `409`, oversized source
+data as `422`, content-store integrity errors as `500`, malformed upstream data
+as `502`, unavailable source/content storage as `503`, and upstream timeouts as
+`504`. Runtime-loaded status is not part of these contracts.
+
 `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` lists stored skill
 revision metadata and exact current assignments. It includes unassigned and
 revoked revisions, source provenance, and the current project configuration
