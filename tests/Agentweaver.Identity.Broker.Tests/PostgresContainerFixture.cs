@@ -1,3 +1,4 @@
+using System.Data;
 using Agentweaver.Identity.Broker;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -18,6 +19,11 @@ public sealed class IdentityBrokerPostgresCollection : ICollectionFixture<Postgr
 /// </summary>
 public sealed class PostgresContainerFixture : IAsyncLifetime
 {
+    private const string ConnectionCountSql = """
+        SELECT count(*) FROM pg_stat_activity
+        WHERE datname = current_database() AND pid <> pg_backend_pid()
+        """;
+
     private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:16-alpine").Build();
 
     public async Task InitializeAsync() => await _container.StartAsync();
@@ -61,10 +67,50 @@ public sealed class PostgresContainerFixture : IAsyncLifetime
         var builder = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false };
         await using var observer = new NpgsqlConnection(builder.ConnectionString);
         await observer.OpenAsync();
-        await using var count = new NpgsqlCommand("""
-            SELECT count(*) FROM pg_stat_activity
-            WHERE datname = current_database() AND pid <> pg_backend_pid()
-            """, observer);
+        await using var count = new NpgsqlCommand(ConnectionCountSql, observer);
         return (long)(await count.ExecuteScalarAsync())!;
+    }
+
+    public static async Task<long> WaitForNoConnectionsAsync(string connectionString)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false };
+        if (string.IsNullOrEmpty(builder.Database))
+            throw new InvalidOperationException("The fixture connection must name its exact database.");
+        await using var observer = new NpgsqlConnection(builder.ConnectionString);
+        await using var count = new NpgsqlCommand(ConnectionCountSql, observer);
+        return await WaitForNoConnectionsAsync(async cancellationToken =>
+        {
+            if (observer.State != ConnectionState.Open)
+                await observer.OpenAsync(cancellationToken);
+            return (long)(await count.ExecuteScalarAsync(cancellationToken))!;
+        }, builder.Database, TimeSpan.FromSeconds(5));
+    }
+
+    internal static async Task<long> WaitForNoConnectionsAsync(
+        Func<CancellationToken, Task<long>> countConnections,
+        string databaseName,
+        TimeSpan timeout)
+    {
+        using var deadline = new CancellationTokenSource(timeout);
+        long? remainingConnections = null;
+        try
+        {
+            while (true)
+            {
+                deadline.Token.ThrowIfCancellationRequested();
+                remainingConnections = await countConnections(deadline.Token);
+                deadline.Token.ThrowIfCancellationRequested();
+                if (remainingConnections == 0)
+                    return 0;
+                await Task.Delay(TimeSpan.FromMilliseconds(50), deadline.Token);
+            }
+        }
+        catch (OperationCanceledException error) when (deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Fixture cleanup for database '{databaseName}' did not reach zero connections within {timeout}; " +
+                $"last observed remaining connections={remainingConnections?.ToString() ?? "not observed"}.",
+                error);
+        }
     }
 }
