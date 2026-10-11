@@ -200,10 +200,32 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         CancellationToken cancellationToken)
     {
         ValidateInput(input);
-        if (input.Payload is not (TurnSessionPayload or CacheReferenceSessionPayload) ||
-            SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload) is not
-                [{ Material: not null }])
-            throw new ArgumentException("Only typed execution turn content or SDK cache material is accepted.");
+        var references = SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload);
+        if (input.Payload is ToolCallSessionPayload
+            {
+                Result.Material.RemoteToolResultProof: { } remoteToolResultProof
+            })
+            SessionMaterialValidation.ValidateRemoteToolResultProof(remoteToolResultProof);
+        var validMaterialPayload = input.Payload switch
+        {
+            TurnSessionPayload turn when references is [{ Material: { Kind: SessionMaterialKind.TurnContent } } stored] =>
+                stored == turn.Content,
+            CacheReferenceSessionPayload cache when
+                references is [{ Material: { Kind: SessionMaterialKind.SdkCache } } stored] =>
+                stored == cache.Cache,
+            ToolCallSessionPayload toolCall when
+                toolCall.State == "completed" &&
+                toolCall.Arguments is null &&
+                toolCall.Result is { Material: { Kind: SessionMaterialKind.RemoteToolResult, RemoteToolResultProof: { } proof } } result &&
+                references is [{ Material: { Kind: SessionMaterialKind.RemoteToolResult } } stored] &&
+                stored == result &&
+                toolCall.CallId == SessionMaterialValidation.RemoteToolResultCallId(proof) &&
+                toolCall.ToolName == SessionMaterialValidation.RemoteToolResultToolName(proof) &&
+                input.EventId == SessionMaterialValidation.RemoteToolResultEventId(proof) => true,
+            _ => false
+        };
+        if (!validMaterialPayload)
+            throw new ArgumentException("Only typed execution turn, SDK cache, or reviewed tool result material is accepted.");
         return AppendCoreAsync(RequireScope(principal).ForSession(sessionId), input,
             cancellationToken, validateBeforeCommit, persistMaterial);
     }

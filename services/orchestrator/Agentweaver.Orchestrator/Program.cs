@@ -164,8 +164,11 @@ builder.Services.AddScoped(services => new ExecutableActionGuard(
     services.GetService<IExecutableActionPolicyEvaluationReceiptWriter>()));
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
 if (runtimeRegistrationEnabled)
+{
     builder.Services.AddHttpClient<MafBuildTestEnvironmentClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    builder.Services.AddScoped<ReviewedRemoteToolResultVerifier>();
+}
 var runtimeUsageEnabled = builder.Services.AddRuntimeUsageSource(builder.Configuration);
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
@@ -214,6 +217,7 @@ app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)
 {
     app.MapRuntimeRegistrationEndpoints();
+    app.MapReviewedRemoteToolResultEndpoints();
     app.MapRuntimeSuspendResumeEndpoints();
 }
 if (runtimeUsageEnabled)

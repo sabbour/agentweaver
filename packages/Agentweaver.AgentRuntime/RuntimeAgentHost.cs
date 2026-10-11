@@ -56,6 +56,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private RuntimeRegistration? _registration;
     private RuntimeActorAuthorization? _actor;
     private AuthorizedRuntimeSession? _session;
+    private CapturedMcpServer? _capturedMcpServer;
     private RuntimeSessionMaterialHttpClient? _material;
     private RuntimeUsageSourceHttpClient? _usageSource;
     private Task? _usage;
@@ -125,6 +126,12 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             _material ??= new(_http, _options.EventsAddress, retained);
             var skillContent = new RuntimeSkillContentHttpClient(
                 _http, _options.OrchestratorAddress, retained);
+            await ReadPlacementAsync(request.Registration, retained, token).ConfigureAwait(false);
+            var capturedMcpServer = Volatile.Read(ref _capturedMcpServer)
+                ?? throw new RuntimeAuthorizationException("runtime_mcp_server_binding_invalid");
+            if (request.McpServer is { IsValid: false } ||
+                request.McpServer != capturedMcpServer.Endpoint)
+                throw new RuntimeAuthorizationException("runtime_mcp_server_binding_invalid");
             var bootstrap = new RuntimeSessionBootstrap(
                 _owner, new(_http, _options.BrokerAddress, request.Registration.Binding.ActorIssuer, retained, _time),
                 _sessions, skillContent, retained, _time,
@@ -132,7 +139,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 async (registration, cancellation) =>
                 {
                     await ReadPlacementAsync(registration, retained, cancellation).ConfigureAwait(false);
-                });
+                }, capturedMcpServer: capturedMcpServer.Endpoint);
             var bytes = System.Text.Encoding.UTF8.GetBytes(request.Configuration.GetRawText());
             _session = await receiver.ConfigureAsync(
                 bootstrap, bytes, request.ConsumeOperationId, request.ExchangeOperationId, token).ConfigureAwait(false);
@@ -330,6 +337,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             placement.Image != _options.Image || placement.ConfigureEndpoint != _options.ConfigureEndpoint ||
             placement.ObservationEndpoint != binding.ObservationEndpoint ||
             placement.ProfileId != binding.ProfileId || placement.LeaseExpiresAt <= _time.GetUtcNow() ||
+            placement.McpServer is { IsValid: false } ||
             observation is null || !Enum.IsDefined(observation.State) || observation.Resource != placement.Resource ||
             observation.FencingGeneration != placement.ProviderFencingGeneration ||
             observation.State is SandboxObservedState.Absent or SandboxObservedState.Finished ||
@@ -395,8 +403,14 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         token.ThrowIfCancellationRequested();
         if (!actor.Bearer.IsUsable())
             throw new RuntimeAuthorizationException("runtime_actor_expired");
+        var candidate = new CapturedMcpServer(placement.McpServer);
+        var capturedMcpServer = Interlocked.CompareExchange(ref _capturedMcpServer, candidate, null);
+        if (capturedMcpServer is not null && capturedMcpServer.Endpoint != placement.McpServer)
+            throw new RuntimeAuthorizationException("runtime_mcp_server_binding_changed");
         return phases.OrderBy(phase => phase.Phase).ToImmutableArray();
     }
+
+    private sealed record CapturedMcpServer(RuntimeMcpServerEndpoint? Endpoint);
 
     private async Task PersistUsageAsync(
         AuthorizedRuntimeSession session, RuntimeUsageSourceHttpClient source, RuntimeActorAuthorization actor)

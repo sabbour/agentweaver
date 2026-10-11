@@ -13,10 +13,13 @@ public sealed record EnvironmentRuntimeBootstrapProfile(
     {
         if (!IsIdentifier(ProfileId) ||
             !RuntimeContractValidation.IsHttpsEndpoint(ConfigureEndpoint) ||
-            !RuntimeContractValidation.IsHttpsEndpoint(ObservationEndpoint))
+            !RuntimeContractValidation.IsHttpsEndpoint(ObservationEndpoint) ||
+            McpServer is { IsValid: false })
             throw new ArgumentException("The Environment Runtime bootstrap profile is invalid.");
         return this;
     }
+
+    public RuntimeMcpServerEndpoint? McpServer { get; init; }
 
     internal static bool IsIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&

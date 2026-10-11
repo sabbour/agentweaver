@@ -6,9 +6,9 @@ accepted-effect fact stream; it is not a deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal, serves ordered run-event replay, appends Knowledge-owned accepted-effect receipts as project facts, and presents Orchestrator owner-outbox messages at fenced turn boundaries. The Orchestrator validates mapped child context against current decisions and authority. Events admits PolicyEvaluation only from immutable Orchestrator receipts after current authority and owner-session checks." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal, serves ordered run-event replay, appends Knowledge-owned accepted-effect receipts as project facts, and presents Orchestrator owner-outbox messages at fenced turn boundaries. The Orchestrator validates mapped child context against current decisions and authority. Events admits PolicyEvaluation only from immutable Orchestrator receipts after current authority and owner-session checks. Reviewed remote tool result endpoints remain unavailable before reading request bodies; no private result bytes are committed or read, and native remote-tool dispatch is disabled." />
   </a>
-  <figcaption>Run-bound session events, project-scoped facts, and addressed messages have separate addresses and storage. Generic PolicyEvaluation appends are rejected; the receipt-reference route fetches immutable Orchestrator evidence and revalidates admission before commit. The Orchestrator validates mapped context against current owner state and authority. The figure describes source behavior, not a deployment topology.</figcaption>
+  <figcaption>Run-bound session events, project-scoped facts, and addressed messages have separate addresses and storage. Generic PolicyEvaluation appends are rejected; the receipt-reference route fetches immutable Orchestrator evidence and revalidates admission before commit. Reviewed remote tool results are not yet accepted: the dedicated routes fail closed before reading request bodies. The figure describes source behavior, not a deployment topology.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
 
@@ -64,6 +64,17 @@ SDK cache restoration additionally requires compatible SDK and model bindings.
 Material responses use `Cache-Control: no-store`.
 The route accepts `turnContent` and `sdkCache`, plus their original CLR names.
 Numeric or unknown kinds are denied.
+
+`RemoteToolResult` remains denied on these generic material routes. The dedicated
+`POST /internal/sessions/{sessionId}/remote-tool-results` write route and
+`POST /internal/sessions/{sessionId}/remote-tool-results/read` route currently
+fail closed: authenticated HTTP requests receive `runtime_remote_tool_result_https_required`;
+authenticated HTTPS requests receive `runtime_remote_tool_result_route_unavailable`.
+Both responses use `no-store` and are returned without reading the request body.
+The Orchestrator proof-verification route and the dedicated runtime client also
+remain unavailable. There is no approved mutual-TLS profile or certificate-pin
+configuration, so no private result bytes are written, acknowledged, or read.
+Native remote-tool dispatch remains disabled.
 
 `GET /internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` returns the actual immutable Sessions consumer pin.
 It requires existing current `ReadRunSelection` and exact signed project/run binding before and after retrieval.

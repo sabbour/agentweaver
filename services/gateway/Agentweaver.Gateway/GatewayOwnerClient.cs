@@ -61,6 +61,52 @@ public sealed class GatewayOwnerClient(
                     .ConfigureAwait(false);
                 return;
             }
+            if (route.Owner == GatewayOwner.Events &&
+                route.OperationId == "replayRunEvents" &&
+                route.Method == "GET" &&
+                HttpMethods.IsGet(context.Request.Method) &&
+                response.IsSuccessStatusCode)
+            {
+                if (response.StatusCode != HttpStatusCode.OK ||
+                    response.Content.Headers.ContentType?.MediaType is not { } mediaType ||
+                    !mediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase))
+                    throw OwnerContractFailure("events_page_contract_invalid");
+
+                var cursorValues = context.Request.Query["cursor"];
+                var limitValues = context.Request.Query["limit"];
+                if (cursorValues.Count > 1 || limitValues.Count > 1)
+                    throw OwnerContractFailure("events_page_contract_invalid");
+                var cursor = cursorValues.FirstOrDefault();
+                var limitText = limitValues.FirstOrDefault();
+                var limit = limitText is null
+                    ? 100
+                    : int.TryParse(limitText, NumberStyles.None, CultureInfo.InvariantCulture, out var parsedLimit)
+                        ? parsedLimit
+                        : 0;
+                if (limit is < 1 or > 200 || cursor is not null && !IsSafeSseValue(cursor))
+                    throw OwnerContractFailure("events_page_contract_invalid");
+
+                var ownerBody = await ReadBoundedAsync(
+                    response.Content, MaximumRunEventPageBytes, timeout.Token).ConfigureAwait(false);
+                byte[] projectedBody;
+                try
+                {
+                    projectedBody = GatewayRunEventProjection.ProjectPage(ownerBody, cursor, limit);
+                }
+                catch (GatewayEventProjectionException exception)
+                {
+                    throw OwnerContractFailure(exception.Code);
+                }
+
+                context.Response.StatusCode = (int)response.StatusCode;
+                context.Response.Headers.CacheControl = "no-store";
+                context.Response.Headers.XContentTypeOptions = "nosniff";
+                CopyResponseHeaders(context, response, route.Owner, route.ForwardSetCookie);
+                context.Response.ContentType = response.Content.Headers.ContentType!.ToString();
+                context.Response.ContentLength = projectedBody.Length;
+                await context.Response.Body.WriteAsync(projectedBody, timeout.Token).ConfigureAwait(false);
+                return;
+            }
             if (response.Content.Headers.ContentLength is > MaximumProxyResponseBytes)
             {
                 await WriteProblemAsync(context, "owner_response_too_large", StatusCodes.Status502BadGateway)
@@ -735,32 +781,22 @@ public sealed class GatewayOwnerClient(
             response.Content,
             MaximumRunEventPageBytes,
             timeout.Token).ConfigureAwait(false);
-        using var document = JsonDocument.Parse(body, new JsonDocumentOptions { MaxDepth = 16 });
-        var root = document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object ||
-            !root.TryGetProperty("events", out var events) ||
-            events.ValueKind != JsonValueKind.Array ||
-            events.GetArrayLength() > 1 ||
-            !root.TryGetProperty("nextCursor", out var nextCursorElement))
-            throw OwnerContractFailure("events_page_contract_invalid");
-
-        var nextCursor = nextCursorElement.ValueKind switch
+        byte[] projectedBody;
+        try
         {
-            JsonValueKind.Null => null,
-            JsonValueKind.String => nextCursorElement.GetString(),
-            _ => throw OwnerContractFailure("events_page_contract_invalid"),
-        };
-        if (events.GetArrayLength() == 0)
-        {
-            if (!string.Equals(nextCursor, cursor, StringComparison.Ordinal))
-                throw OwnerContractFailure("events_page_cursor_invalid");
-            return new GatewayRunEventPage(null, cursor);
+            projectedBody = GatewayRunEventProjection.ProjectPage(body, cursor, 1);
         }
-        if (string.IsNullOrWhiteSpace(nextCursor) ||
-            nextCursor.Length > MaximumSseCursorLength ||
-            !IsSafeSseValue(nextCursor) ||
-            string.Equals(nextCursor, cursor, StringComparison.Ordinal))
-            throw OwnerContractFailure("events_page_cursor_invalid");
+        catch (GatewayEventProjectionException exception)
+        {
+            throw OwnerContractFailure(exception.Code);
+        }
+        using var document = JsonDocument.Parse(projectedBody, new JsonDocumentOptions { MaxDepth = 16 });
+        var root = document.RootElement;
+        var events = root.GetProperty("events");
+        var nextCursor = root.GetProperty("nextCursor").ValueKind == JsonValueKind.Null
+            ? null : root.GetProperty("nextCursor").GetString();
+        if (events.GetArrayLength() == 0)
+            return new GatewayRunEventPage(null, cursor);
         return new GatewayRunEventPage(events[0].Clone(), nextCursor);
     }
 
@@ -891,10 +927,20 @@ public sealed class GatewayOwnerClient(
         CancellationToken cancellationToken)
     {
         _ = await RequireValidatedBearerAsync(context).ConfigureAwait(false);
+        JsonElement projectedEvent;
+        try
+        {
+            projectedEvent = GatewayRunEventProjection.ProjectEvent(
+                page.Event ?? throw new GatewayEventProjectionException("events_page_contract_invalid"));
+        }
+        catch (GatewayEventProjectionException exception)
+        {
+            throw OwnerContractFailure(exception.Code);
+        }
         var cursor = page.NextCursor
             ?? throw new InvalidDataException("Events owner omitted the cursor for a journal event.");
         var eventText = $"id: {cursor}\nevent: session-event\n" +
-            $"data: {JsonSerializer.Serialize(page.Event, JsonOptions)}\n\n";
+            $"data: {JsonSerializer.Serialize(projectedEvent, JsonOptions)}\n\n";
         await context.Response.WriteAsync(eventText, cancellationToken).ConfigureAwait(false);
         await context.Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
     }

@@ -25,7 +25,11 @@ public sealed record RuntimeHostConfigureRequest(
     RuntimeRegistration Registration,
     Guid ConsumeOperationId,
     Guid ExchangeOperationId,
-    JsonElement Configuration);
+    JsonElement Configuration)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeMcpServerEndpoint? McpServer { get; init; }
+}
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostSessionProof(
