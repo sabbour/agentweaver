@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 namespace Agentweaver.Abstractions;
@@ -130,7 +131,8 @@ public sealed record SandboxBuildTestAcceptedExecutionOptions(
             !CollectorAssemblyArguments.SequenceEqual(
                 [SandboxBuildTestLimits.OutputCollectorAssembly],
                 StringComparer.Ordinal) ||
-            CollectorMode != SandboxBuildTestLimits.OutputCollectorMode ||
+            CollectorMode is not (SandboxBuildTestLimits.OutputCollectorMode or
+                SandboxBuildTestLimits.WorkspaceCollectorMode) ||
             CollectorContainerName != SandboxBuildTestLimits.OutputCollectorContainerName)
             throw new ArgumentException("The immutable BuildTest execution options are invalid.");
         return this with
@@ -153,6 +155,12 @@ public sealed record SandboxBuildTestAcceptedCommand(
     SandboxBuildTestAcceptedExecutionOptions ExecutionOptions,
     string ImmutableHash)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxBuildTestWorkspaceSource? WorkspaceSource { get; init; }
+
+    [JsonIgnore]
+    public ImmutableArray<byte>? WorkspaceSeed { get; init; }
+
     private static readonly JsonWriterOptions CanonicalJsonOptions = new()
     {
         Encoder = JavaScriptEncoder.Default,
@@ -160,13 +168,29 @@ public sealed record SandboxBuildTestAcceptedCommand(
         SkipValidation = false
     };
 
-    public SandboxBuildTestAcceptedCommand Validate()
+    public SandboxBuildTestAcceptedCommand Validate() => Validate(requireSeed: true);
+
+    public SandboxBuildTestAcceptedCommand ValidateMetadata() => Validate(requireSeed: false);
+
+    private SandboxBuildTestAcceptedCommand Validate(bool requireSeed)
     {
         ArgumentNullException.ThrowIfNull(Checkpoint);
         ArgumentNullException.ThrowIfNull(ExecutionOptions);
         _ = Checkpoint.Validate();
         _ = ExecutionOptions.Validate();
-        if (ContractVersion != 1 ||
+        if (ContractVersion is not (1 or 2) ||
+        ContractVersion == 1 && ExecutionOptions.CollectorMode != SandboxBuildTestLimits.OutputCollectorMode ||
+        ContractVersion == 2 && ExecutionOptions.CollectorMode != SandboxBuildTestLimits.WorkspaceCollectorMode ||
+            ContractVersion == 1 && (WorkspaceSource is not null || WorkspaceSeed is not null) ||
+            ContractVersion == 2 && (WorkspaceSource is null || !WorkspaceSource.IsValid() ||
+                WorkspaceSource.Identity.ProjectId != Checkpoint.ProjectId ||
+                WorkspaceSource.Identity.RunId != Checkpoint.RunId ||
+                WorkspaceSource.Identity.SessionId != Checkpoint.SessionId ||
+                WorkspaceSource.AcceptedSelectionHash != Checkpoint.AcceptedSelectionHash ||
+                requireSeed && WorkspaceSeed is null ||
+                WorkspaceSeed is { } seed && (seed.IsDefault ||
+                    seed.Length != WorkspaceSource.SeedByteLength ||
+                    SandboxBuildTestHashes.UnprefixedSha256(seed.AsSpan()) != WorkspaceSource.SeedSha256)) ||
             OperationId == Guid.Empty ||
             !SandboxBuildTestPaths.IsAbsoluteExecutable(ExecutableReference) ||
             !ExecutionOptions.AllowedExecutables.Contains(ExecutableReference, StringComparer.Ordinal) ||
@@ -230,6 +254,10 @@ public sealed record SandboxBuildTestAcceptedCommand(
             }
             writer.WriteEndArray();
             WriteExecutionOptions(writer, ExecutionOptions);
+            if (ContractVersion == 2)
+                (WorkspaceSource ?? throw new ArgumentException(
+                    "A version-2 BuildTest command requires its accepted repository seed."))
+                    .WriteCanonical(writer);
             writer.WriteEndObject();
         }
         return SandboxBuildTestHashes.PrefixSha256(stream.ToArray());
@@ -1012,6 +1040,7 @@ public static class SandboxBuildTestLimits
     public const string OutputCollectorExecutable = "dotnet";
     public const string OutputCollectorAssembly = "Agentweaver.AgentHost.dll";
     public const string OutputCollectorMode = "--build-test-output-collector-v1";
+    public const string WorkspaceCollectorMode = "--build-test-workspace-collector-v2";
     public const string OutputCollectorContainerName = "buildtest-collector";
     public const int MaximumCollectorRequestBytes = 65_536;
     public const long MaximumFileOutputBytes = 67_108_864;

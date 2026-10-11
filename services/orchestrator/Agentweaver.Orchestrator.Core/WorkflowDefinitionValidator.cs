@@ -221,6 +221,7 @@ public static class WorkflowDefinitionValidator
     public static bool IsValidBuildTestCommand(WorkflowBuildTestCommand? command)
     {
         if (command is null ||
+            command.WorkspaceSource is { } source && !source.IsValid() ||
             !WorkflowValidationSupport.IsOpaqueReference(command.ExecutionProfileReference) ||
             command.ExecutableReference is not { Length: > 1 and <= 512 } executable ||
             executable[0] != '/' || executable.Contains('\\') || executable.Contains(':') ||

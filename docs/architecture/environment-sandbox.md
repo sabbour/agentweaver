@@ -271,6 +271,29 @@ Core retains that state and its interruption acknowledgement.
 Disposable PostgreSQL tests verify owner-store reservation, restart replay, and terminal-evidence preservation.
 They do not prove command-Pod execution, Kubernetes isolation, Cilium datapath enforcement, or complete native accounting.
 
+### Version 2 repository input candidate
+
+Version 2 binds a credential-free Git bundle and the full baseline inventory to the accepted command.
+The source binding includes the current actor, selection, repository pin, workspace incarnation, branch, and content digests.
+The original execution checkpoint stores the bounded seed in a separate PostgreSQL `bytea` field.
+Later checkpoints retain only the typed origin reference.
+The JSON checkpoint limit remains 4 MiB.
+The seed limit remains 67,188,876 bytes.
+
+Explicit seed reads require the current owner and fence.
+They validate the original intent, declared length, digests, and package before they return bytes.
+Ordinary checkpoint reads do not load the binary field.
+An identical append must match both the JSON metadata and the stored bytes.
+The parent foreign key prevents deletion of an origin that has later checkpoints.
+The seed is source input, not SDK cache data or a produced-output record.
+
+The Kubernetes client adds a bounded native WebSocket exchange for fixed preparation and collector containers.
+It retains the existing service-account handler and trusted server certificate.
+The helper must identify the exact Pod UID and request fingerprint before the client sends seed bytes.
+Local TLS tests cover binary transfers at the exact admitted limit and reject invalid identity, protocol, output, or terminal evidence.
+This candidate does not yet connect the image helper, preparation record, writer exclusion, and complete capture through the provider.
+These checks do not prove live Kubernetes execution or complete BuildTest acceptance.
+
 ## Retirement and storage retention
 
 An exact Agent Sandbox `Finished=True` condition with a supported `PodSucceeded`
