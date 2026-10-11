@@ -145,16 +145,30 @@ public static class RuntimeNativeTurnContract
         var admission = recorded.Admission;
         var request = new RuntimeUsageCostSnapshotRequest(1, admission.Registration, admission.Source)
         {
-            DispatchId = admission.MessageId, RequiredReceipts = references
+            DispatchId = admission.MessageId, RequiredReceipts = references, NativeTurn = recorded
         };
         RuntimeUsageCostSnapshotContract.ValidateRequest(request);
+        return request;
+    }
+
+    public static void ValidateAccountingSnapshot(
+        RuntimeUsageCostSnapshotRequest request, RuntimeNativeTurnRecordedReceipt recorded)
+    {
+        ValidateRecorded(recorded);
+        var admission = recorded.Admission;
+        if (request.Registration != admission.Registration || request.Source != admission.Source ||
+            request.DispatchId != admission.MessageId || request.RequiredReceipts.IsDefault ||
+            request.NativeTurn is not { } expected || expected.Admission != admission ||
+            expected.OwnerRevision != recorded.OwnerRevision ||
+            expected.CanonicalPayloadHash != recorded.CanonicalPayloadHash)
+            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
         var observed = recorded.Observation.UsageEventIds.Select(id =>
             SdkUsageIdentity.Create(admission.Source.RuntimeInstanceId, admission.Source.SdkSessionId, id.ToString("D")))
             .ToHashSet();
-        if (references.Length != observed.Count ||
-            references.Any(reference => !observed.Remove(reference.Accounting.EventId)) || observed.Count != 0)
+        if (request.RequiredReceipts.Length != observed.Count ||
+            request.RequiredReceipts.Any(reference => reference?.Accounting is not { } accounting ||
+                !observed.Remove(accounting.EventId)) || observed.Count != 0)
             throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
-        return request;
     }
 
     public static void ValidateAccounted(

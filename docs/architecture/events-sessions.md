@@ -262,6 +262,12 @@ The snapshot endpoint rechecks current signed run authority before it commits.
 An optional dispatch ID and at most 512 required references request an observed accounting join.
 Events reads each immutable source receipt, accounting receipt, and ledger row in the same transaction.
 Each registration, SDK source, platform message, event, accounting hash, and stored price must match.
+An optional `NativeTurn` reference requires an authenticated read of Core's persisted native turn.
+Events reads that proof before taking the Cost lock and again after releasing it.
+The proof must retain the current registration, execution fence, checkpoint, report hash, revision, and exact event set.
+Only this verified association permits a raw usage receipt without a platform message ID.
+A wrong non-null message ID or an event after native completion fails.
+Without native proof, the existing exact raw-message check remains unchanged.
 The response returns only those verified references as `RepresentedReceipts`.
 Missing rows reject the join; altered references cannot substitute another receipt.
 Observed validation permits an explicit `Unpriced` receipt.

@@ -217,6 +217,14 @@ An optional `DispatchId` and up to 512 `RequiredReceipts` request an observed ac
 References must have unique source and event IDs with exact runtime attribution.
 `RepresentedReceipts` contains the matching immutable source and ledger receipts.
 Events checks actual registration, source, platform message, accounting hash, and price under the same transaction.
+Optional `NativeTurn` carries the expected recorded native receipt; it is omitted from historical requests.
+Events verifies it through `POST /internal/runtime/turns/recorded`, not through caller claims.
+That authenticated Core read returns the canonical persisted observation only for the current source,
+registration, owner checkpoint, report hash, and recorded revision.
+Its transformed native event IDs must equal the required accounting event set.
+Events reads Core before its Cost transaction and again after releasing the Cost lock.
+Only verified native evidence permits a null raw platform message ID.
+Wrong non-null IDs, late events, changed evidence, missing rows, and altered prices still fail.
 `ValidateObservedReceipt` allows explicit unpriced accounting.
 The separate priced validator still rejects unavailable pricing for configured hosted credit admission.
 
@@ -240,6 +248,9 @@ output hash, observed root usage-event IDs, and an optional accounting checkpoin
 The source writer records it as partial, not source-complete.
 `RuntimeNativeTurnAccountingRequest` carries the recorded native proof and exactly its observed usage references.
 `POST /internal/runtime/turns/accounting` verifies the existing Events join before completing that dispatch.
+Core checks the committed report, releases owner locks for the Events request, and
+rechecks current authority and the same report in its final completion transaction.
+Report insertion, proof reads, and final completion reject event reuse by another dispatch of the same SDK source.
 `RuntimeNativeTurnAccountingReceipt` binds the observation, represented references, and newer owner revision.
 The source report stays partial; no source-finality or strict retirement proof is written.
 The Host returns the actual answer after this durable observed completion.
@@ -424,6 +435,7 @@ role claims are not required.
 | `GET /internal/sessions/{sessionId}/material/{eventId}/{kind}` | Reads only committed material by session, event, and kind. `TurnContent` requires current `ReadRunSelection` or actually supplied `ReadProjects` entitlement, exact signed project/run binding, and recorded session membership. Project-summary access alone does not authorize opaque bytes. `SdkCache` retains Core `ReadRunSelection` authority. The route verifies the recorded Sessions provider, digest, length, kind, and version, then rechecks read authority after retrieval. Historical content does not require dispatchability, a live lease, or model credentials. Returns a no-store `SessionMaterialReadResult`. Arbitrary object keys, paths, and URLs are not accepted. |
 | `GET /internal/projects/{projectId}/runs/{runId}/usage` | Optional native usage totals route. Requires current `ReadRunSelection` for the exact signed project/run and returns exact run and agent totals. |
 | `POST /internal/projects/{projectId}/runs/{runId}/usage/copilot-run-admission` | Optional run-start pricing route. Accepts contract version 1 and only the accepted-selection hash. Requires current `ReadRunSelection` and `AcceptRunSelection`, rereads the trusted Projects selection, and resolves the shared versioned AgentHost model map. Returns a no-store receipt with the concrete model/connection, real Cost pin, zero-work quote, and Copilot-only totals. Missing or unpriced pricing rejects before capped root acceptance; no SDK or usage evidence is invented. |
+| `POST /internal/projects/{projectId}/runs/{runId}/usage/copilot-cost-snapshot` | Optional observed pricing route. Requires current run authority and exact immutable source and ledger references. Native references require matching authenticated Core proof reads before and after the Cost transaction. Returns no-store; unavailable or changed evidence fails. |
 | `GET /internal/sessions/{sessionId}/events?cursor={cursor}&limit={limit}` | Read an ordered page for one session after an optional opaque cursor. Positions are run-wide and may have gaps in a session-only page. |
 | `GET /internal/sessions/{sessionId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll durable journal state and stream NDJSON `SessionEventDelivery` records, each containing the event and a reconnectable `nextCursor`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events?cursor={cursor}&limit={limit}` | Read a bounded, run-ordered page across all sessions in the authorized project/run. |

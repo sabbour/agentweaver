@@ -148,19 +148,63 @@ internal sealed class RuntimeUsageSourceOwner(
                     connection, transaction, registration, grant, request, token), cancellationToken);
     }
 
-    internal Task<RuntimeNativeTurnAccountingReceipt> CompleteNativeTurnAsync(
+    internal async Task<RuntimeNativeTurnAccountingReceipt> CompleteNativeTurnAsync(
         HttpContext context, RuntimeNativeTurnAccountingRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request.Authorization);
         var snapshotRequest = RuntimeNativeTurnContract.AccountingSnapshotRequest(
             request.Recorded, request.RequiredReceipts);
-        return ExecuteWriteAsync(context, request.Authorization,
+        var recorded = await ExecuteWriteAsync(context, request.Authorization,
+            async (connection, transaction, registration, grant, actor, token) =>
+            {
+                await store.ReadCurrentSourceForGrantAsync(
+                    connection, transaction, registration, grant, token).ConfigureAwait(false);
+                return await store.ReadNativeTurnWithinTransactionAsync(
+                    connection, transaction, registration, request.Recorded, token).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
+        RuntimeNativeTurnContract.ValidateAccountingSnapshot(snapshotRequest, recorded);
+        var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
+        var expiry = context.User.GetExpirationDate() ?? authentication.Properties?.ExpiresUtc;
+        if (!authentication.Succeeded || expiry is null || expiry <= timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_actor_expired");
+        var bearer = new SecretCredential(
+            CoordinationIdentity.RequireBearer(context).Parameter!, expiry.Value, timeProvider);
+        RuntimeUsageCostSnapshotReceipt snapshot;
+        try
+        {
+            var actor = new RuntimeActorAuthorization(bearer, CoordinationIdentity.ReadTenantSelector(context));
+            snapshot = await broker.ReadCostSnapshotAsync(
+                actor, options.EventsOwnerBaseAddress, snapshotRequest, cancellationToken).ConfigureAwait(false);
+            if (!bearer.IsUsable())
+                throw new RuntimeAuthorizationException("runtime_actor_expired");
+        }
+        finally
+        {
+            bearer.Invalidate();
+        }
+        return await ExecuteWriteAsync(context, request.Authorization,
             (connection, transaction, registration, grant, actor, token) =>
                 store.CompleteNativeTurnWithinTransactionAsync(
-                    connection, transaction, registration, grant, request,
-                    currentToken => broker.ReadCostSnapshotAsync(
-                        actor, options.EventsOwnerBaseAddress, snapshotRequest, currentToken), token),
-            cancellationToken);
+                    connection, transaction, registration, grant, request, snapshot, token),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<RuntimeNativeTurnRecordedReceipt> ReadNativeTurnAsync(
+        HttpContext context, RuntimeNativeTurnRecordedReceipt expected, CancellationToken cancellationToken)
+    {
+        RuntimeNativeTurnContract.ValidateRecorded(expected);
+        var runtimeInstanceId = expected.Admission.Registration.RuntimeInstanceId;
+        var recorded = await store.ExecuteLockedAsync(runtimeInstanceId,
+            (connection, transaction, token) => registrations.ExecuteCurrentAsync(
+                context, runtimeInstanceId, (registration, currentToken) =>
+                    store.ReadNativeTurnWithinTransactionAsync(
+                        connection, transaction, registration, expected, currentToken), token),
+            cancellationToken).ConfigureAwait(false);
+        var current = await registrations.ReadCurrentAsync(context, runtimeInstanceId, cancellationToken)
+            .ConfigureAwait(false);
+        if (recorded.Admission.Registration != current)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+        return recorded;
     }
 
     internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceAsync(

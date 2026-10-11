@@ -224,6 +224,22 @@ public sealed class RuntimeUsageSourceReceiptTests
         };
         ImmutableArray<RuntimeUsageCostReceiptReference> references = observesUsage ? [reference] : [];
         var request = RuntimeNativeTurnContract.AccountingSnapshotRequest(recorded, references);
+        Assert.Equal(recorded, request.NativeTurn);
+        RuntimeUsageCostSnapshotContract.ValidateRequest(
+            JsonSerializer.Deserialize<RuntimeUsageCostSnapshotRequest>(JsonSerializer.Serialize(request))!);
+        foreach (var invalid in new[]
+        {
+            request with { DispatchId = Guid.NewGuid() },
+            request with { Source = request.Source with { SdkVersion = "other-sdk" } },
+            request with { Registration = request.Registration with { Revision = 2 } },
+            request with { NativeTurn = recorded with { CanonicalPayloadHash = new string('c', 64) } },
+            request with { NativeTurn = recorded with { OwnerRevision = 2 } },
+            request with { RequiredReceipts = observesUsage ? [] : [reference] }
+        })
+            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageCostSnapshotContract.ValidateRequest(invalid));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNativeTurnContract.ValidateAccountingSnapshot(
+                request, recorded with { OwnerRevision = recorded.OwnerRevision + 1 }));
         var snapshot = CostSnapshot(request, 0, 0) with
         {
             DispatchId = admission.MessageId, RepresentedReceipts = references
@@ -254,6 +270,7 @@ public sealed class RuntimeUsageSourceReceiptTests
         Assert.Equal(amount, RuntimeUsageCostSnapshotContract.ValidateReceipt(receipt, request));
         Assert.DoesNotContain("SourceComplete", JsonSerializer.Serialize(receipt));
         Assert.DoesNotContain("UsageSubmission", JsonSerializer.Serialize(request));
+        Assert.DoesNotContain("NativeTurn", JsonSerializer.Serialize(request));
         var json = JsonSerializer.Serialize(receipt);
         Assert.Equal(amount, RuntimeUsageCostSnapshotContract.ValidateReceipt(
             JsonSerializer.Deserialize<RuntimeUsageCostSnapshotReceipt>(json)!, request));

@@ -215,9 +215,17 @@ internal sealed class NativeUsageReceiptConsumer(
 
     internal async Task<RuntimeUsageCostSnapshotReceipt> ReadCostSnapshotAsync(
         RuntimeUsageCostSnapshotRequest request, Func<CancellationToken, Task> revalidateCurrentAuthority,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, RuntimeNativeTurnRecordedReceipt? verifiedNativeTurn = null)
     {
         RuntimeUsageCostSnapshotContract.ValidateRequest(request);
+        if (request.NativeTurn is not null)
+        {
+            if (verifiedNativeTurn is null)
+                throw new RuntimeAuthorizationException("runtime_native_turn_evidence_required");
+            RuntimeNativeTurnContract.ValidateAccountingSnapshot(request, verifiedNativeTurn);
+        }
+        else if (verifiedNativeTurn is not null)
+            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
         var scope = request.Registration.Binding;
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
@@ -227,7 +235,8 @@ internal sealed class NativeUsageReceiptConsumer(
             scope.TenantId, scope.ProjectId, scope.RunId, request.Source.MeterSource, cancellationToken)
             .ConfigureAwait(false);
         var quote = Quote(request.Source.ModelId, scope.RunId, pinned);
-        var represented = await ReadRequiredReceiptsAsync(connection, transaction, request, cancellationToken)
+        var represented = await ReadRequiredReceiptsAsync(
+            connection, transaction, request, verifiedNativeTurn, cancellationToken)
             .ConfigureAwait(false);
         var totals = await ledger.GetCopilotRunTotalsWithinTransactionAsync(
             connection, transaction, scope.TenantId, scope.ProjectId, scope.RunId, cancellationToken)
@@ -246,7 +255,7 @@ internal sealed class NativeUsageReceiptConsumer(
 
     private async Task<ImmutableArray<RuntimeUsageCostReceiptReference>> ReadRequiredReceiptsAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeUsageCostSnapshotRequest request,
-        CancellationToken cancellationToken)
+        RuntimeNativeTurnRecordedReceipt? verifiedNativeTurn, CancellationToken cancellationToken)
     {
         var represented = ImmutableArray.CreateBuilder<RuntimeUsageCostReceiptReference>();
         foreach (var reference in request.RequiredReceipts)
@@ -270,7 +279,11 @@ internal sealed class NativeUsageReceiptConsumer(
             var accounting = Deserialize<UsageAccountingReceipt>(reader.GetString(2));
             var usage = Deserialize<UsageSubmission>(reader.GetString(4));
             if (source.ReceiptId != reference.SourceReceiptId || source.Registration != request.Registration ||
-                source.Usage.SdkSource != request.Source || source.Usage.A2AMessageId != request.DispatchId ||
+                source.Usage.SdkSource != request.Source ||
+                (source.Usage.A2AMessageId != request.DispatchId &&
+                    (verifiedNativeTurn is null || source.Usage.A2AMessageId is not null)) ||
+                verifiedNativeTurn is not null &&
+                    source.Usage.OccurredAt > verifiedNativeTurn.Observation.CompletedAt ||
                 source.CanonicalPayloadHash != reader.GetString(1) ||
                 usage != source.Usage || accounting != reference.Accounting ||
                 accounting.EventId != usage.EventId || accounting.Attribution != usage.Attribution ||

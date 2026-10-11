@@ -234,7 +234,16 @@ public sealed class ProjectConfigurationValidatorTests
     public void OptionalLimitsDoNotChangeHistoricalNullSerializationOrAcceptedSnapshotShape()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        var limits = ProjectConfigurationValidator.ResolveLimits(PlatformDefaults(), new());
+        var historicalPlatform = PlatformDefaults() with
+        {
+            RunLimits = PlatformDefaults().RunLimits with
+            {
+                MaxRevisionAttempts = null,
+                CopilotSoftCreditLimit = null,
+                CopilotHardCreditLimit = null
+            }
+        };
+        var limits = ProjectConfigurationValidator.ResolveLimits(historicalPlatform, new());
         Assert.Equal(
             """{"maxModelTurns":12,"maxToolCalls":100,"maxChildren":4,"maxConcurrentChildren":2,"maxWallTimeSeconds":3600,"maxPromptTokens":20000}""",
             JsonSerializer.Serialize(limits, options));
@@ -242,7 +251,7 @@ public sealed class ProjectConfigurationValidatorTests
             """{"maxModelTurns":null,"maxToolCalls":null,"maxChildren":null,"maxConcurrentChildren":null,"maxWallTimeSeconds":null,"maxPromptTokens":null}""",
             JsonSerializer.Serialize(new CopilotRunLimitOverrides(), options));
         var configured = ProjectConfigurationValidator.ResolveLimits(
-            PlatformDefaults(), new() { MaxRevisionAttempts = 0, CopilotHardCreditLimit = 0 });
+            historicalPlatform, new() { MaxRevisionAttempts = 0, CopilotHardCreditLimit = 0 });
         Assert.Contains("\"maxRevisionAttempts\":0", JsonSerializer.Serialize(configured, options));
         Assert.Contains("\"copilotHardCreditLimit\":0", JsonSerializer.Serialize(configured, options));
         Assert.DoesNotContain("copilotSoftCreditLimit", JsonSerializer.Serialize(configured, options));

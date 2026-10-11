@@ -1153,6 +1153,215 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         Assert.Equal(1, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeSnapshotJoinsUnassociatedUsageOnlyWithVerifiedExactOwnerEvidence(bool unpriced)
+    {
+        var native = NativeReceipt(missingMeasurements: unpriced, withoutA2AMessageId: true);
+        var consumer = NativeConsumer();
+        var acknowledged = await consumer.AppendAsync(native, _ => Task.CompletedTask, default);
+        var reference = new RuntimeUsageCostReceiptReference(native.ReceiptId, acknowledged.Accounting);
+        var recorded = NativeRecordedTurn(native);
+        var request = RuntimeNativeTurnContract.AccountingSnapshotRequest(recorded, [reference]);
+        var denied = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            consumer.ReadCostSnapshotAsync(request, _ => Task.CompletedTask, default));
+        Assert.Equal("runtime_native_turn_evidence_required", denied.Code);
+        var legacy = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            consumer.ReadCostSnapshotAsync(request with { NativeTurn = null }, _ => Task.CompletedTask, default));
+        Assert.Equal("runtime_usage_accounting_mismatch", legacy.Code);
+        var snapshot = await consumer.ReadCostSnapshotAsync(
+            request, _ => Task.CompletedTask, default, recorded);
+        Assert.Equal(reference, Assert.Single(snapshot.RepresentedReceipts));
+        Assert.Equal(recorded.Admission.MessageId, snapshot.DispatchId);
+        Assert.Equal(1, snapshot.CopilotTotals.Events);
+        Assert.Equal(unpriced ? CostDisposition.Unpriced : CostDisposition.Estimate,
+            snapshot.RepresentedReceipts[0].Accounting.Disposition);
+        Assert.Equal(1, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
+    }
+
+    [Theory]
+    [InlineData("missing", "runtime_usage_accounting_pending")]
+    [InlineData("wrong-raw-dispatch", "runtime_usage_accounting_mismatch")]
+    [InlineData("late-event", "runtime_usage_accounting_mismatch")]
+    [InlineData("hash", "runtime_usage_accounting_mismatch")]
+    [InlineData("amount", "runtime_usage_accounting_mismatch")]
+    [InlineData("foreign-record", "runtime_native_turn_accounting_invalid")]
+    [InlineData("changed-revision", "runtime_native_turn_accounting_invalid")]
+    [InlineData("event-set", "runtime_native_turn_accounting_invalid")]
+    public async Task NativeSnapshotRejectsWrongLateOrForgedAccountingEvidence(string fault, string expectedCode)
+    {
+        var native = NativeReceipt(withoutA2AMessageId: fault != "wrong-raw-dispatch");
+        var consumer = NativeConsumer();
+        var acknowledged = await consumer.AppendAsync(native, _ => Task.CompletedTask, default);
+        var reference = new RuntimeUsageCostReceiptReference(native.ReceiptId, acknowledged.Accounting);
+        var recorded = NativeRecordedTurn(native);
+        if (fault == "late-event")
+        {
+            var observation = recorded.Observation with { CompletedAt = native.Usage.OccurredAt.AddTicks(-1) };
+            recorded = recorded with
+            {
+                Observation = observation, CanonicalPayloadHash = RuntimeNativeTurnContract.ObservationHash(observation)
+            };
+        }
+        var request = RuntimeNativeTurnContract.AccountingSnapshotRequest(recorded, [reference]);
+        var verified = recorded;
+        switch (fault)
+        {
+            case "missing":
+                request = request with { RequiredReceipts = [reference with { SourceReceiptId = Guid.NewGuid() }] };
+                break;
+            case "hash":
+                request = request with
+                {
+                    RequiredReceipts = [reference with
+                    {
+                        Accounting = reference.Accounting with { CanonicalPayloadHash = new string('f', 64) }
+                    }]
+                };
+                break;
+            case "amount":
+                request = request with
+                {
+                    RequiredReceipts = [reference with { Accounting = reference.Accounting with { Amount = 999 } }]
+                };
+                break;
+            case "foreign-record":
+                verified = verified with
+                {
+                    Admission = verified.Admission with { MessageId = Guid.NewGuid() }
+                };
+                break;
+            case "changed-revision":
+                verified = verified with { OwnerRevision = verified.OwnerRevision + 1 };
+                break;
+            case "event-set":
+                request = request with { RequiredReceipts = [] };
+                break;
+        }
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            consumer.ReadCostSnapshotAsync(request, _ => Task.CompletedTask, default, verified));
+        Assert.Equal(expectedCode, failure.Code);
+        Assert.Equal(1, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
+    }
+
+    private static RuntimeNativeTurnRecordedReceipt NativeRecordedTurn(RuntimeUsageSourceReceipt native)
+    {
+        var admission = new RuntimeNativeTurnAdmissionReceipt(native.Registration, native.Usage.SdkSource!,
+            Guid.NewGuid(), new string('c', 64), new string('d', 64), 2);
+        var observation = new RuntimeNativeTurnObservation(admission.Source, Guid.NewGuid().ToString("D"),
+            "native-turn", Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), native.Usage.OccurredAt,
+            "native-cursor", new string('e', 64), null)
+        {
+            UsageEventIds = [Guid.ParseExact(native.Usage.SdkEventId!, "D")]
+        };
+        return new(admission, observation, RuntimeNativeTurnContract.ObservationHash(observation), 3);
+    }
+
+    [Theory]
+    [InlineData("stable")]
+    [InlineData("generic")]
+    [InlineData("revision")]
+    [InlineData("foreign-dispatch")]
+    [InlineData("event-set")]
+    [InlineData("owner-denied")]
+    [InlineData("actor")]
+    [InlineData("expiry")]
+    public async Task NativeSnapshotRechecksOwnerAndAuthorityAfterReleasingTheCostLock(string change)
+    {
+        var native = NativeReceipt(withoutA2AMessageId: change != "generic");
+        var consumer = NativeConsumer();
+        var acknowledged = await consumer.AppendAsync(native, _ => Task.CompletedTask, default);
+        var recorded = NativeRecordedTurn(native);
+        var request = RuntimeNativeTurnContract.AccountingSnapshotRequest(
+            recorded, [new(native.ReceiptId, acknowledged.Accounting)]);
+        if (change == "generic")
+            request = request with { NativeTurn = null, DispatchId = native.Usage.A2AMessageId };
+        var clock = new AdmissionClock(DateTimeOffset.UtcNow);
+        using var authentication = AdmissionAuthentication(clock.GetUtcNow().AddMinutes(1));
+        var context = AdmissionContext(authentication);
+        var authority = AdmissionAuthority();
+        var projects = new AdmissionProjectsClient(authority, authority,
+            change == "actor" ? authority with { ActorId = "changed-actor" } : authority);
+        var reads = 0;
+        using var handler = new NativeEvidenceHandler(async (httpRequest, token) =>
+        {
+            Assert.Equal(HttpMethod.Post, httpRequest.Method);
+            Assert.Equal("https://orchestrator.test/internal/runtime/turns/recorded",
+                httpRequest.RequestUri?.AbsoluteUri);
+            Assert.Equal("admission-original-bearer", httpRequest.Headers.Authorization?.Parameter);
+            Assert.Equal(["tenant-1"], httpRequest.Headers.GetValues("X-Agentweaver-Tenant"));
+            await using (var connection = await _fixture.DataSource.OpenConnectionAsync(token))
+            await using (var transaction = await connection.BeginTransactionAsync(token))
+            await using (var acquire = new NpgsqlCommand(
+                "SELECT pg_try_advisory_xact_lock(hashtext('agentweaver.usage.cost'), hashtext(@run))",
+                connection, transaction))
+            {
+                acquire.Parameters.AddWithValue("run", JsonSerializer.Serialize(new[]
+                {
+                    "tenant-1", "project-1", "run-1", SdkMeterSources.CopilotNanoAiu
+                }));
+                Assert.Equal(true, await acquire.ExecuteScalarAsync(token));
+            }
+            var response = recorded;
+            if (++reads == 2)
+            {
+                if (change == "owner-denied")
+                    return new(HttpStatusCode.Forbidden)
+                    {
+                        RequestMessage = httpRequest,
+                        Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+                    };
+                if (change == "expiry")
+                    clock.UtcNow = clock.GetUtcNow().AddMinutes(2);
+                if (change == "revision")
+                    response = response with { OwnerRevision = response.OwnerRevision + 1 };
+                if (change == "foreign-dispatch")
+                    response = response with { Admission = response.Admission with { MessageId = Guid.NewGuid() } };
+                if (change == "event-set")
+                {
+                    var observation = response.Observation with { UsageEventIds = [Guid.NewGuid()] };
+                    response = response with
+                    {
+                        Observation = observation,
+                        CanonicalPayloadHash = RuntimeNativeTurnContract.ObservationHash(observation)
+                    };
+                }
+            }
+            return new(HttpStatusCode.OK)
+            {
+                RequestMessage = httpRequest,
+                Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } },
+                Content = new StringContent(JsonSerializer.Serialize(response,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)
+                    {
+                        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+                    }), Encoding.UTF8, "application/json")
+            };
+        });
+        using var http = new HttpClient(handler);
+        var service = new NativeUsageApplicationService(
+            new(http, new("https://orchestrator.test/", "events", "https://identity.test/")),
+            projects, consumer, _ledger, clock);
+        if (change is "stable" or "generic")
+        {
+            var snapshot = await service.ReadCostSnapshotAsync(context, "project-1", "run-1", request, default);
+            Assert.Equal(acknowledged.Accounting, Assert.Single(snapshot.RepresentedReceipts).Accounting);
+        }
+        else
+            await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                service.ReadCostSnapshotAsync(context, "project-1", "run-1", request, default));
+        Assert.Equal(change == "generic" ? 0 : 2, reads);
+        Assert.Equal(1, (await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1")).Events);
+    }
+
+    private sealed class NativeEvidenceHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) => send(request, cancellationToken);
+    }
+
     [Fact]
     public async Task MissingCostProviderReturnsUnpricedSnapshotNotAFreeQuote()
     {

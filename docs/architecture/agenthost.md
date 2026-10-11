@@ -254,7 +254,7 @@ The source bridge now uses a typed `RuntimeNativeTurnObservation`.
 It retains the actual root usage-event IDs found inside the native completion range.
 Those IDs describe observed membership, not a complete accounting-source set.
 
-Orchestrator exposes three authenticated turn routes under the existing observe grant.
+Orchestrator exposes three authenticated turn-write routes under the existing observe grant.
 Before sending, the MAF source path prepares the immutable dispatch row under the
 current registration, root owner, decision, and checkpoint locks.
 It pins the platform intent, complete request hash, source hash, model, and execution fence.
@@ -286,8 +286,15 @@ These routes reuse migration 015; they add no financial ledger or migration.
 It requires the recorded native range and exactly its observed usage-event references.
 Events joins every reference to its immutable source receipt and actual ledger row.
 The registration, SDK source, platform message, accounting hash, and price must match.
-This read uses the existing Cost lock and transaction; it does not call Source GET.
-Orchestrator then stores the references and changes the dispatch to `completed`.
+Raw SDK usage can have no platform message ID. Events accepts this only after an
+authenticated Core read confirms the persisted turn and its exact observed event set.
+A wrong non-null message ID or an event after native completion still fails.
+Events repeats the Core read after releasing its Cost transaction.
+Core releases its owner locks before requesting the Events snapshot.
+Its final owner transaction rechecks the source grant, checkpoint, report, and revision
+before storing references and changing the dispatch to `completed`.
+Report writes and final completion reject event reuse by another dispatch of the same SDK source.
+This join does not call Source GET or create a source-completion manifest.
 Accounting remains explicitly `priced` or `unpriced`; unknown cost does not become zero.
 The source report stays `partial`, and `hard_cap_serialized` stays false.
 Neither source-completion nor strict retirement fields are populated.

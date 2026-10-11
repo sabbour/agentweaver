@@ -425,7 +425,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     {
                         MaxModelTurns = 12,
                         MaxToolCalls = 100,
-                        MaxChildren = 6,
+                        MaxChildren = 7,
                         MaxConcurrentChildren = 2,
                         MaxWallTimeSeconds = 3600,
                         MaxPromptTokens = 20000
@@ -910,7 +910,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                        checkoutBaseSha,
                        sourceControlWorkspaceBranch)))
         {
-            Assert.Equal(HttpStatusCode.OK, readWorkspaceDiff.StatusCode);
+            await AssertStatusAsync(readWorkspaceDiff, HttpStatusCode.OK);
             var diffBody = await readWorkspaceDiff.Content.ReadAsStringAsync();
             Assert.DoesNotContain(sourceControlSecretBackend.Value, diffBody, StringComparison.Ordinal);
             using var diffDocument = JsonDocument.Parse(diffBody);
@@ -1532,7 +1532,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                        Guid.NewGuid().ToString("D"),
                        "pull_request",
                        tooLargeWebhook,
-                       sourceControlSecretBackend.Value))
+                       sourceControlSecretBackend.Value,
+                       expectContinue: true))
                 Assert.Equal(HttpStatusCode.RequestEntityTooLarge, tooLargeResponse.StatusCode);
         }
 
@@ -3395,8 +3396,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(fixedStep.Id, fixedRuntimeOwner.WorkflowStepId);
             Assert.Equal(fixedChild.Node.ExecutionFence, fixedRuntimeOwner.ExecutionFence);
             Assert.Equal(fixedBoundary.LogicalTurnOrdinal, fixedRuntimeOwner.LogicalTurnOrdinal);
-            Assert.Equal(linkedConnection!.ConnectionId, fixedRuntimeOwner.ModelConnectionId);
-            Assert.Equal(ProjectAuthorityResourceType.Platform, fixedRuntimeOwner.ModelConnectionScope);
+            Assert.Equal(azureByok ? new SecretRef("model-api", "model-v1") : null,
+                fixedRuntimeOwner.ModelCredentialReference);
+            Assert.Equal(linkedConnection?.ConnectionId, fixedRuntimeOwner.ModelConnectionId);
+            Assert.Equal(azureByok ? (ProjectAuthorityResourceType?)null : ProjectAuthorityResourceType.Platform,
+                fixedRuntimeOwner.ModelConnectionScope);
+            Assert.Equal(azureByok ? ModelSourceMode.Byok : ModelSourceMode.HostedCopilot,
+                fixedRuntimeOwner.ModelSourceMode);
+            if (azureByok)
+                Assert.Equal(AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok),
+                    fixedRuntimeOwner.ModelBindingPin);
         }
         var latestFixedCheckpoint = await fixedExecutionStore.ReadLatestAsync(CancellationToken.None)
             ?? throw new InvalidOperationException("The fixed-work checkpoint was not persisted.");
@@ -4330,6 +4339,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
         await RestoreRunnerRoleAsync();
 
+        var capacityBeforeFence = await fixedOwnerStore.ReadMafExecutionCapacityAsync(
+            actorForFixedWork, rootIdentityForFixedWork, CancellationToken.None);
+        Assert.Equal(4, capacityBeforeFence.RegisteredChildren);
+        Assert.Equal(7, capacityBeforeFence.RegisteredChildren + acceptedPlan.Items.Length);
+        Assert.Equal(7, CoordinatorWorkflowCatalog.ReadMaxChildren(effectiveSelectionForFixedWork.Snapshot));
         var (fenceConflictIntentId, _) =
             await CreateApprovedMergeIntentAsync("source-control-merge-execution-fence-race");
         var currentMergeGrantBeforeFence = await ReadMergeGrantAndFenceStateAsync(fenceConflictIntentId);
@@ -5721,12 +5735,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         string deliveryId,
         string eventName,
         byte[] rawBody,
-        string secret)
+        string secret,
+        bool expectContinue = false)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path)
         {
             Content = new ByteArrayContent(rawBody)
         };
+        request.Headers.ExpectContinue = expectContinue;
         request.Headers.Add("X-GitHub-Delivery", deliveryId);
         request.Headers.Add("X-GitHub-Event", eventName);
         var signature = Convert.ToHexString(HMACSHA256.HashData(

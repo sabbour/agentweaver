@@ -41,6 +41,18 @@ internal sealed class NativeUsageReceiptClient(HttpClient client, CoordinationOw
             throw new RuntimeAuthorizationException("runtime_cost_preflight_source_invalid");
         return new(registration, receipt);
     }
+
+    internal async Task<RuntimeNativeTurnRecordedReceipt> ReadNativeTurnAsync(
+        RuntimeActorAuthorization actor, RuntimeUsageCostSnapshotRequest request, CancellationToken cancellationToken)
+    {
+        var expected = request.NativeTurn ??
+            throw new RuntimeAuthorizationException("runtime_native_turn_evidence_required");
+        var recorded = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnRecordedReceipt>(
+            client, OwnerAddress, "/internal/runtime/turns/recorded", actor, expected, cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeNativeTurnContract.ValidateAccountingSnapshot(request, recorded);
+        return recorded;
+    }
 }
 
 internal sealed record NativeRuntimeUsageSourceSnapshot(
@@ -214,14 +226,32 @@ internal sealed class NativeUsageApplicationService(
         var bearer = await BearerAsync(context, timeProvider).ConfigureAwait(false);
         try
         {
-            return await consumer.ReadCostSnapshotAsync(request, async token =>
+            var actor = new RuntimeActorAuthorization(bearer, first.TenantId);
+            var nativeTurn = request.NativeTurn is null ? null :
+                await source.ReadNativeTurnAsync(actor, request, cancellationToken).ConfigureAwait(false);
+            var result = await consumer.ReadCostSnapshotAsync(request, async token =>
             {
                 var current = await projects.GetCurrentAsync(context, token).ConfigureAwait(false);
                 RequireReadAuthority(current);
-                if (current.TenantId != first.TenantId || current.BoundProjectId != projectId ||
+                if (current.ActorId != first.ActorId || current.TenantId != first.TenantId ||
+                    current.BoundProjectId != projectId ||
                     current.BoundRunId != runId || !bearer.IsUsable())
                     throw new RuntimeAuthorizationException("runtime_usage_authority_changed");
-            }, cancellationToken).ConfigureAwait(false);
+            }, cancellationToken, nativeTurn).ConfigureAwait(false);
+            if (nativeTurn is not null)
+            {
+                var final = await source.ReadNativeTurnAsync(actor, request, cancellationToken).ConfigureAwait(false);
+                if (final.Admission != nativeTurn.Admission || final.OwnerRevision != nativeTurn.OwnerRevision ||
+                    final.CanonicalPayloadHash != nativeTurn.CanonicalPayloadHash ||
+                    !final.Observation.UsageEventIds.SequenceEqual(nativeTurn.Observation.UsageEventIds))
+                    throw new RuntimeAuthorizationException("runtime_native_turn_evidence_changed");
+                var current = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+                RequireReadAuthority(current);
+                if (current.ActorId != first.ActorId || current.TenantId != first.TenantId ||
+                    current.BoundProjectId != projectId || current.BoundRunId != runId || !bearer.IsUsable())
+                    throw new RuntimeAuthorizationException("runtime_usage_authority_changed");
+            }
+            return result;
         }
         finally
         {

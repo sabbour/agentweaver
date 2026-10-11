@@ -1071,7 +1071,7 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             1,
             1,
             "context-v1",
-            selectionHash,
+            selectionHash.ToLowerInvariant(),
             _acceptedRoot.ExecutionFence,
             "environment-1",
             "placement-1",
@@ -1083,7 +1083,9 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             Image = image,
             PlacementProviderId = "sandbox-provider",
             EnvironmentLifecycleGeneration = 1,
-            EnvironmentLeaseRevision = 1
+            EnvironmentLeaseRevision = 1,
+            EnvironmentCurrentFencingGeneration = 1,
+            EnvironmentProviderFencingGeneration = 1
         };
         var registration = await new RuntimeRegistrationStore(
                 _fixture.DataSource, _schema, TimeProvider.System)
