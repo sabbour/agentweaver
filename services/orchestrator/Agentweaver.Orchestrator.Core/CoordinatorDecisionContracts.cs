@@ -311,20 +311,20 @@ public sealed class CoordinatorDecisionState
         CoordinatorOutcomeSpecSnapshot? outcomeSpec,
         bool outcomeConfirmed,
         int nextClarifyingQuestionIndex,
-        int workPlanRevisionAttempts,
         WorkflowDefinitionSnapshot? selectedWorkflow,
         bool workflowConfirmed,
         WorkPlanSnapshot? confirmedWorkPlan,
         WorkPlanSnapshot? candidateWorkPlan,
         WorkPlanScopeDiff? lastScopeDiff,
         CoordinatorGateRequest? pendingGate,
-        ImmutableArray<CoordinatorGateDecisionReceipt> decisionReceipts) =>
-        (Fence, OutcomeSpec, OutcomeConfirmed, NextClarifyingQuestionIndex, WorkPlanRevisionAttempts,
-            SelectedWorkflow, WorkflowConfirmed,
-            ConfirmedWorkPlan, CandidateWorkPlan, LastScopeDiff, PendingGate, DecisionReceipts) =
-        (fence, outcomeSpec, outcomeConfirmed, nextClarifyingQuestionIndex, workPlanRevisionAttempts,
-            selectedWorkflow, workflowConfirmed,
-            confirmedWorkPlan, candidateWorkPlan, lastScopeDiff, pendingGate, decisionReceipts);
+        ImmutableArray<CoordinatorGateDecisionReceipt> decisionReceipts,
+        int workPlanRevisionAttempts = 0) =>
+        (Fence, OutcomeSpec, OutcomeConfirmed, NextClarifyingQuestionIndex, SelectedWorkflow, WorkflowConfirmed,
+            ConfirmedWorkPlan, CandidateWorkPlan, LastScopeDiff, PendingGate, DecisionReceipts,
+            WorkPlanRevisionAttempts) =
+        (fence, outcomeSpec, outcomeConfirmed, nextClarifyingQuestionIndex, selectedWorkflow, workflowConfirmed,
+            confirmedWorkPlan, candidateWorkPlan, lastScopeDiff, pendingGate, decisionReceipts,
+            workPlanRevisionAttempts);
 
     public long Fence { get; }
     public CoordinatorOutcomeSpecSnapshot? OutcomeSpec { get; }
@@ -353,7 +353,7 @@ public sealed class CoordinatorDecisionState
             throw new ArgumentOutOfRangeException(nameof(fence), "Fence must be positive.");
 
         return new CoordinatorDecisionState(
-            fence, null, false, 0, 0, null, false, null, null, null, null, []);
+            fence, null, false, 0, null, false, null, null, null, null, []);
     }
 
     public static WorkflowValidationResult<CoordinatorDecisionState> Restore(
@@ -486,14 +486,14 @@ public sealed class CoordinatorDecisionState
                 outcomeSpec,
                 outcomeConfirmed,
                 nextClarifyingQuestionIndex,
-                workPlanRevisionAttempts,
                 selectedWorkflow,
                 workflowConfirmed,
                 confirmedWorkPlan,
                 candidateWorkPlan,
                 lastScopeDiff,
                 pendingGate,
-                decisionReceipts));
+                decisionReceipts,
+                workPlanRevisionAttempts));
     }
 
     public CoordinatorDecisionState AdvanceFence(long fence)
@@ -610,7 +610,6 @@ public sealed class CoordinatorDecisionState
         bool setOutcomeSpec = false,
         bool? outcomeConfirmed = null,
         int? nextClarifyingQuestionIndex = null,
-        int? workPlanRevisionAttempts = null,
         WorkflowDefinitionSnapshot? selectedWorkflow = null,
         bool setSelectedWorkflow = false,
         bool? workflowConfirmed = null,
@@ -622,20 +621,21 @@ public sealed class CoordinatorDecisionState
         bool setLastScopeDiff = false,
         CoordinatorGateRequest? pendingGate = null,
         bool clearPendingGate = false,
-        ImmutableArray<CoordinatorGateDecisionReceipt>? decisionReceipts = null) =>
+        ImmutableArray<CoordinatorGateDecisionReceipt>? decisionReceipts = null,
+        int? workPlanRevisionAttempts = null) =>
         new(
             fence ?? Fence,
             setOutcomeSpec ? outcomeSpec : OutcomeSpec,
             outcomeConfirmed ?? OutcomeConfirmed,
             nextClarifyingQuestionIndex ?? NextClarifyingQuestionIndex,
-            workPlanRevisionAttempts ?? WorkPlanRevisionAttempts,
             setSelectedWorkflow ? selectedWorkflow : SelectedWorkflow,
             workflowConfirmed ?? WorkflowConfirmed,
             setConfirmedWorkPlan ? confirmedWorkPlan : ConfirmedWorkPlan,
             setCandidateWorkPlan ? candidateWorkPlan : CandidateWorkPlan,
             setLastScopeDiff ? lastScopeDiff : LastScopeDiff,
             clearPendingGate ? null : pendingGate ?? PendingGate,
-            decisionReceipts ?? DecisionReceipts);
+            decisionReceipts ?? DecisionReceipts,
+            workPlanRevisionAttempts ?? WorkPlanRevisionAttempts);
 
     private CoordinatorDecisionState ApplyAcceptedDecision(
         CoordinatorGateRequest gate,
@@ -989,7 +989,8 @@ public static class CoordinatorDecisionFlow
         WorkPlan? revisedPlan,
         WorkPlanRunSelectionContext? selectionContext,
         string? requestId,
-        string? authorizedActorId)
+        string? authorizedActorId,
+        int? maximumRevisionAttempts = null)
     {
         if (!CanStartTransition(state, "workPlanRevision", out var blocked))
             return Failure<CoordinatorWorkPlanRevision>(blocked);
@@ -999,6 +1000,13 @@ public static class CoordinatorDecisionFlow
                 WorkflowValidationCode.WorkPlanConfirmationRequired,
                 "workPlan",
                 "A confirmed work plan is required before it can be revised."));
+        if (maximumRevisionAttempts is { } maximum &&
+            state.WorkPlanRevisionAttempts >= maximum ||
+            state.WorkPlanRevisionAttempts == int.MaxValue)
+            return Failure<CoordinatorWorkPlanRevision>(Issue(
+                WorkflowValidationCode.WorkPlanLimitExceeded,
+                "runLimits.maxRevisionAttempts",
+                "The accepted work-plan revision attempt limit has been reached."));
 
         var validated = WorkPlanValidator.ValidateAndSnapshot(
             state.SelectedWorkflow,

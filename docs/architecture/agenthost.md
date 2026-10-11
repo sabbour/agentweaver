@@ -27,6 +27,12 @@ Environment supplies the exact retained lease, provider resource, image, and run
 Identity supplies separate configure and observe grants, plus current model-credential proof.
 The host compares actor, tenant, project, run, session, purpose, grant revision, execution fence, and placement.
 It repeats current authority checks after remote waits and before protected effects.
+An authenticated per-session registration read uses
+`GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations`.
+Orchestrator checks the current session owner before and after finding the exact registration.
+Missing, ambiguous, expired, or changed registrations do not produce a current result.
+Fixed-work sessions use their retained execution-checkpoint association instead of an open WorkPlan item.
+The association must match the parent, child, workflow, plan, agent, model, selection hash, fence, and decision version.
 Accepted numeric and credit limits propagate without changing legacy null configuration.
 Orchestrator reserves model sends and registered tool invocations through existing durable owner records.
 AgentHost narrows prompt capacity through the actual SDK configuration.
@@ -67,6 +73,7 @@ sequenceDiagram
 | `POST /runtime/v1/refresh` | Exact session proof and an operation ID. Rotation rechecks current Identity and owner authority. Exact replay does not rotate again. |
 | `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after the host revalidates the caller, registration, session, Observe grant, and readiness evidence. It does not configure the SDK or send a turn. |
 | `POST /runtime/v1/a2a/message:send` | One `user` message with one `text` part, a GUID message ID, native context ID, exact runtime proof, and `immediate` or `enqueue` delivery. |
+| `GET /runtime/v1/readiness` | Authenticated current readiness receipt. Checks the caller, exact HTTPS configure audience, registration, source authority, and current placement. Does not start a turn or rotate a grant. |
 | `GET /health/live` | Process liveness only. |
 | `GET /health/ready` | Current registration, source authority, lease, isolation, workspace, egress, configuration, and startup budgets. A lost prerequisite returns `503`. |
 
@@ -94,6 +101,8 @@ Runtime responses use `Cache-Control: no-store`.
 Authentication rejection returns `401`.
 Current-authority rejection returns `403` with the exact `code`.
 Invalid input returns `400`; owner, execution, or startup failure returns `503`.
+The authenticated readiness route does not reuse the configured actor as permission for a different caller.
+The health route remains a process probe, not caller authorization.
 
 Hosted Copilot and BYOK remain distinct modes.
 Hosted selection names an Identity-owned connection, not a secret version or personal-provider fallback.

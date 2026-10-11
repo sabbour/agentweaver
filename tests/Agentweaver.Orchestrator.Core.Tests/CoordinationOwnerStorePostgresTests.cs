@@ -736,13 +736,15 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RuntimeOwnerStateAllowsCheckpointBoundFixedChildWithoutOpenWorkPlanLink()
+    public async Task RuntimeOwnerStateReturnsAnActiveChildWithoutInventingAWorkPlanLink()
     {
-        await StartActiveTurnAsync(_child.Identity, _acceptedRoot.StateVersion);
+        var active = await StartActiveTurnAsync(_child.Identity, _acceptedRoot.StateVersion);
 
         var owner = await _store.ReadRuntimeOwnerStateAsync(
             _actor, _child.Identity, CancellationToken.None);
         Assert.Null(owner.WorkPlanItemId);
+        Assert.Equal(active.RuntimeTurnId, owner.RuntimeTurnId);
+        Assert.Equal(_acceptedRoot.ExecutionFence, owner.ExecutionFence);
     }
 
     [Theory]
@@ -955,13 +957,36 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MafFixedSpawnKeepsOpenLinkNullAndMapsCheckpointAssociationToChild()
+    public async Task ChildRegistrationRejectsWhenTheTotalChildLimitIsReached()
     {
-        await SeedCoordinatorDecisionVersionAsync(1);
-        var selectionHash = await ReadAcceptedSelectionHashAsync();
+        var limit = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.RegisterChildAsync(
+                _actor, _root, "over-limit-child", 1, 32, CancellationToken.None));
+        Assert.Equal("run_child_limit_exceeded", limit.Code);
+
+        var tree = await _store.ReadSessionTreeAsync(_actor, _root, CancellationToken.None);
+        Assert.DoesNotContain(tree.Nodes, node => node.Identity.SessionId == "over-limit-child");
+    }
+
+    [Fact]
+    public async Task MafFixedSpawnKeepsOpenLinkNullAndMapsRecoveredCheckpointAssociationToChild()
+    {
+        var runId = Guid.NewGuid().ToString("D");
+        var selection = new AuthorizedRunSelection(
+            _selection.Selection with
+            {
+                RunId = runId,
+                Snapshot = Payload("""{"modelSelection":{"reference":"model:provider/alpha"}}""")
+            },
+            _selection.Authorization with { BoundRunId = runId });
+        var root = new SessionIdentity(selection.Selection.ProjectId, runId, "fixed-root");
+        var accepted = await _store.AcceptRootAsync(
+            _actor, selection, root.SessionId, CancellationToken.None);
+        Assert.Equal((0, 0), await _store.ReadMafExecutionCapacityAsync(
+            _actor, root, CancellationToken.None));
         const string associationId = "fixed-association";
-        var childSessionId = MafExecutionPlanner.CreateChildSessionId(_root, "plan-1", associationId);
-        var fixedAssociation = new MafExecutionFixedWorkAssociation(
+        var childSessionId = MafExecutionPlanner.CreateChildSessionId(root, "plan-1", associationId);
+        var association = new MafExecutionFixedWorkAssociation(
             associationId,
             1,
             "plan-1",
@@ -975,53 +1000,56 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             "agent-dev",
             "model:provider/alpha",
             "isolation-provider",
-            selectionHash,
-            _acceptedRoot.ExecutionFence,
+            CoordinationOwnerStore.HashSelection(selection.Selection),
+            accepted.ExecutionFence,
             1,
             childSessionId);
-        var progress = MafExecutionProgress.Empty with
+        var state = new MafExecutionCheckpoint(1, "plan-1", 1, MafExecutionProgress.Empty with
         {
             FixedWorkItems = MafExecutionProgress.Empty.FixedWorkItems.Add(
                 associationId, MafExecutionTaskStatus.Running)
-        };
-        var state = new MafExecutionCheckpoint(1, "plan-1", 1, progress)
+        })
         {
             FixedWorkAssociations = ImmutableDictionary<string, MafExecutionFixedWorkAssociation>.Empty
                 .WithComparers(StringComparer.Ordinal)
-                .Add(associationId, fixedAssociation)
+                .Add(associationId, association)
         };
+        var binding = new MafCheckpointBinding(
+            root, _actor, accepted.ExecutionFence, "maf-test-sdk", "model:provider/alpha", null);
         var execution = new MafExecutionCheckpointStore(
-            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null),
-            new MafCheckpointBinding(
-                _root, _actor, _acceptedRoot.ExecutionFence, "maf-test-sdk", "model:provider/alpha", null));
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null), binding);
         var request = new SpawnSessionRequest(
-            childSessionId,
-            CoordinationSessionKind.ChildWork,
-            "fixed-child-spawn",
-            fixedAssociation.Specification.Task);
+            childSessionId, CoordinationSessionKind.ChildWork, "fixed-child-spawn",
+            association.Specification.Task);
 
         var spawned = await _store.SpawnSessionAsync(
-            _actor,
-            _root,
-            request,
-            100,
-            32,
-            CancellationToken.None,
+            _actor, root, request, 100, 32, CancellationToken.None,
             persistSpawnedInTransaction: async (connection, transaction, _, cancellationToken) =>
             {
                 await execution.AppendInTransactionAsync(
                     connection, transaction, "fixed-execution", null, state, cancellationToken);
             });
-        var active = await StartActiveTurnAsync(spawned.Node.Identity, _acceptedRoot.StateVersion);
+        var presenting = await _store.AdvanceTurnBoundaryAsync(
+            _actor, spawned.Node.Identity, accepted.ExecutionFence, accepted.StateVersion,
+            CancellationToken.None);
+        var active = await _store.CompleteTurnBoundaryAsync(
+            _actor, spawned.Node.Identity, accepted.ExecutionFence, accepted.StateVersion,
+            presenting.StateVersion, presentedMessage: null, cancellationToken: CancellationToken.None);
         Assert.Null((await _store.ReadRuntimeOwnerStateAsync(
             _actor, spawned.Node.Identity, CancellationToken.None)).WorkPlanItemId);
         Assert.Equal(1, active.LogicalTurnOrdinal);
 
+        var recovered = await new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null), binding)
+            .ReadLatestAsync(CancellationToken.None);
+        Assert.NotNull(recovered);
         var child = Assert.Single(await _store.ReadMafExecutionChildrenAsync(
-            _actor, _root, CancellationToken.None, state.FixedWorkAssociations));
+            _actor, root, CancellationToken.None, recovered.State.FixedWorkAssociations));
         Assert.Equal(associationId, child.AssociationId);
         Assert.Equal(childSessionId, child.Identity.SessionId);
-        Assert.Equal((2, 2), await _store.ReadMafExecutionCapacityAsync(
+        Assert.Equal((1, 1), await _store.ReadMafExecutionCapacityAsync(
+            _actor, root, CancellationToken.None));
+        Assert.Equal((1, 1), await _store.ReadMafExecutionCapacityAsync(
             _actor, _root, CancellationToken.None));
     }
 

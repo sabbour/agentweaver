@@ -77,19 +77,23 @@ public sealed class CoordinatorWorkflowCatalogTests
     public void RuntimeNumericRunPoliciesPreserveConfiguredValuesAndOmission()
     {
         using var configured = JsonDocument.Parse(
-            """{"runLimits":{"maxModelTurns":12,"maxToolCalls":100,"maxPromptTokens":20000}}""");
+            """{"runLimits":{"maxModelTurns":12,"maxToolCalls":100,"maxPromptTokens":20000,"maxRevisionAttempts":0,"copilotSoftCreditLimit":4.25,"copilotHardCreditLimit":5}}""");
         var limits = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(configured.RootElement);
 
         Assert.Equal(12, limits.MaxModelTurns);
         Assert.Equal(100, limits.MaxToolCalls);
         Assert.Equal(20000, limits.MaxPromptTokens);
-
+        Assert.Equal(0, limits.MaxRevisionAttempts);
+        Assert.Equal(4.25m, limits.CopilotSoftCreditLimit);
+        Assert.Equal(5m, limits.CopilotHardCreditLimit);
         using var omitted = JsonDocument.Parse("""{"runLimits":{}}""");
         var unconfigured = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(omitted.RootElement);
-
         Assert.Null(unconfigured.MaxModelTurns);
         Assert.Null(unconfigured.MaxToolCalls);
         Assert.Null(unconfigured.MaxPromptTokens);
+        Assert.Null(unconfigured.MaxRevisionAttempts);
+        Assert.Null(unconfigured.CopilotSoftCreditLimit);
+        Assert.Null(unconfigured.CopilotHardCreditLimit);
     }
 
     [Theory]
@@ -99,6 +103,7 @@ public sealed class CoordinatorWorkflowCatalogTests
     [InlineData("maxToolCalls", 10001)]
     [InlineData("maxPromptTokens", 1023)]
     [InlineData("maxPromptTokens", 200001)]
+    [InlineData("maxRevisionAttempts", -1)]
     public void RuntimeNumericRunPoliciesRejectValuesOutsideProjectsBounds(
         string propertyName,
         int value)

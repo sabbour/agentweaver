@@ -157,37 +157,32 @@ current accepted selection, confirmed WorkPlan item or running Fixed-step
 association in the root's owner-created `coordinator-execution` checkpoint, and
 active child turn. A Fixed association must match the current accepted selection,
 execution fence, decision version, and child identity. The endpoint rechecks the
-root decision and current Projects authority before returning.
+root decision and current Projects authority after checkpoint reads and before returning.
 
-The authenticated session-scoped runtime-registration `GET` first resolves that
-current child context, then pages the Orchestrator's own registration IDs for the
-exact project, run, and session. It revalidates every candidate against current
-owner and Environment placement state. The bounded scan returns one current
-registration only. It returns an explicit conflict if it finds no match, multiple
-matches, or more than 64 candidates. This read does not authorize configure delivery.
+The authenticated session-scoped runtime-registration `GET` resolves that current child context.
+It pages registration IDs for the exact project, run, and session, with a maximum of 64 candidates.
+Each candidate must match the current owner and Environment placement.
+The read returns exactly one current registration.
+Missing matches, ambiguous matches, or an exceeded candidate bound return an explicit conflict.
+The owner rechecks the child context and selected registration after the scan.
+This read does not authorize configure delivery.
 
 ```mermaid
 sequenceDiagram
     participant C as Authenticated caller
-    participant O as Orchestrator owner
-    participant P as Projects and session owners
+    participant O as Orchestrator
     participant D as Registration store
-    participant E as Environment owner
-    C->>O: GET session runtime-registrations
-    O->>P: Validate caller, accepted selection, decision, and child
-    P-->>O: Current RuntimeOwnerContext
-    O->>D: Page IDs scoped to project, run, and session
-    loop Each bounded candidate
-        O->>P: Revalidate current child authority
-        O->>E: Revalidate current registration placement
-        E-->>O: Current binding or stale/unavailable
+    participant E as Environment
+    C->>O: Read current session registration
+    O->>O: Check caller, child, decision, and accepted selection
+    O->>D: Page exact project, run, and session IDs
+    loop At most 64 candidates
+        O->>E: Check current placement
+        E-->>O: Current binding or explicit failure
+        O->>O: Check current child and registration
     end
-    O->>P: Recheck child context
-    alt Exactly one current registration
-        O-->>C: Registration (no-store)
-    else No match, ambiguity, or candidate-limit overflow
-        O-->>C: 409 explicit outcome
-    end
+    O->>O: Recheck child and sole selected registration
+    O-->>C: Current registration or explicit conflict, no-store
 ```
 
 The `Agentweaver.AgentRuntime` library uses the pinned native Copilot SDK.

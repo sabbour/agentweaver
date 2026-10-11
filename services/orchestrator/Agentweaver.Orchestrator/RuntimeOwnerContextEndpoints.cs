@@ -46,15 +46,15 @@ public static partial class CoordinationEndpoints
             confirmedPlan.Workflow, confirmedPlan.Plan, selectionContext);
         if (!validatedPlan.IsValid || validatedPlan.Value is null)
             throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
-        var planSnapshot = validatedPlan.Value;
+        var plan = validatedPlan.Value;
         string agentId;
         string modelSelectionReference;
         string workflowStepId;
-        MafExecutionCheckpointStore? executionCheckpoints = null;
+        MafExecutionCheckpointStore? execution = null;
         MafExecutionFixedWorkAssociation? fixedAssociation = null;
         if (owner.WorkPlanItemId is { } workPlanItemId)
         {
-            var workPlanItem = planSnapshot.Plan.Items.FirstOrDefault(item =>
+            var workPlanItem = plan.Plan.Items.FirstOrDefault(item =>
                 string.Equals(item.Id, workPlanItemId, StringComparison.Ordinal));
             if (workPlanItem is null || string.IsNullOrWhiteSpace(workPlanItem.AgentId) ||
                 string.IsNullOrWhiteSpace(workPlanItem.ModelSelectionReference))
@@ -65,23 +65,16 @@ public static partial class CoordinationEndpoints
         }
         else
         {
-            executionCheckpoints = new MafExecutionCheckpointStore(
-                checkpoints,
-                new MafCheckpointBinding(
-                    root,
-                    actor,
-                    owner.ExecutionFence,
+            execution = new MafExecutionCheckpointStore(
+                checkpoints, CreateExecutionCheckpointBinding(root, actor, owner.ExecutionFence,
                     MafExecutionCheckpointStore.CurrentSdkVersion,
-                    PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot),
-                    null));
-            fixedAssociation = await executionCheckpoints.ReadFixedWorkAssociationAsync(
-                sessionId, planSnapshot.Plan.Id, cancellationToken).ConfigureAwait(false);
+                    PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot)));
+            fixedAssociation = await execution.ReadFixedWorkAssociationAsync(
+                sessionId, plan.Plan.Id, cancellationToken).ConfigureAwait(false);
             if (fixedAssociation is null ||
-                !MatchesFixedAssociation(
-                    fixedAssociation, planSnapshot, selectionContext, root, sessionId,
-                    owner.AcceptedSelectionHash, owner.ExecutionFence, decision.StateVersion))
-                throw new CoordinationException(
-                    "runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+                !MatchesFixedRuntimeAssociation(fixedAssociation, plan, selectionContext, root,
+                    sessionId, owner.AcceptedSelectionHash, owner.ExecutionFence, decision.StateVersion))
+                throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
             agentId = fixedAssociation.AgentId;
             modelSelectionReference = fixedAssociation.ModelSelectionReference;
             workflowStepId = fixedAssociation.StepId;
@@ -109,8 +102,8 @@ public static partial class CoordinationEndpoints
                 string.Equals(item.Id, currentWorkPlanItemId, StringComparison.Ordinal));
             if (currentWorkPlanItem is null ||
                 !string.Equals(currentWorkPlanItem.AgentId, agentId, StringComparison.Ordinal) ||
-                !string.Equals(currentWorkPlanItem.ModelSelectionReference,
-                    modelSelectionReference, StringComparison.Ordinal))
+                !string.Equals(currentWorkPlanItem.ModelSelectionReference, modelSelectionReference,
+                    StringComparison.Ordinal))
                 throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
         }
         else
@@ -119,16 +112,23 @@ public static partial class CoordinationEndpoints
                 currentConfirmedPlan.Workflow, currentConfirmedPlan.Plan, selectionContext);
             if (!currentPlan.IsValid || currentPlan.Value is null)
                 throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
-            var currentAssociation = await executionCheckpoints!.ReadFixedWorkAssociationAsync(
+            var currentAssociation = await execution!.ReadFixedWorkAssociationAsync(
                 sessionId, currentPlan.Value.Plan.Id, cancellationToken).ConfigureAwait(false);
-            if (
-                currentAssociation is null ||
-                !MatchesFixedAssociation(
-                    currentAssociation, currentPlan.Value, selectionContext, root, sessionId,
-                    currentDecision.SelectionHash, owner.ExecutionFence, currentDecision.StateVersion) ||
-                !MatchesFixedAssociation(
-                    fixedAssociation!, currentPlan.Value, selectionContext, root, sessionId,
-                    currentDecision.SelectionHash, owner.ExecutionFence, currentDecision.StateVersion))
+            if (currentAssociation is null ||
+                !MatchesFixedRuntimeAssociation(currentAssociation, currentPlan.Value, selectionContext,
+                    root, sessionId, currentDecision.SelectionHash, owner.ExecutionFence,
+                    currentDecision.StateVersion) ||
+                !MatchesFixedRuntimeAssociation(fixedAssociation!, currentPlan.Value, selectionContext,
+                    root, sessionId, currentDecision.SelectionHash, owner.ExecutionFence,
+                    currentDecision.StateVersion))
+                throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+            if (await store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken).ConfigureAwait(false) != owner)
+                throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+            var latestDecision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
+                .ConfigureAwait(false);
+            if (latestDecision.StateVersion != decision.StateVersion ||
+                latestDecision.SelectionHash != decision.SelectionHash ||
+                latestDecision.State.Fence != owner.ExecutionFence || !latestDecision.State.CanDispatch)
                 throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
         }
         await RequireUnchangedAuthorizedSelectionAsync(
@@ -156,7 +156,7 @@ public static partial class CoordinationEndpoints
         };
     }
 
-    private static bool MatchesFixedAssociation(
+    internal static bool MatchesFixedRuntimeAssociation(
         MafExecutionFixedWorkAssociation association,
         WorkPlanSnapshot snapshot,
         WorkPlanRunSelectionContext selectionContext,
@@ -166,9 +166,13 @@ public static partial class CoordinationEndpoints
         long executionFence,
         long decisionStateVersion)
     {
+        if (association.AcceptedSelectionHash != acceptedSelectionHash ||
+            association.ExecutionFence != executionFence ||
+            association.DecisionStateVersion != decisionStateVersion)
+            return false;
         var step = snapshot.Workflow.Definition.Steps.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, association.StepId, StringComparison.Ordinal));
-        if (step is null)
+        if (step?.FixedWork is null)
             return false;
 
         MafExecutionFixedWorkAssociation expected;
@@ -178,7 +182,9 @@ public static partial class CoordinationEndpoints
                 snapshot, selectionContext, parent, step, acceptedSelectionHash,
                 executionFence, decisionStateVersion, association.ActivationRevision, childSessionId);
         }
-        catch (CoordinationException)
+        catch (CoordinationException exception) when (exception.Code is
+            "maf_fixed_work_unavailable" or "maf_fixed_work_selection_unavailable" or
+            "maf_fixed_work_association_conflict")
         {
             return false;
         }

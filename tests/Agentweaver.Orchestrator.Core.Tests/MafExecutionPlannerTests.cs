@@ -143,6 +143,76 @@ public sealed class MafExecutionPlannerTests
         Assert.Empty(frontier.ReadyActions);
         Assert.Empty(frontier.UnavailableExecutorStepIds);
         Assert.True(frontier.IsComplete);
+        Assert.Empty(afterJoin.NonModelSteps);
+    }
+
+    [Fact]
+    public void MissingOptionalPlatformExecutorCompletesWithoutRecordingAResult()
+    {
+        var optional = WorkflowTestData.Platform("review", 0, []) with
+        {
+            Cardinality = new WorkflowCardinality(0, 1)
+        };
+        var snapshot = CreateSnapshot(WorkflowTestData.Definition(
+            WorkflowDefinitionOrigin.BuiltIn, optional));
+
+        var frontier = MafExecutionPlanner.BuildFrontier(
+            snapshot, MafExecutionProgress.Empty, 0, 0, 0, 1, _ => false);
+
+        Assert.True(frontier.IsComplete);
+        Assert.Empty(frontier.ReadyActions);
+        Assert.Empty(frontier.UnavailableExecutorStepIds);
+        Assert.Empty(MafExecutionProgress.Empty.NonModelSteps);
+    }
+
+    [Fact]
+    public void MissingOptionalExecutorUnblocksWorkButNotARequiredBuildTestGate()
+    {
+        var optional = WorkflowTestData.Platform("review", 0, []) with
+        {
+            Cardinality = new WorkflowCardinality(0, 1)
+        };
+        var snapshot = CreateSnapshot(WorkflowTestData.Definition(
+                WorkflowDefinitionOrigin.BuiltIn,
+                optional,
+                WorkflowTestData.Open("implement", 1, ["review"]),
+                WorkflowTestData.Platform("build", 2, ["implement"], WorkflowPlatformGate.BuildTest)),
+            WorkflowTestData.Item("implementation"));
+        var beforeJoin = MafExecutionPlanner.BuildFrontier(
+            snapshot, MafExecutionProgress.Empty, 0, 0, 1, 1, _ => false);
+
+        Assert.Equal("implementation", Assert.Single(beforeJoin.ReadyActions).WorkItem!.Id);
+        Assert.False(beforeJoin.IsComplete);
+
+        var progress = MafExecutionProgress.Empty with
+        {
+            WorkItems = MafExecutionProgress.Empty.WorkItems.Add(
+                "implementation", MafExecutionTaskStatus.Succeeded)
+        };
+        var afterJoin = MafExecutionPlanner.BuildFrontier(
+            snapshot, progress, 1, 0, 1, 1, _ => false);
+
+        Assert.False(afterJoin.IsComplete);
+        Assert.Empty(afterJoin.ReadyActions);
+        Assert.Equal(["build"], afterJoin.UnavailableExecutorStepIds.ToArray());
+        Assert.Empty(progress.NonModelSteps);
+    }
+
+    [Fact]
+    public void AvailableOptionalExecutorStillRuns()
+    {
+        var optional = WorkflowTestData.Platform("review", 0, []) with
+        {
+            Cardinality = new WorkflowCardinality(0, 1)
+        };
+        var snapshot = CreateSnapshot(WorkflowTestData.Definition(
+            WorkflowDefinitionOrigin.BuiltIn, optional));
+
+        var frontier = MafExecutionPlanner.BuildFrontier(
+            snapshot, MafExecutionProgress.Empty, 0, 0, 0, 1, _ => true);
+
+        Assert.Equal("review", Assert.Single(frontier.ReadyActions).Step.Id);
+        Assert.False(frontier.IsComplete);
     }
 
     [Fact]
@@ -410,6 +480,11 @@ public sealed class MafExecutionPlannerTests
             WorkflowDefinitionOrigin.BuiltIn,
             WorkflowTestData.Open("implement", 0, []),
             WorkflowTestData.Platform("review", 1, ["implement"]));
+        return CreateSnapshot(definition, items);
+    }
+
+    private static WorkPlanSnapshot CreateSnapshot(WorkflowDefinition definition, params WorkPlanItem[] items)
+    {
         var result = WorkPlanValidator.ValidateAndSnapshot(
             WorkflowTestData.Snapshot(definition),
             WorkflowTestData.Plan(items),

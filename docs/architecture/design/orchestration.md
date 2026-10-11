@@ -108,6 +108,14 @@ owner persists accepted definitions and decisions, exact-request gate state, wor
 position, and MAF checkpoints in its own PostgreSQL schema. The full dispatch engine
 remains a separate slice.
 
+Accepted WorkPlan revisions increment a persisted attempt count.
+The owner enforces the accepted `maxRevisionAttempts` limit before accepting another revision.
+A zero limit permits no revisions.
+Invalid proposals and rejected transitions do not consume an attempt.
+An exact request replay returns its saved decision without another increment.
+Gate-answer replay, owner-fence changes, and checkpoint recovery retain the count.
+Older decision envelopes without this field restore with a zero count.
+
 The Core models a project-scoped, revisioned backlog dependency graph. It rejects
 cross-project, self, missing, duplicate, and cyclic edges; only unclaimed, unarchived,
 non-provisional tasks can have their dependencies edited. Effective edge changes
@@ -345,31 +353,33 @@ flowchart TD
     F --> D
     D --> G["Propose step-snapped WorkPlan"]
     G -->     V{"Step identity, coverage, joins, eligibility, pins, bounds, and outputs valid?"}
-    V -->|"No: structured reasons"| R["Bounded WorkPlan revision"]
+    V -->|"No: structured reasons"| R["Correct invalid proposal"]
     R --> G
-    R -->|"Attempts exhausted"| Z["Hold for human guidance"]
     V -->|"Yes; conflicts serialized"| H["Confirm generated workflow or scope change"]
-    H --> S["Snapshot executable definition"]
-    S --> D["Explicit typed dispatch"]
-    D -->     F["Recheck plan, selection, fence and limits under root-run mutex"]
-    F --> O["Stage ready dependency frontier within remaining limits"]
+    H --> N["Save decision and revision count"]
+    N --> S["Snapshot executable definition"]
+    S --> DispatchWorkflow["Explicit typed dispatch"]
+    DispatchWorkflow --> RecheckRun["Recheck plan, selection, fence and limits under root-run mutex"]
+    RecheckRun --> O["Stage ready dependency frontier within remaining limits"]
     O --> X["Phase A: commit child association, spawn outbox, pending intent, Running checkpoint"]
-    X --> R["Read and validate actual current child registration"]
-    R --> W{"Real Phase B admission bound to registration, native source/turn, fence, pending checkpoint, and applicable counters?"}
+    X --> ChildRegistration["Read and validate actual current child registration"]
+    ChildRegistration --> W{"Real Phase B admission bound to registration, native source/turn, fence, pending checkpoint, and applicable counters?"}
     W -->|"Yes"| M["Deliver admitted intents to authenticated ready Hosts"]
     W -->|"No"| L["Keep pending intent; report unavailable step or reached limit"]
     M --> J{"Join state matches checkpoint?"}
     J -->|"Pending exact intent"| K["Atomically checkpoint joined result and Succeeded status"]
     K --> CompleteFrontier{"Complete dependency frontier?"}
-    CompleteFrontier -->|"No: continue ready work or return incomplete"| D
+    CompleteFrontier -->|"No: continue ready work or return incomplete"| DispatchWorkflow
     CompleteFrontier -->|"Yes"| AppendOutputWitness["Revalidate decision, fence, and checkpoint; append output witness"]
     AppendOutputWitness --> CompleteResponse["Return complete result"]
-    J -->|"Exact completed replay with checkpointed result"| D
+    J -->|"Exact completed replay with checkpointed result"| DispatchWorkflow
     J -->|"Changed or missing intent/result"| Rj["Reject replay; retain checkpoint"]
-    F --> T["Platform executor unavailable"]
-    T --> B["Report blocker; do not fall back to model work"]
+    RecheckRun --> T["Platform executor unavailable"]
+    T --> ReportBlocker["Report blocker; do not fall back to model work"]
     J --> Y["Replan with diff and gate"]
-    Y --> G
+    Y --> RevisionLimit{"Accepted revision limit reached?"}
+    RevisionLimit -->|"Yes"| Z["Hold for human guidance"]
+    RevisionLimit -->|"No"| G
 ```
 
 The accepted definition is snapshotted for the run, then bound to real MAF executors.
@@ -382,6 +392,16 @@ Command, argument-order, profile, path, or output-bound changes require scope co
 The validated WorkPlan requires a pinned Sandbox with the BuildTest command capability,
 even when it contains no model work.
 A legacy BuildTest step without a typed command remains valid but cannot execute.
+
+An optional platform step with no executor can be skipped when its dependencies are satisfied.
+The frontier does not save a successful result or manufacture a BuildTest receipt for that skip.
+An available optional executor still runs.
+A required step without an executor keeps the workflow incomplete and blocks its dependents.
+
+Fixed-work runtime reads resolve the retained checkpoint association for the exact child session.
+They compare its workflow, plan, task, outputs, agent, model, provider, selection hash, fence, and decision version.
+They recheck the current owner, decision, association, and accepted selection after remote reads.
+This path does not relax the existing model or provider checks for open work.
 
 Before dispatch, the checkpoint stores the operation ID, exact command, accepted
 execution and collector options, and expected Environment binding.

@@ -1048,6 +1048,62 @@ public sealed class RuntimeAgentHostTests
         Assert.Contains("runtime_registration_stale", await staleReadiness.Content.ReadAsStringAsync());
     }
 
+    [Fact]
+    public async Task CurrentReadinessRequiresAuthenticatedCallerAndExactHttpsAudience()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var expected = await fixture.ConfigureAsync(timeout.Token);
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+
+        using var anonymous = await client.GetAsync("/runtime/v1/readiness", timeout.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var wrongScheme = await client.GetAsync("http://runtime.test/runtime/v1/readiness", timeout.Token);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongScheme.StatusCode);
+        using var wrongHost = await client.GetAsync("https://another.test/runtime/v1/readiness", timeout.Token);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongHost.StatusCode);
+        using var current = await client.GetAsync("/runtime/v1/readiness", timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, current.StatusCode);
+        Assert.True(current.Headers.CacheControl?.NoStore);
+        var receipt = await current.Content.ReadFromJsonAsync<RuntimeHostReadinessReceipt>(HostFixture.Json, timeout.Token);
+        Assert.Equal(expected.RuntimeInstanceId, receipt!.RuntimeInstanceId);
+        Assert.Equal(expected.RegistrationRevision, receipt.RegistrationRevision);
+        Assert.Equal(expected.ExecutionFence, receipt.ExecutionFence);
+        Assert.Equal(expected.Image, receipt.Image);
+        Assert.Equal(expected.SourceGrant, receipt.SourceGrant);
+        Assert.Equal(0, fixture.Rotations);
+        Assert.Empty(fixture.NativeAdmissions);
+    }
+
+    [Fact]
+    public async Task CurrentReadinessRejectsForeignTenantAndChangedRegistrationWithoutEffects()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.ConfigureAsync(timeout.Token);
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "another-tenant");
+
+        using var foreign = await client.GetAsync("/runtime/v1/readiness", timeout.Token);
+        Assert.Equal(HttpStatusCode.Forbidden, foreign.StatusCode);
+        client.DefaultRequestHeaders.Remove("X-Agentweaver-Tenant");
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        fixture.Registration = fixture.Registration with { Revision = fixture.Registration.Revision + 1 };
+        using var stale = await client.GetAsync("/runtime/v1/readiness", timeout.Token);
+        Assert.Equal(HttpStatusCode.Forbidden, stale.StatusCode);
+        var error = await stale.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal("runtime_registration_stale", error.GetProperty("code").GetString());
+        Assert.Equal(0, fixture.Rotations);
+        Assert.Empty(fixture.NativeAdmissions);
+    }
+
     private sealed class HostFixture : IAsyncDisposable
     {
         internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
