@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Agentweaver.Identity;
 using Npgsql;
 using Xunit;
 
@@ -207,13 +208,33 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             CancellationToken.None);
         var detach = await store.ReserveWorkspaceVolumeDetachAsync(
             fence, volumeId, 5, 2, 0, "detach", CancellationToken.None);
+        var detachChecks = 0;
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => store.CompleteWorkspaceVolumeDetachAsync(
+            detach.OperationId, fence, effectMayHaveApplied: true, resource2, effectVerified: true,
+            CancellationToken.None, _ =>
+            {
+                if (++detachChecks == 2)
+                    throw new RuntimeAuthorizationException("suspend_manifest_changed");
+                return Task.CompletedTask;
+            }));
+        Assert.Equal(2, detachChecks);
+        var notDetached = await store.GetWorkspaceVolumeAsync(fence, volumeId, CancellationToken.None);
+        Assert.NotNull(notDetached);
+        Assert.Equal(5, notDetached.TransitionRevision);
+        Assert.Equal(resource2, notDetached.Resource);
+        detachChecks = 0;
         await store.CompleteWorkspaceVolumeDetachAsync(
             detach.OperationId,
             fence,
             effectMayHaveApplied: true,
             resource2,
             effectVerified: true,
-            CancellationToken.None);
+            CancellationToken.None, _ =>
+            {
+                detachChecks++;
+                return Task.CompletedTask;
+            });
+        Assert.Equal(2, detachChecks);
         var unbind = await store.ReserveWorkspaceVolumeUnbindAsync(
             fence, volumeId, 6, 2, 0, "unbind", CancellationToken.None);
         await store.CompleteWorkspaceVolumeUnbindAsync(
@@ -496,7 +517,7 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             fence,
             effectMayHaveApplied: true,
             resource,
-            effectVerified: true,
+            effectVerified: false,
             durableFlushVerified: false,
             CancellationToken.None);
 
@@ -513,14 +534,20 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             flush.OperationId, fence, CancellationToken.None);
         var retry = await store.ReserveWorkspaceVolumeFlushAsync(
             fence, volumeId, 2, 1, 0, 1, "flush-durable", CancellationToken.None);
-        var completed = await store.CompleteWorkspaceVolumeFlushAsync(
+        await Assert.ThrowsAsync<ArgumentException>(() => store.CompleteWorkspaceVolumeFlushAsync(
             retry.OperationId,
             fence,
             effectMayHaveApplied: true,
             resource,
             effectVerified: true,
             durableFlushVerified: true,
-            CancellationToken.None);
+            CancellationToken.None));
+        var evidence = new WorkspaceVolumeFlushEvidence(
+            new WorkspaceVolumeFlushReceipt(
+                1, fence, new(owner.ProjectId, volumeId, 1), resource,
+                0, 1, "flush-durable", new string('a', 64), null), null);
+        var completed = await store.CompleteWorkspaceVolumeFlushAsync(
+            retry.OperationId, fence, true, evidence, true, CancellationToken.None);
 
         Assert.Equal(EnvironmentWorkspaceVolumeTransitionState.Completed, completed.TransitionState);
         Assert.Equal(3, completed.TargetTransitionRevision);
@@ -528,6 +555,18 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
         Assert.Equal(1, completed.TargetDataGeneration);
         Assert.Equal(resource, completed.ExpectedResource);
         Assert.Equal(resource, completed.TargetResource);
+        var saved = await store.GetWorkspaceVolumeFlushEvidenceAsync(
+            fence, volumeId, completed.TargetTransitionRevision, CancellationToken.None);
+        Assert.Equal(evidence.Receipt, saved!.Receipt);
+        var replay = await store.CompleteWorkspaceVolumeFlushAsync(
+            retry.OperationId, fence, true, evidence, true, CancellationToken.None);
+        Assert.True(replay.Replayed);
+        Assert.Equal(evidence.Receipt, replay.FlushEvidence!.Receipt);
+        var conflict = evidence with { Receipt = evidence.Receipt with { TreeSha256 = new string('b', 64) } };
+        var exception = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            store.CompleteWorkspaceVolumeFlushAsync(
+                retry.OperationId, fence, true, conflict, true, CancellationToken.None));
+        Assert.Equal("environment_volume_flush_evidence_conflict", exception.Code);
     }
 
     [Fact]

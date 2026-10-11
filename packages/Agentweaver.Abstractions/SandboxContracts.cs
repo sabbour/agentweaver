@@ -881,7 +881,8 @@ public interface ISandboxLeaseStore
         EnvironmentGenerationFence fence,
         long providerFencingGeneration,
         SandboxReleaseReceipt receipt,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null);
 
     Task<SandboxLeaseSnapshot> CompletePartialReleaseAsync(
         SandboxPartialReleaseCompletionRequest request,

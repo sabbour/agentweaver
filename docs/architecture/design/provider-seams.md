@@ -578,13 +578,18 @@ unexpired lease and exact `Released` receipt. `Retained` records preservation an
 an `AlreadyAbsent` disposition cannot close work. Failures and expired leases remain durably retryable, and
 Environment release is blocked while any cleanup is incomplete. The provider receipt cannot attest
 owner-side sharing or data erasure.
-The adapter does not advertise Sandbox attachment or durable-flush capability: a provisioned PVC is not
-proof that a selected Sandbox can attach it or provide the requested flush semantics. The Environment
-lifecycle must negotiate those capabilities and the actual resources before dispatch or immutable pinning.
+The adapter advertises durable flush only through a trusted mounted-workspace callback.
+A provisioned PVC alone does not prove durability or Sandbox attachment.
+Flush requires a writable, strict-consistency Environment volume and its pinned cluster, PVC, and PV identities.
+The adapter checks the complete claim specification and approved mount options before and after that callback.
+Only its exact verified receipt can advance the Environment data generation.
+Shared and read-only volumes are rejected.
+The adapter still does not advertise Sandbox attachment; Environment negotiates that capability separately.
+See [the Environment suspend flush path](../environment-sandbox.md#trusted-suspend-workspace-flush) for ownership, replay, and authority checks.
 
 ![Sequence showing generation-scoped Azure Files PVC provisioning, claim/PV UID checks, and separate
-Sandbox attachment negotiation. It does not imply that the Azure Files adapter mounts a volume or provides
-durable flush.](../../diagrams/flagship/v1-storage-volume-provisioning.png)
+Sandbox attachment negotiation and receipt-based mounted flush. The adapter does not mount the volume itself.
+Source checks do not prove live CSI durability.](../../diagrams/flagship/v1-storage-volume-provisioning.png)
 
 [Full-size diagram](../../diagrams/flagship/v1-storage-volume-provisioning.png) ·
 [Editable draw.io source](../../diagrams/drawio/generated/flagship/v1-storage-volume-provisioning.drawio)

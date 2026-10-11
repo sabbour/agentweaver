@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Agentweaver.Identity;
 using Agentweaver.Providers.Storage.AzureFiles;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -59,15 +60,21 @@ public sealed class EnvironmentWorkspaceVolumeApiTests
                 "/workspace-volumes", StringComparison.Ordinal) == true)
             .ToArray();
 
-        Assert.Equal(9, volumeEndpoints.Length);
+        Assert.Equal(10, volumeEndpoints.Length);
         Assert.All(volumeEndpoints, endpoint =>
         {
             Assert.Contains(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>(), _ => true);
             Assert.DoesNotContain(endpoint.Metadata, item => item is IAllowAnonymous);
         });
         Assert.DoesNotContain(volumeEndpoints, endpoint =>
-            endpoint.RoutePattern.RawText!.Contains("flush", StringComparison.OrdinalIgnoreCase) ||
-            endpoint.RoutePattern.RawText.Contains("attach", StringComparison.OrdinalIgnoreCase));
+            endpoint.RoutePattern.RawText!.Contains("attach", StringComparison.OrdinalIgnoreCase));
+        Assert.Single(volumeEndpoints, endpoint =>
+            endpoint.RoutePattern.RawText!.EndsWith("/{volumeId}/flush", StringComparison.Ordinal));
+        var resolver = Assert.Single(((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>(), endpoint =>
+            endpoint.RoutePattern.RawText == "/internal/runtime/suspend/resolve");
+        Assert.NotEmpty(resolver.Metadata.GetOrderedMetadata<IAuthorizeData>());
+        Assert.DoesNotContain(resolver.Metadata, item => item is IAllowAnonymous);
     }
 
     [Fact]

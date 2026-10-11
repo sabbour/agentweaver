@@ -135,6 +135,53 @@ run-owner evidence API for this consumer. Therefore, no caller-supplied
 `abandoned` flag, lease age, stale credential, timeout, Pod failure, or failed
 lookup is treated as proof that a run ended.
 
+## Trusted suspend Workspace flush
+
+This source connects Environment to the trusted AgentHost flush operation for issue [#1930](https://github.com/sabbour/agentweaver/issues/1930).
+It does not claim a complete deployed suspend/resume flow.
+
+Core calls authenticated `POST /internal/runtime/suspend/resolve` with its current suspend operation and Host session proof.
+This request cannot contain Workspace evidence.
+Environment reads the current registration, attached Workspace, and volume snapshot through their owners.
+It returns the exact Storage resource, provider binding, transition revision, and next data generation.
+Resolve is a read-only step while Core's operation is Reserved.
+Core stores the resolved request and its target phase version when it advances Reserved to Fenced.
+Host delivery accepts only that saved Fenced request.
+Retries must use that saved request, not new generations.
+The shared request and client live in `Agentweaver.Identity`; Core does not need an Environment assembly reference.
+
+`POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/flush`
+reserves the exact volume transition.
+Environment checks fresh Projects authority, Core's exact current-operation response, registration, placement, and attached Workspace before and after Host delivery.
+The trusted Host response must contain the matching native-turn receipt, durable cache acknowledgment, and Workspace flush receipt.
+The Azure Files adapter verifies its pinned PVC, PV, full claim specification, and approved mount options around that delivery.
+Both routes require an expiring authenticated bearer and return `no-store`.
+The original actor is retained; no service credential replaces it.
+
+Only a verified receipt advances data generation by one.
+Migration `20261011133000_WorkspaceFlushEvidence` adds nullable `owner_effects.flush_evidence_json`.
+The receipt and Host evidence are saved with the transition in the same owner transaction.
+Authority is checked again after database waits and before commit.
+Uncertain effects keep their evidence for reconciliation without advancing the generation.
+Failure before provider dispatch records no effect.
+Completed replay returns the saved evidence without repeating Host flush.
+Conflicting evidence cannot replace a saved receipt.
+A resource and a caller-supplied durability flag alone cannot complete a flush.
+
+Placement retirement accepts changed Workspace counters only with the exact saved suspend flush for that retiring lease.
+Core calls authenticated `POST /internal/runtime/suspend/release-placement` only after it commits the complete suspend manifest.
+The shared release request contains the saved Host receipt and exact flush transition revision.
+Environment asks Core's `POST /internal/runtime/suspend/require-release-current` to confirm that saved evidence before provider release and owner completion.
+Detach and lease completion repeat the Projects and Core checks after owner database waits and before transaction commit.
+Ordinary abandonment and retirement recovery apply the same check when their Workspace has trusted suspend flush evidence.
+The Sandbox provider must confirm release before Environment detaches the exact Workspace and records the lease as Released.
+Completed detach replay keeps the same resource, data generation, and transition.
+Core's client rejects pending release, changed placement, and different detach counters.
+Credential revocation alone is not placement release.
+It does not rewrite the original attachment or immutable provider selection.
+Workspace retention and reclaim rules remain unchanged.
+Pure checks cover these source contracts; PostgreSQL and mounted CSI execution require their separate acceptance runs.
+
 ## Workspace, network, and readiness
 
 Provisioning accepts a Workspace volume ID and exact resource/data generations,

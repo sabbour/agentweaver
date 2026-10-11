@@ -615,7 +615,8 @@ public sealed class EnvironmentSandboxLeaseStore(
         EnvironmentGenerationFence fence,
         long providerFencingGeneration,
         SandboxReleaseReceipt receipt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null)
     {
         ArgumentNullException.ThrowIfNull(fence);
         ArgumentNullException.ThrowIfNull(receipt);
@@ -643,6 +644,8 @@ public sealed class EnvironmentSandboxLeaseStore(
             throw new EnvironmentLifecycleException(
                 "sandbox_release_receipt_mismatch",
                 "The Sandbox release receipt does not match the exact fenced provider resource.");
+        if (beforeCommitCheck is not null)
+            await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
 
         var updatedAt = timeProvider.GetUtcNow();
         await using (var update = new NpgsqlCommand($"""
@@ -675,6 +678,8 @@ public sealed class EnvironmentSandboxLeaseStore(
         var result = await ReadByOperationAsync(
             connection, transaction, operationId, fence.Owner, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The Sandbox release completion was not persisted.");
+        if (beforeCommitCheck is not null)
+            await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
     }

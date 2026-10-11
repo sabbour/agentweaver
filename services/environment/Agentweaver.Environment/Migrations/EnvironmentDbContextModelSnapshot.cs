@@ -161,6 +161,10 @@ namespace Agentweaver.Environment.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("expected_transition_revision");
 
+                    b.Property<string>("FlushEvidenceJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("flush_evidence_json");
+
                     b.Property<string>("IdempotencyKey")
                         .IsRequired()
                         .HasMaxLength(128)

@@ -136,6 +136,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         var capabilities = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
         capabilities.Add(WorkspaceVolumeCapabilities.ForAccessMode(spec.AccessMode));
         capabilities.Add(WorkspaceVolumeCapabilities.ReadOnlyMount);
+        if (spec.BindingMode == WorkspaceVolumeBindingMode.Environment)
+            capabilities.Add(WorkspaceVolumeCapabilities.DurableFlush);
         return new WorkspaceVolumeResource(
             new ProviderResourceRef(
                 ProviderSeam.Storage,
@@ -159,6 +161,89 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                         spec.EnvironmentId,
                         _client.ClusterIdentity),
                     BindingJsonOptions))).Validate();
+    }
+
+    public async Task<WorkspaceVolumeFlushReceipt> FlushAsync(
+        WorkspaceVolumeFlushRequest request,
+        Func<WorkspaceVolumeFlushRequest, CancellationToken, Task<WorkspaceVolumeFlushReceipt>> trustedMountedFlush,
+        CancellationToken cancellationToken = default)
+    {
+        request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        ArgumentNullException.ThrowIfNull(trustedMountedFlush);
+        if (request.Spec.BindingMode != WorkspaceVolumeBindingMode.Environment ||
+            request.Spec.Consistency != WorkspaceVolumeConsistency.Strict ||
+            request.Spec.AccessMode == WorkspaceVolumeAccessMode.ReadOnlyMany)
+            throw new AzureFilesCsiException(
+                "durable_flush_unsupported",
+                "Durable flush requires an exact, single-writer Environment workspace.",
+                effectMayHaveApplied: false);
+        var binding = request.ProviderBinding ??
+            throw new AzureFilesCsiException(
+                "provider_binding_missing",
+                "Durable flush requires the pinned Azure Files generation binding.",
+                effectMayHaveApplied: false);
+        var descriptor = ReadReleaseBinding(new WorkspaceVolumeReleaseRequest(
+            new WorkspaceVolumeReference(request.Spec.ProjectId, request.Spec.VolumeId, request.ResourceGeneration),
+            request.Resource,
+            request.Spec.BindingMode,
+            request.Spec.GetEffectiveReleasePolicy(),
+            request.Spec.OwnerDeletionPolicy,
+            binding,
+            request.IdempotencyKey).Validate());
+        if (descriptor.ClusterIdentity != _client.ClusterIdentity ||
+            descriptor.EnvironmentId != request.EnvironmentFence.Owner.EnvironmentId)
+            throw new AzureFilesCsiException(
+                "flush_resource_binding_mismatch",
+                "The pinned workspace is not bound to this cluster and Environment.",
+                effectMayHaveApplied: false);
+
+        await RequireFlushResourceAsync(request, descriptor, false, cancellationToken).ConfigureAwait(false);
+        var receipt = await trustedMountedFlush(request, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The trusted workspace producer returned no flush receipt.");
+        receipt.ValidateFor(request);
+        await RequireFlushResourceAsync(request, descriptor, true, cancellationToken).ConfigureAwait(false);
+        return receipt;
+    }
+
+    private async Task RequireFlushResourceAsync(
+        WorkspaceVolumeFlushRequest request,
+        AzureFilesReleaseDescriptor descriptor,
+        bool flushMayHaveApplied,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var claim = await _client.GetClaimAsync(descriptor.Namespace, descriptor.ClaimName, cancellationToken)
+                .ConfigureAwait(false) ??
+                throw new AzureFilesCsiException("claim_missing", "The pinned workspace claim is missing.");
+            var volume = await _client.GetPersistentVolumeAsync(descriptor.PersistentVolumeName, cancellationToken)
+                .ConfigureAwait(false) ??
+                throw new AzureFilesCsiException("persistent_volume_missing", "The pinned workspace PV is missing.");
+            var reference = new WorkspaceVolumeReference(
+                request.Spec.ProjectId, request.Spec.VolumeId, request.ResourceGeneration);
+            ValidateClaimIdentity(claim, descriptor.Namespace, descriptor.ClaimName, reference, descriptor.EnvironmentId);
+            ValidateClaim(claim, new AzureFilesClaimRequest(
+                descriptor.Namespace, descriptor.ClaimName, request.Spec.ProjectId,
+                request.Spec.VolumeId, request.ResourceGeneration, request.Spec.Owner,
+                request.Spec.StorageClass, request.Spec.CapacityGiB, request.Spec.AccessMode)
+            {
+                EnvironmentId = descriptor.EnvironmentId
+            });
+            ValidatePersistentVolumeDescriptor(volume, descriptor, reference);
+            if (claim.Uid != request.Resource.ResourceId || claim.VolumeName != descriptor.PersistentVolumeName ||
+                claim.Phase != "Bound" || claim.StorageClassName != request.Spec.StorageClass ||
+                volume.StorageClassName != request.Spec.StorageClass)
+                throw new AzureFilesCsiException(
+                    "flush_resource_mismatch", "The mounted workspace no longer matches its pinned Storage resource.");
+            var storageClass = await _client.GetStorageClassAsync(request.Spec.StorageClass, cancellationToken)
+                .ConfigureAwait(false) ??
+                throw new AzureFilesCsiException("storage_class_missing", "The pinned workspace StorageClass is missing.");
+            ValidateStorageClass(storageClass, request.Spec.StorageClass);
+        }
+        catch (AzureFilesCsiException exception)
+        {
+            throw new AzureFilesCsiException(exception.Code, exception.Message, flushMayHaveApplied, exception);
+        }
     }
 
     public async Task<WorkspaceVolumeReleaseReceipt> ReleaseAsync(

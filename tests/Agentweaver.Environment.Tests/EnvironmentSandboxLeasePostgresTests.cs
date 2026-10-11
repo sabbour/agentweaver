@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
+using Agentweaver.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
@@ -146,12 +147,33 @@ public sealed class EnvironmentSandboxLeasePostgresTests(EnvironmentPostgresFixt
             provisioned.Resource,
             "abandon-1",
             SandboxReleaseDisposition.Released);
+        var releaseChecks = 0;
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => store.CompleteReleaseAsync(
+            retiring.OperationId, fence, retiring.ProviderFencingGeneration, receipt, CancellationToken.None,
+            _ =>
+            {
+                if (++releaseChecks == 2)
+                    throw new RuntimeAuthorizationException("suspend_manifest_changed");
+                return Task.CompletedTask;
+            }));
+        Assert.Equal(2, releaseChecks);
+        var notReleased = await store.GetCurrentAsync(fence, CancellationToken.None);
+        Assert.NotNull(notReleased);
+        Assert.Equal(SandboxLeaseState.Releasing, notReleased.State);
+        Assert.Equal(retiring.LeaseRevision, notReleased.LeaseRevision);
+        releaseChecks = 0;
         var released = await store.CompleteReleaseAsync(
             retiring.OperationId,
             fence,
             retiring.ProviderFencingGeneration,
             receipt,
-            CancellationToken.None);
+            CancellationToken.None,
+            _ =>
+            {
+                releaseChecks++;
+                return Task.CompletedTask;
+            });
+        Assert.Equal(2, releaseChecks);
         Assert.Equal(SandboxLeaseState.Released, released.State);
         var duplicateCompletion = await store.CompleteProvisionAsync(
             released.OperationId,

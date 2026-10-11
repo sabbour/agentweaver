@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Storage volumes, replacement, and Sandbox attachment",
-  "alt": "Environment provisions a generation-pinned Azure Files claim, then negotiates a mount for the selected Sandbox. It reserves the exact Workspace generation before Sandbox dispatch and detaches it only after placement retirement. The retained-lease runtime bootstrap read does not change Workspace attachment or retirement. Replace cleanup deletes only the pinned old claim and PV. It does not prove Azure data erasure.",
+  "alt": "Environment provisions a generation-pinned Azure Files claim and negotiates the selected Sandbox mount. Suspend flush checks the exact PVC and PV around a trusted mounted Host operation. Environment saves its native, cache, and Workspace receipts before advancing data generation once. Placement retirement requires Core's committed manifest and the matching saved flush before provider release and exact detach. It does not change the original attachment. These source contracts do not prove live durability or Azure erasure.",
   "autonumber": true,
   "participants": [
     {
@@ -33,7 +33,7 @@
     {
       "id": "sandbox",
       "label": "Sandbox provider",
-      "subLabel": "Actual resource and profile",
+      "subLabel": "Placement and mounted AgentHost",
       "icon": "bot",
       "fluentIcon": "window",
       "badge": { "text": "Provider", "tone": "teal" }
@@ -159,9 +159,65 @@
       "arrow": "filled"
     },
     {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "storage-caller",
+      "label": "Resolve current suspend Workspace; save exact next-generation request",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "azure-files",
+      "label": "FlushAsync with pinned resource and trusted mounted callback",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "azure-files",
+      "to": "kubernetes",
+      "label": "Check exact PVC, PV, claim specification, and mount options",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "sandbox",
+      "label": "Require current Core authority; deliver trusted mounted suspend",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "sandbox",
+      "to": "storage-caller",
+      "label": "Exact native-turn, cache, and Workspace flush receipts",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "azure-files",
+      "to": "kubernetes",
+      "label": "Recheck the same pinned resources after mounted flush",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "storage-caller",
+      "label": "Recheck authority after SQL waits; save evidence and advance data once",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
       "type": "note",
       "over": ["azure-files", "storage-caller"],
-      "label": "Replace pins both generations; cleanup verifies exact claim/PV absence. Sandbox uses owner-CAS attach/detach; Release waits for detach. No Azure erasure proof."
+      "label": "Saved flush and Core manifest required before release and exact detach. Replay preserves the attachment. Retention and replace cleanup stay unchanged."
     }
   ]
 }

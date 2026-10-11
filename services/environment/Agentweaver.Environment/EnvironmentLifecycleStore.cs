@@ -917,7 +917,8 @@ public sealed class EnvironmentLifecycleStore(
         bool effectMayHaveApplied,
         ProviderResourceRef? providerResource,
         bool effectVerified,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null) =>
         CompleteWorkspaceVolumeTransitionCoreAsync(
             operationId,
             environmentFence,
@@ -927,7 +928,8 @@ public sealed class EnvironmentLifecycleStore(
             providerBinding: null,
             effectVerified,
             durableFlushVerified: false,
-            cancellationToken);
+            cancellationToken,
+            beforeCommitCheck: beforeCommitCheck);
 
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeDetachReconciledAsync(
         Guid operationId,
@@ -979,6 +981,24 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified,
             cancellationToken);
 
+    public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeFlushAsync(
+        Guid operationId,
+        EnvironmentGenerationFence environmentFence,
+        bool effectMayHaveApplied,
+        WorkspaceVolumeFlushEvidence? evidence,
+        bool effectVerified,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null)
+    {
+        if (effectVerified && evidence is null)
+            throw new ArgumentException("A verified workspace flush requires its complete producer evidence.",
+                nameof(evidence));
+        return CompleteWorkspaceVolumeTransitionCoreAsync(
+            operationId, environmentFence, EnvironmentWorkspaceVolumeOperation.Flush,
+            effectMayHaveApplied, evidence?.Receipt.Resource, providerBinding: null,
+            effectVerified, durableFlushVerified: effectVerified, cancellationToken, evidence, beforeCommitCheck);
+    }
+
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeFlushReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1008,6 +1028,52 @@ public sealed class EnvironmentLifecycleStore(
             idempotencyKey,
             specificationJson: null,
             cancellationToken);
+
+    public async Task<WorkspaceVolumeFlushEvidence?> GetWorkspaceVolumeFlushEvidenceAsync(
+        EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        long targetTransitionRevision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(environmentFence);
+        ArgumentException.ThrowIfNullOrWhiteSpace(volumeId);
+        if (targetTransitionRevision < 1)
+            throw new ArgumentOutOfRangeException(nameof(targetTransitionRevision));
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await AcquireOwnerLockAsync(connection, transaction, environmentFence.Owner, cancellationToken)
+            .ConfigureAwait(false);
+        await RequireActiveInTransactionAsync(connection, transaction, environmentFence, cancellationToken)
+            .ConfigureAwait(false);
+        WorkspaceVolumeOperation? operation;
+        await using (var command = new NpgsqlCommand($"""
+            SELECT effect_kind, operation_id, lifecycle_generation, resource_id,
+                   expected_transition_revision, expected_resource_generation, expected_data_generation,
+                   target_transition_revision, target_resource_generation, target_data_generation,
+                   target_volume_state, operation, idempotency_key, request_fingerprint,
+                   effect_state, created_at, completed_at, specification_json,
+                   expected_provider_seam, expected_provider_id, expected_provider_resource_id,
+                   target_provider_seam, target_provider_id, target_provider_resource_id,
+                   expected_provider_binding_json, target_provider_binding_json, flush_evidence_json
+            FROM {OwnerEffects}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND lifecycle_generation = @lifecycle_generation
+              AND effect_kind = 'WorkspaceVolume' AND operation = 'Flush' AND effect_state = 'Completed'
+              AND resource_id = @volume_id AND target_transition_revision = @target_transition_revision
+            """, connection, transaction))
+        {
+            AddOwnerParameters(command, environmentFence.Owner);
+            command.Parameters.AddWithValue("lifecycle_generation", environmentFence.LifecycleGeneration);
+            command.Parameters.AddWithValue("volume_id", volumeId);
+            command.Parameters.AddWithValue("target_transition_revision", targetTransitionRevision);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            operation = await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+                ? ReadWorkspaceVolumeOperation(reader, environmentFence.Owner) : null;
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return operation?.FlushEvidence;
+    }
 
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeReleaseAsync(
         Guid operationId,
@@ -1428,9 +1494,14 @@ public sealed class EnvironmentLifecycleStore(
         WorkspaceVolumeProviderBindingSnapshot? providerBinding,
         bool effectVerified,
         bool durableFlushVerified,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        WorkspaceVolumeFlushEvidence? flushEvidence = null,
+        Func<CancellationToken, Task>? beforeCommitCheck = null)
     {
         ArgumentNullException.ThrowIfNull(fence);
+        if (expectedOperation == EnvironmentWorkspaceVolumeOperation.Flush && effectVerified && flushEvidence is null)
+            throw new ArgumentException("A verified workspace flush requires its complete producer evidence.",
+                nameof(flushEvidence));
         if (effectVerified && !effectMayHaveApplied)
             throw new ArgumentException(
                 "A provider effect cannot be verified when it did not occur.",
@@ -1451,10 +1522,37 @@ public sealed class EnvironmentLifecycleStore(
             throw new EnvironmentLifecycleException(
                 "environment_volume_operation_mismatch",
                 "The reserved workspace-volume operation does not match the typed completion method.");
+        if (flushEvidence is not null)
+        {
+            flushEvidence = flushEvidence.Validate();
+            var receipt = flushEvidence.Receipt;
+            if (expectedOperation != EnvironmentWorkspaceVolumeOperation.Flush ||
+                receipt.EnvironmentFence != operation.Fence ||
+                receipt.Volume.VolumeId != operation.ResourceId ||
+                receipt.Volume.ResourceGeneration != operation.ExpectedResourceGeneration ||
+                receipt.Resource != operation.ExpectedResource ||
+                receipt.ExpectedDataGeneration != operation.ExpectedDataGeneration ||
+                receipt.DataGeneration != operation.TargetDataGeneration ||
+                receipt.IdempotencyKey != operation.IdempotencyKey ||
+                operation.FlushEvidence is { } saved &&
+                    !JsonElement.DeepEquals(
+                        JsonSerializer.SerializeToElement(saved, JsonOptions),
+                        JsonSerializer.SerializeToElement(flushEvidence, JsonOptions)))
+                throw new EnvironmentLifecycleException(
+                    "environment_volume_flush_evidence_conflict",
+                    "The flush evidence does not match the exact reserved operation or its saved receipt.");
+        }
         var releaseRetry = expectedOperation == EnvironmentWorkspaceVolumeOperation.Release &&
             operation.State == EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
-        if (operation.State != EnvironmentWorkspaceVolumeTransitionState.Reserved && !releaseRetry)
+        var flushRetry = expectedOperation == EnvironmentWorkspaceVolumeOperation.Flush &&
+            flushEvidence is not null && effectVerified &&
+            operation.State == EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired;
+        if (beforeCommitCheck is not null)
+            await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
+        if (operation.State != EnvironmentWorkspaceVolumeTransitionState.Reserved && !releaseRetry && !flushRetry)
         {
+            if (beforeCommitCheck is not null)
+                await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return ToVolumeResult(operation, replayed: true);
         }
@@ -1513,7 +1611,8 @@ public sealed class EnvironmentLifecycleStore(
                 operation.TargetResource,
                 operation.TargetProviderBinding,
                 timeProvider.GetUtcNow(),
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                flushEvidence).ConfigureAwait(false);
         }
         if (complete)
         {
@@ -1529,7 +1628,8 @@ public sealed class EnvironmentLifecycleStore(
                     ? providerBinding
                     : operation.TargetProviderBinding,
                 timeProvider.GetUtcNow(),
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                flushEvidence).ConfigureAwait(false);
             if (operation.Operation == EnvironmentWorkspaceVolumeOperation.Replace)
                 await InsertWorkspaceVolumeCleanupAsync(
                     connection,
@@ -1538,13 +1638,16 @@ public sealed class EnvironmentLifecycleStore(
                     timeProvider.GetUtcNow(),
                     cancellationToken).ConfigureAwait(false);
         }
+        if (beforeCommitCheck is not null)
+            await beforeCommitCheck(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return ToVolumeResult(
             operation with
             {
                 State = operationState,
                 CompletedAt = timeProvider.GetUtcNow(),
-                TargetResource = complete ? providerResource : operation.TargetResource
+                TargetResource = complete ? providerResource : operation.TargetResource,
+                FlushEvidence = flushEvidence ?? operation.FlushEvidence
             },
             replayed: false);
     }
@@ -1760,7 +1863,7 @@ public sealed class EnvironmentLifecycleStore(
                    effect_state, created_at, completed_at, specification_json,
                    expected_provider_seam, expected_provider_id, expected_provider_resource_id,
                    target_provider_seam, target_provider_id, target_provider_resource_id,
-                   expected_provider_binding_json, target_provider_binding_json
+                   expected_provider_binding_json, target_provider_binding_json, flush_evidence_json
             FROM {OwnerEffects}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND run_id = @run_id AND environment_id = @environment_id
@@ -1798,7 +1901,7 @@ public sealed class EnvironmentLifecycleStore(
                    effect_state, created_at, completed_at, specification_json,
                    expected_provider_seam, expected_provider_id, expected_provider_resource_id,
                    target_provider_seam, target_provider_id, target_provider_resource_id,
-                   expected_provider_binding_json, target_provider_binding_json
+                   expected_provider_binding_json, target_provider_binding_json, flush_evidence_json
             FROM {OwnerEffects}
             WHERE operation_id = @operation_id
               AND tenant_id = @tenant_id AND project_id = @project_id
@@ -1845,7 +1948,27 @@ public sealed class EnvironmentLifecycleStore(
             ReadProviderBinding(
                 reader,
                 25,
-                ReadProviderResource(reader, 21, 22, 23, reader.GetInt64(8), "target")));
+                ReadProviderResource(reader, 21, 22, 23, reader.GetInt64(8), "target")))
+        {
+            FlushEvidence = ReadFlushEvidence(reader, 26)
+        };
+
+    private static WorkspaceVolumeFlushEvidence? ReadFlushEvidence(NpgsqlDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+            return null;
+        try
+        {
+            return (JsonSerializer.Deserialize<WorkspaceVolumeFlushEvidence>(reader.GetString(ordinal), JsonOptions) ??
+                throw new JsonException("The saved workspace flush evidence is empty.")).Validate();
+        }
+        catch (Exception exception) when (exception is JsonException or ArgumentException)
+        {
+            throw new EnvironmentLifecycleException(
+                "environment_volume_flush_evidence_corrupt",
+                $"The saved workspace flush evidence is invalid ({exception.GetType().Name}).");
+        }
+    }
 
     private static ProviderResourceRef? ReadProviderResource(
         NpgsqlDataReader reader,
@@ -2026,7 +2149,8 @@ public sealed class EnvironmentLifecycleStore(
         ProviderResourceRef? targetResource,
         WorkspaceVolumeProviderBindingSnapshot? targetProviderBinding,
         DateTimeOffset completedAt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        WorkspaceVolumeFlushEvidence? flushEvidence = null)
     {
         await using var command = new NpgsqlCommand($"""
             UPDATE {OwnerEffects}
@@ -2034,7 +2158,8 @@ public sealed class EnvironmentLifecycleStore(
                 target_provider_seam = @target_provider_seam,
                 target_provider_id = @target_provider_id,
                 target_provider_resource_id = @target_provider_resource_id,
-                target_provider_binding_json = @target_provider_binding_json
+                target_provider_binding_json = @target_provider_binding_json,
+                flush_evidence_json = COALESCE(@flush_evidence_json, flush_evidence_json)
             WHERE operation_id = @operation_id
               AND effect_kind = 'WorkspaceVolume'
               AND effect_state = @expected_state
@@ -2050,6 +2175,8 @@ public sealed class EnvironmentLifecycleStore(
                 ? DBNull.Value
                 : JsonSerializer.Serialize(targetProviderBinding, JsonOptions));
         command.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, operationId);
+        command.Parameters.AddWithValue("flush_evidence_json", NpgsqlDbType.Jsonb,
+            flushEvidence is null ? DBNull.Value : JsonSerializer.Serialize(flushEvidence, JsonOptions));
         if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
             throw new EnvironmentLifecycleException(
                 "environment_volume_transition_conflict",
@@ -2247,7 +2374,10 @@ public sealed class EnvironmentLifecycleStore(
             operation.TargetState,
             operation.Operation,
             operation.State,
-            replayed);
+            replayed)
+        {
+            FlushEvidence = operation.FlushEvidence
+        };
 
     private static EnvironmentWorkspaceVolumeTransitionResult ToVolumeResult(
         WorkspaceVolumeOperation operation,
@@ -2267,7 +2397,10 @@ public sealed class EnvironmentLifecycleStore(
             operation.TargetState,
             operation.Operation,
             operation.State,
-            replayed);
+            replayed)
+        {
+            FlushEvidence = operation.FlushEvidence
+        };
 
     private static async Task EnsureOwnerResourcesReleasedAsync(
         NpgsqlConnection connection,
@@ -2739,5 +2872,6 @@ public sealed class EnvironmentLifecycleStore(
         WorkspaceVolumeProviderBindingSnapshot? TargetProviderBinding)
     {
         public EnvironmentGenerationFence Fence => new(Owner, LifecycleGeneration);
+        public WorkspaceVolumeFlushEvidence? FlushEvidence { get; init; }
     }
 }

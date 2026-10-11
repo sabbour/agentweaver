@@ -668,7 +668,8 @@ public interface IEnvironmentLifecycleStore
         bool effectMayHaveApplied,
         ProviderResourceRef? providerResource,
         bool effectVerified,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null);
 
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeDetachReconciledAsync(
         Guid operationId,
@@ -708,6 +709,13 @@ public interface IEnvironmentLifecycleStore
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken);
+
+    Task<WorkspaceVolumeFlushEvidence?> GetWorkspaceVolumeFlushEvidenceAsync(
+        EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        long targetTransitionRevision,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("The Environment owner cannot read durable workspace flush evidence.");
 
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeReleaseAsync(
         EnvironmentGenerationFence environmentFence,

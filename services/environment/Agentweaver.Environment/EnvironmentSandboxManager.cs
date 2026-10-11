@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Providers;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
 using Agentweaver.Providers.Storage.AzureFiles;
@@ -125,7 +126,8 @@ public sealed class EnvironmentSandboxManager(
     AgentSandboxOptions sandboxOptions,
     KubernetesAgentSandboxClient kubernetesClient,
     CiliumEgressProviderOptions ciliumOptions,
-    EnvironmentEgressManager egressManager)
+    EnvironmentEgressManager egressManager,
+    EnvironmentRuntimeSuspendReleaseAuthority? suspendReleaseAuthority = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
@@ -501,6 +503,45 @@ public sealed class EnvironmentSandboxManager(
         }
     }
 
+    public async Task<RuntimeSuspendPlacementReleaseReceipt> ReleaseSuspendPlacementAsync(
+        CurrentCallerRequest caller,
+        RuntimeSuspendPlacementReleaseRequest request,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        var host = request.HostReceipt;
+        var binding = host.Registration.Binding;
+        var context = await AuthorizeAsync(
+            caller, binding.ProjectId, binding.RunId, binding.EnvironmentId, cancellationToken).ConfigureAwait(false);
+        var lease = await leaseStore.GetAsync(
+            context.Fence, binding.PlacementGeneration, cancellationToken).ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException("sandbox_lease_unknown", "The suspended Sandbox is missing.");
+        var detach = await ReadWorkspaceDetachmentAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
+        if (detach.SuspendRelease is null ||
+            !JsonElement.DeepEquals(
+                JsonSerializer.SerializeToElement(detach.SuspendRelease, JsonOptions),
+                JsonSerializer.SerializeToElement(request, JsonOptions)))
+            throw new RuntimeAuthorizationException("runtime_suspend_release_evidence_mismatch");
+        await RequireSuspendReleaseAsync(caller, detach.SuspendRelease, cancellationToken).ConfigureAwait(false);
+        var result = await AbandonAsync(
+            caller, binding.ProjectId, binding.RunId, binding.EnvironmentId,
+            new(binding.PlacementGeneration, binding.EnvironmentProviderFencingGeneration,
+                $"suspend-release-{host.OperationId:D}-{host.ManifestId:D}"),
+            cancellationToken).ConfigureAwait(false);
+        var volume = await lifecycleStore.GetWorkspaceVolumeAsync(
+            context.Fence, host.WorkspaceFlush!.Volume.VolumeId, cancellationToken).ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException("workspace_volume_unknown", "The suspended Workspace is missing.");
+        if (volume.Phase != EnvironmentWorkspaceVolumeState.Bound || volume.Resource is null)
+            throw new RuntimeAuthorizationException("runtime_suspend_release_detachment_incomplete");
+        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        await RequireSuspendReleaseAsync(caller, request, cancellationToken).ConfigureAwait(false);
+        return new RuntimeSuspendPlacementReleaseReceipt(
+            1, host.OperationId, host.ManifestId, context.Fence,
+            result.Resource ?? throw new RuntimeAuthorizationException("runtime_suspend_release_resource_missing"),
+            result.ProviderFencingGeneration, result.State, host.WorkspaceFlush.Volume, volume.Resource,
+            volume.DataGeneration, volume.TransitionRevision).ValidateFor(request);
+    }
+
     public async Task<EnvironmentSandboxResult> AbandonAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -521,6 +562,12 @@ public sealed class EnvironmentSandboxManager(
             throw new EnvironmentLifecycleException(
                 "sandbox_fence_stale",
                 "The requested Sandbox resource generation or provider fence is stale.");
+        if (lease.ProvisionedResource is not null)
+        {
+            var detach = await ReadWorkspaceDetachmentAsync(context.Fence, lease, cancellationToken)
+                .ConfigureAwait(false);
+            await RequireSuspendReleaseAsync(caller, detach.SuspendRelease, cancellationToken).ConfigureAwait(false);
+        }
         var authorization = new SandboxRetirementAuthorization(
             context.Selection.Authorization.Issuer,
             context.Selection.Authorization.ActorId,
@@ -572,6 +619,9 @@ public sealed class EnvironmentSandboxManager(
             await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
             if (observation.State == SandboxObservedState.Finished && observation.TerminalEvidence is { } evidence)
             {
+                var detach = await ReadWorkspaceDetachmentAsync(context.Fence, lease, cancellationToken)
+                    .ConfigureAwait(false);
+                await RequireSuspendReleaseAsync(caller, detach.SuspendRelease, cancellationToken).ConfigureAwait(false);
                 lease = await leaseStore.BeginRetirementAsync(
                     context.Fence,
                     lease.ResourceGeneration,
@@ -961,6 +1011,9 @@ public sealed class EnvironmentSandboxManager(
                 "The Sandbox lease is no longer the exact current retiring resource.");
         lease = currentLease;
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        var detachment = await ReadWorkspaceDetachmentAsync(
+            context.Fence, lease, cancellationToken).ConfigureAwait(false);
+        await RequireSuspendReleaseAsync(caller, detachment.SuspendRelease, cancellationToken).ConfigureAwait(false);
         var provisionedResource = lease.ProvisionedResource
             ?? throw new EnvironmentLifecycleException(
                 "sandbox_resource_unknown",
@@ -985,11 +1038,14 @@ public sealed class EnvironmentSandboxManager(
                 "sandbox_fence_stale",
                 "The Sandbox lease changed during provider release; the receipt was not accepted.");
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        await RequireSuspendReleaseAsync(caller, detachment.SuspendRelease, cancellationToken).ConfigureAwait(false);
         await DetachWorkspaceAfterSandboxReleaseAsync(
             context.Fence,
             lease,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            beforeCommitCheck: CheckReleaseAuthorityAsync).ConfigureAwait(false);
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        await RequireSuspendReleaseAsync(caller, detachment.SuspendRelease, cancellationToken).ConfigureAwait(false);
         current = await leaseStore.GetCurrentAsync(context.Fence, cancellationToken).ConfigureAwait(false);
         if (current is null ||
             current.OperationId != lease.OperationId ||
@@ -1003,8 +1059,15 @@ public sealed class EnvironmentSandboxManager(
             context.Fence,
             lease.ProviderFencingGeneration,
             receipt,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            CheckReleaseAuthorityAsync).ConfigureAwait(false);
         return ToResult(released);
+
+        async Task CheckReleaseAuthorityAsync(CancellationToken token)
+        {
+            await EnsureUnchangedAsync(caller, context, token).ConfigureAwait(false);
+            await RequireSuspendReleaseAsync(caller, detachment.SuspendRelease, token).ConfigureAwait(false);
+        }
     }
 
     private async Task<AuthorizedSandboxContext> AuthorizeAsync(
@@ -1212,6 +1275,45 @@ public sealed class EnvironmentSandboxManager(
         EnvironmentGenerationFence fence,
         SandboxLeaseSnapshot lease,
         CancellationToken cancellationToken,
+        bool allowUnprovisionedResource = false,
+        Func<CancellationToken, Task>? beforeCommitCheck = null)
+    {
+        var detach = await ReadWorkspaceDetachmentAsync(
+            fence, lease, cancellationToken, allowUnprovisionedResource).ConfigureAwait(false);
+        var negotiation = ReadProviderRecoveryIntent(lease).Workspace.Negotiation;
+        await DetachWorkspaceAttachmentAsync(
+            fence, lease.OperationId, negotiation.Volume, negotiation.StorageResource,
+            detach.DataGeneration, detach.TransitionRevision, cancellationToken, beforeCommitCheck)
+            .ConfigureAwait(false);
+    }
+
+    private Task RequireSuspendReleaseAsync(
+        CurrentCallerRequest caller, RuntimeSuspendPlacementReleaseRequest? request,
+        CancellationToken cancellationToken) =>
+        request is null ? Task.CompletedTask :
+        (suspendReleaseAuthority ?? throw new RuntimeAuthorizationException(
+            "runtime_suspend_release_owner_unavailable")).RequireCurrentAsync(caller, request, cancellationToken);
+
+    private async Task<(long TransitionRevision, long DataGeneration,
+        RuntimeSuspendPlacementReleaseRequest? SuspendRelease)> ReadWorkspaceDetachmentAsync(
+        EnvironmentGenerationFence fence, SandboxLeaseSnapshot lease, CancellationToken cancellationToken,
+        bool allowUnprovisionedResource = false)
+    {
+        var recovery = ReadProviderRecoveryIntent(lease);
+        var negotiation = recovery.Workspace.Negotiation;
+        var current = await lifecycleStore.GetWorkspaceVolumeAsync(fence, negotiation.Volume.VolumeId, cancellationToken)
+            .ConfigureAwait(false) ??
+            throw new EnvironmentLifecycleException("workspace_volume_unknown", "The retiring workspace is missing.");
+        var evidence = await lifecycleStore.GetWorkspaceVolumeFlushEvidenceAsync(
+            fence, negotiation.Volume.VolumeId, checked(recovery.WorkspaceAttachmentTransitionRevision + 1),
+            cancellationToken).ConfigureAwait(false);
+        return ResolveWorkspaceDetachment(fence, lease, current, evidence, allowUnprovisionedResource);
+    }
+
+    internal static (long TransitionRevision, long DataGeneration,
+        RuntimeSuspendPlacementReleaseRequest? SuspendRelease) ResolveWorkspaceDetachment(
+        EnvironmentGenerationFence fence, SandboxLeaseSnapshot lease,
+        EnvironmentWorkspaceVolumeSnapshot current, WorkspaceVolumeFlushEvidence? evidence,
         bool allowUnprovisionedResource = false)
     {
         var recovery = ReadProviderRecoveryIntent(lease);
@@ -1238,19 +1340,58 @@ public sealed class EnvironmentSandboxManager(
             !string.Equals(negotiation.SandboxResource.ProviderId, lease.ProvisionIntent.ProviderId, StringComparison.Ordinal) ||
             negotiation.SandboxResource != plannedResource ||
             !exactResource ||
+            lease.Fence != fence ||
+            current.EnvironmentFence != fence ||
+            current.VolumeId != negotiation.Volume.VolumeId ||
+            current.ResourceGeneration != negotiation.Volume.ResourceGeneration ||
+            current.Resource != negotiation.StorageResource ||
             recovery.WorkspaceAttachmentTransitionRevision < 2)
             throw new EnvironmentLifecycleException(
                 "sandbox_recovery_intent_invalid",
                 "The retiring Sandbox lease does not contain its exact Workspace attachment receipt.");
 
-        await DetachWorkspaceAttachmentAsync(
-            fence,
-            lease.OperationId,
-            negotiation.Volume,
-            negotiation.StorageResource,
-            negotiation.DataGeneration,
-            recovery.WorkspaceAttachmentTransitionRevision,
-            cancellationToken).ConfigureAwait(false);
+        var detachRevision = recovery.WorkspaceAttachmentTransitionRevision;
+        var detachDataGeneration = negotiation.DataGeneration;
+        RuntimeSuspendPlacementReleaseRequest? release = null;
+        if (evidence is not null)
+        {
+            evidence.Validate();
+            var host = evidence.RuntimeHostReceipt is { } saved
+                ? saved.Deserialize<RuntimeHostSuspendReceipt>(JsonOptions) : null;
+            var flush = evidence.Receipt;
+            if (flush is null || host is null || host.WorkspaceFlush != flush ||
+                host.Registration.Binding.TenantId != fence.Owner.TenantId ||
+                host.Registration.Binding.ProjectId != fence.Owner.ProjectId ||
+                host.Registration.Binding.RunId != fence.Owner.RunId ||
+                host.Registration.Binding.EnvironmentId != fence.Owner.EnvironmentId ||
+                host.Registration.Binding.EnvironmentLifecycleGeneration != fence.LifecycleGeneration ||
+                host.Registration.Binding.PlacementUid != resource?.ResourceId ||
+                host.Registration.Binding.PlacementGeneration != lease.ResourceGeneration ||
+                host.Registration.Binding.PlacementProviderId != lease.ProvisionIntent.ProviderId ||
+                host.Registration.Binding.EnvironmentProviderFencingGeneration != lease.ProviderFencingGeneration ||
+                host.Registration.Binding.EnvironmentCurrentFencingGeneration !=
+                    (lease.RetirementReason is null ? lease.CurrentFencingGeneration :
+                        checked(lease.CurrentFencingGeneration - 1)) ||
+                flush.EnvironmentFence != fence || flush.Volume != negotiation.Volume ||
+                flush.Resource != negotiation.StorageResource ||
+                flush.ExpectedDataGeneration != negotiation.DataGeneration ||
+                flush.DataGeneration != checked(negotiation.DataGeneration + 1))
+                throw new EnvironmentLifecycleException(
+                    "workspace_detachment_flush_evidence_invalid",
+                    "The changed workspace counters have no exact trusted suspend flush for this retiring lease.");
+            detachRevision = checked(detachRevision + 1);
+            detachDataGeneration = flush.DataGeneration;
+            release = new RuntimeSuspendPlacementReleaseRequest(host, detachRevision).Validate();
+        }
+        if (current.DataGeneration != detachDataGeneration ||
+            !(current.Phase == EnvironmentWorkspaceVolumeState.Attached &&
+                current.TransitionRevision == detachRevision ||
+              current.Phase == EnvironmentWorkspaceVolumeState.Bound &&
+                current.TransitionRevision == checked(detachRevision + 1)))
+            throw new EnvironmentLifecycleException(
+                "workspace_detachment_flush_evidence_invalid",
+                "The retiring Workspace is not the exact attachment or its completed detach replay.");
+        return (detachRevision, detachDataGeneration, release);
     }
 
     private async Task DetachWorkspaceAttachmentAsync(
@@ -1260,7 +1401,8 @@ public sealed class EnvironmentSandboxManager(
         ProviderResourceRef storageResource,
         long dataGeneration,
         long attachmentTransitionRevision,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null)
     {
         var reservation = await lifecycleStore.ReserveWorkspaceVolumeDetachAsync(
             fence,
@@ -1288,7 +1430,8 @@ public sealed class EnvironmentSandboxManager(
             effectMayHaveApplied: true,
             storageResource,
             effectVerified: true,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            beforeCommitCheck).ConfigureAwait(false);
         if (completed.EnvironmentFence != fence ||
             completed.VolumeId != volume.VolumeId ||
             completed.Operation != EnvironmentWorkspaceVolumeOperation.Detach ||
