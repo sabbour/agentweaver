@@ -43,7 +43,7 @@ internal static class InitializerChecks
                 !Guid.TryParse(service.PrincipalObjectId, out var expectedObject) || actualObject != expectedObject ||
                 !Guid.TryParse(principal.TenantId, out var actualTenant) ||
                 !Guid.TryParse(tenantId, out var expectedTenant) || actualTenant != expectedTenant ||
-                principal.Type != "service" || principal.Admin || principal.Mfa || !principal.CanLogin ||
+                principal.Type != "service" || principal.AdminFlag != 0 || principal.MfaFlag != 0 || !principal.CanLogin ||
                 principal.Superuser || principal.CreateDatabase || principal.CreateRole ||
                 principal.Replication || principal.Inherit || principal.BypassRls ||
                 principal.Memberships.Length != 1 || principal.Memberships[0] != membership)
@@ -115,8 +115,8 @@ internal sealed record PreflightSnapshot(ExistingBoundary? Boundary, uint Operat
 internal sealed record RoleMembership(uint RoleOid, uint MemberOid, uint GrantorOid,
     bool Admin, bool Inherit, bool Set);
 internal sealed record RuntimePrincipal(uint Oid, string Role, string? ObjectId, string? Type,
-    bool Admin, bool CanLogin, bool Superuser, bool CreateDatabase, bool CreateRole,
-    bool Replication, bool Inherit, bool BypassRls, string? TenantId, bool Mfa, RoleMembership[] Memberships);
+    int? AdminFlag, bool CanLogin, bool Superuser, bool CreateDatabase, bool CreateRole,
+    bool Replication, bool Inherit, bool BypassRls, string? TenantId, int? MfaFlag, RoleMembership[] Memberships);
 internal sealed record FunctionState(uint Oid, string Signature, uint OwnerOid,
     AclGrant[] Grants, bool RuntimeCanExecute);
 internal sealed record PostgresPlan(int FormatVersion, TargetPlan Target, ServicePlan[] Services, int[] CoreVersions);

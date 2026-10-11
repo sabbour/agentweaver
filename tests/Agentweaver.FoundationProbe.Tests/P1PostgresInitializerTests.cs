@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Agentweaver.P1PostgresInitializer;
 using Xunit;
 
@@ -97,8 +98,14 @@ public sealed class P1PostgresInitializerTests
             principals[0] with { ObjectId = Guid.NewGuid().ToString() },
             principals[0] with { ObjectId = null },
             principals[0] with { Type = "user" },
-            principals[0] with { Admin = true },
-            principals[0] with { Mfa = true },
+            principals[0] with { AdminFlag = 1 },
+            principals[0] with { AdminFlag = -1 },
+            principals[0] with { AdminFlag = 2 },
+            principals[0] with { AdminFlag = null },
+            principals[0] with { MfaFlag = 1 },
+            principals[0] with { MfaFlag = -1 },
+            principals[0] with { MfaFlag = 2 },
+            principals[0] with { MfaFlag = null },
             principals[0] with { TenantId = Guid.NewGuid().ToString() },
             principals[0] with { TenantId = null },
             principals[0] with { CanLogin = false },
@@ -124,6 +131,19 @@ public sealed class P1PostgresInitializerTests
             InitializerChecks.AssertPrincipals(services, principals.Skip(1).ToArray(), Owner, Tenant));
         Assert.Throws<InvalidOperationException>(() =>
             InitializerChecks.AssertPrincipals(services, [principals[0], principals[0], .. principals.Skip(2)], Owner, Tenant));
+    }
+
+    [Fact]
+    public void PrincipalFlagReadbackRequiresIntegerColumnsNotBooleanValues()
+    {
+        var json = JsonSerializer.Serialize(Principals(Services())[0]);
+        var principal = JsonSerializer.Deserialize<RuntimePrincipal>(json)!;
+        Assert.Equal(0, principal.AdminFlag);
+        Assert.Equal(0, principal.MfaFlag);
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<RuntimePrincipal>(
+            json.Replace("\"AdminFlag\":0", "\"AdminFlag\":false", StringComparison.Ordinal)));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<RuntimePrincipal>(
+            json.Replace("\"MfaFlag\":0", "\"MfaFlag\":false", StringComparison.Ordinal)));
     }
 
     [Fact]
@@ -232,6 +252,6 @@ public sealed class P1PostgresInitializerTests
 
     private static RuntimePrincipal[] Principals(ServicePlan[] services) => services.Select((service, index) =>
         new RuntimePrincipal(Runtime + (uint)index, service.Role, service.PrincipalObjectId, "service",
-            false, true, false, false, false, false, false, false, Tenant, false,
+            0, true, false, false, false, false, false, false, Tenant, 0,
             [new(Runtime + (uint)index, Owner, Owner, true, false, false)])).ToArray();
 }

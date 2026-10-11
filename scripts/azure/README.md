@@ -57,7 +57,9 @@ functions, and default privileges must remain unchanged.
 
 Before role creation commits, the source checks all five object-ID mappings,
 service principal types, role flags, and exact operator memberships.
-All five mappings must use the reviewed tenant and have no administrator or MFA-required flag.
+All five mappings must use the reviewed tenant.
+The administrator and MFA-required integer flags must each equal zero.
+Missing flags and any nonzero integer fail the source checks.
 The operator membership has ADMIN but neither INHERIT nor SET permission.
 Function checks require the operator owner and the exact effective EXECUTE grants.
 Only the existing casting authority function can receive runtime EXECUTE.

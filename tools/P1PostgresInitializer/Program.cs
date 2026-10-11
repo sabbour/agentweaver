@@ -332,8 +332,8 @@ static Task<RuntimePrincipal[]> ReadPrincipalsAsync(NpgsqlConnection connection,
     ReadJsonAsync<RuntimePrincipal[]>(connection, transaction, """
         SELECT coalesce(jsonb_agg(jsonb_build_object(
           'oid', r.oid, 'role', r.rolname, 'objectId', p.object_id, 'type', p.principal_type,
-          'tenantId', p.tenant_id, 'mfa', coalesce(p.is_mfa <> 0, true),
-          'admin', coalesce(p.is_admin <> 0, true), 'canLogin', r.rolcanlogin, 'superuser', r.rolsuper,
+          'tenantId', p.tenant_id, 'mfaFlag', p.is_mfa,
+          'adminFlag', p.is_admin, 'canLogin', r.rolcanlogin, 'superuser', r.rolsuper,
           'createDatabase', r.rolcreatedb, 'createRole', r.rolcreaterole, 'replication', r.rolreplication,
           'inherit', r.rolinherit, 'bypassRls', r.rolbypassrls,
           'memberships', (SELECT coalesce(jsonb_agg(jsonb_build_object(
