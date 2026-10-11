@@ -858,6 +858,8 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         var root = new SessionIdentity(selection.Selection.ProjectId, runId, "fixed-root");
         var accepted = await _store.AcceptRootAsync(
             _actor, selection, root.SessionId, CancellationToken.None);
+        Assert.Equal((0, 0), await _store.ReadMafExecutionCapacityAsync(
+            _actor, root, CancellationToken.None));
         const string associationId = "fixed-association";
         var childSessionId = MafExecutionPlanner.CreateChildSessionId(root, "plan-1", associationId);
         var association = new MafExecutionFixedWorkAssociation(
@@ -920,8 +922,10 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             _actor, root, CancellationToken.None, recovered.State.FixedWorkAssociations));
         Assert.Equal(associationId, child.AssociationId);
         Assert.Equal(childSessionId, child.Identity.SessionId);
-        Assert.Equal((2, 2), await _store.ReadMafExecutionCapacityAsync(
+        Assert.Equal((1, 1), await _store.ReadMafExecutionCapacityAsync(
             _actor, root, CancellationToken.None));
+        Assert.Equal((1, 1), await _store.ReadMafExecutionCapacityAsync(
+            _actor, _root, CancellationToken.None));
     }
 
     [Fact]
