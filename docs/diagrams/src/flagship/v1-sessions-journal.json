@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Session journal and private reviewed tool results",
-  "alt": "Events & Sessions verifies the run's provider binding before committing a session. Migration 008 rejects row updates to sessions, provider bindings and fork lineage while permitting inserts and row locks. Startup checks the enabled, unconditional update triggers. Private tool result routes require direct mutual TLS and the original current actor. Orchestrator verifies the full selected call and native action admission. Events stores bytes before journal references and acknowledgments. Saved reads require exact proof, source, length and digest, with current checks before return. Public replay hides private result references and bytes. Native remote-tool dispatch remains disabled; this source does not prove deployment or a real remote call.",
+  "alt": "Events & Sessions verifies the run's provider binding before committing a session. Private tool result routes require direct mutual TLS and the original current actor. Orchestrator verifies the full selected call and native action admission. Events stores bytes before journal references and acknowledgments. Saved reads require exact proof, source, length and digest, with current checks before return. Public replay hides private result references and bytes. Native remote-tool dispatch remains disabled; this source does not prove deployment or a real remote call.",
   "autonumber": true,
   "participants": [
     {
@@ -74,11 +74,6 @@
       "label": "Persist immutable project/run pin and session",
       "line": "solid",
       "arrow": "filled"
-    },
-    {
-      "type": "note",
-      "over": ["postgres"],
-      "label": "Migration 008: session, provider-binding and fork-lineage rows permit inserts and locks, but reject all updates."
     },
     {
       "type": "note",

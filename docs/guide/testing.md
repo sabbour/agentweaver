@@ -15,6 +15,24 @@ These 30 PostgreSQL cases compile but have not run for this source change.
 Checkpoint corruption and size-limit cases insert malformed fixtures directly.
 Decision-version cases append new decisions instead of changing saved rows.
 
+Each restricted-role case grants `SELECT`, `INSERT`, and `UPDATE` on only the column below.
+The column grant permits row locks; the trigger rejects all updates, including an unchanged value.
+
+| Owner migration | Table | Test role's only `UPDATE` column |
+| --- | --- | --- |
+| Core `021` | `coordinator_decisions` | `decision_id` |
+| Core `021` | `maf_workflow_checkpoints` | `checkpoint_id` |
+| Sessions `008` | `sessions` | `session_id` |
+| Sessions `008` | `session_provider_bindings` | `run_id` |
+| Sessions `008` | `session_fork_lineage` | `target_session_id` |
+
+Startup checks the migration record and each named row-level `BEFORE UPDATE` trigger.
+Each trigger must use the owner's schema-qualified `reject_row_lock_record_update()` function.
+It must be enabled for ordinary execution, with no column filter, condition, or arguments.
+The migration revokes public access to the function and rejects updates with SQLSTATE `55000`.
+It adds no `DELETE` or `TRUNCATE` trigger and changes no foreign-key deletion rule.
+These source checks do not prove installed database permissions or deployed behavior.
+
 The shared Broker coordination test reserves seven child slots: four registered
 children, including its Fixed child, plus three confirmed WorkPlan items.
 It keeps the two-active-child limit and checks that one more active child is rejected.

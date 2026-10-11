@@ -2,7 +2,7 @@
   "$schema": "../graph-spec.schema.json",
   "kind": "graph",
   "title": "V1 services, contracts, and adapters",
-  "alt": "Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator/Core candidates and their provider adapters. Core migration 021 rejects updates to decisions and checkpoints; Sessions migration 008 rejects updates to sessions, provider bindings and fork lineage. Inserts and row locks remain available, and startup checks enabled, unconditional update triggers. The runtime library connects native SDK callbacks to authenticated Orchestrator receipts. Events fetches receipt references and commits immutable Cost accounting. Environment retains its canonical placement lease during internal lookup and denies public run-bound enrollment. The journal requires trusted Orchestrator receipts for PolicyEvaluation writes. This source structure does not prove deployment, paid model execution, or physical runtime recovery.",
+  "alt": "Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator/Core candidates and their provider adapters. The runtime library connects native SDK callbacks to authenticated Orchestrator receipts. Events fetches receipt references and commits immutable Cost accounting. Environment retains its canonical placement lease during internal lookup and denies public run-bound enrollment. The journal requires trusted Orchestrator receipts for PolicyEvaluation writes. This source structure does not prove deployment, paid model execution, or physical runtime recovery.",
   "direction": "TB",
   "routing": "separate-ports",
   "groups": [
@@ -140,7 +140,7 @@
     {
       "id": "orchestrator-owner",
       "label": "Orchestrator",
-      "subLabel": "Decision and checkpoint rows reject updates.",
+      "subLabel": "Tree owner; refs: Core, Postgres, Providers.",
       "meta": "Agentweaver.Orchestrator",
       "icon": "server",
       "fluentIcon": "api",
@@ -283,7 +283,7 @@
       { "id": "iworkspacevolumeprovider", "type": "card", "position": { "x": 1196.96, "y": 144 }, "data": { "label": "IWorkspaceVolumeProvider", "subLabel": "Generation-scoped Storage contract." } },
       { "id": "sessions-dependencies", "type": "card", "position": { "x": 396.4064, "y": 492.8 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry" } },
       { "id": "events-and-sessions", "type": "card", "position": { "x": 999.5936, "y": 492.8 }, "data": { "label": "Events & Sessions", "subLabel": "PostgreSQL journal, policy evidence, and messages.", "meta": "Agentweaver.EventsAndSessions" } },
-      { "id": "orchestrator-owner", "type": "card", "position": { "x": 1150, "y": 1310 }, "data": { "label": "Orchestrator", "subLabel": "Decision and checkpoint rows reject updates.", "meta": "Agentweaver.Orchestrator" } },
+      { "id": "orchestrator-owner", "type": "card", "position": { "x": 1150, "y": 1310 }, "data": { "label": "Orchestrator", "subLabel": "Tree owner; refs: Core, Postgres, Providers.", "meta": "Agentweaver.Orchestrator" } },
       { "id": "environment-dependencies", "type": "card", "position": { "x": 396.4064, "y": 804.8 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nAzure Files Storage" } },
       { "id": "agentweaver-environment", "type": "card", "position": { "x": 999.5936, "y": 790.8 }, "data": { "label": "Environment", "subLabel": "Owner lifecycle, egress, and workspace volumes.", "meta": "Agentweaver.Environment" } },
       { "id": "knowledge-dependencies", "type": "card", "position": { "x": 396.4064, "y": 1099.2 }, "data": { "label": "Refs", "subLabel": "Abstractions; Providers;\nPersistence.Postgres; Telemetry" } },
