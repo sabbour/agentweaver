@@ -13,13 +13,25 @@ public sealed record WorkspaceVolumeApiFlushRequest(
     {
         ArgumentNullException.ThrowIfNull(Transition);
         ArgumentNullException.ThrowIfNull(Suspend);
+        ArgumentNullException.ThrowIfNull(Suspend.Proof);
+        ArgumentNullException.ThrowIfNull(Suspend.Proof.Registration);
+        ArgumentNullException.ThrowIfNull(Suspend.Proof.Registration.Binding);
         ArgumentNullException.ThrowIfNull(Suspend.WorkspaceFlush);
         var flush = Suspend.WorkspaceFlush.Validate();
-        Transition.ToTransition(flush.Spec.VolumeId, WorkspaceVolumeTransitionKind.Flush);
-        if (Transition.ExpectedResourceGeneration != flush.ResourceGeneration ||
+        var binding = Suspend.Proof.Registration.Binding;
+        var owner = flush.EnvironmentFence.Owner;
+        if (Suspend.OperationId == Guid.Empty || Suspend.ManifestId == Guid.Empty || Suspend.PhaseVersion < 1 ||
+            Suspend.Proof.ContractVersion != 1 || Suspend.Proof.SourceGrantId == Guid.Empty ||
+            Suspend.Proof.SourceGrantRevision < 1 || Suspend.Proof.Purpose != RuntimeCredentialPurpose.Observe ||
+            binding.TenantId != owner.TenantId || binding.ProjectId != owner.ProjectId ||
+            binding.RunId != owner.RunId || binding.EnvironmentId != owner.EnvironmentId ||
+            binding.EnvironmentLifecycleGeneration != flush.EnvironmentFence.LifecycleGeneration ||
+            Transition.ExpectedResourceGeneration != flush.ResourceGeneration ||
             Transition.ExpectedDataGeneration != flush.ExpectedDataGeneration ||
-            Transition.IdempotencyKey != flush.IdempotencyKey || Transition.NextDataGeneration is not null)
+            Transition.IdempotencyKey != flush.IdempotencyKey ||
+            Transition.NextDataGeneration != checked(flush.ExpectedDataGeneration + 1))
             throw new RuntimeAuthorizationException("runtime_workspace_flush_request_invalid");
+        Transition.ToTransition(flush.Spec.VolumeId, WorkspaceVolumeTransitionKind.Flush);
         return this;
     }
 }
@@ -69,10 +81,12 @@ public sealed record WorkspaceVolumeLifecycleResult(
         CleanupStatus is { State: EnvironmentWorkspaceVolumeCleanupState.Blocked };
 }
 
-public sealed class RuntimeWorkspaceSuspendHttpClient(HttpClient client, Uri environmentOwnerAddress)
+public sealed class RuntimeWorkspaceSuspendHttpClient(
+    HttpClient client, Uri environmentOwnerAddress, TimeProvider? timeProvider = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly Uri _owner = RuntimeOwnerHttpTransport.RequireOwnerAddress(environmentOwnerAddress);
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
     public async Task<WorkspaceVolumeApiFlushRequest> ResolveAsync(
         RuntimeHostSuspendRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
@@ -134,7 +148,41 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(HttpClient client, Uri env
         if (host.OperationId != request.Suspend.OperationId || host.ManifestId != request.Suspend.ManifestId ||
             host.Registration != request.Suspend.Proof.Registration || host.WorkspaceFlush != receipt)
             throw new RuntimeAuthorizationException("runtime_suspend_receipt_binding_invalid");
+        ValidateHostReceipt(host, request.Suspend, _time.GetUtcNow());
         return result;
+    }
+
+    public static void ValidateHostReceipt(
+        RuntimeHostSuspendReceipt receipt, RuntimeHostSuspendRequest request, DateTimeOffset now)
+    {
+        if (receipt is null || receipt.SourceGrant is null || receipt.CacheAcknowledgment is null ||
+            receipt.WorkspaceFlush is null || receipt.NativeTurn is null || request.WorkspaceFlush is null)
+            throw new RuntimeAuthorizationException("runtime_suspend_receipt_invalid");
+        var registration = request.Proof.Registration;
+        var grant = receipt.SourceGrant;
+        var cache = receipt.CacheAcknowledgment;
+        var binding = registration.Binding;
+        var identity = new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId);
+        var material = cache.Reference?.Material;
+        if (receipt.ContractVersion != 1 || receipt.OperationId != request.OperationId ||
+            receipt.ManifestId != request.ManifestId || receipt.Registration != registration ||
+            grant.GrantId != request.Proof.SourceGrantId || grant.Revision != request.Proof.SourceGrantRevision ||
+            grant.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            grant.RegistrationRevision != registration.Revision ||
+            grant.Purpose != RuntimeCredentialPurpose.Observe || grant.State != RuntimeCredentialState.Active ||
+            grant.Audience != binding.ObservationEndpoint ||
+            grant.ExpiresAt <= now || grant.ExpiresAt > registration.ExpiresAt ||
+            cache.ContractVersion != 1 || cache.Identity != identity || cache.EventId != request.ManifestId ||
+            cache.Position < 1 || material?.Kind != SessionMaterialKind.SdkCache ||
+            material.TenantId != binding.TenantId || material.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            material.RegistrationRevision != registration.Revision || material.ExecutionFence != binding.ExecutionFence ||
+            material.AcceptedSelectionHash != binding.AcceptedSelectionHash)
+            throw new RuntimeAuthorizationException("runtime_suspend_receipt_invalid");
+        SessionMaterialValidation.Validate(cache.Reference!);
+        RuntimeNativeTurnContract.ValidateRecorded(receipt.NativeTurn);
+        if (receipt.NativeTurn.Admission.Registration != registration)
+            throw new RuntimeAuthorizationException("runtime_suspend_native_turn_binding_invalid");
+        receipt.WorkspaceFlush.ValidateFor(request.WorkspaceFlush);
     }
 
     private static bool SameJson<T>(T expected, T actual) =>
