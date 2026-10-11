@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import { buildP1PostgresPlan, p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
 
@@ -57,11 +57,10 @@ test('Only the existing casting authority function receives direct runtime EXECU
     ['projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)']);
 });
 
-test('Core plan includes 016/018 but never 017; source approval is not execution permission', () => {
+test('Core plan includes all 20 registered versions but never 017; source approval is not execution permission', () => {
   const plan = buildP1PostgresPlan();
-  assert.ok(plan.coreVersions.includes(16));
-  assert.ok(plan.coreVersions.includes(18));
-  assert.ok(!plan.coreVersions.includes(17));
+  assert.deepEqual(plan.coreVersions,
+    [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21]);
   assert.equal(plan.executionRequirements.length, 4);
   assert.ok(plan.executionRequirements.some(item => item.includes('separate approval')));
   assert.ok(plan.executionRequirements.some(item => item.includes('Restricted-role PostgreSQL tests')));
@@ -87,6 +86,115 @@ test('Initializer source corrections preserve both execution blocks and the sepa
     credentialBlock);
   assert.ok(credentialBlock < source.indexOf('new AzureCliCredential('));
   assert.ok(source.includes('if (table.LockColumn is not null)\n            throw new InvalidOperationException("One-column row-lock grants still require reviewed mutation-denial source and restricted-role proof. Initialization is not yet permitted.");'));
-  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20\\]\\)'));
-  assert.ok(!source.includes('021') && !source.includes('008'));
+  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20,\\s*21\\]\\)'));
+  assert.ok(source.includes('21 => \\"row_lock_record_updates\\"'));
+});
+
+test('Current source catalog preserves exact Core and Events versions and embedded resources', () => {
+  const plan = buildP1PostgresPlan();
+  const owners = [
+    ['orchestrator/Agentweaver.Orchestrator', 'CoordinationOwnerMigrator.cs', plan.coreVersions],
+    ['events-and-sessions/Agentweaver.EventsAndSessions', 'EventsAndSessionsMigrator.cs',
+      Array.from({ length: 8 }, (_, index) => index + 1)],
+  ];
+  for (const [owner, migrator, versions] of owners) {
+    const directory = new URL(`../../../services/${owner}/`, import.meta.url);
+    const source = readFileSync(new URL(migrator, directory), 'utf8').replace(/\r\n/g, '\n');
+    const project = readFileSync(new URL(`${owner.split('/')[1]}.csproj`, directory), 'utf8');
+    const embedded = [...project.matchAll(/<EmbeddedResource Include="Migrations\\([^"]+)"\s*\/>/g)]
+      .map(match => match[1]);
+    const mappings = owner.startsWith('orchestrator/')
+      ? [...source.matchAll(/^\s*(\d+) => "([a-z_]+)",$/gm)]
+        .map(match => [Number(match[1]), Number(match[1]) === 10
+          ? `${match[2]}.sql` : `${match[1].padStart(3, '0')}_${match[2]}.sql`])
+      : [...source.matchAll(/^\s*(\d+) => "Agentweaver\.EventsAndSessions\.Migrations\.([^"]+)",$/gm)]
+        .map(match => [Number(match[1]), match[2]]);
+    assert.deepEqual(mappings.map(([version]) => version), versions);
+    assert.deepEqual(embedded, mappings.map(([, filename]) => filename));
+    for (const [, filename] of mappings)
+      assert.ok(readFileSync(new URL(`Migrations/${filename}`, directory)).length > 0);
+    if (owner.startsWith('orchestrator/')) {
+      assert.ok(source.includes('Enumerable.Range(1, 16).Concat([18, 19, 20, 21])'));
+      assert.ok(source.includes('(applied.Contains(21) && !applied.Contains(20))'));
+      assert.ok(!source.includes('if (!applied.Contains(21))'));
+      const allowed = source.match(/WHERE version NOT IN \(([\d, ]+)\)/);
+      assert.deepEqual(allowed[1].split(',').map(Number), versions);
+      assert.ok(source.includes("tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal"));
+      assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
+      assert.ok(source.includes('Enumerable.Range(57, 10)'));
+    } else {
+      assert.ok(source.includes('private const int CurrentSchemaVersion = 8;'));
+      assert.ok(source.includes('(applied.Contains(8) && !applied.Contains(7))'));
+      assert.ok(source.includes('3 when legacyProjectFactsV2 => "Agentweaver.EventsAndSessions.Migrations.002_addressed_messages.sql"'));
+      assert.equal((source.match(/tgtype = 19/g) ?? []).length, 3);
+    }
+  }
+});
+
+test('Catalog function inventory matches all 28 source signatures without changing table or lock grants', () => {
+  const plan = buildP1PostgresPlan();
+  assert.equal(plan.services.flatMap(service => service.tables).length, 93);
+  assert.deepEqual(plan.services.map(service => service.functions.length), [3, 0, 4, 4, 17]);
+  assert.deepEqual(plan.services.flatMap(service =>
+    service.tables.filter(table => table.lockColumn)
+      .map(table => `${service.schema}.${table.table}.${table.lockColumn}`)), [
+    'events_sessions.sessions.session_id',
+    'events_sessions.session_provider_bindings.run_id',
+    'events_sessions.session_fork_lineage.target_session_id',
+    'events_sessions.usage_rate_cards.card_id',
+    'events_sessions.usage_ledger.event_id',
+    'orchestrator.coordinator_decisions.decision_id',
+    'orchestrator.maf_workflow_checkpoints.checkpoint_id',
+    'orchestrator.session_consistency_manifests.manifest_id',
+  ]);
+  const directories = [
+    'projects-config/Agentweaver.Projects.Config',
+    'environment/Agentweaver.Environment',
+    'knowledge/Agentweaver.Knowledge',
+    'events-and-sessions/Agentweaver.EventsAndSessions',
+    'orchestrator/Agentweaver.Orchestrator',
+  ];
+  for (const [index, owner] of directories.entries()) {
+    const directory = new URL(`../../../services/${owner}/Migrations/`, import.meta.url);
+    const functions = readdirSync(directory)
+      .filter(file => file.endsWith('.sql') || file.endsWith('.cs'))
+      .flatMap(file => [...readFileSync(new URL(file, directory), 'utf8').matchAll(
+        /CREATE(?: OR REPLACE)? FUNCTION (?:"?\{schema\}"?|projects_config)\.([a-z_]+)\(([\s\S]*?)\)/g)]
+        .map(match => `${match[1]}(${match[2].trim() ? match[2].split(',')
+          .map(parameter => parameter.trim().split(/\s+/).at(-1)).join(', ') : ''})`));
+    assert.deepEqual(functions.sort(), plan.services[index].functions.map(item => item.signature).sort());
+  }
+  assert.equal(plan.services.flatMap(service =>
+    service.functions.filter(item => item.execute)).length, 1);
+});
+
+test('Old and new guards retain distinct SQL states and row and truncate protections', () => {
+  for (const [owner, filename, tables] of [
+    ['orchestrator/Agentweaver.Orchestrator', '021_row_lock_record_updates.sql',
+      ['coordinator_decisions', 'maf_workflow_checkpoints']],
+    ['events-and-sessions/Agentweaver.EventsAndSessions', '008_row_lock_record_updates.sql',
+      ['sessions', 'session_provider_bindings', 'session_fork_lineage']],
+  ]) {
+    const sql = readFileSync(new URL(`../../../services/${owner}/Migrations/${filename}`, import.meta.url), 'utf8');
+    assert.deepEqual([...sql.matchAll(/BEFORE UPDATE ON \{schema\}\.([a-z_]+)/g)]
+      .map(match => match[1]), tables);
+    assert.ok(sql.includes("USING ERRCODE = '55000'"));
+    assert.ok(sql.includes('REVOKE ALL ON FUNCTION {schema}.reject_row_lock_record_update() FROM PUBLIC'));
+    assert.doesNotMatch(sql, /\b(?:DELETE|TRUNCATE|RETURN)\b/);
+  }
+  for (const [owner, filename, functionName, tables] of [
+    ['orchestrator/Agentweaver.Orchestrator', '019_session_suspend_resume.sql',
+      'reject_session_consistency_manifest_mutation', ['session_consistency_manifests']],
+    ['events-and-sessions/Agentweaver.EventsAndSessions', '005_copilot_usage.sql',
+      'reject_usage_history_mutation', ['usage_rate_cards', 'usage_ledger']],
+  ]) {
+    const sql = readFileSync(new URL(`../../../services/${owner}/Migrations/${filename}`, import.meta.url), 'utf8');
+    const body = sql.split(`CREATE OR REPLACE FUNCTION {schema}.${functionName}()`)[1].split('$$;')[0];
+    assert.ok(body.includes('RAISE EXCEPTION'));
+    assert.doesNotMatch(body, /ERRCODE/);
+    for (const table of tables) {
+      assert.match(sql, new RegExp(`BEFORE UPDATE OR DELETE ON \\{schema\\}\\.${table}\\s+FOR EACH ROW EXECUTE FUNCTION \\{schema\\}\\.${functionName}\\(\\)`));
+      assert.match(sql, new RegExp(`BEFORE TRUNCATE ON \\{schema\\}\\.${table}\\s+FOR EACH STATEMENT EXECUTE FUNCTION \\{schema\\}\\.${functionName}\\(\\)`));
+    }
+  }
 });

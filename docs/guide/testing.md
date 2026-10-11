@@ -283,11 +283,11 @@ The disposable-PostgreSQL tests cover concurrent duplicates, content conflicts,
 restart, immutable history, transaction rollback, and exact run/agent totals.
 Receipt tests read the committed hash and immutable price through a separate
 PostgreSQL connection. Duplicate retries return the identical receipt.
-Migration tests cover fresh Events version 7, admitted version-3 and version-4 upgrades,
+Migration tests cover fresh Events version 8, admitted version-3 and version-4 upgrades,
 the legacy version-2 project-fact layout, and rejected version gaps.
-The Orchestrator migration fixture covers versions 8 through 16 and versions 18 through 20.
+The Orchestrator migration fixture covers versions 8 through 16 and versions 18 through 21.
 It checks fresh initialization and existing version-19 and version-20 schemas that lack resources 016 and 018.
-The final history must contain exactly 19 registered versions; version 17 remains unregistered.
+The final history must contain exactly 20 registered versions; version 17 remains unregistered.
 Tests reject unknown versions, missing prerequisites, missing tables, and a missing or disabled snapshot trigger.
 Repeated initialization preserves the original history and applies no resource twice.
 Backlog and reviewed-snapshot tests use the production migrator, not separate SQL setup.

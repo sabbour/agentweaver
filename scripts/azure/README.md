@@ -45,7 +45,14 @@ A created identity does not prove database access or a ready service.
 Source review does not authorize role creation, migrations, grants, or deployment.
 The existing credential check blocks initialization before any credential request
 or database connection. The later row-lock column check also remains blocked.
-The Core migration and installed-guard checks need a separate current-source review.
+The source catalog requires Core versions 1 through 16 and 18 through 21.
+These are 20 registered versions; version 17 remains excluded.
+Events requires versions 1 through 8 and preserves the earlier version-2 layout.
+The plan retains 93 tables and eight exact row-lock columns.
+It includes 28 exact function signatures, with runtime EXECUTE only for casting authority.
+Installed guards and restricted-role behavior still require separate database proof.
+The five new update guards reject changes with SQLSTATE `55000`.
+The three older history guards retain `P0001` and their update, delete, and truncate protections.
 
 The source preflight rejects incompatible PUBLIC privileges before the first write.
 It also rejects default grants to unrelated principals and an inherited-only
@@ -65,6 +72,7 @@ Function checks require the operator owner and the exact effective EXECUTE grant
 Only the existing casting authority function can receive runtime EXECUTE.
 
 Local controlled tests exercise the same predicates and role-stage ordering.
+Pure catalog tests compare the registered resources, function signatures, and guard definitions.
 They also check partial-stage reporting and failure-receipt errors.
 An unreadable failure receipt must not hide the original failure.
 These tests do not execute the initializer or prove database catalog behavior.

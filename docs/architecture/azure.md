@@ -105,7 +105,10 @@ Its pre-write checks reject incompatible existing privileges without changing th
 Its role stage checks all five mappings before commit.
 Its grant checks preserve existing ownership and permit only exact runtime grants.
 The source checks functions by owner and effective EXECUTE privileges, not counts alone.
-Both execution blocks remain active; catalog and installed-guard review is still separate.
+Its source catalog includes 20 Core migration versions, with version 17 excluded, and eight Events versions.
+It retains 93 tables, eight row-lock columns, and 28 exact function signatures.
+Only casting authority can receive direct runtime EXECUTE.
+Both execution blocks remain active; installed guards and restricted-role behavior still require separate database proof.
 These source changes do not change the Azure topology shown above.
 See the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 and the [source-test boundary](../guide/testing).
