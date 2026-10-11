@@ -135,7 +135,12 @@ the session journal, addressed messages, project facts, and explicit session for
 The migration preserves admitted version-4 schemas and the earlier version-2 project-fact layout.
 Migration `006_native_sdk_usage.sql` adds cache-write values and permits unknown
 request counts. Migration `007_native_usage_receipts.sql` adds immutable source
-receipts and run-scoped Cost bindings. Ordinary startup requires version 7.
+receipts and run-scoped Cost bindings. Migration `008_row_lock_record_updates.sql`
+rejects every row update to `sessions`, `session_provider_bindings`, and
+`session_fork_lineage`. It permits inserts and row locks without permitting data changes.
+Ordinary startup requires version 8 and checks each enabled, unconditional update trigger.
+It rejects missing, disabled, conditional, column-limited, or wrong-function triggers.
+The new migration does not change deletion rules or rewrite earlier migration records.
 
 `PostgresUsageLedger` implements the low-level `IUsageLedger` storage contract.
 An entry records tenant, project, run, session, agent, model metadata, measurements,

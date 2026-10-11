@@ -6,7 +6,7 @@ using Xunit;
 namespace Agentweaver.Orchestrator.Core.Tests;
 
 [Collection("Coordination PostgreSQL")]
-public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture fixture) : IAsyncLifetime
+public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgresFixture fixture) : IAsyncLifetime
 {
     private readonly string _schema = "coordination_upgrade_" + Guid.NewGuid().ToString("N");
 
@@ -33,11 +33,12 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
     [InlineData(18)]
     [InlineData(19)]
     [InlineData(20)]
+    [InlineData(21)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
         await ApplyMigrationsThroughAsync(version);
         var historyBefore = await ReadMigrationHistoryAsync(version);
-        if (version < 20)
+        if (version < 21)
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
@@ -108,6 +109,7 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
     [InlineData(14)]
     [InlineData(15)]
     [InlineData(19)]
+    [InlineData(20)]
     public async Task RejectsMissingPrerequisitesWithoutRewritingHistory(int missingVersion)
     {
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
@@ -195,7 +197,8 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             (16, "016_project_backlog.sql"),
             (18, "018_reviewed_remote_tool_snapshots.sql"),
             (19, "019_session_suspend_resume.sql"),
-            (20, "020_maf_buildtest_workspace_seed.sql")
+            (20, "020_maf_buildtest_workspace_seed.sql"),
+            (21, "021_row_lock_record_updates.sql")
         ];
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using (var setup = new NpgsqlCommand($"""
@@ -293,7 +296,7 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
-        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20]), reader.GetFieldValue<int[]>(9));
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20, 21]), reader.GetFieldValue<int[]>(9));
         Assert.True(reader.GetBoolean(10));
         Assert.True(reader.GetBoolean(11));
         Assert.True(reader.GetBoolean(12));

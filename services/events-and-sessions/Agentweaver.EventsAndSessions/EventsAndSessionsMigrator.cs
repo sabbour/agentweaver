@@ -7,7 +7,7 @@ namespace Agentweaver.EventsAndSessions;
 
 public static class EventsAndSessionsMigrator
 {
-    private const int CurrentSchemaVersion = 7;
+    private const int CurrentSchemaVersion = 8;
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
 
@@ -56,7 +56,8 @@ public static class EventsAndSessionsMigrator
             (applied.Contains(4) && !applied.Contains(3)) ||
             (applied.Contains(5) && !applied.Contains(4)) ||
             (applied.Contains(6) && !applied.Contains(5)) ||
-            (applied.Contains(7) && !applied.Contains(6)))
+            (applied.Contains(7) && !applied.Contains(6)) ||
+            (applied.Contains(8) && !applied.Contains(7)))
             throw new InvalidOperationException("Unsupported Events & Sessions schema version.");
 
         var legacyProjectFactsV2 = false;
@@ -111,6 +112,7 @@ public static class EventsAndSessionsMigrator
                 5 => "Agentweaver.EventsAndSessions.Migrations.005_copilot_usage.sql",
                 6 => "Agentweaver.EventsAndSessions.Migrations.006_native_sdk_usage.sql",
                 7 => "Agentweaver.EventsAndSessions.Migrations.007_native_usage_receipts.sql",
+                8 => "Agentweaver.EventsAndSessions.Migrations.008_row_lock_record_updates.sql",
                 _ => throw new InvalidOperationException("Unsupported Events & Sessions schema version.")
             };
             await using var resource = typeof(EventsAndSessionsMigrator).Assembly.GetManifestResourceStream(resourceName)
@@ -147,7 +149,7 @@ public static class EventsAndSessionsMigrator
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 3),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 4),
-                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7)),
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -175,7 +177,23 @@ public static class EventsAndSessionsMigrator
                     AND attname = 'request_count' AND attnum > 0 AND NOT attisdropped AND NOT attnotnull),
                 (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 7),
                 to_regclass(@usageBindings) IS NOT NULL,
-                to_regclass(@usageReceipts) IS NOT NULL
+                to_regclass(@usageReceipts) IS NOT NULL,
+                (SELECT count(*) FROM {quotedSchema}.sessions_schema_migrations WHERE version = 8) = 1,
+                EXISTS (SELECT 1 FROM pg_catalog.pg_trigger
+                    WHERE tgrelid = to_regclass(@sessions) AND tgname = 'sessions_no_update'
+                      AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 19
+                      AND tgenabled = 'O' AND NOT tgisinternal
+                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0),
+                EXISTS (SELECT 1 FROM pg_catalog.pg_trigger
+                    WHERE tgrelid = to_regclass(@bindings) AND tgname = 'session_provider_bindings_no_update'
+                      AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 19
+                      AND tgenabled = 'O' AND NOT tgisinternal
+                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0),
+                EXISTS (SELECT 1 FROM pg_catalog.pg_trigger
+                    WHERE tgrelid = to_regclass(@forkLineage) AND tgname = 'session_fork_lineage_no_update'
+                      AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 19
+                      AND tgenabled = 'O' AND NOT tgisinternal
+                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0)
             """, connection);
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.sessions");
         command.Parameters.AddWithValue("bindings", NpgsqlDbType.Text, $"{schema}.session_provider_bindings");
@@ -195,6 +213,7 @@ public static class EventsAndSessionsMigrator
         command.Parameters.AddWithValue("usageBindings", NpgsqlDbType.Text, $"{schema}.usage_run_cost_bindings");
         command.Parameters.AddWithValue("usageReceipts", NpgsqlDbType.Text, $"{schema}.usage_source_receipts");
         command.Parameters.AddWithValue("forkLineage", NpgsqlDbType.Text, $"{schema}.session_fork_lineage");
+        command.Parameters.AddWithValue("updateGuard", NpgsqlDbType.Text, $"{schema}.reject_row_lock_record_update()");
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) ||
             reader.GetInt64(0) != 1 || reader.GetInt64(1) != 1 || reader.GetInt64(2) != 1 ||
@@ -203,7 +222,8 @@ public static class EventsAndSessionsMigrator
             Enumerable.Range(8, 16).Any(column => !reader.GetBoolean(column)) ||
             reader.GetInt64(24) != 1 || reader.GetInt64(25) != 1 ||
             !reader.GetBoolean(26) || !reader.GetBoolean(27) ||
-            reader.GetInt64(28) != 1 || !reader.GetBoolean(29) || !reader.GetBoolean(30))
+            reader.GetInt64(28) != 1 || !reader.GetBoolean(29) || !reader.GetBoolean(30) ||
+            Enumerable.Range(31, 4).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Events & Sessions schema is not current; run the explicit --migrate command.");
     }

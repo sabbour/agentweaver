@@ -60,7 +60,14 @@ public sealed partial class MafCheckpointStorePostgresTests
             intent.CheckpointId, initial.Info, state, CancellationToken.None);
         Assert.Equal(saved.Info, (await _executionStore.AppendAsync(
             intent.CheckpointId, initial.Info, state, CancellationToken.None)).Info);
-        await TamperSeedAsync(intent.CheckpointId, intent.WorkspaceSeed!.Value.Length);
+        Assert.Equal(1, await SeedRowCountAsync());
+    }
+
+    [Fact]
+    public async Task BinarySeedReplayRejectsCorruptedBytesFromAnInitialCheckpointFixture()
+    {
+        var (initial, state, intent) = await SeedCheckpointAsync();
+        await InsertSeedFixtureAsync(initial, state, intent, new byte[intent.WorkspaceSeed!.Value.Length]);
 
         var conflict = await Assert.ThrowsAsync<CoordinationException>(() =>
             _executionStore.AppendAsync(intent.CheckpointId, initial.Info, state, CancellationToken.None));
@@ -96,19 +103,12 @@ public sealed partial class MafCheckpointStorePostgresTests
     public async Task BinarySeedDatabaseLimitMatchesTheExactAdmittedMaximum()
     {
         var (initial, state, intent) = await SeedCheckpointAsync();
-        await _executionStore.AppendAsync(
-            intent.CheckpointId, initial.Info, state, CancellationToken.None);
-        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using var update = new NpgsqlCommand(
-            $"UPDATE \"{_schema}\".maf_workflow_checkpoints SET workspace_seed = @bytes WHERE checkpoint_id = @checkpoint",
-            connection);
-        update.Parameters.AddWithValue("checkpoint", intent.CheckpointId);
-        var parameter = update.Parameters.AddWithValue(
-            "bytes", NpgsqlDbType.Bytea, new byte[ProducedRunCaptureLimits.MaximumPackageBytes]);
-        Assert.Equal(1, await update.ExecuteNonQueryAsync());
-        parameter.Value = new byte[ProducedRunCaptureLimits.MaximumPackageBytes + 1];
+        await InsertSeedFixtureAsync(initial, state, intent,
+            new byte[ProducedRunCaptureLimits.MaximumPackageBytes]);
 
-        var exception = await Assert.ThrowsAsync<PostgresException>(() => update.ExecuteNonQueryAsync());
+        var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+            InsertSeedFixtureAsync(initial, state, intent,
+                new byte[ProducedRunCaptureLimits.MaximumPackageBytes + 1], "seed-too-large"));
 
         Assert.Equal(PostgresErrorCodes.CheckViolation, exception.SqlState);
         Assert.Equal("ck_maf_workspace_seed_bytes", exception.ConstraintName);
@@ -121,14 +121,7 @@ public sealed partial class MafCheckpointStorePostgresTests
     public async Task BinarySeedMissingOriginCannotExecuteFromItsValidJsonReference()
     {
         var (initial, state, intent) = await SeedCheckpointAsync();
-        await _executionStore.AppendAsync(
-            intent.CheckpointId, initial.Info, state, CancellationToken.None);
-        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using var update = new NpgsqlCommand(
-            $"UPDATE \"{_schema}\".maf_workflow_checkpoints SET workspace_seed = NULL WHERE checkpoint_id = @checkpoint",
-            connection);
-        update.Parameters.AddWithValue("checkpoint", intent.CheckpointId);
-        await update.ExecuteNonQueryAsync();
+        await InsertSeedFixtureAsync(initial, state, intent, bytes: null);
 
         var exception = await Assert.ThrowsAsync<CoordinationException>(() =>
             _executionStore.HydrateBuildTestIntentAsync(intent, CancellationToken.None));
@@ -257,15 +250,35 @@ public sealed partial class MafCheckpointStorePostgresTests
         return (int)(await count.ExecuteScalarAsync())!;
     }
 
-    private async Task TamperSeedAsync(string checkpointId, int length)
+    private async Task InsertSeedFixtureAsync(
+        MafExecutionCheckpointSnapshot initial,
+        MafExecutionCheckpoint state,
+        MafExecutionBuildTestIntent intent,
+        byte[]? bytes,
+        string? checkpointId = null)
     {
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using var update = new NpgsqlCommand(
-            $"UPDATE \"{_schema}\".maf_workflow_checkpoints SET workspace_seed = @bytes WHERE checkpoint_id = @checkpoint",
-            connection);
-        update.Parameters.AddWithValue("bytes", NpgsqlDbType.Bytea, new byte[length]);
-        update.Parameters.AddWithValue("checkpoint", checkpointId);
-        await update.ExecuteNonQueryAsync();
+        await using var insert = new NpgsqlCommand($"""
+            INSERT INTO "{_schema}".maf_workflow_checkpoints
+                (project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
+                 payload, cache_object_key, cache_sdk_version, pinned_model_reference,
+                 accepted_selection_hash, execution_fence, created_at, workspace_seed)
+            SELECT project_id, run_id, session_id, store_name, @checkpoint, checkpoint_id,
+                   @payload, cache_object_key, cache_sdk_version, pinned_model_reference,
+                   accepted_selection_hash, execution_fence, clock_timestamp(), @bytes
+            FROM "{_schema}".maf_workflow_checkpoints
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND checkpoint_id = @parent AND store_name = @store
+            """, connection);
+        insert.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+        insert.Parameters.AddWithValue("run", _binding.Identity.RunId);
+        insert.Parameters.AddWithValue("session", _binding.Identity.SessionId);
+        insert.Parameters.AddWithValue("store", MafExecutionCheckpointContract.StoreName);
+        insert.Parameters.AddWithValue("parent", initial.Info.CheckpointId);
+        insert.Parameters.AddWithValue("checkpoint", checkpointId ?? intent.CheckpointId);
+        insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, MafExecutionCheckpointContract.Serialize(state));
+        insert.Parameters.AddWithValue("bytes", NpgsqlDbType.Bytea, (object?)bytes ?? DBNull.Value);
+        Assert.Equal(1, await insert.ExecuteNonQueryAsync());
     }
 
     private static async Task<string> GitAsync(string directory, params string[] arguments)
