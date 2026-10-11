@@ -45,7 +45,11 @@ public sealed record RuntimeHostRefreshRequest(RuntimeHostSessionProof Proof, Gu
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostSuspendRequest(
-    RuntimeHostSessionProof Proof, Guid OperationId, Guid ManifestId, long PhaseVersion);
+    RuntimeHostSessionProof Proof, Guid OperationId, Guid ManifestId, long PhaseVersion)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public WorkspaceVolumeFlushRequest? WorkspaceFlush { get; init; }
+}
 
 public sealed record RuntimeHostSuspendReceipt(
     int ContractVersion,
@@ -54,7 +58,11 @@ public sealed record RuntimeHostSuspendReceipt(
     RuntimeRegistration Registration,
     RuntimeGrantReceipt SourceGrant,
     RuntimeNativeTurnRecordedReceipt NativeTurn,
-    SessionMaterialAcknowledgment CacheAcknowledgment);
+    SessionMaterialAcknowledgment CacheAcknowledgment)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public WorkspaceVolumeFlushReceipt? WorkspaceFlush { get; init; }
+}
 
 public sealed record RuntimeHostReadinessReceipt(
     int ContractVersion,
