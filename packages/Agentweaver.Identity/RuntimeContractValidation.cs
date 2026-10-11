@@ -97,6 +97,15 @@ public static class RuntimeContractValidation
         ValidateHash(binding.AcceptedSelectionHash);
     }
 
+    public static void RequireSupportedNumericRunLimits(RuntimeBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        if (binding.MaxModelTurns is not null ||
+            binding.MaxToolCalls is not null ||
+            binding.MaxPromptTokens is not null)
+            throw new RuntimeAuthorizationException("runtime_numeric_limits_unsupported");
+    }
+
     public static void ValidateHash(string value)
     {
         if (value is null || value.Length != 64 ||

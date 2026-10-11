@@ -7,6 +7,15 @@ Open WorkPlan link and a recovered checkpoint association, not runtime permissio
 The runtime-owner context matcher separately checks the confirmed Fixed step.
 Compilation does not prove PostgreSQL execution.
 
+The shared Broker coordination test reserves seven child slots: four registered
+children, including its Fixed child, plus three confirmed WorkPlan items.
+It keeps the two-active-child limit and checks that one more active child is rejected.
+Fixed-child model assertions cover both Copilot connections and Azure BYOK bindings.
+Historical run-limit JSON checks use a fixture with the optional limits unset.
+The retirement fixture supplies both required Environment fencing generations.
+The oversized webhook request uses `Expect: 100-continue` to receive the
+exact `413` rejection before uploading its body. The one-MiB limit is unchanged.
+
 | Test suite | What it exercises | What it does not prove |
 | --- | --- | --- |
 | Orchestrator Core tests | Typed outcome/workflow/plan/revision validation, workflow grammar and step DAG validation, bounded WorkPlan eligibility and joins, deterministic UTC daily/weekly/monthly occurrence evaluation, stable schedule idempotency inputs, bounded structured GitHub event predicates and regex safety, project-scoped backlog graph edits and cycle checks, revision-fenced readiness for merge-complete and verified non-merge completion, MAF witness serialization and current-capture inventory regressions for late non-empty captures and multiple captures, pinned model/provider selection checks, structured scope diffs, AGT Policy provider validation and evaluation, negotiation/pinning, deny-by-default and project-policy narrowing, plus action-guard grant scope/fence checks, immutable owner receipt persistence, journal-ACK ordering, current-grant revalidation, and no-effect behavior on evidence failure. Its PostgreSQL integration tests cover persisted backlog edits, concurrent claim arbitration, idempotent replay after store restart, rollback of claim/root/decision intent, and rollback when current authority is lost immediately before commit or replay commit. The source-only Guardrails candidate uses controlled classifiers, authority and journal doubles to cover ordered seam/run/resource pin consistency, invalid null/default shapes, content SHA-256 binding, typed stage/content support, AGT deny monotonicity, timeout/failure, revocation, redaction, and append response-loss/replay. | Current network authorization in backlog routes, production task-to-whole-plan evidence association/output-proof verification, automatic workflow initiation, live model output, full child dispatch, deployed authorization, production Prompt Shields transport, a trusted Guardrails journal/current-authority adapter, MAF gate wiring, or protected-effect call-site enforcement. |
@@ -115,6 +124,15 @@ npm run test:release
 
 Missing Docker, image-pull permission, or PostgreSQL startup fails the integration suite. Testcontainers does not clean up unrelated containers or contact production resources.
 
+### Focused MAF review corrections
+
+Managed tool-callback tests check repeated invocation and secondary permission requests after authority revocation.
+They also check cancellation and a turn change during an authority wait.
+Stable native call IDs prevent duplicate reservations; they do not cache permission to run a tool.
+Managed revision tests retain the exhausted attempt count through gate replay, fence advance, and saved-state recovery.
+PostgreSQL quota tests also check the saved revision count before failure, after failure, and after recovery.
+Compiling those PostgreSQL tests does not prove that they passed against a database.
+
 ### Opt-in native Redis Memory tests
 
 `RedisMemoryNativeIntegrationTests` are skipped unless
@@ -165,7 +183,18 @@ authority, credential access, applied L7 enforcement, or a protected remote call
 `AzureByokNativeUsageUsesBrokerCoreAndEventsWithExactDispatchProvenance` uses the real Broker, Projects, Core PostgreSQL, and Events owners.
 Only the external native SDK transport and credential backend are controlled.
 The fixture requires an accepted Azure provider pin and exact-version model-session redemption.
-It records an actual dispatch-correlated SDK usage event, duplicate/conflict outcomes, and reference-only Events acknowledgment.
+It records native SDK usage, duplicate/conflict outcomes, and reference-only Events acknowledgment.
+Raw usage callbacks have no proven dispatch ID. The recorded native turn's exact
+event IDs link its accounting snapshot to the accepted dispatch.
+Events checks the persisted Core observation before and after its Cost transaction.
+Contract and PostgreSQL tests reject missing native evidence, foreign dispatches,
+changed revisions, wrong event sets, late events, and altered accounting hashes or amounts.
+Generic requests still require the raw dispatch ID to match.
+Controlled Core-response tests use the real Events PostgreSQL transaction.
+They verify both native reads occur outside the Cost lock and reject changes before returning a snapshot.
+Core PostgreSQL tests use controlled Events snapshots to check current-checkpoint changes,
+concurrent report reuse, retained overlapping reports, and exact completion replay.
+The positive Azure fixture also reads the real authenticated Core route and rejects forged report, revision, and fence references.
 BYOK authority-loss cases reject stale grants, retired leases, and expiry without native or ledger effects.
 The Projects fixture reuses its role-bound connection pool and closes it before role cleanup.
 Provider/model mismatch and missing-measurement tests reject invalid source facts.

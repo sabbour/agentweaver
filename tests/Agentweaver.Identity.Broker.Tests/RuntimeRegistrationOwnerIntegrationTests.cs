@@ -130,6 +130,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         routes.Add("orchestrator.test", () => factory.Server.CreateHandler());
         var enrollmentPath = $"/internal/projects/{owner.ProjectId}/runs/{owner.RunId}" +
             $"/coordination/sessions/{owner.SessionId}/runtime-registrations";
+        using var unavailable = await SendAsync(
+            client, HttpMethod.Get, enrollmentPath, runToken, [owner.TenantId]);
+        await AssertStatusAsync(unavailable, HttpStatusCode.Conflict);
+        Assert.Contains("runtime_registration_unavailable",
+            await unavailable.Content.ReadAsStringAsync());
         TraceNativeStage(failures, "Runtime registration begin.");
         using var response = await SendJsonAsync(client, HttpMethod.Post, enrollmentPath,
             runToken, new RegisterRuntimeRequest(environmentOwner.EnvironmentId, "runtime-profile"));
@@ -152,6 +157,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(environment.Lease.ProvisionedResource!.Resource.ProviderId,
             registration.Binding.PlacementProviderId);
         Assert.Equal(environment.Lease.ProvisionedResource.Resource.ResourceId, registration.Binding.PlacementUid);
+        using var discovered = await SendAsync(
+            client, HttpMethod.Get, enrollmentPath, runToken, [owner.TenantId]);
+        await AssertStatusAsync(discovered, HttpStatusCode.OK);
+        Assert.True(discovered.Headers.CacheControl?.NoStore);
+        Assert.Equal(registration,
+            await discovered.Content.ReadFromJsonAsync<RuntimeRegistration>(CoordinationJsonOptions));
         using var current = await SendAsync(client, HttpMethod.Get,
             $"/internal/runtime/registrations/{registration.RuntimeInstanceId:D}", runToken, [owner.TenantId]);
         await AssertStatusAsync(current, HttpStatusCode.OK);
@@ -746,7 +757,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             Assert.True(await usage.MoveNextAsync());
                             var nativeReceipt = usage.Current;
                             Assert.Equal(sdk.NativeUsageEventId.ToString("D"), nativeReceipt.Usage.SdkEventId);
-                            Assert.Equal(recorded.Admission.MessageId, nativeReceipt.Usage.A2AMessageId);
+                            Assert.Null(nativeReceipt.Usage.A2AMessageId);
                             Assert.Equal(session.Facts, nativeReceipt.Usage.SdkSource);
                             Assert.Equal(session.Registration, nativeReceipt.Registration);
                             Assert.Contains(sdk.NativeUsageEventId, recorded.Observation.UsageEventIds);
@@ -763,7 +774,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             await AssertNativeAccountingCountsAsync(eventsSchema, 2, 0);
                             return ImmutableArray.Create(new RuntimeUsageCostReceiptReference(
                                 nativeReceipt.ReceiptId, ack.Accounting));
-                        } : null);
+                        } : null, runtimeHttp);
                     await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.DisposeAsync().AsTask());
                     Assert.Equal(RuntimeBootstrapReceiverState.Disposed, receiver.State);
                 });
@@ -799,7 +810,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         HttpClient client, RuntimeMaterialObjects objects,
         CancellationToken cancellationToken,
         Func<RuntimeNativeTurnRecordedReceipt, Task<ImmutableArray<RuntimeUsageCostReceiptReference>>>?
-            accountNativeUsage = null)
+            accountNativeUsage = null, HttpClient? ownerClient = null)
     {
         var sourceCredentialValue = session.Proof().Credential.GetValue();
         var material = new RuntimeSessionMaterialHttpClient(client, client.BaseAddress!, actor);
@@ -924,8 +935,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Empty(recorded.Observation.UsageEventIds);
         else
             Assert.Single(recorded.Observation.UsageEventIds);
+        if (accountNativeUsage is not null)
+            await VerifyRecordedNativeOwnerReadAsync(
+                Assert.IsType<HttpClient>(ownerClient), actor, recorded, references, cancellationToken);
         var accounted = await sourceClient.CompleteNativeTurnAsync(session, recorded, references, cancellationToken);
         RuntimeNativeTurnContract.ValidateAccounted(accounted, recorded, references);
+        Assert.Equal(intent.MessageId, accounted.Recorded.Admission.MessageId);
+        Assert.Equal(intent.MessageId, accounted.Snapshot.DispatchId);
         if (accountNativeUsage is null)
             Assert.Equal(0.00123456725m, Assert.Single(accounted.Snapshot.CopilotTotals.Amounts).Amount);
         else
@@ -937,7 +953,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var recovery = await material.ReadRecoveryAsync(session.Registration, cancellationToken);
         Assert.NotNull(recovery.Cache);
         Assert.Contains(recovery.Turns, turn => turn == ("user", "A bounded user request."));
-        Assert.Contains(recovery.Turns, turn => turn == ("assistant", sdk.AssistantResponse));
+        Assert.Contains(recovery.Turns, turn => turn == ("assistant", answer));
         Assert.Equal(session.Facts.SdkVersion, recovery.Cache.Material.Reference.Material!.SdkVersion);
         Assert.DoesNotContain(sdk.SdkCredential, System.Text.Encoding.UTF8.GetString(recovery.Cache.Bytes));
         Assert.DoesNotContain(sourceCredentialValue,
@@ -962,6 +978,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 $"{path}/{eventId:D}/{invalidKind}", runToken, [session.Registration.Binding.TenantId]);
             await AssertStatusAsync(invalid, HttpStatusCode.BadRequest);
         }
+
         var pinPath = $"/internal/projects/{receipt.Identity.ProjectId}/runs/{receipt.Identity.RunId}/sessions-provider-binding";
         using var pinResponse = await SendAsync(client, HttpMethod.Get, pinPath,
             runToken, [session.Registration.Binding.TenantId]);
@@ -1006,6 +1023,45 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(historical.Material, restored.Material);
         Assert.Equal(historical.Bytes, restored.Bytes);
         TraceNativeStage(failures, "Guarded model turn, exact native cache, and missing-cache journal path completed.");
+    }
+
+    private static async Task VerifyRecordedNativeOwnerReadAsync(
+        HttpClient client, RuntimeActorAuthorization actor, RuntimeNativeTurnRecordedReceipt recorded,
+        ImmutableArray<RuntimeUsageCostReceiptReference> references, CancellationToken cancellationToken)
+    {
+        var snapshot = RuntimeNativeTurnContract.AccountingSnapshotRequest(recorded, references);
+        var retained = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnRecordedReceipt>(
+            client, new("https://orchestrator.test/"), "/internal/runtime/turns/recorded",
+            actor, recorded, cancellationToken);
+        RuntimeNativeTurnContract.ValidateAccountingSnapshot(snapshot, retained);
+        var changedObservation = recorded.Observation with { OutputHash = new string('c', 64) };
+        foreach (var changed in new[]
+        {
+            recorded with { OwnerRevision = recorded.OwnerRevision + 1 },
+            recorded with { Observation = changedObservation,
+                CanonicalPayloadHash = RuntimeNativeTurnContract.ObservationHash(changedObservation) },
+            recorded with { Admission = recorded.Admission with
+            {
+                Registration = recorded.Admission.Registration with
+                {
+                    Binding = recorded.Admission.Registration.Binding with
+                    {
+                        ExecutionFence = recorded.Admission.Registration.Binding.ExecutionFence + 1
+                    }
+                }
+            } }
+        })
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post, "https://orchestrator.test/internal/runtime/turns/recorded")
+            {
+                Content = JsonContent.Create(changed, options: CoordinationJsonOptions)
+            };
+            AddBearerAndTenant(request, actor.Bearer.GetValue(), recorded.Admission.Registration.Binding.TenantId);
+            using var denied = await client.SendAsync(request, cancellationToken);
+            await AssertStatusAsync(denied, HttpStatusCode.Forbidden);
+            Assert.True(denied.Headers.CacheControl?.NoStore);
+        }
     }
 
     private sealed class MaterialResponseTraceHandler(ConcurrentQueue<string> failures) : DelegatingHandler

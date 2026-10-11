@@ -98,6 +98,16 @@ public sealed class RuntimeOwnerContextTests
             association, plan, changed, parent, association.ChildSessionId, SelectionHash, 3, 4));
     }
 
+    [Fact]
+    public void FixedRuntimeCannotUseAnUnavailableAcceptedSelection()
+    {
+        var (plan, context, parent, association) = CreateFixedAssociation();
+
+        Assert.False(CoordinationEndpoints.MatchesFixedRuntimeAssociation(
+            association, plan, context with { Roles = [] }, parent,
+            association.ChildSessionId, SelectionHash, 3, 4));
+    }
+
     private static (WorkPlanSnapshot Plan, WorkPlanRunSelectionContext Context,
         SessionIdentity Parent, MafExecutionFixedWorkAssociation Association) CreateFixedAssociation()
     {

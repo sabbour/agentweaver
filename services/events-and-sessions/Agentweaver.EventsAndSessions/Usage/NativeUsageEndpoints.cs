@@ -8,19 +8,56 @@ namespace Agentweaver.EventsAndSessions;
 
 internal sealed class NativeUsageReceiptClient(HttpClient client, CoordinationOwnerClientOptions options)
 {
+    private Uri OwnerAddress => Uri.TryCreate(options.OwnerBaseAddress, UriKind.Absolute, out var address)
+        ? RuntimeOwnerHttpTransport.RequireOwnerAddress(address)
+        : throw new RuntimeAuthorizationException("runtime_usage_owner_configuration_invalid");
+
     internal Task<RuntimeUsageSourceReceipt> ReadAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
         Guid receiptId, CancellationToken cancellationToken)
     {
-        if (!Uri.TryCreate(options.OwnerBaseAddress, UriKind.Absolute, out var address))
-            throw new RuntimeAuthorizationException("runtime_usage_owner_configuration_invalid");
         return RuntimeOwnerHttpTransport.SendAsync<RuntimeUsageSourceReceipt>(
-            client, address,
+            client, OwnerAddress,
             $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
             $"/coordination/sessions/{Uri.EscapeDataString(sessionId)}/usage-receipts/{receiptId:D}",
             actor, null, cancellationToken);
     }
+
+    internal async Task<NativeRuntimeUsageSourceSnapshot> ReadCurrentSourceAsync(
+        Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
+    {
+        var address = OwnerAddress;
+        var registration = await new RuntimeRegistrationHttpClient(client, address)
+            .ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
+        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeSdkSourceReceipt>(
+            client, address, $"/internal/runtime/sources/{runtimeInstanceId:D}",
+            actor, null, cancellationToken).ConfigureAwait(false);
+        RuntimeUsageSourceReceiptContract.ValidateSource(registration, receipt.Source);
+        if (receipt.RuntimeInstanceId != runtimeInstanceId ||
+            receipt.RegistrationRevision != registration.Revision ||
+            receipt.SourceGrantId == Guid.Empty ||
+            receipt.CanonicalPayloadHash != RuntimeUsageSourceReceiptContract.HashSource(
+                registration, receipt.Source))
+            throw new RuntimeAuthorizationException("runtime_cost_preflight_source_invalid");
+        return new(registration, receipt);
+    }
+
+    internal async Task<RuntimeNativeTurnRecordedReceipt> ReadNativeTurnAsync(
+        RuntimeActorAuthorization actor, RuntimeUsageCostSnapshotRequest request, CancellationToken cancellationToken)
+    {
+        var expected = request.NativeTurn ??
+            throw new RuntimeAuthorizationException("runtime_native_turn_evidence_required");
+        var recorded = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnRecordedReceipt>(
+            client, OwnerAddress, "/internal/runtime/turns/recorded", actor, expected, cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeNativeTurnContract.ValidateAccountingSnapshot(request, recorded);
+        return recorded;
+    }
 }
+
+internal sealed record NativeRuntimeUsageSourceSnapshot(
+    RuntimeRegistration Registration,
+    RuntimeSdkSourceReceipt Receipt);
 
 internal sealed class NativeUsageApplicationService(
     NativeUsageReceiptClient source, IProjectsAuthorizationContextClient projects,
@@ -63,6 +100,102 @@ internal sealed class NativeUsageApplicationService(
         }
     }
 
+    internal async Task<RuntimeUsageCostPreflightReceipt> PreflightAsync(
+        HttpContext context, Guid runtimeInstanceId, RuntimeUsageCostPreflightRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request is null || request.ContractVersion != 1 || runtimeInstanceId == Guid.Empty)
+            throw new ArgumentException("A current runtime source is required.", nameof(runtimeInstanceId));
+        var first = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+        RequireReadAuthority(first);
+        var bearer = await BearerAsync(context, timeProvider).ConfigureAwait(false);
+        try
+        {
+            var actor = new RuntimeActorAuthorization(bearer, first.TenantId);
+            var sourceSnapshot = await source.ReadCurrentSourceAsync(
+                runtimeInstanceId, actor, cancellationToken).ConfigureAwait(false);
+            var binding = sourceSnapshot.Registration.Binding;
+            RequireSourceScope(first, runtimeInstanceId, sourceSnapshot);
+
+            var preflight = await consumer.PreflightAsync(
+                binding.TenantId, binding.ProjectId, binding.RunId,
+                sourceSnapshot.Receipt.Source.MeterSource, sourceSnapshot.Receipt.Source.ModelId,
+                async token =>
+                {
+                    var current = await projects.GetCurrentAsync(context, token).ConfigureAwait(false);
+                    RequireReadAuthority(current);
+                    if (current.ActorId != first.ActorId || current.TenantId != binding.TenantId ||
+                        current.BoundProjectId != binding.ProjectId || current.BoundRunId != binding.RunId ||
+                        !bearer.IsUsable())
+                        throw new RuntimeAuthorizationException("runtime_usage_authority_changed");
+                    var currentSource = await source.ReadCurrentSourceAsync(
+                        runtimeInstanceId, actor, token).ConfigureAwait(false);
+                    if (currentSource != sourceSnapshot)
+                        throw new RuntimeAuthorizationException("runtime_cost_preflight_source_changed");
+                }, cancellationToken).ConfigureAwait(false);
+
+            var receipt = new RuntimeUsageCostPreflightReceipt(
+                1,
+                runtimeInstanceId,
+                sourceSnapshot.Registration.Revision,
+                binding.ExecutionFence,
+                sourceSnapshot.Receipt.Source.ModelSelectionReference,
+                sourceSnapshot.Receipt.Source.ModelId,
+                sourceSnapshot.Receipt.Source.MeterSource,
+                binding.AcceptedSelectionHash,
+                sourceSnapshot.Receipt.CanonicalPayloadHash,
+                preflight.Binding,
+                preflight.IsPriced,
+                preflight.UnpricedReason);
+            RuntimeUsageCostPreflightContract.Validate(receipt);
+            return receipt;
+        }
+        finally
+        {
+            bearer.Invalidate();
+        }
+    }
+
+    internal async Task<RuntimeUsageCostReconciliationReceipt> ReconcileCostTurnAsync(
+        HttpContext context, string projectId, string runId,
+        RuntimeUsageCostReconciliationRequest request, CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.ValidateIdentifier(projectId);
+        RuntimeContractValidation.ValidateIdentifier(runId);
+        RuntimeUsageCostReconciliationContract.ValidateRequest(request);
+        var first = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+        RequireReadAuthority(first);
+        if (first.BoundProjectId != projectId || first.BoundRunId != runId)
+            throw new RuntimeAuthorizationException("runtime_usage_receipt_scope_invalid");
+
+        return await consumer.ReconcileAsync(first.TenantId, projectId, runId, request, async token =>
+        {
+            var current = await projects.GetCurrentAsync(context, token).ConfigureAwait(false);
+            RequireReadAuthority(current);
+            if (current.ActorId != first.ActorId || current.TenantId != first.TenantId ||
+                current.BoundProjectId != projectId || current.BoundRunId != runId)
+                throw new RuntimeAuthorizationException("runtime_usage_authority_changed");
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void RequireSourceScope(
+        ProjectsAuthorizationContextResponse authority, Guid runtimeInstanceId,
+        NativeRuntimeUsageSourceSnapshot source)
+    {
+        var binding = source.Registration.Binding;
+        var receipt = source.Receipt;
+        if (source.Registration.RuntimeInstanceId != runtimeInstanceId ||
+            binding.TenantId != authority.TenantId ||
+            binding.ProjectId != authority.BoundProjectId ||
+            binding.RunId != authority.BoundRunId ||
+            receipt.Source.RuntimeInstanceId != runtimeInstanceId ||
+            receipt.Source.RegistrationRevision != source.Registration.Revision ||
+            receipt.Source.ModelSelectionReference != binding.ModelSelectionReference ||
+            receipt.Source.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+            receipt.Source.MeterSource is not (SdkMeterSources.CopilotNanoAiu or SdkMeterSources.ByokTokens))
+            throw new RuntimeAuthorizationException("runtime_cost_preflight_source_scope_invalid");
+    }
+
     internal async Task<UsageRunTotals> GetTotalsAsync(
         HttpContext context, string projectId, string runId, CancellationToken cancellationToken)
     {
@@ -93,14 +226,32 @@ internal sealed class NativeUsageApplicationService(
         var bearer = await BearerAsync(context, timeProvider).ConfigureAwait(false);
         try
         {
-            return await consumer.ReadCostSnapshotAsync(request, async token =>
+            var actor = new RuntimeActorAuthorization(bearer, first.TenantId);
+            var nativeTurn = request.NativeTurn is null ? null :
+                await source.ReadNativeTurnAsync(actor, request, cancellationToken).ConfigureAwait(false);
+            var result = await consumer.ReadCostSnapshotAsync(request, async token =>
             {
                 var current = await projects.GetCurrentAsync(context, token).ConfigureAwait(false);
                 RequireReadAuthority(current);
-                if (current.TenantId != first.TenantId || current.BoundProjectId != projectId ||
+                if (current.ActorId != first.ActorId || current.TenantId != first.TenantId ||
+                    current.BoundProjectId != projectId ||
                     current.BoundRunId != runId || !bearer.IsUsable())
                     throw new RuntimeAuthorizationException("runtime_usage_authority_changed");
-            }, cancellationToken).ConfigureAwait(false);
+            }, cancellationToken, nativeTurn).ConfigureAwait(false);
+            if (nativeTurn is not null)
+            {
+                var final = await source.ReadNativeTurnAsync(actor, request, cancellationToken).ConfigureAwait(false);
+                if (final.Admission != nativeTurn.Admission || final.OwnerRevision != nativeTurn.OwnerRevision ||
+                    final.CanonicalPayloadHash != nativeTurn.CanonicalPayloadHash ||
+                    !final.Observation.UsageEventIds.SequenceEqual(nativeTurn.Observation.UsageEventIds))
+                    throw new RuntimeAuthorizationException("runtime_native_turn_evidence_changed");
+                var current = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+                RequireReadAuthority(current);
+                if (current.ActorId != first.ActorId || current.TenantId != first.TenantId ||
+                    current.BoundProjectId != projectId || current.BoundRunId != runId || !bearer.IsUsable())
+                    throw new RuntimeAuthorizationException("runtime_usage_authority_changed");
+            }
+            return result;
         }
         finally
         {
@@ -167,6 +318,12 @@ public static class NativeUsageEndpoints
                 [FromServices] NativeUsageApplicationService service, CancellationToken cancellationToken) =>
                 ExecuteAsync(context, () => service.AppendAsync(context, sessionId, request, cancellationToken)))
             .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/sources/{runtimeInstanceId:guid}/cost-preflight",
+            (Guid runtimeInstanceId, RuntimeUsageCostPreflightRequest request, HttpContext context,
+                [FromServices] NativeUsageApplicationService service, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => service.PreflightAsync(
+                    context, runtimeInstanceId, request, cancellationToken)))
+            .RequireAuthorization();
         endpoints.MapGet("/internal/projects/{projectId}/runs/{runId}/usage",
             (string projectId, string runId, HttpContext context,
                 [FromServices] NativeUsageApplicationService service, CancellationToken cancellationToken) =>
@@ -188,6 +345,13 @@ public static class NativeUsageEndpoints
         {
             return Results.Ok(await action().ConfigureAwait(false));
         }
+        catch (RuntimeAuthorizationException exception) when (
+            exception.Code.StartsWith("runtime_cost_preflight_", StringComparison.Ordinal))
+        {
+            return Results.Json(new { error = exception.Code }, statusCode:
+                exception.Code.EndsWith("_changed", StringComparison.Ordinal)
+                    ? StatusCodes.Status409Conflict : StatusCodes.Status422UnprocessableEntity);
+        }
         catch (RuntimeAuthorizationException exception)
         {
             return Results.Json(new { error = exception.Code }, statusCode: StatusCodes.Status403Forbidden);
@@ -199,6 +363,16 @@ public static class NativeUsageEndpoints
         catch (UsageLedgerConflictException)
         {
             return Results.Conflict(new { error = "runtime_usage_receipt_conflict" });
+        }
+        catch (NativeUsageReconciliationException exception)
+        {
+            return Results.Json(new
+            {
+                error = exception.Code,
+                sourceReceiptIds = exception.SourceReceiptIds.IsDefault
+                    ? Array.Empty<Guid>()
+                    : exception.SourceReceiptIds.ToArray()
+            }, statusCode: StatusCodes.Status409Conflict);
         }
         catch (ArgumentException)
         {

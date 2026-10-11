@@ -425,7 +425,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     {
                         MaxModelTurns = 12,
                         MaxToolCalls = 100,
-                        MaxChildren = 6,
+                        MaxChildren = 7,
                         MaxConcurrentChildren = 2,
                         MaxWallTimeSeconds = 3600,
                         MaxPromptTokens = 20000
@@ -910,7 +910,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                        checkoutBaseSha,
                        sourceControlWorkspaceBranch)))
         {
-            Assert.Equal(HttpStatusCode.OK, readWorkspaceDiff.StatusCode);
+            await AssertStatusAsync(readWorkspaceDiff, HttpStatusCode.OK);
             var diffBody = await readWorkspaceDiff.Content.ReadAsStringAsync();
             Assert.DoesNotContain(sourceControlSecretBackend.Value, diffBody, StringComparison.Ordinal);
             using var diffDocument = JsonDocument.Parse(diffBody);
@@ -1532,7 +1532,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                        Guid.NewGuid().ToString("D"),
                        "pull_request",
                        tooLargeWebhook,
-                       sourceControlSecretBackend.Value))
+                       sourceControlSecretBackend.Value,
+                       expectContinue: true))
                 Assert.Equal(HttpStatusCode.RequestEntityTooLarge, tooLargeResponse.StatusCode);
         }
 
@@ -1732,10 +1733,29 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     null,
                     null),
                 new WorkflowStepDefinition(
+                    "fixed-setup",
+                    "Prepare the prescribed fixed setup change.",
+                    WorkflowStepMode.Fixed,
+                    1,
+                    new WorkflowCardinality(1, 1),
+                    [],
+                    ["implementer"],
+                    ["implementation"],
+                    ["isolated-worktree"],
+                    [],
+                    new FixedWorkSpecification(
+                        "Prepare the fixed setup",
+                        "Prepare the fixed setup change in the isolated worktree.",
+                        "implementer",
+                        "implementation",
+                        "isolated-worktree",
+                        ["src/fixed-setup.cs"]),
+                    null),
+                new WorkflowStepDefinition(
                     "build-test",
                     "Record a typed platform build-and-test request.",
                     WorkflowStepMode.Platform,
-                    1,
+                    2,
                     new WorkflowCardinality(0, 1),
                     [],
                     [],
@@ -1748,7 +1768,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "merge",
                     "Merge the approved pull request after current checks pass.",
                     WorkflowStepMode.Platform,
-                    2,
+                    3,
                     new WorkflowCardinality(0, 1),
                     [],
                     [],
@@ -2232,7 +2252,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(
             effectsBeforeRevokedPlan,
             await ReadOwnerEffectCountsAsync(_connectionString, ownerSchema, project.ProjectId));
-        Assert.Equal(1, sandboxProvider.NegotiationCount);
+        Assert.Equal(2, sandboxProvider.NegotiationCount);
 
         runnerRole = await AssignRoleAsync(
             projects.PrivilegedFixtureDataSource,
@@ -2275,7 +2295,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal("work-plan-gate-1", proposedPlanResult.PendingGate?.RequestId);
         Assert.Equal(proposedPlanResult.DecisionId, proposalReplayResult.DecisionId);
         Assert.Equal(proposedPlanResult.StateVersion, proposalReplayResult.StateVersion);
-        Assert.Equal(3, sandboxProvider.NegotiationCount);
+        Assert.Equal(4, sandboxProvider.NegotiationCount);
         var effectsAfterConcurrentProposals = await ReadOwnerEffectCountsAsync(
             _connectionString, ownerSchema, project.ProjectId);
         Assert.Equal(effectsBeforeConcurrentProposals.Bindings + 1, effectsAfterConcurrentProposals.Bindings);
@@ -2372,7 +2392,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.True(revisedPlanResult.Accepted);
         Assert.Equal(15, revisedPlanResult.StateVersion);
         Assert.Null(revisedPlanResult.PendingGate);
-        Assert.Equal(3, sandboxProvider.NegotiationCount);
+        Assert.Equal(4, sandboxProvider.NegotiationCount);
 
         var mergeIntentPath = sourceControlBasePath + "/merge-intents";
         async Task<(string IntentId, string ApprovalRequestId)> CreateApprovedMergeIntentAsync(
@@ -3103,6 +3123,19 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(childReplay, HttpStatusCode.Created);
         Assert.Equal(child, await ReadJsonAsync<RegisteredChild>(childReplay));
 
+        using (var duplicateOpenWorkItem = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
+                   runToken,
+                   new RegisterChildRequest("duplicate-open-child", "implement-1")))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, duplicateOpenWorkItem.StatusCode);
+            Assert.Contains(
+                "session_work_plan_item_conflict",
+                await duplicateOpenWorkItem.Content.ReadAsStringAsync());
+        }
+
         using var forgedAdmission = await SendJsonAsync(
             events,
             HttpMethod.Post,
@@ -3221,6 +3254,253 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             await AssertStatusAsync(replayedOwner, HttpStatusCode.OK);
             Assert.Equal(runtimeOwner, await ReadJsonAsync<RuntimeOwnerContext>(replayedOwner));
         }
+        using var acceptedProjectsSelectionDocument = JsonDocument.Parse(acceptedProjectsSelection);
+        var projectsSelectionForFixedWork =
+            JsonSerializer.Deserialize<ProjectsConfig::Agentweaver.Projects.Config.EffectiveRunSelection>(
+                acceptedProjectsSelection, CoordinationJsonOptions)
+            ?? throw new InvalidOperationException("The accepted run selection could not be restored.");
+        var effectiveSelectionForFixedWork =
+            new OrchestratorHost::Agentweaver.Orchestrator.EffectiveRunSelection(
+                projectsSelectionForFixedWork.ProjectId,
+                projectsSelectionForFixedWork.RunId,
+                projectsSelectionForFixedWork.ProjectRevision,
+                projectsSelectionForFixedWork.ProjectConfigurationRevision,
+                projectsSelectionForFixedWork.PlatformRuntimeRevision,
+                projectsSelectionForFixedWork.ContextRevision,
+                acceptedProjectsSelectionDocument.RootElement.Clone());
+        var rootIdentityForFixedWork =
+            new SessionIdentity(project.ProjectId, RunId, root.RootSessionId);
+        var actorForFixedWork = new CoordinationActor(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+            currentRunnerSubject);
+        var selectionContextForFixedWork = await orchestratorFactory.Services
+            .GetRequiredService<CoordinatorRunSelectionContextStore>()
+            .ReadAsync(effectiveSelectionForFixedWork, root.ExecutionFence, CancellationToken.None)
+            ?? throw new InvalidOperationException("The persisted run selection context is unavailable.");
+        var workflowValidationForFixedWork =
+            WorkflowDefinitionValidator.ValidateAndSnapshot(generatedWorkflow);
+        Assert.True(workflowValidationForFixedWork.IsValid);
+        var planValidationForFixedWork = WorkPlanValidator.ValidateAndSnapshot(
+            workflowValidationForFixedWork.Value,
+            acceptedPlan,
+            selectionContextForFixedWork);
+        Assert.True(planValidationForFixedWork.IsValid);
+        var planSnapshotForFixedWork = planValidationForFixedWork.Value
+            ?? throw new InvalidOperationException("The accepted plan could not be restored.");
+        var fixedStep = generatedWorkflow.Steps.Single(step => step.Id == "fixed-setup");
+        var acceptedSelectionHashForFixedWork =
+            CoordinationOwnerStore.HashSelection(effectiveSelectionForFixedWork);
+        var fixedAssociationId = MafExecutionPlanner.CreateFixedWorkAssociationId(
+            rootIdentityForFixedWork, acceptedPlan.Id, fixedStep.Id, activationRevision: 1);
+        var fixedChildSessionId = MafExecutionPlanner.CreateChildSessionId(
+            rootIdentityForFixedWork, acceptedPlan.Id, fixedAssociationId);
+        var fixedAssociation = MafExecutionPlanner.CreateFixedWorkAssociation(
+            planSnapshotForFixedWork,
+            selectionContextForFixedWork,
+            rootIdentityForFixedWork,
+            fixedStep,
+            acceptedSelectionHashForFixedWork,
+            root.ExecutionFence,
+            currentDecisionForRuntimeOwner.StateVersion,
+            activationRevision: 1,
+            fixedChildSessionId);
+        var fixedExecutionStore = new MafExecutionCheckpointStore(
+            orchestratorFactory.Services.GetRequiredService<PostgresMafCheckpointStore>(),
+            new MafCheckpointBinding(
+                rootIdentityForFixedWork,
+                actorForFixedWork,
+                root.ExecutionFence,
+                MafExecutionCheckpointStore.CurrentSdkVersion,
+                PostgresMafCheckpointStore.ReadSelectedModelReference(
+                    effectiveSelectionForFixedWork.Snapshot),
+                null));
+        var fixedProgress = MafExecutionProgress.Empty with
+        {
+            FixedWorkItems = MafExecutionProgress.Empty.FixedWorkItems
+                .Add(fixedAssociationId, MafExecutionTaskStatus.Running)
+        };
+        var fixedExecutionState = new MafExecutionCheckpoint(
+            1,
+            acceptedPlan.Id,
+            currentDecisionForRuntimeOwner.StateVersion,
+            fixedProgress)
+        {
+            FixedWorkAssociations = ImmutableDictionary<string, MafExecutionFixedWorkAssociation>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add(fixedAssociationId, fixedAssociation)
+        };
+        using (var registerFixedEventsSession = await SendAsync(
+                   events,
+                   HttpMethod.Post,
+                   $"/internal/sessions/{Uri.EscapeDataString(fixedChildSessionId)}",
+                   runToken,
+                   [TenantId]))
+            Assert.Equal(HttpStatusCode.Created, registerFixedEventsSession.StatusCode);
+        var fixedChildRequest = new SpawnSessionRequest(
+            fixedChildSessionId,
+            CoordinationSessionKind.ChildWork,
+            "fixed-child-spawn",
+            fixedAssociation.Specification.Task);
+        var fixedOwnerStore = orchestratorFactory.Services.GetRequiredService<CoordinationOwnerStore>();
+        var fixedChild = await fixedOwnerStore.SpawnSessionAsync(
+            actorForFixedWork,
+            rootIdentityForFixedWork,
+            fixedChildRequest,
+            CoordinatorWorkflowCatalog.ReadMaxChildren(effectiveSelectionForFixedWork.Snapshot),
+            CoordinatorWorkflowCatalog.ReadMaxConcurrentChildren(effectiveSelectionForFixedWork.Snapshot),
+            CancellationToken.None,
+            persistSpawnedInTransaction: async (connection, transaction, _, cancellationToken) =>
+            {
+                await fixedExecutionStore.AppendInTransactionAsync(
+                    connection,
+                    transaction,
+                    "fixed-execution-1",
+                    expectedParent: null,
+                    state: fixedExecutionState,
+                    cancellationToken: cancellationToken);
+            });
+        using var fixedOwnerBindingResponse = await SendAsync(
+            orchestrator,
+            HttpMethod.Get,
+            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{fixedChild.Node.Identity.SessionId}/owner-binding",
+            runToken,
+            [TenantId]);
+        await AssertStatusAsync(fixedOwnerBindingResponse, HttpStatusCode.OK);
+        var fixedOwnerBinding = await ReadJsonAsync<CoordinationSessionBinding>(fixedOwnerBindingResponse);
+        using var fixedBoundaryResponse = await SendJsonAsync(
+            orchestrator,
+            HttpMethod.Post,
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{fixedChild.Node.Identity.SessionId}/turn-boundary",
+            runToken,
+            new TurnBoundaryRequest(fixedChild.Node.ExecutionFence, fixedOwnerBinding.StateVersion));
+        await AssertStatusAsync(fixedBoundaryResponse, HttpStatusCode.OK);
+        var fixedBoundary = await ReadJsonAsync<TurnBoundaryResult>(fixedBoundaryResponse)
+            ?? throw new InvalidOperationException("The fixed-work turn boundary was not returned.");
+        Assert.Equal("active", fixedBoundary.ExecutionState);
+        var verifiedFixedAssociation = fixedAssociation
+            ?? throw new InvalidOperationException("The fixed-work association was not persisted.");
+        var fixedRuntimeOwnerPath =
+            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{fixedChild.Node.Identity.SessionId}/runtime-owner-context";
+        using (var fixedRuntimeOwnerResponse = await SendAsync(
+                   orchestrator, HttpMethod.Get, fixedRuntimeOwnerPath, runToken, [TenantId]))
+        {
+            await AssertStatusAsync(fixedRuntimeOwnerResponse, HttpStatusCode.OK);
+            Assert.True(fixedRuntimeOwnerResponse.Headers.CacheControl?.NoStore);
+            var fixedRuntimeOwner = await ReadJsonAsync<RuntimeOwnerContext>(fixedRuntimeOwnerResponse)
+                ?? throw new InvalidOperationException("The fixed runtime owner context was not returned.");
+            Assert.Equal(verifiedFixedAssociation.AgentId, fixedRuntimeOwner.AgentId);
+            Assert.Equal(verifiedFixedAssociation.ModelSelectionReference, fixedRuntimeOwner.ModelSelectionReference);
+            Assert.Equal(12, fixedRuntimeOwner.MaxModelTurns);
+            Assert.Equal(100, fixedRuntimeOwner.MaxToolCalls);
+            Assert.Equal(20000, fixedRuntimeOwner.MaxPromptTokens);
+            Assert.Equal(fixedStep.Id, fixedRuntimeOwner.WorkflowStepId);
+            Assert.Equal(fixedChild.Node.ExecutionFence, fixedRuntimeOwner.ExecutionFence);
+            Assert.Equal(fixedBoundary.LogicalTurnOrdinal, fixedRuntimeOwner.LogicalTurnOrdinal);
+            Assert.Equal(azureByok ? new SecretRef("model-api", "model-v1") : null,
+                fixedRuntimeOwner.ModelCredentialReference);
+            Assert.Equal(linkedConnection?.ConnectionId, fixedRuntimeOwner.ModelConnectionId);
+            Assert.Equal(azureByok ? (ProjectAuthorityResourceType?)null : ProjectAuthorityResourceType.Platform,
+                fixedRuntimeOwner.ModelConnectionScope);
+            Assert.Equal(azureByok ? ModelSourceMode.Byok : ModelSourceMode.HostedCopilot,
+                fixedRuntimeOwner.ModelSourceMode);
+            if (azureByok)
+                Assert.Equal(AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok),
+                    fixedRuntimeOwner.ModelBindingPin);
+        }
+        var latestFixedCheckpoint = await fixedExecutionStore.ReadLatestAsync(CancellationToken.None)
+            ?? throw new InvalidOperationException("The fixed-work checkpoint was not persisted.");
+        async Task AppendFixedCheckpointAsync(MafExecutionCheckpoint state)
+        {
+            latestFixedCheckpoint = await fixedExecutionStore.AppendAsync(
+                $"fixed-execution-{state.Revision}",
+                latestFixedCheckpoint.Info,
+                state,
+                CancellationToken.None);
+        }
+
+        var missingAssociationState = latestFixedCheckpoint.State with
+        {
+            Revision = 2,
+            Progress = latestFixedCheckpoint.State.Progress with
+            {
+                FixedWorkItems = ImmutableDictionary<string, MafExecutionTaskStatus>.Empty
+                    .WithComparers(StringComparer.Ordinal)
+            },
+            FixedWorkAssociations = ImmutableDictionary<string, MafExecutionFixedWorkAssociation>.Empty
+                .WithComparers(StringComparer.Ordinal)
+        };
+        await AppendFixedCheckpointAsync(missingAssociationState);
+        using (var missingFixedAssociation = await SendAsync(
+                   orchestrator, HttpMethod.Get, fixedRuntimeOwnerPath, runToken, [TenantId]))
+            await AssertStatusAsync(missingFixedAssociation, HttpStatusCode.Conflict);
+
+        var mismatchedAssociation = fixedAssociation with { AgentId = "unselected-agent" };
+        var mismatchedAssociationState = latestFixedCheckpoint.State with
+        {
+            Revision = 3,
+            Progress = fixedProgress,
+            FixedWorkAssociations = ImmutableDictionary<string, MafExecutionFixedWorkAssociation>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add(fixedAssociationId, mismatchedAssociation)
+        };
+        await AppendFixedCheckpointAsync(mismatchedAssociationState);
+        using (var mismatchedFixedAssociation = await SendAsync(
+                   orchestrator, HttpMethod.Get, fixedRuntimeOwnerPath, runToken, [TenantId]))
+            await AssertStatusAsync(mismatchedFixedAssociation, HttpStatusCode.Conflict);
+
+        var staleAssociation = fixedAssociation with
+        {
+            DecisionStateVersion = currentDecisionForRuntimeOwner.StateVersion - 1
+        };
+        var staleAssociationState = latestFixedCheckpoint.State with
+        {
+            Revision = 4,
+            Progress = fixedProgress,
+            FixedWorkAssociations = ImmutableDictionary<string, MafExecutionFixedWorkAssociation>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add(fixedAssociationId, staleAssociation)
+        };
+        await AppendFixedCheckpointAsync(staleAssociationState);
+        using (var staleFixedAssociation = await SendAsync(
+                   orchestrator, HttpMethod.Get, fixedRuntimeOwnerPath, runToken, [TenantId]))
+            await AssertStatusAsync(staleFixedAssociation, HttpStatusCode.Conflict);
+
+        var restoredAssociationState = latestFixedCheckpoint.State with
+        {
+            Revision = 5,
+            Progress = fixedProgress,
+            FixedWorkAssociations = ImmutableDictionary<string, MafExecutionFixedWorkAssociation>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add(fixedAssociationId, fixedAssociation)
+        };
+        await AppendFixedCheckpointAsync(restoredAssociationState);
+        await RevokeRoleAsync(
+            projects.PrivilegedFixtureDataSource, runnerRole.AssignmentId, runnerRole.Revision);
+        try
+        {
+            using var revokedFixedOwner = await SendAsync(
+                orchestrator, HttpMethod.Get, fixedRuntimeOwnerPath, runToken, [TenantId]);
+            await AssertStatusAsync(revokedFixedOwner, HttpStatusCode.Forbidden);
+        }
+        finally
+        {
+            runnerRole = await AssignRoleAsync(
+                projects.PrivilegedFixtureDataSource,
+                runnerMembership.MembershipId,
+                ProjectAuthorityResourceType.Project,
+                project.ProjectId,
+                ProjectAuthorityRole.Orchestrator);
+        }
+        using (var fixedCompletionResponse = await SendJsonAsync(
+                   orchestrator,
+                   HttpMethod.Post,
+                   $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{fixedChild.Node.Identity.SessionId}/turn-completion",
+                   runToken,
+                   new FinishTurnRequest(
+                       fixedChild.Node.ExecutionFence,
+                       fixedBoundary.StateVersion,
+                       LogicalTurnCompletion.Completed)))
+            await AssertStatusAsync(fixedCompletionResponse, HttpStatusCode.OK);
         using (var unmappedOwner = await SendAsync(
                    orchestrator, HttpMethod.Get,
                    $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/runtime-owner-context",
@@ -4059,6 +4339,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
         await RestoreRunnerRoleAsync();
 
+        var capacityBeforeFence = await fixedOwnerStore.ReadMafExecutionCapacityAsync(
+            actorForFixedWork, rootIdentityForFixedWork, CancellationToken.None);
+        Assert.Equal(4, capacityBeforeFence.RegisteredChildren);
+        Assert.Equal(7, capacityBeforeFence.RegisteredChildren + acceptedPlan.Items.Length);
+        Assert.Equal(7, CoordinatorWorkflowCatalog.ReadMaxChildren(effectiveSelectionForFixedWork.Snapshot));
         var (fenceConflictIntentId, _) =
             await CreateApprovedMergeIntentAsync("source-control-merge-execution-fence-race");
         var currentMergeGrantBeforeFence = await ReadMergeGrantAndFenceStateAsync(fenceConflictIntentId);
@@ -5450,12 +5735,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         string deliveryId,
         string eventName,
         byte[] rawBody,
-        string secret)
+        string secret,
+        bool expectContinue = false)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path)
         {
             Content = new ByteArrayContent(rawBody)
         };
+        request.Headers.ExpectContinue = expectContinue;
         request.Headers.Add("X-GitHub-Delivery", deliveryId);
         request.Headers.Add("X-GitHub-Event", eventName);
         var signature = Convert.ToHexString(HMACSHA256.HashData(

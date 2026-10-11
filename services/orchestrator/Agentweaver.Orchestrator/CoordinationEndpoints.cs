@@ -822,6 +822,8 @@ public static partial class CoordinationEndpoints
                 actor, identity, selection, cancellationToken).ConfigureAwait(false);
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            var maxRevisionAttempts = CoordinatorWorkflowCatalog
+                .ReadRuntimeBudgetLimits(selection.Selection.Snapshot).MaxRevisionAttempts;
 
             var selectionContextResolution = RequiresProviderBinding(current.State, request.RevisedPlan)
                 ? await runSelectionContexts.ResolveForPlanAsync(
@@ -838,8 +840,7 @@ public static partial class CoordinationEndpoints
                 selectionContext,
                 request.RequestId,
                 selection.Authorization.ActorId,
-                CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(
-                    selection.Selection.Snapshot).MaxRevisionAttempts);
+                maxRevisionAttempts);
             transition = await EnforceRunChildLimitAsync(
                 transition,
                 current.State,
