@@ -251,10 +251,16 @@ Receipt tests read the committed hash and immutable price through a separate
 PostgreSQL connection. Duplicate retries return the identical receipt.
 Migration tests cover fresh Events version 7, admitted version-3 and version-4 upgrades,
 the legacy version-2 project-fact layout, and rejected version gaps.
-The Orchestrator migration fixture now enumerates schema versions 8 through 15 and
-includes the packaged 015 MAF evidence resource. It asserts the final migration
-history contains exactly 15 versions. The fixture was not run locally during source
-preparation; configured GitHub Actions CI covers it in a disposable PostgreSQL schema.
+The Orchestrator migration fixture covers versions 8 through 16 and versions 18 through 20.
+It checks fresh initialization and existing version-19 and version-20 schemas that lack resources 016 and 018.
+The final history must contain exactly 19 registered versions; version 17 remains unregistered.
+Tests reject unknown versions, missing prerequisites, missing tables, and a missing or disabled snapshot trigger.
+Repeated initialization preserves the original history and applies no resource twice.
+Backlog and reviewed-snapshot tests use the production migrator, not separate SQL setup.
+Restricted login roles perform actual task/dependency edits and snapshot persistence, resolution, and exact replay.
+They cannot change the schema, write migration history, truncate tables, delete tasks, or update or delete snapshots.
+The focused disposable-PostgreSQL selector is
+`FullyQualifiedName~CoordinationOwnerMigrationTests|FullyQualifiedName~BacklogOwnerStorePostgresTests|FullyQualifiedName~ReviewedRemoteToolSnapshotStorePostgresTests`.
 Source publication does not invoke a migration against a shared or live database.
 Repeated migration checks preserve the original migration history.
 

@@ -20,17 +20,8 @@ public sealed class ReviewedRemoteToolSnapshotStorePostgresTests : IAsyncLifetim
 
     public async Task InitializeAsync()
     {
-        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using (var createSchema = new NpgsqlCommand($"CREATE SCHEMA \"{_schema}\"", connection))
-            await createSchema.ExecuteNonQueryAsync();
-        await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
-            "Agentweaver.Orchestrator.Migrations.018_reviewed_remote_tool_snapshots.sql")
-            ?? throw new InvalidOperationException("The reviewed remote tool snapshot migration resource is missing.");
-        using var text = new StreamReader(resource);
-        var sql = (await text.ReadToEndAsync()).Replace(
-            "{schema}", $"\"{_schema}\"", StringComparison.Ordinal);
-        await using var command = new NpgsqlCommand(sql, connection);
-        await command.ExecuteNonQueryAsync();
+        await CoordinationOwnerMigrator.MigrateAsync(_fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(_fixture.DataSource, _schema);
         _store = new ReviewedRemoteToolSnapshotStore(_fixture.DataSource, _schema);
     }
 
@@ -39,6 +30,83 @@ public sealed class ReviewedRemoteToolSnapshotStorePostgresTests : IAsyncLifetim
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{_schema}\" CASCADE", connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    [Fact]
+    public async Task RestrictedRuntimeRolePersistsResolvesAndReplaysWithoutMutationOrSchemaPrivileges()
+    {
+        var role = _schema + "_runtime";
+        var password = Guid.NewGuid().ToString("N");
+        await using var ownerConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using (var createRole = new NpgsqlCommand($"""
+            CREATE ROLE "{role}" LOGIN PASSWORD '{password}'
+                NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT
+            """, ownerConnection))
+            await createRole.ExecuteNonQueryAsync();
+
+        try
+        {
+            await using (var grants = new NpgsqlCommand($"""
+                GRANT USAGE ON SCHEMA "{_schema}" TO "{role}";
+                GRANT SELECT ON "{_schema}".coordination_schema_migrations,
+                    "{_schema}".outbox_schema_migrations TO "{role}";
+                GRANT SELECT, INSERT ON "{_schema}".reviewed_remote_tool_snapshots TO "{role}";
+                """, ownerConnection))
+                await grants.ExecuteNonQueryAsync();
+
+            var connectionString = new NpgsqlConnectionStringBuilder(_fixture.DataSource.ConnectionString)
+            {
+                Username = role,
+                Password = password,
+                Pooling = false
+            }.ConnectionString;
+            await using var runtime = NpgsqlDataSource.Create(connectionString);
+            await CoordinationOwnerMigrator.VerifyAsync(runtime, _schema);
+            var store = new ReviewedRemoteToolSnapshotStore(runtime, _schema);
+            var snapshot = Snapshot();
+            var reference = await store.PersistAsync(snapshot, CancellationToken.None);
+            var replay = await store.PersistAsync(snapshot, CancellationToken.None);
+            var resolved = await store.ResolveAsync(reference, CancellationToken.None);
+            AssertReferenceEqual(snapshot.Reference, reference);
+            AssertReferenceEqual(reference, replay);
+            Assert.NotNull(resolved);
+            AssertSnapshotEqual(snapshot, resolved);
+            var conflict = await Assert.ThrowsAsync<CoordinationException>(() =>
+                store.PersistAsync(Snapshot(endpointUri: "https://changed.example.test/api"), CancellationToken.None));
+            Assert.Equal("reviewed_remote_tool_snapshot_conflict", conflict.Code);
+
+            await using var runtimeConnection = await runtime.OpenConnectionAsync();
+            foreach (var sql in new[]
+            {
+                $"CREATE TABLE \"{_schema}\".runtime_forbidden (id integer)",
+                $"ALTER TABLE \"{_schema}\".reviewed_remote_tool_snapshots DISABLE TRIGGER reviewed_remote_tool_snapshots_immutable",
+                $"UPDATE \"{_schema}\".reviewed_remote_tool_snapshots SET snapshot_json = snapshot_json",
+                $"DELETE FROM \"{_schema}\".reviewed_remote_tool_snapshots",
+                $"TRUNCATE \"{_schema}\".reviewed_remote_tool_snapshots"
+            }.Concat(new[] { "coordination_schema_migrations", "outbox_schema_migrations" }
+                .SelectMany(table => new[]
+                {
+                    $"INSERT INTO \"{_schema}\".{table} (version) VALUES (999)",
+                    $"UPDATE \"{_schema}\".{table} SET version = version",
+                    $"DELETE FROM \"{_schema}\".{table}",
+                    $"TRUNCATE \"{_schema}\".{table}"
+                })))
+            {
+                await using var denied = new NpgsqlCommand(sql, runtimeConnection);
+                var error = await Assert.ThrowsAsync<PostgresException>(() => denied.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, error.SqlState);
+            }
+            await CoordinationOwnerMigrator.VerifyAsync(runtime, _schema);
+            var unchanged = await store.ResolveAsync(reference, CancellationToken.None);
+            Assert.NotNull(unchanged);
+            AssertSnapshotEqual(snapshot, unchanged);
+        }
+        finally
+        {
+            await using var cleanup = new NpgsqlCommand(
+                $"DROP OWNED BY \"{role}\"; DROP ROLE \"{role}\"", ownerConnection);
+            await cleanup.ExecuteNonQueryAsync();
+        }
     }
 
     [Fact]
