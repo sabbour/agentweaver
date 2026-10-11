@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -49,6 +51,12 @@ public sealed record SandboxBuildTestWorkspaceSource(
     string BaselineManifestSha256,
     long BaselineManifestByteLength)
 {
+    [JsonIgnore]
+    public string PreparedRepositoryRelativePath =>
+        "buildtest-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
+            TenantId + "\0" + Identity.ProjectId + "\0" + Identity.RunId + "\0" + WorkspaceId)))[..32] +
+        "/repository";
+
     public bool IsValid() =>
         ContractVersion == 2 &&
         IsText(Identity.ProjectId, 256) &&

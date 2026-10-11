@@ -443,8 +443,7 @@ public sealed class GitWorkspaceManager
             throw new GitWorkspaceException(
                 GitWorkspaceFailureCode.PathConflict, "The BuildTest input paths collide on this filesystem.");
         cancellationToken.ThrowIfCancellationRequested();
-        var key = "buildtest-" + Hash(
-            source.TenantId + "\0" + source.Identity.ProjectId + "\0" + source.Identity.RunId + "\0" + source.WorkspaceId);
+        var key = source.PreparedRepositoryRelativePath.Split('/')[0];
         var workspaceRoot = Path.Combine(_rootPath, key);
         var repositoryPath = Path.Combine(workspaceRoot, "repository");
         var manifestPath = Path.Combine(workspaceRoot, "workspace.json");
@@ -575,6 +574,77 @@ public sealed class GitWorkspaceManager
                 GitWorkspaceFailureCode.CorruptWorkspace, "The prepared BuildTest tree differs from its accepted input.");
         await WriteManifestAsync(manifestPath, expected with { State = "ready" }, cancellationToken).ConfigureAwait(false);
         return BuildTestSeedWorkspace(source, repositoryPath);
+    }
+
+    public async Task<GitWorkspaceCaptureDocument> CreateBuildTestOutputDocumentAsync(
+        SandboxBuildTestWorkspaceSource source,
+        ReadOnlyMemory<byte> seedBytes,
+        ImmutableArray<GitWorkspaceCapturedFile> files,
+        ImmutableArray<SandboxBuildTestOutputObligation> outputs,
+        ImmutableArray<SandboxBuildTestOutputEvidence> evidence,
+        CancellationToken cancellationToken)
+    {
+        var seed = GitWorkspaceBuildTestSeedPackage.Parse(seedBytes.Span, source);
+        var capture = new GitWorkspaceCapture(
+            source.WorkspaceId, source.Identity.RunId, source.SourceControlResource.ResourceId,
+            source.SourceControlResource.Generation, source.WorkspaceIncarnationId,
+            source.BaseSha, source.BaselineTreeSha, string.Empty, files, source.BranchName);
+        var candidate = GitWorkspaceCapturePackage.Create(capture);
+        GitWorkspaceBuildTestSeedPackage.ValidateCapture(candidate.Manifest, seed, outputs, evidence);
+        var workspace = await PrepareBuildTestSeedAsync(source, seedBytes, cancellationToken)
+            .ConfigureAwait(false);
+        var workspaceRoot = Path.GetDirectoryName(workspace.Path)!;
+        var key = source.PreparedRepositoryRelativePath.Split('/')[0];
+        using var lease = AcquireBuildTestSeedLock(Path.Combine(_rootPath, key + ".lock"));
+        var emptyGitConfig = Path.Combine(workspaceRoot, "git-empty-config");
+        var hooks = Path.Combine(workspaceRoot, "git-no-hooks");
+        var privateIndex = Path.Combine(workspaceRoot, $"capture-{Guid.NewGuid():N}.index");
+        Task<byte[]> GitAsync(string[] arguments, byte[]? input = null, int maximumBytes = MaximumCommandOutputBytes) =>
+            RunGitAsync(workspace.Path,
+                ["-c", "core.hooksPath=" + hooks, "-c", "core.fsmonitor=false",
+                    "-c", "protocol.allow=never", "-c", "maintenance.auto=false",
+                    "-c", "gc.auto=0", .. arguments],
+                maximumBytes, emptyGitConfig, null, null, cancellationToken,
+                gitIndexFile: privateIndex, standardInput: input);
+        try
+        {
+            await GitAsync(["read-tree", "--empty"]).ConfigureAwait(false);
+            var entries = new StringBuilder();
+            foreach (var file in files)
+            {
+                var hash = DecodeGitOutput(await GitAsync(
+                    ["hash-object", "--no-filters", "-w", "--stdin"], file.Content.ToArray())
+                    .ConfigureAwait(false)).Trim();
+                if (!IsGitObjectId(hash))
+                    throw new GitWorkspaceException(
+                        GitWorkspaceFailureCode.CorruptWorkspace,
+                        "Git returned an invalid BuildTest output object identity.");
+                entries.Append(file.Mode).Append(' ').Append(hash).Append('\t').Append(file.Path).Append('\0');
+            }
+            if (entries.Length > 0)
+                await GitAsync(["update-index", "-z", "--index-info"], Encoding.UTF8.GetBytes(entries.ToString()))
+                    .ConfigureAwait(false);
+            var tree = DecodeGitOutput(await GitAsync(["write-tree"], maximumBytes: 128)
+                .ConfigureAwait(false)).Trim();
+            if (!IsGitObjectId(tree))
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace,
+                    "Git returned an invalid BuildTest output tree identity.");
+            var patch = await GitAsync(
+                ["diff", "--binary", "--no-ext-diff", "--no-textconv", "--full-index",
+                    source.BaseSha, tree, "--"], maximumBytes: MaximumDiffBytes).ConfigureAwait(false);
+            var document = GitWorkspaceCapturePackage.Create(
+                capture with { OutputTreeSha = tree, Patch = DecodeGitOutput(patch) });
+            GitWorkspaceBuildTestSeedPackage.ValidateCapture(document.Manifest, seed, outputs, evidence);
+            return document;
+        }
+        finally
+        {
+            if (File.Exists(privateIndex))
+                File.Delete(privateIndex);
+            if (File.Exists(privateIndex + ".lock"))
+                File.Delete(privateIndex + ".lock");
+        }
     }
 
     private static FileStream AcquireBuildTestSeedLock(string path)
