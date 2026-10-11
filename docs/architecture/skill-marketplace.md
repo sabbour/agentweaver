@@ -81,8 +81,9 @@ TenantAdmin or project Owner authority. The owner rechecks authority after the
 read and permits archived projects. Invalid cursors, page sizes outside 1–50,
 repeated keys, and unknown query keys return `400`. Invalid authentication
 returns `401`. A viewer or an administrator with lost or revoked access receives
-`403`. The owner returns `404` for a foreign project or inactive or stale
-membership.
+`403`. Inactive membership rejected during initial caller resolution also
+returns `403`. During the inventory recheck, the owner returns `404` for a
+foreign project or membership found inactive or stale.
 
 Gateway responses use `Cache-Control: no-store`.
 
