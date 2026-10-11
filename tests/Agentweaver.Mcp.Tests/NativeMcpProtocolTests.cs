@@ -646,6 +646,22 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
         Assert.Empty(_gatewayFactory.KnowledgeIdempotencyKeys);
     }
 
+    [Theory]
+    [InlineData("/health/live", "live")]
+    [InlineData("/health/ready", "ready")]
+    public async Task HealthEndpointsDoNotRequireABearer(string path, string expectedStatus)
+    {
+        using var client = _mcpFactory.CreateClient();
+
+        using var response = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(expectedStatus, document.RootElement.GetProperty("status").GetString());
+        Assert.Empty(response.Headers.WwwAuthenticate);
+        Assert.Empty(_gatewayFactory.KnowledgeIdempotencyKeys);
+    }
+
     [Fact]
     public async Task ProtectedResourceMetadataAdvertisesTheBrokerAndMcpResource()
     {

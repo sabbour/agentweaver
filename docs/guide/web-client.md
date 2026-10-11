@@ -45,6 +45,10 @@ connection BFF, which narrowly allows credentials for its callback cookie.
 Direct Repo App browser requests use the Broker's independent credentialed
 endpoint allowlist; the Gateway origin setting does not configure Broker CORS.
 
+The Web host provides `/health/live` and `/health/ready` without sign-in.
+Readiness returns `503` when the built `wwwroot/index.html` file is missing.
+These checks cover the host and its built page, not Broker access or live API behavior.
+
 ## Routes and behavior
 
 | Route | Behavior |

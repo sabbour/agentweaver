@@ -113,7 +113,7 @@
     },
     {
       "id": "Agentweaver.Environment",
-      "kind": "library",
+      "kind": "service",
       "version": "0.0.0",
       "project": "services/environment/Agentweaver.Environment/Agentweaver.Environment.csproj"
     },

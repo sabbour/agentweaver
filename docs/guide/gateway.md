@@ -5,6 +5,10 @@ first-party MCP clients. It is an unpublished service candidate: this guide desc
 the checked-in host and does not claim a deployment, public endpoint, image, or live
 environment.
 
+The first-party MCP host provides anonymous `/health/live` and `/health/ready` checks.
+They report host availability, not a successful Gateway tool call.
+The `/mcp` endpoint still requires Broker authentication.
+
 ## Discovery and routing
 
 The versioned API is rooted at `/api/v1`. `GET /openapi/v1.json` describes every

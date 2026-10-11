@@ -259,10 +259,15 @@ export function packComponents(manifest, {
   outDir,
   packagesOnly = false,
   foundationProbeOnly = false,
+  platformOnly = false,
 } = {}) {
   if (typeof outDir !== 'string' || outDir.trim() === '') fail('outDir', 'expected an output directory path');
   if (packagesOnly && foundationProbeOnly) fail('selection', 'package-only and Foundation Probe-only preparation are mutually exclusive');
-  const components = foundationProbeOnly
+  if (platformOnly && (packagesOnly || foundationProbeOnly))
+    fail('selection', 'platform-only preparation cannot combine with package-only or Foundation Probe-only preparation');
+  const components = platformOnly
+    ? manifest.components.filter(component => component.id !== 'Agentweaver.FoundationProbe')
+    : foundationProbeOnly
     ? manifest.components.filter(component => component.id === 'Agentweaver.FoundationProbe' && component.kind === 'service')
     : packagesOnly
     ? manifest.components.filter((component) => component.kind !== 'service')
@@ -588,10 +593,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const out = outIndex >= 0 ? args[outIndex + 1] : 'artifacts/release/pack';
     const packagesOnly = args.includes('--packages-only');
     const foundationProbeOnly = args.includes('--foundation-probe-only');
+    const platformOnly = args.includes('--platform-only');
     if (!manifestArg || (outIndex >= 0 && !args[outIndex + 1])) {
-      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only | --foundation-probe-only] [--out <dir>]');
+      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only | --foundation-probe-only | --platform-only] [--out <dir>]');
     }
-    const provenance = packComponentsFromFile(manifestArg, { root: repositoryRoot, outDir: out, packagesOnly, foundationProbeOnly });
+    const provenance = packComponentsFromFile(manifestArg, { root: repositoryRoot, outDir: out, packagesOnly, foundationProbeOnly, platformOnly });
     console.log(`Packed ${provenance.components.length} component(s) at source ${provenance.sourceSha} into ${out}`);
     for (const artifact of provenance.artifacts) {
       console.log(`  ${artifact.path} (${artifact.sha256})`);

@@ -82,6 +82,8 @@ app.Use(async (context, next) =>
 });
 app.UseAuthentication();
 app.UseAuthorization();
+app.MapGet("/health/live", () => Results.Ok(new { status = "live" })).AllowAnonymous();
+app.MapGet("/health/ready", () => Results.Ok(new { status = "ready" })).AllowAnonymous();
 app.MapMcp("/mcp").RequireAuthorization()
     .WithMetadata(new RequestSizeLimitAttribute(
         KnowledgeRecordTransferContract.MaximumBytes + 64 * 1024));

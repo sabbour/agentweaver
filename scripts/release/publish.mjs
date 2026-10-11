@@ -151,6 +151,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   writeFileSync: writeReceipt = writeFileSync,
   packagesOnly = false,
   foundationProbeOnly = false,
+  platformOnly = false,
   confirmFoundationProbeInitialReplacement,
   confirmFoundationProbeSamplerReplacement,
   expectedFoundationProbeSamplerDigest,
@@ -158,6 +159,8 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   root = path.resolve(root);
   if (!confirmed || !/^[a-f0-9]{40}$/.test(sourceSha ?? '')) fail('explicit confirmation and exact source SHA are required');
   if (packagesOnly && foundationProbeOnly) fail('package-only and Foundation Probe-only publication are mutually exclusive');
+  if (platformOnly && (packagesOnly || foundationProbeOnly))
+    fail('platform-only publication cannot combine with package-only or Foundation Probe-only publication');
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   if (git('rev-parse', 'HEAD') !== sourceSha || git('status', '--porcelain')) fail('publication requires a clean exact source HEAD');
   const manifest = validateFile(path.resolve(root, manifestPath), { root });
@@ -169,7 +172,9 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const provenance = JSON.parse(readFileSync(path.join(directory, 'provenance.json'), 'utf8'));
   if (provenance.schemaVersion !== 1 || provenance.sourceSha !== sourceSha ||
       provenance.manifestSha256 !== hash(JSON.stringify(manifest))) fail('provenance does not match exact source composition');
-  const components = foundationProbeOnly
+  const components = platformOnly
+    ? manifest.components.filter(component => component.id !== 'Agentweaver.FoundationProbe')
+    : foundationProbeOnly
     ? manifest.components.filter(component => component.id === 'Agentweaver.FoundationProbe' && component.kind === 'service')
     : packagesOnly
     ? manifest.components.filter((component) => component.kind !== 'service')
@@ -213,7 +218,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
         return !component || record?.id !== component.id || record?.kind !== component.kind ||
           record?.version !== component.version || record?.project !== component.project;
       })) {
-    fail(`provenance component selection does not match the ${foundationProbeOnly ? 'Foundation Probe-only' : packagesOnly ? 'package-only' : 'full'} manifest selection`);
+    fail(`provenance component selection does not match the ${platformOnly ? 'platform-only' : foundationProbeOnly ? 'Foundation Probe-only' : packagesOnly ? 'package-only' : 'full'} manifest selection`);
   }
   if (!Array.isArray(provenance.artifacts) || provenance.artifacts.length !== components.length) {
     fail('missing or unexpected artifact provenance');
@@ -472,6 +477,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       confirmed: args.includes('--confirm-publication'),
       packagesOnly: args.includes('--packages-only'),
       foundationProbeOnly: args.includes('--foundation-probe-only'),
+      platformOnly: args.includes('--platform-only'),
       confirmFoundationProbeInitialReplacement: replacementIndex >= 0 ? args[replacementIndex + 1] : undefined,
       confirmFoundationProbeSamplerReplacement: samplerIndex >= 0 ? args[samplerIndex + 1] : undefined,
       expectedFoundationProbeSamplerDigest: expectedDigestIndex >= 0 ? args[expectedDigestIndex + 1] : undefined,
