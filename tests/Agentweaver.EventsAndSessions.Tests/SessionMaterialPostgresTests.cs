@@ -5,6 +5,7 @@ using System.Text;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions;
 using Agentweaver.Identity;
+using Microsoft.AspNetCore.Http;
 using Npgsql;
 using Xunit;
 
@@ -169,9 +170,131 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         Assert.Equal(1, _objects.Writes);
     }
 
+    [Fact]
+    public async Task ReviewedRemoteToolResultRetriesPersistAndReplayTheSameBoundBytes()
+    {
+        var proof = RemoteToolResultProof();
+        var eventId = SessionMaterialValidation.RemoteToolResultEventId(proof);
+        var bytes = """{"content":[{"type":"text","text":"saved result"}]}"""u8.ToArray();
+        var input = new SessionMaterialWriteRequest(
+            1, eventId, _registration.RuntimeInstanceId, _registration.Revision,
+            _registration.Binding.ExecutionFence, SessionMaterialKind.RemoteToolResult, bytes)
+        {
+            RemoteToolResultProof = proof
+        };
+        Assert.Null(input.SdkVersion);
+        Assert.Null(input.ModelId);
+        Assert.Null(input.MaxPromptTokens);
+
+        Assert.Equal(eventId, SessionMaterialValidation.RemoteToolResultEventId(proof with
+        {
+            ContentClass = SessionMaterialResultContentClass.TextOnly
+        }));
+        Assert.NotEqual(eventId, SessionMaterialValidation.RemoteToolResultEventId(proof with
+        {
+            CallInputHash = new string('f', 64)
+        }));
+        Assert.StartsWith("remote_tool_call_", SessionMaterialValidation.RemoteToolResultCallId(proof));
+        Assert.StartsWith("remote_tool_", SessionMaterialValidation.RemoteToolResultToolName(proof));
+
+        var acknowledgment = await Store.WriteAsync(
+            Principal, "session", input, _registration, Source, Current, default);
+        Assert.Equal(eventId, acknowledgment.EventId);
+        Assert.Equal(SessionMaterialKind.RemoteToolResult, acknowledgment.Reference.Material!.Kind);
+        Assert.Equal(Source.SdkVersion, acknowledgment.Reference.Material.SdkVersion);
+        Assert.Equal(Source.ModelId, acknowledgment.Reference.Material.ModelId);
+        Assert.Equal(Source.MaxPromptTokens, acknowledgment.Reference.Material.MaxPromptTokens);
+        Assert.True(SessionMaterialValidation.SameRemoteToolResultProof(
+            proof, acknowledgment.Reference.Material.RemoteToolResultProof));
+        Assert.Equal(1, _objects.Writes);
+
+        _journal = new(fixture.DataSource, _options);
+        var retry = await Store.WriteAsync(
+            Principal, "session", input, _registration, Source, Current, default);
+        Assert.Equal(acknowledgment, retry);
+        var replay = await Store.ReadAsync(
+            Principal, "session", eventId, SessionMaterialKind.RemoteToolResult, Historical, default);
+        Assert.Equal(bytes, replay.Bytes);
+        Assert.True(SessionMaterialValidation.SameRemoteToolResultProof(
+            proof, replay.Material.Reference.Material!.RemoteToolResultProof));
+        var toolCall = Assert.IsType<ToolCallSessionPayload>(
+            Assert.Single((await _journal.ReplayAsync(Principal, new("session"))).Events).Payload);
+        Assert.Equal(eventId, (await _journal.ReadMaterialEventAsync(
+            Principal, "session", eventId, default)).EventId);
+        Assert.Equal("completed", toolCall.State);
+        Assert.StartsWith("remote_tool_call_", toolCall.CallId);
+        Assert.StartsWith("remote_tool_", toolCall.ToolName);
+
+        await Assert.ThrowsAsync<SessionEventConflictException>(() => Store.WriteAsync(
+            Principal, "session", input with { Bytes = "different result"u8.ToArray() },
+            _registration, Source, Current, default));
+        Assert.Equal(1, _objects.Writes);
+    }
+
+    [Fact]
+    public async Task ProjectReaderCannotReadOrWritePersistedReviewedRemoteToolResultThroughApplicationService()
+    {
+        var proof = RemoteToolResultProof();
+        var eventId = SessionMaterialValidation.RemoteToolResultEventId(proof);
+        var request = new SessionMaterialWriteRequest(
+            1, eventId, _registration.RuntimeInstanceId, _registration.Revision,
+            _registration.Binding.ExecutionFence, SessionMaterialKind.RemoteToolResult,
+            """{"content":[{"type":"text","text":"saved result"}]}"""u8.ToArray())
+        {
+            RemoteToolResultProof = proof
+        };
+        var acknowledgment = await Store.WriteAsync(
+            Principal, "session", request, _registration, Source, Current, default);
+        Assert.Equal(eventId, acknowledgment.EventId);
+
+        var projects = new ProjectReaderAuthorizationClient(_registration.Binding);
+        var service = new SessionMaterialApplicationService(
+            null!, projects, Store, _journal, null!, TimeProvider.System);
+        var readsBefore = _objects.Reads;
+        var readFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            service.ReadAsync(new DefaultHttpContext(), "session", eventId,
+                SessionMaterialKind.RemoteToolResult, default));
+        Assert.Equal("runtime_remote_tool_result_read_requires_orchestrator", readFailure.Code);
+        Assert.Equal(readsBefore, _objects.Reads);
+
+        var writesBefore = _objects.Writes;
+        var writeFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            service.WriteAsync(new DefaultHttpContext(), "session", request, default));
+        Assert.Equal("runtime_remote_tool_result_write_requires_orchestrator", writeFailure.Code);
+        Assert.Equal(writesBefore, _objects.Writes);
+        Assert.Equal(1, projects.CallCount);
+    }
+
     private SessionMaterialWriteRequest Request(SessionMaterialKind kind = SessionMaterialKind.TurnContent) =>
         new(1, Guid.NewGuid(), _registration.RuntimeInstanceId, 1, 1, kind, "actual native turn content"u8.ToArray(),
             kind == SessionMaterialKind.TurnContent ? "assistant" : null, Source.SdkVersion, Source.ModelId);
+
+    private RemoteToolResultProof RemoteToolResultProof()
+    {
+        var binding = _registration.Binding;
+        var callEventId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        return new(
+            1, callEventId, new string('c', 64), "native-call-1",
+            new ReviewedRemoteToolSnapshotReference(
+                binding.ProjectId, Guid.Parse("44444444-4444-4444-4444-444444444444"),
+                new string('a', 64), binding.AgentId, "node"),
+            new(
+                "connection", 1, 2, 3, "Enabled", new string('b', 64),
+                "https://mcp.example.test/api", "https://mcp.example.test/resource",
+                "None", null, "StreamableHttp20250618", null, null, null,
+                "catalog-1", new string('d', 64), "remote.lookup", "tool-1",
+                new string('e', 64), "schema-1", new string('f', 64),
+                "tool.read", "runtime.execution", new string('9', 64)),
+            "remote.lookup", """{"query":"x"}""", new string('8', 64),
+            _registration.RuntimeInstanceId, _registration.Revision,
+            binding.ActorIssuer, binding.ActorId, binding.TenantId, binding.ProjectId,
+            binding.RunId, binding.SessionId, binding.WorkflowStepId!, binding.ProjectRevision,
+            binding.ProjectConfigurationRevision, binding.PlatformRuntimeRevision, binding.ContextRevision,
+            binding.AcceptedSelectionHash, binding.ExecutionFence, "tool.read", "runtime.execution",
+            1, true, callEventId.ToString("N"), "1", callEventId,
+            PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed,
+            SessionMaterialResultContentClass.Structured);
+    }
 
     private static Task Current(CancellationToken token)
     {
@@ -191,6 +314,7 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
             "agent", "turn", 1, 1, 1, "context", new string('b', 64), 1, "environment", "placement", 1,
             "profile", new("https://runtime.test/configure"), new("https://orchestrator.test/internal/runtime/observations"))
         {
+            WorkflowStepId = "step",
             EnvironmentCurrentFencingGeneration = 1, EnvironmentProviderFencingGeneration = 1,
             PlacementProviderId = "agent-sandbox", EnvironmentLifecycleGeneration = 1,
             EnvironmentLeaseRevision = 1, ModelSelectionReference = "accepted-model",
@@ -201,6 +325,7 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
     {
         public ConcurrentDictionary<ObjectKey, byte[]> Values { get; } = [];
         public int Writes;
+        public int Reads;
         public Func<Task>? AfterWrite { get; set; }
         public async Task WriteAsync(ObjectKey key, Stream content, CancellationToken cancellationToken = default)
         {
@@ -215,6 +340,7 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         public Task<ObjectRead?> ReadAsync(ObjectKey key, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref Reads);
             if (!Values.TryGetValue(key, out var bytes))
                 return Task.FromResult<ObjectRead?>(null);
             var content = new MemoryStream(bytes, writable: false);
@@ -222,5 +348,22 @@ public sealed class SessionMaterialPostgresTests(SessionsPostgresFixture fixture
         }
         public Task<bool> DeleteAsync(ObjectKey key, CancellationToken cancellationToken = default) =>
             Task.FromResult(Values.TryRemove(key, out _));
+    }
+
+    private sealed class ProjectReaderAuthorizationClient(RuntimeBinding binding)
+        : IProjectsAuthorizationContextClient
+    {
+        public int CallCount { get; private set; }
+
+        public Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
+            HttpContext context, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CallCount++;
+            return Task.FromResult(new ProjectsAuthorizationContextResponse(
+                1, binding.ActorIssuer, binding.ActorId, binding.TenantId, 1, binding.ProjectId, binding.RunId,
+                [new("project", binding.ProjectId,
+                    [new ProjectsAuthorizationPermissionGrant("readRunSelection", 1)])]));
+        }
     }
 }

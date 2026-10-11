@@ -8,7 +8,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Sandbox.AgentSandbox;
 
-public sealed class KubernetesAgentSandboxClient
+public sealed partial class KubernetesAgentSandboxClient
 {
     private const int MaximumResponseBytes = 4 * 1024 * 1024;
     private readonly HttpClient _httpClient;

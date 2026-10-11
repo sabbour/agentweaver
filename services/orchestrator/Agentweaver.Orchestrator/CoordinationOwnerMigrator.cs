@@ -48,7 +48,7 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is not (>= 1 and <= 15) and not 19) ||
+        if (applied.Any(version => version is not (>= 1 and <= 15) and not (19 or 20)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -63,7 +63,8 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(13) && !applied.Contains(12)) ||
             (applied.Contains(14) && !applied.Contains(13)) ||
             (applied.Contains(15) && !applied.Contains(14)) ||
-            (applied.Contains(19) && !applied.Contains(15)))
+            (applied.Contains(19) && !applied.Contains(15)) ||
+            (applied.Contains(20) && !applied.Contains(19)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
         foreach (var version in Enumerable.Range(1, 15).Where(version => !applied.Contains(version)))
         {
@@ -117,6 +118,22 @@ public static class CoordinationOwnerMigrator
                 await record.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        if (!applied.Contains(20))
+        {
+            await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(
+                "Agentweaver.Orchestrator.Migrations.020_maf_buildtest_workspace_seed.sql")
+                ?? throw new InvalidOperationException("The BuildTest workspace seed migration resource is missing.");
+            using var text = new StreamReader(resource);
+            var sql = (await text.ReadToEndAsync(cancellationToken))
+                .Replace("{schema}", quotedSchema, StringComparison.Ordinal);
+            await using (var migration = new NpgsqlCommand(sql, connection, transaction))
+                await migration.ExecuteNonQueryAsync(cancellationToken);
+            await using (var record = new NpgsqlCommand(
+                $"INSERT INTO {quotedSchema}.coordination_schema_migrations (version) VALUES (20)",
+                connection, transaction))
+                await record.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -147,7 +164,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 19)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 19, 20)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -190,7 +207,14 @@ public static class CoordinationOwnerMigrator
                 to_regclass(@mafExecutionRunGuards) IS NOT NULL,
                 to_regclass(@mafExecutionDispatches) IS NOT NULL,
                 to_regclass(@mafExecutionOutputWitnesses) IS NOT NULL,
-                to_regclass(@sessionConsistencyManifests) IS NOT NULL
+                to_regclass(@sessionConsistencyManifests) IS NOT NULL,
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 20) = 1,
+                EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = @schemaName AND table_name = 'maf_workflow_checkpoints'
+                        AND column_name = 'workspace_seed' AND data_type = 'bytea'),
+                EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conrelid = to_regclass(@checkpoints)
+                        AND conname = 'fk_maf_checkpoint_parent' AND contype = 'f')
             """, connection);
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
@@ -255,7 +279,8 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(20, 25).Any(column => !reader.GetBoolean(column)) ||
             Enumerable.Range(45, 5).Any(column => !reader.GetBoolean(column)) ||
             Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
-            !reader.GetBoolean(53))
+            !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
+            !reader.GetBoolean(55) || !reader.GetBoolean(56))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

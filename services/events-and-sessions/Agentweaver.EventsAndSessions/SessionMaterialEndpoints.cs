@@ -21,6 +21,7 @@ internal sealed class SessionMaterialRuntimeClient(HttpClient client, Coordinati
         Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken) =>
         RuntimeOwnerHttpTransport.SendAsync<RuntimeSdkSourceReceipt>(
             client, Address, $"/internal/runtime/sources/{runtimeInstanceId:D}", actor, null, cancellationToken);
+
 }
 
 internal sealed class SessionMaterialApplicationService(
@@ -32,6 +33,8 @@ internal sealed class SessionMaterialApplicationService(
         HttpContext context, string sessionId, SessionMaterialWriteRequest request, CancellationToken cancellationToken)
     {
         SessionMaterialValidation.Validate(request);
+        if (request.Kind == SessionMaterialKind.RemoteToolResult)
+            throw new RuntimeAuthorizationException("runtime_remote_tool_result_write_requires_orchestrator");
         var first = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
         NativeUsageApplicationService.RequireReadAuthority(first);
         var bearer = await NativeUsageApplicationService.BearerAsync(context, timeProvider).ConfigureAwait(false);
@@ -80,12 +83,12 @@ internal sealed class SessionMaterialApplicationService(
             .ConfigureAwait(false);
         await bindings.VerifyPinnedAsync(context.User, pinned, cancellationToken).ConfigureAwait(false);
         return await material.ReadAsync(context.User, sessionId, eventId, kind, async (recorded, token) =>
-        {
-            var current = await projects.GetCurrentAsync(context, token).ConfigureAwait(false);
-            RequireMaterialReadAuthority(current, kind);
-            RequireScope(current, recorded.TenantId, pinned.ProjectId, pinned.RunId);
-            await bindings.VerifyPinnedAsync(context.User, pinned, token).ConfigureAwait(false);
-        }, cancellationToken).ConfigureAwait(false);
+            {
+                var current = await projects.GetCurrentAsync(context, token).ConfigureAwait(false);
+                RequireMaterialReadAuthority(current, kind);
+                RequireScope(current, recorded.TenantId, pinned.ProjectId, pinned.RunId);
+                await bindings.VerifyPinnedAsync(context.User, pinned, token).ConfigureAwait(false);
+            }, cancellationToken).ConfigureAwait(false);
     }
 
     internal static void RequireMaterialReadAuthority(ProjectsAuthorizationContextResponse authority, SessionMaterialKind kind)
@@ -95,6 +98,8 @@ internal sealed class SessionMaterialApplicationService(
             NativeUsageApplicationService.RequireReadAuthority(authority);
             return;
         }
+        if (kind == SessionMaterialKind.RemoteToolResult)
+            throw new RuntimeAuthorizationException("runtime_remote_tool_result_read_requires_orchestrator");
         if (kind != SessionMaterialKind.TurnContent || authority.MembershipRevision < 1 ||
             authority.BoundProjectId is null || authority.BoundRunId is null ||
             !HasTurnContentReadEntitlement(authority))
@@ -152,6 +157,7 @@ public static class SessionMaterialEndpoints
     {
         "turnContent" or "TurnContent" => SessionMaterialKind.TurnContent,
         "sdkCache" or "SdkCache" => SessionMaterialKind.SdkCache,
+        "remoteToolResult" or "RemoteToolResult" => SessionMaterialKind.RemoteToolResult,
         _ => throw new ArgumentException("A supported session material kind is required.", nameof(kind))
     };
 

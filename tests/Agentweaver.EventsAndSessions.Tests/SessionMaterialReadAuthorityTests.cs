@@ -20,6 +20,15 @@ public sealed class SessionMaterialReadAuthorityTests
             Authority("readRunSelection"), SessionMaterialKind.SdkCache);
     }
 
+    [Fact]
+    public void ProjectReadAuthorityCannotReadReviewedRemoteToolResults()
+    {
+        var failure = Assert.Throws<RuntimeAuthorizationException>(() =>
+            SessionMaterialApplicationService.RequireMaterialReadAuthority(
+                Authority("readRunSelection"), SessionMaterialKind.RemoteToolResult));
+        Assert.Equal("runtime_remote_tool_result_read_requires_orchestrator", failure.Code);
+    }
+
     [Theory]
     [InlineData("permission")]
     [InlineData("project")]

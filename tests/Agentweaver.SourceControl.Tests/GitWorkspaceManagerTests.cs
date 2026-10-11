@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
 using Agentweaver.SourceControl;
@@ -11,6 +12,327 @@ namespace Agentweaver.SourceControl.Tests;
 
 public sealed class GitWorkspaceManagerTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PreparesBuildTestSeedWithoutCheckoutCredentialsAndNeverReseedsReadyWorkspace(bool empty)
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            var fixture = await CreateBuildTestSeedFixtureAsync(temporaryRoot, empty);
+            var preparationRoot = Path.Combine(temporaryRoot, "buildtest");
+            var manager = new GitWorkspaceManager(preparationRoot, new UnavailableGitRepositoryRemote());
+            var workspace = await manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None);
+            Assert.NotEqual(fixture.Original.Path, workspace.Path);
+            Assert.Equal(fixture.Source.WorkspaceIncarnationId, workspace.WorkspaceIncarnationId);
+            Assert.Equal(fixture.Source.BaseSha,
+                (await RunFixtureGitAsync(workspace.Path, ["rev-parse", "HEAD"])).Trim());
+            Assert.Equal(fixture.Source.BaselineTreeSha,
+                (await RunFixtureGitAsync(workspace.Path, ["write-tree"])).Trim());
+            Assert.Empty(await RunFixtureGitAsync(workspace.Path, ["remote"]));
+            var seed = GitWorkspaceBuildTestSeedPackage.Parse(fixture.Seed.Bytes, fixture.Source);
+            foreach (var file in seed.Baseline.Files)
+            {
+                var path = Path.Combine(workspace.Path, file.Path.Replace('/', Path.DirectorySeparatorChar));
+                Assert.Equal(GitWorkspaceCapturePackage.ExtractFile(
+                    seed.BaselinePackageBytes.ToArray(), seed.Baseline,
+                    GitWorkspaceCapturePackage.Hash(seed.BaselinePackageBytes.AsSpan()), file.Path),
+                    await File.ReadAllBytesAsync(path));
+            }
+            Assert.False(File.Exists(Path.Combine(workspace.Path, "delete-me.txt")));
+            if (!empty)
+                Assert.Contains("100755", await RunFixtureGitAsync(workspace.Path, ["ls-files", "--stage", "--", "run.sh"]));
+            Assert.Equal(fixture.OriginalIndex,
+                await File.ReadAllBytesAsync(Path.Combine(fixture.Original.Path, ".git", "index")));
+            var manifestPath = Path.Combine(Path.GetDirectoryName(workspace.Path)!, "workspace.json");
+            var manifestBefore = await File.ReadAllBytesAsync(manifestPath);
+            Assert.DoesNotContain("transient-token", Encoding.UTF8.GetString(manifestBefore));
+            Assert.DoesNotContain("transient-token",
+                await File.ReadAllTextAsync(Path.Combine(workspace.Path, ".git", "config")));
+
+            await File.WriteAllBytesAsync(Path.Combine(workspace.Path, "result.bin"), [255, 0, 1]);
+            await File.WriteAllTextAsync(Path.Combine(workspace.Path, "README.md"), "command changed input\n");
+            var indexBefore = await File.ReadAllBytesAsync(Path.Combine(workspace.Path, ".git", "index"));
+            var noGitManager = new GitWorkspaceManager(
+                preparationRoot, new UnavailableGitRepositoryRemote(), "missing-buildtest-git-" + Guid.NewGuid().ToString("N"));
+            var repeated = await noGitManager.PrepareBuildTestSeedAsync(
+                fixture.Source, fixture.Seed.Bytes, CancellationToken.None);
+            Assert.Equal(workspace, repeated);
+            Assert.Equal(new byte[] { 255, 0, 1 }, await File.ReadAllBytesAsync(Path.Combine(workspace.Path, "result.bin")));
+            Assert.Equal("command changed input\n", await File.ReadAllTextAsync(Path.Combine(workspace.Path, "README.md")));
+            Assert.Equal(manifestBefore, await File.ReadAllBytesAsync(manifestPath));
+            Assert.Equal(indexBefore, await File.ReadAllBytesAsync(Path.Combine(workspace.Path, ".git", "index")));
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildTestPreparationResumesOnlyItsOwnIncompleteCopy()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            var fixture = await CreateBuildTestSeedFixtureAsync(temporaryRoot);
+            var manager = new GitWorkspaceManager(Path.Combine(temporaryRoot, "buildtest"), new UnavailableGitRepositoryRemote());
+            var workspace = await manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None);
+            await SetPreparationStateAsync(workspace.Path, "preparing");
+            File.Delete(Path.Combine(workspace.Path, "README.md"));
+            File.Delete(Path.Combine(workspace.Path, ".git", "index"));
+            var resumed = await manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None);
+            Assert.Equal(workspace, resumed);
+            Assert.Equal("dirty input\n", await File.ReadAllTextAsync(Path.Combine(workspace.Path, "README.md")));
+            Assert.Equal(fixture.Source.BaselineTreeSha,
+                (await RunFixtureGitAsync(workspace.Path, ["write-tree"])).Trim());
+            var manifest = JsonNode.Parse(await File.ReadAllTextAsync(
+                Path.Combine(Path.GetDirectoryName(workspace.Path)!, "workspace.json")))!;
+            Assert.Equal("ready", manifest["state"]!.GetValue<string>());
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildTestPreparationRejectsUndeclaredDataBeforeOverwritingInput()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            var fixture = await CreateBuildTestSeedFixtureAsync(temporaryRoot);
+            var manager = new GitWorkspaceManager(Path.Combine(temporaryRoot, "buildtest"), new UnavailableGitRepositoryRemote());
+            var workspace = await manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None);
+            await SetPreparationStateAsync(workspace.Path, "preparing");
+            await File.WriteAllTextAsync(Path.Combine(workspace.Path, "README.md"), "preserve changed data\n");
+            await File.WriteAllTextAsync(Path.Combine(workspace.Path, "unowned.txt"), "preserve unowned data\n");
+            var index = await File.ReadAllBytesAsync(Path.Combine(workspace.Path, ".git", "index"));
+            var exception = await Assert.ThrowsAsync<GitWorkspaceException>(() =>
+                manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None));
+            Assert.Equal(GitWorkspaceFailureCode.CorruptWorkspace, exception.Code);
+            Assert.Equal("preserve changed data\n", await File.ReadAllTextAsync(Path.Combine(workspace.Path, "README.md")));
+            Assert.Equal("preserve unowned data\n", await File.ReadAllTextAsync(Path.Combine(workspace.Path, "unowned.txt")));
+            Assert.Equal(index, await File.ReadAllBytesAsync(Path.Combine(workspace.Path, ".git", "index")));
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildTestPreparationRejectsChangedBindingAndConcurrentPreparation()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            var fixture = await CreateBuildTestSeedFixtureAsync(temporaryRoot);
+            var preparationRoot = Path.Combine(temporaryRoot, "buildtest");
+            var manager = new GitWorkspaceManager(preparationRoot, new UnavailableGitRepositoryRemote());
+            var workspace = await manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None);
+            var changed = fixture.Source with { ActorSubject = "other-actor" };
+            var exception = await Assert.ThrowsAsync<GitWorkspaceException>(() =>
+                manager.PrepareBuildTestSeedAsync(changed, fixture.Seed.Bytes, CancellationToken.None));
+            Assert.Equal(GitWorkspaceFailureCode.PathConflict, exception.Code);
+            var lockPath = Directory.GetFiles(preparationRoot, "*.lock").Single();
+            using var held = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            exception = await Assert.ThrowsAsync<GitWorkspaceException>(() =>
+                manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None));
+            Assert.Equal(GitWorkspaceFailureCode.PathConflict, exception.Code);
+            Assert.Equal("dirty input\n", await File.ReadAllTextAsync(Path.Combine(workspace.Path, "README.md")));
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildTestPreparationRejectsCorruptionAndCancellationBeforeCreatingPaths()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            var fixture = await CreateBuildTestSeedFixtureAsync(temporaryRoot);
+            var preparationRoot = Path.Combine(temporaryRoot, "buildtest");
+            var manager = new GitWorkspaceManager(preparationRoot, new UnavailableGitRepositoryRemote());
+            var corrupt = fixture.Seed.Bytes.ToArray();
+            corrupt[^1] ^= 1;
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                manager.PrepareBuildTestSeedAsync(fixture.Source, corrupt, CancellationToken.None));
+            Assert.False(Directory.Exists(preparationRoot));
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, new CancellationToken(canceled: true)));
+            Assert.False(Directory.Exists(preparationRoot));
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildTestPreparationRejectsBundleWithADifferentReferenceBeforeCopyingFiles()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            var fixture = await CreateBuildTestSeedFixtureAsync(temporaryRoot);
+            var bundlePath = Path.Combine(temporaryRoot, "different-reference.bundle");
+            await RunFixtureGitAsync(fixture.Original.Path, ["bundle", "create", bundlePath, "HEAD"]);
+            var bundle = await File.ReadAllBytesAsync(bundlePath);
+            var bytes = GitWorkspaceBuildTestSeedPackage.Create(fixture.Seed.Baseline, bundle);
+            var source = fixture.Source with
+            {
+                SeedSha256 = GitWorkspaceCapturePackage.Hash(bytes),
+                SeedByteLength = bytes.Length,
+                BundleSha256 = GitWorkspaceCapturePackage.Hash(bundle),
+                BundleByteLength = bundle.Length
+            };
+            var preparationRoot = Path.Combine(temporaryRoot, "buildtest");
+            var manager = new GitWorkspaceManager(preparationRoot, new UnavailableGitRepositoryRemote());
+            var exception = await Assert.ThrowsAsync<GitWorkspaceException>(() =>
+                manager.PrepareBuildTestSeedAsync(source, bytes, CancellationToken.None));
+            Assert.Equal(GitWorkspaceFailureCode.CorruptWorkspace, exception.Code);
+            var repositoryPath = Path.Combine(Directory.GetDirectories(preparationRoot).Single(), "repository");
+            Assert.False(File.Exists(Path.Combine(repositoryPath, "README.md")));
+            Assert.False(File.Exists(Path.Combine(repositoryPath, "delete-me.txt")));
+            var manifest = JsonNode.Parse(await File.ReadAllTextAsync(
+                Path.Combine(Path.GetDirectoryName(repositoryPath)!, "workspace.json")))!;
+            Assert.Equal("preparing", manifest["state"]!.GetValue<string>());
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildTestPreparationPreservesWorkspaceWithoutOwnershipManifest()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            var fixture = await CreateBuildTestSeedFixtureAsync(temporaryRoot);
+            var preparationRoot = Path.Combine(temporaryRoot, "buildtest");
+            var key = "buildtest-" + Hash(fixture.Source.TenantId + "\0" + fixture.Source.Identity.ProjectId +
+                "\0" + fixture.Source.Identity.RunId + "\0" + fixture.Source.WorkspaceId);
+            var directory = Path.Combine(preparationRoot, key);
+            Directory.CreateDirectory(directory);
+            var marker = Path.Combine(directory, "unowned.txt");
+            await File.WriteAllTextAsync(marker, "keep\n");
+            var manager = new GitWorkspaceManager(preparationRoot, new UnavailableGitRepositoryRemote());
+            var exception = await Assert.ThrowsAsync<GitWorkspaceException>(() =>
+                manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None));
+            Assert.Equal(GitWorkspaceFailureCode.PathConflict, exception.Code);
+            Assert.Equal("keep\n", await File.ReadAllTextAsync(marker));
+            Assert.False(File.Exists(Path.Combine(directory, "workspace.json")));
+            Assert.False(Directory.Exists(Path.Combine(directory, "repository")));
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
+    public async Task BuildTestPreparationRejectsLinkedDirectoryWithoutWritingThroughIt()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        string? linkedPath = null;
+        try
+        {
+            var fixture = await CreateBuildTestSeedFixtureAsync(temporaryRoot);
+            var manager = new GitWorkspaceManager(Path.Combine(temporaryRoot, "buildtest"), new UnavailableGitRepositoryRemote());
+            var workspace = await manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None);
+            await SetPreparationStateAsync(workspace.Path, "preparing");
+            linkedPath = Path.Combine(workspace.Path, "nested");
+            File.Delete(Path.Combine(linkedPath, "space \u00e9.bin"));
+            Directory.Delete(linkedPath);
+            var target = Path.Combine(temporaryRoot, "link-target");
+            Directory.CreateDirectory(target);
+            var marker = Path.Combine(target, "space \u00e9.bin");
+            await File.WriteAllBytesAsync(marker, [7, 8, 9]);
+            if (OperatingSystem.IsWindows())
+            {
+                var start = new ProcessStartInfo("cmd.exe")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                foreach (var argument in new[] { "/c", "mklink", "/J", linkedPath, target })
+                    start.ArgumentList.Add(argument);
+                using var process = Process.Start(start)!;
+                var output = process.StandardOutput.ReadToEndAsync();
+                var errors = process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+                Assert.True(process.ExitCode == 0, await output + await errors);
+            }
+            else
+            {
+                Directory.CreateSymbolicLink(linkedPath, target);
+            }
+            var exception = await Assert.ThrowsAsync<GitWorkspaceException>(() =>
+                manager.PrepareBuildTestSeedAsync(fixture.Source, fixture.Seed.Bytes, CancellationToken.None));
+            Assert.Equal(GitWorkspaceFailureCode.PathConflict, exception.Code);
+            Assert.Equal(new byte[] { 7, 8, 9 }, await File.ReadAllBytesAsync(marker));
+        }
+        finally
+        {
+            if (linkedPath is not null && Directory.Exists(linkedPath) &&
+                (File.GetAttributes(linkedPath) & FileAttributes.ReparsePoint) != 0)
+                Directory.Delete(linkedPath);
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
+    [Fact]
+    public async Task ExportsCredentialFreeSeedWithARealCompleteBaseBundleAndFullInventory()
+    {
+        var temporaryRoot = CreateTemporaryDirectory();
+        try
+        {
+            var sourceRepository = Path.Combine(temporaryRoot, "source-repository");
+            var baseSha = await CreateGitRepositoryAsync(sourceRepository);
+            var manager = new GitWorkspaceManager(
+                Path.Combine(temporaryRoot, "workspaces"),
+                new LocalGitRepositoryRemote(new Uri(sourceRepository)));
+            var request = CreateRequest("seed-run", "seed-workspace", baseSha);
+            var workspace = await manager.PrepareAsync(request, CancellationToken.None);
+            var captureRequest = new GitWorkspaceCaptureRequest(
+                request.Context.Binding, request.Context.Repository,
+                request.WorkspaceId, request.BaseSha, request.BranchName);
+            var index = Path.Combine(workspace.Path, ".git", "index");
+            var indexBefore = await File.ReadAllBytesAsync(index);
+            var seed = await manager.CreateBuildTestSeedAsync(captureRequest, workspace, CancellationToken.None);
+            var bundlePath = Path.Combine(temporaryRoot, "base.bundle");
+            await File.WriteAllBytesAsync(bundlePath, seed.BundleBytes);
+            await RunFixtureGitAsync(workspace.Path, ["bundle", "verify", bundlePath]);
+            var clone = Path.Combine(temporaryRoot, "seed-clone");
+            await RunFixtureGitAsync(
+                temporaryRoot, ["-c", "core.autocrlf=false", "clone", "--branch", "buildtest-base", bundlePath, clone]);
+
+            Assert.Equal(
+                await File.ReadAllBytesAsync(Path.Combine(workspace.Path, "README.md")),
+                await File.ReadAllBytesAsync(Path.Combine(clone, "README.md")));
+            Assert.Equal(baseSha, seed.Baseline.Manifest.BaseSha);
+            Assert.Equal(2, seed.Baseline.Manifest.Files.Length);
+            Assert.Equal(indexBefore, await File.ReadAllBytesAsync(index));
+            Assert.Equal(seed.Sha256, GitWorkspaceCapturePackage.Hash(seed.Bytes));
+            Assert.DoesNotContain("transient-token", Encoding.UTF8.GetString(seed.BundleBytes));
+            Assert.DoesNotContain("transient-token", Encoding.UTF8.GetString(seed.Baseline.ManifestBytes));
+        }
+        finally
+        {
+            DeleteTemporaryDirectory(temporaryRoot);
+        }
+    }
+
     [Fact]
     public async Task CreatesIsolatedRunWorkspacesAndRecoversOwnedWorkspace()
     {
@@ -227,6 +549,65 @@ public sealed class GitWorkspaceManagerTests
         {
             DeleteTemporaryDirectory(temporaryRoot);
         }
+    }
+
+    private static async Task<BuildTestSeedFixture> CreateBuildTestSeedFixtureAsync(string root, bool empty = false)
+    {
+        var sourceRepository = Path.Combine(root, "source-repository");
+        _ = await CreateGitRepositoryAsync(sourceRepository);
+        await File.WriteAllTextAsync(Path.Combine(sourceRepository, "run.sh"), "#!/bin/sh\nexit 0\n");
+        await RunFixtureGitAsync(sourceRepository, ["add", "--", "run.sh"]);
+        await RunFixtureGitAsync(sourceRepository, ["update-index", "--chmod=+x", "--", "run.sh"]);
+        await RunFixtureGitAsync(sourceRepository, ["commit", "-m", "executable input"]);
+        var baseSha = (await RunFixtureGitAsync(sourceRepository, ["rev-parse", "HEAD"])).Trim();
+        var manager = new GitWorkspaceManager(Path.Combine(root, "workspaces"),
+            new LocalGitRepositoryRemote(new Uri(sourceRepository)));
+        var request = CreateRequest("buildtest-run", "buildtest-workspace", baseSha);
+        var workspace = await manager.PrepareAsync(request, CancellationToken.None);
+        File.Delete(Path.Combine(workspace.Path, "delete-me.txt"));
+        if (empty)
+        {
+            File.Delete(Path.Combine(workspace.Path, "README.md"));
+            File.Delete(Path.Combine(workspace.Path, "run.sh"));
+        }
+        else
+        {
+            await File.WriteAllTextAsync(Path.Combine(workspace.Path, "README.md"), "dirty input\n");
+            Directory.CreateDirectory(Path.Combine(workspace.Path, "nested"));
+            await File.WriteAllBytesAsync(Path.Combine(workspace.Path, "nested", "space \u00e9.bin"), [0, 255, 13, 10, 42]);
+        }
+        var originalIndex = await File.ReadAllBytesAsync(Path.Combine(workspace.Path, ".git", "index"));
+        var capture = new GitWorkspaceCaptureRequest(request.Context.Binding, request.Context.Repository,
+            request.WorkspaceId, request.BaseSha, request.BranchName);
+        var seed = await manager.CreateBuildTestSeedAsync(capture, workspace, CancellationToken.None);
+        var source = new SandboxBuildTestWorkspaceSource(
+            2, new("project", request.Context.Binding.RunId, "session"), "tenant", "issuer", "actor",
+            "source-pin", new string('a', 64), request.Context.Binding.Resource,
+            request.WorkspaceId, workspace.WorkspaceIncarnationId, request.BranchName, baseSha,
+            seed.Baseline.Manifest.OutputTreeSha, "seed-reference", seed.Sha256, seed.Bytes.Length,
+            GitWorkspaceCapturePackage.Hash(seed.BundleBytes), seed.BundleBytes.Length,
+            seed.Baseline.ManifestSha256, seed.Baseline.ManifestBytes.Length);
+        return new(seed, source, workspace, originalIndex);
+    }
+
+    private static async Task SetPreparationStateAsync(string repositoryPath, string state)
+    {
+        var path = Path.Combine(Path.GetDirectoryName(repositoryPath)!, "workspace.json");
+        var manifest = JsonNode.Parse(await File.ReadAllTextAsync(path))!;
+        manifest["state"] = state;
+        await File.WriteAllTextAsync(path, manifest.ToJsonString());
+    }
+
+    private sealed record BuildTestSeedFixture(
+        GitWorkspaceBuildTestSeedDocument Seed,
+        SandboxBuildTestWorkspaceSource Source,
+        GitWorkspace Original,
+        byte[] OriginalIndex);
+
+    private sealed class UnavailableGitRepositoryRemote : IGitRepositoryRemote
+    {
+        public Uri GetCloneUri(SourceControlRepositoryIdentity repository) =>
+            throw new InvalidOperationException("BuildTest preparation must not resolve a repository remote.");
     }
 
     private static GitWorkspaceRequest CreateRequest(

@@ -71,22 +71,44 @@ internal sealed record MafExecutionBuildTestIntent(
     SandboxBuildTestAcceptedExecutionOptions ExecutionOptions,
     SandboxBuildTestExpectedBinding ExpectedBinding)
 {
+    [JsonIgnore]
+    public ImmutableArray<byte>? WorkspaceSeed { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxBuildTestWorkspaceSeedReference? WorkspaceSeedReference { get; init; }
+
     internal SandboxBuildTestCheckpointReference CheckpointReference() =>
         new(Identity.ProjectId, Identity.RunId, Identity.SessionId, CheckpointId, WorkPlanId,
             StepId, CheckpointRevision, DecisionStateVersion, ExecutionFence, AcceptedSelectionHash);
 
-    internal SandboxBuildTestAcceptedCommand ToAcceptedCommand()
+    internal SandboxBuildTestAcceptedCommand ToAcceptedCommand(bool requireSeed = true)
     {
         if (Command is null || ExecutionOptions is null ||
             ExecutionOptions.ProfileId != Command.ExecutionProfileReference)
             throw new ArgumentException("The BuildTest command must use its pinned execution profile.");
+        if (Command.WorkspaceSource is { } source)
+        {
+            _ = (WorkspaceSeedReference ?? throw new ArgumentException(
+                "The BuildTest workspace seed requires its persisted origin reference."))
+                .Validate(CheckpointReference(), OperationId, source);
+        }
+        else if (WorkspaceSeedReference is not null)
+        {
+            throw new ArgumentException("A legacy BuildTest intent cannot reference a workspace seed.");
+        }
         var accepted = new SandboxBuildTestAcceptedCommand(
-            1, OperationId, CheckpointReference(), Command.ExecutableReference, Command.Arguments,
+            Command.WorkspaceSource is null ? 1 : 2,
+            OperationId, CheckpointReference(), Command.ExecutableReference, Command.Arguments,
             Command.WorkingDirectory,
             Command.Outputs.Select(output => new SandboxBuildTestOutputObligation(
                 output.Name, output.RelativePath, output.Required, output.MaximumBytes)).ToImmutableArray(),
-            ExecutionOptions, string.Empty);
-        return (accepted with { ImmutableHash = accepted.ComputeImmutableHash() }).Validate();
+            ExecutionOptions, string.Empty)
+        {
+            WorkspaceSource = Command.WorkspaceSource,
+            WorkspaceSeed = WorkspaceSeed
+        };
+        accepted = accepted with { ImmutableHash = accepted.ComputeImmutableHash() };
+        return requireSeed ? accepted.Validate() : accepted.ValidateMetadata();
     }
 
     internal SandboxBuildTestApiRequest ToApiRequest() =>
@@ -307,7 +329,7 @@ internal static class MafExecutionCheckpointContract
                 !state.Progress.NonModelSteps.TryGetValue(stepId, out var status) ||
                 status == MafExecutionTaskStatus.Pending)
                 throw new ArgumentException("MAF BuildTest checkpoint intents are invalid.", nameof(state));
-            _ = intent.ToAcceptedCommand();
+            _ = intent.ToAcceptedCommand(requireSeed: false);
             _ = intent.ToApiRequest();
             if (status != MafExecutionTaskStatus.Running &&
                 !state.BuildTestReceipts.ContainsKey(stepId))

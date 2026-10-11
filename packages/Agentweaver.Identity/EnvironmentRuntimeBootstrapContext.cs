@@ -3,6 +3,19 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Identity;
 
+public sealed record RuntimeMcpServerEndpoint(string Name, Uri HttpsUrl)
+{
+    public bool IsValid =>
+        !string.IsNullOrWhiteSpace(Name) &&
+        Name.Length <= 256 &&
+        Name.All(character => char.IsAsciiLetterOrDigit(character) ||
+            character is '.' or '_' or '-' or ':') &&
+        RuntimeContractValidation.IsHttpsEndpoint(HttpsUrl);
+
+    public RuntimeMcpServerEndpoint Validate() =>
+        IsValid ? this : throw new ArgumentException("The Runtime MCP server endpoint is invalid.");
+}
+
 public sealed record EnvironmentRuntimeBootstrapContext(
     int ContractVersion,
     string TenantId,
@@ -25,4 +38,6 @@ public sealed record EnvironmentRuntimeBootstrapContext(
     public RuntimeOwnerContext? RuntimeOwnerContext { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SandboxImageIdentity? Image { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeMcpServerEndpoint? McpServer { get; init; }
 }

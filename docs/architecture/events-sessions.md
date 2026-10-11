@@ -6,9 +6,9 @@ accepted-effect fact stream; it is not a deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal, serves ordered run-event replay, appends Knowledge-owned accepted-effect receipts as project facts, and presents Orchestrator owner-outbox messages at fenced turn boundaries. The Orchestrator validates mapped child context against current decisions and authority. Events admits PolicyEvaluation only from immutable Orchestrator receipts after current authority and owner-session checks." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'" alt="Events & Sessions pins the native PostgreSQL journal and serves ordered run-event replay. Configured private remote tool result routes require direct mutual TLS before reading bodies. Events checks current Orchestrator proof, stores bytes before journal references, and verifies reads before returning bytes. Generic and public routes do not expose private results. Native remote-tool dispatch remains disabled." />
   </a>
-  <figcaption>Run-bound session events, project-scoped facts, and addressed messages have separate addresses and storage. Generic PolicyEvaluation appends are rejected; the receipt-reference route fetches immutable Orchestrator evidence and revalidates admission before commit. The Orchestrator validates mapped context against current owner state and authority. The figure describes source behavior, not a deployment topology.</figcaption>
+  <figcaption>Run-bound events, project facts, and addressed messages use separate storage. Private result routes require configured mutual TLS and current owner proof. Bytes precede journal references and acknowledgments. The figure describes source behavior, not an approved deployment.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.drawio'">Open editable draw.io source</a></p>
 
@@ -64,6 +64,63 @@ SDK cache restoration additionally requires compatible SDK and model bindings.
 Material responses use `Cache-Control: no-store`.
 The route accepts `turnContent` and `sdkCache`, plus their original CLR names.
 Numeric or unknown kinds are denied.
+
+`RemoteToolResult` remains denied on these generic material routes. The dedicated
+`POST /internal/sessions/{sessionId}/remote-tool-results` write route and
+`POST /internal/sessions/{sessionId}/remote-tool-results/read` route require
+the configured direct mutual-TLS listener before they read the request body.
+HTTP requests receive `runtime_remote_tool_result_https_required`.
+Without the TLS configuration, HTTPS requests receive `runtime_remote_tool_result_route_unavailable`.
+An HTTPS flag, forwarded header, actor token, or project permission alone cannot pass this check.
+All handled responses use `no-store`.
+
+Events accepts only the configured Orchestrator peer certificate on this listener.
+It forwards the original actor bearer to the fixed Orchestrator owner.
+`POST /internal/runtime/remote-tool-results/verify` reconstructs the selected tool
+call and verifies its current native action grant and reserved tool slot.
+Events also checks current Projects authority, actor, tenant, session provider,
+runtime registration, execution fence, and native SDK source.
+It repeats these checks around storage and journal waits, including exact retries.
+Events stores result bytes before committing their journal reference.
+An acknowledgment binds the full call proof, runtime identity, source, length, and digest.
+
+Private reads require the same current authority and committed journal reference.
+Events verifies the recorded proof, source, byte length, and digest before returning bytes.
+The Orchestrator checks for a saved result after native action admission and before external dispatch.
+It accepts only the exact recorded call proof; only the previously unknown result content class may differ from the read template.
+It rechecks current authority before returning saved or newly acknowledged bytes.
+The ordinary AgentHost material client cannot use these private routes.
+Public event pages and streams continue to omit private result references and bytes.
+
+## Private result TLS configuration
+
+Each service requires its own trusted configuration section:
+`Orchestrator:RemoteToolResults:Tls` or `EventsAndSessions:RemoteToolResults:Tls`.
+Both require `Kestrel:Endpoints:RemoteToolResults:Url` with HTTPS and the exact `ListenerPort`.
+Core also requires the runtime registration and native SDK source owners.
+Events requires the configured session material container.
+Missing sections leave private routes disabled; invalid sections stop startup.
+
+| Setting | Required value |
+| --- | --- |
+| `LocalServiceName`, `PeerServiceName` | `Orchestrator` and `EventsAndSessions`, in the local and peer roles. |
+| `LocalServicePrincipalId`, `PeerServicePrincipalId` | Distinct, explicit, nonempty service principal GUIDs. They map the configured services to the pinned certificates; callers cannot supply this mapping. |
+| `LocalCertificatePemPath`, `LocalPrivateKeyPemPath` | Distinct absolute server-side paths to the existing PEM certificate and private key. |
+| `LocalCertificateSha256` | Exact SHA-256 digest of the local certificate bytes. |
+| `PeerCertificateSha256Pins` | One to four distinct SHA-256 digests for the trusted peer certificates. |
+| `ListenerPort` | The dedicated local HTTPS port. |
+| `PeerOwnerAddress` | The fixed HTTPS root address of the other service's dedicated listener. |
+
+Certificates must be current, non-CA certificates with client and server authentication purposes.
+The native TLS stack checks the peer chain; outbound calls also require a valid server name.
+TLS 1.2 or 1.3, revocation checks, certificate pins, and redirect rejection remain required.
+The service keeps its certificate private; it does not give it to AgentHost or accept caller-selected owner addresses.
+Bounded HTTP reads retain their deadline after response headers arrive.
+A `409` owner response is an explicit changed-binding denial, not a successful retry.
+
+This source adds no certificate issuance, service principal, trust store, deployment, or approved live TLS configuration.
+Native remote-tool dispatch remains disabled.
+Positive native TLS, complete producer recovery, and private-result acceptance remain open.
 
 `GET /internal/projects/{projectId}/runs/{runId}/sessions-provider-binding` returns the actual immutable Sessions consumer pin.
 It requires existing current `ReadRunSelection` and exact signed project/run binding before and after retrieval.

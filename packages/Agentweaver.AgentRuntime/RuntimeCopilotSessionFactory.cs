@@ -76,11 +76,16 @@ public sealed class RuntimeCopilotSessionFactory
         CancellationToken cancellationToken,
         SkillRuntimeContentProjectionV1 acceptedSkills,
         RuntimeSessionRecovery? recovery = null,
-        Func<string, ReadOnlyMemory<byte>, bool, CancellationToken, Task>? requireActionAuthority = null)
+        Func<string, ReadOnlyMemory<byte>, bool, CancellationToken, Task>? requireActionAuthority = null,
+        RuntimeMcpServerEndpoint? mcpServer = null)
     {
         ArgumentNullException.ThrowIfNull(requireCreationAuthority);
         RuntimeContractValidation.Validate(registration);
         RuntimeSkillContentHttpClient.ValidateForRegistration(acceptedSkills, registration);
+        if (mcpServer is { IsValid: false })
+            throw new RuntimeAuthorizationException("runtime_mcp_server_binding_invalid");
+        if (mcpServer is not null)
+            throw new RuntimeAuthorizationException("runtime_mcp_tool_interception_unavailable");
         if (acceptedModelSelectionReference != registration.Binding.ModelSelectionReference)
             throw new RuntimeAuthorizationException("runtime_model_reference_unavailable");
         var model = _modelBindings.Resolve(acceptedModelSelectionReference,

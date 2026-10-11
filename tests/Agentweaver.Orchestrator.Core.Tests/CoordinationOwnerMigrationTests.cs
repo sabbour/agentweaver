@@ -79,16 +79,16 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
-        await AssertMigration19SchemaAsync();
+        await AssertCurrentSchemaAsync();
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
-        await AssertMigration19SchemaAsync();
+        await AssertCurrentSchemaAsync();
         Assert.Equal(historyBefore, await ReadMigrationHistoryAsync(version));
         await using var verifyConnection = await fixture.DataSource.OpenConnectionAsync();
         await using var verify = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".coordination_schema_migrations
             """, verifyConnection);
-        Assert.Equal(16L, await verify.ExecuteScalarAsync());
+        Assert.Equal(17L, await verify.ExecuteScalarAsync());
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
     }
 
-    private async Task AssertMigration19SchemaAsync()
+    private async Task AssertCurrentSchemaAsync()
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
@@ -125,11 +125,23 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
                 (SELECT count(*) FROM pg_trigger
                  WHERE tgrelid = to_regclass(@manifests) AND tgname IN (
                     'session_consistency_manifests_immutable', 'session_consistency_manifests_no_truncate')
-                   AND NOT tgisinternal)
+                   AND NOT tgisinternal),
+                (SELECT count(*) FROM "{_schema}".coordination_schema_migrations WHERE version = 20),
+                (SELECT count(*) FROM information_schema.columns
+                 WHERE table_schema = @schema AND table_name = 'maf_workflow_checkpoints'
+                   AND column_name = 'workspace_seed' AND data_type = 'bytea' AND is_nullable = 'YES'),
+                (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                 WHERE conrelid = to_regclass(@checkpoints) AND conname = 'ck_maf_workspace_seed_bytes'
+                   AND contype = 'c' AND convalidated),
+                (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                 WHERE conrelid = to_regclass(@checkpoints) AND conname = 'fk_maf_checkpoint_parent'
+                   AND contype = 'f' AND convalidated AND confrelid = to_regclass(@checkpoints)
+                   AND confdeltype = 'r')
             """, connection);
         command.Parameters.AddWithValue("schema", _schema);
         command.Parameters.AddWithValue("manifests", $"{_schema}.session_consistency_manifests");
         command.Parameters.AddWithValue("operations", $"{_schema}.coordination_execution_operations");
+        command.Parameters.AddWithValue("checkpoints", $"{_schema}.maf_workflow_checkpoints");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
@@ -137,6 +149,20 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
         Assert.Equal(5L, reader.GetInt64(2));
         Assert.Equal(1L, reader.GetInt64(3));
         Assert.Equal(2L, reader.GetInt64(4));
+        Assert.Equal(1L, reader.GetInt64(5));
+        Assert.Equal(1L, reader.GetInt64(6));
+        var seedConstraint = reader.GetString(7);
+        Assert.Contains("workspace_seed IS NULL", seedConstraint);
+        Assert.Contains("octet_length(workspace_seed) >= 1", seedConstraint);
+        Assert.Contains("octet_length(workspace_seed) <= 67188876", seedConstraint);
+        var parentConstraint = reader.GetString(8);
+        Assert.StartsWith(
+            "FOREIGN KEY (project_id, run_id, session_id, store_name, parent_checkpoint_id)",
+            parentConstraint);
+        Assert.Contains(
+            "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
+            parentConstraint);
+        Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version)

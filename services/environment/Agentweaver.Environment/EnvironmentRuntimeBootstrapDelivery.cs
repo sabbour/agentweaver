@@ -26,12 +26,16 @@ public sealed class EnvironmentRuntimeBootstrapDelivery(
         if (registration != request.Registration)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
         var placement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
+        if (request.McpServer is { IsValid: false } ||
+            request.McpServer is not null && request.McpServer != placement.McpServer)
+            throw new RuntimeAuthorizationException("runtime_mcp_server_binding_invalid");
         var endpoint = placement.ConfigureEndpoint;
         if (endpoint.AbsolutePath != "/runtime/v1/configure")
             throw new RuntimeAuthorizationException("runtime_configuration_version_unavailable");
         var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeHostReadinessReceipt>(
             client, new Uri(endpoint.GetLeftPart(UriPartial.Authority) + "/"),
-            endpoint.AbsolutePath + "/activate", actor, request, cancellationToken).ConfigureAwait(false);
+            endpoint.AbsolutePath + "/activate", actor,
+            request with { McpServer = placement.McpServer }, cancellationToken).ConfigureAwait(false);
         var currentPlacement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
         var current = await ReadCurrentAsync(registration.RuntimeInstanceId, actor, cancellationToken)
             .ConfigureAwait(false);

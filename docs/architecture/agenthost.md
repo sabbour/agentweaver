@@ -283,6 +283,22 @@ flowchart LR
     V -->|"Yes or exact HTTP replay"| X["Reserve once; then execute guarded tool"]
 ```
 
+## Reviewed remote tool result recovery
+
+The source-only Orchestrator reviewed-tool agent checks for a committed result after
+native action admission and before serializing or sending a remote call.
+A matching saved result returns only after current grant, registration, selection,
+and tool snapshot checks.
+It must match the complete call proof, event, runtime binding, byte length, and digest.
+Only the result content class can come from the recorded result rather than the read template.
+Missing material permits a new guarded dispatch; invalid or changed material does not.
+New results also require durable Events acknowledgment and a final current-authority check.
+
+The trusted private result client belongs to Orchestrator, not AgentHost.
+The ordinary runtime material client remains disabled for remote results.
+See the [private result TLS boundary](./events-sessions#private-result-tls-configuration).
+These source paths do not enable the native remote-tool hook or prove a real remote call.
+
 ## Startup evidence and image
 
 Environment reports actual `scheduled`, `imageReady`, and `started` timestamps from Sandbox observations.

@@ -538,13 +538,13 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
             : null;
     }
 
-    private static EnvironmentSandboxBuildTestCommandState DeserializeState(StoredRow row)
+    internal static EnvironmentSandboxBuildTestCommandState DeserializeState(StoredRow row)
     {
         try
         {
             var accepted = JsonSerializer.Deserialize<SandboxBuildTestAcceptedCommand>(
                 row.SpecificationJson,
-                JsonOptions)?.Validate()
+                JsonOptions)?.ValidateMetadata()
                 ?? throw new JsonException("The persisted BuildTest command is empty.");
             var expected = JsonSerializer.Deserialize<SandboxBuildTestExpectedBinding>(
                 row.ExpectedBindingJson,
@@ -574,7 +574,7 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
         }
     }
 
-    private static string SerializeMutableState(EnvironmentSandboxBuildTestCommandState state) =>
+    internal static string SerializeMutableState(EnvironmentSandboxBuildTestCommandState state) =>
         JsonSerializer.Serialize(
             new MutableState(state.Operation, state.AttemptedEffects),
             JsonOptions);
@@ -710,7 +710,7 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
         SandboxBuildTestOperationSnapshot Operation,
         ImmutableArray<string> AttemptedEffects);
 
-    private sealed record StoredRow(
+    internal sealed record StoredRow(
         EnvironmentOwnerIdentity Owner,
         string EffectKind,
         string Fingerprint,

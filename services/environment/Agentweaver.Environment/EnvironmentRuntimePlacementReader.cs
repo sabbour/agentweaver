@@ -88,7 +88,8 @@ public sealed class EnvironmentRuntimePlacementReader(
             profile.ProfileId, profile.ConfigureEndpoint, profile.ObservationEndpoint)
         {
             RuntimeOwnerContext = ownerContext,
-            Image = placement.Image
+            Image = placement.Image,
+            McpServer = profile.McpServer
         };
     }
 }

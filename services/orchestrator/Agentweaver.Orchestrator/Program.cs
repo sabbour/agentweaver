@@ -163,10 +163,47 @@ builder.Services.AddScoped(services => new ExecutableActionGuard(
     services.GetService<IExecutableActionSourceReceiptWriter>(),
     services.GetService<IExecutableActionPolicyEvaluationReceiptWriter>()));
 var runtimeRegistrationEnabled = builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options);
+var remoteToolTlsSection = builder.Configuration.GetSection("Orchestrator:RemoteToolResults:Tls");
+if (remoteToolTlsSection.Exists())
+{
+    if (!runtimeRegistrationEnabled)
+        throw new InvalidOperationException("Remote tool result TLS requires the runtime registration owner.");
+    var tlsOptions = (remoteToolTlsSection.Get<RuntimeServiceTlsOptions>()
+        ?? throw new InvalidOperationException("The remote tool result TLS profile is required."))
+        .Validate("Orchestrator", "EventsAndSessions");
+    var endpointUrl = builder.Configuration["Kestrel:Endpoints:RemoteToolResults:Url"];
+    if (!Uri.TryCreate(endpointUrl, UriKind.Absolute, out var endpoint) ||
+        endpoint.Scheme != Uri.UriSchemeHttps || endpoint.Port != tlsOptions.ListenerPort)
+        throw new InvalidOperationException("Configure the dedicated HTTPS RemoteToolResults Kestrel endpoint.");
+    builder.Services.AddSingleton(tlsOptions);
+    builder.Services.AddSingleton(_ =>
+        new RuntimeServiceTlsIdentity(tlsOptions, "Orchestrator", "EventsAndSessions"));
+    builder.Services.AddHttpClient<ReviewedRemoteToolResultClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
+        .ConfigurePrimaryHttpMessageHandler(services =>
+            services.GetRequiredService<RuntimeServiceTlsIdentity>().CreateHandler());
+    builder.Services.AddScoped<IReviewedRemoteToolResultWriter>(services =>
+        services.GetRequiredService<ReviewedRemoteToolResultClient>());
+    builder.WebHost.ConfigureKestrel(server =>
+        server.Configure(builder.Configuration.GetSection("Kestrel")).Endpoint("RemoteToolResults", endpoint =>
+        {
+            var tls = server.ApplicationServices.GetRequiredService<RuntimeServiceTlsIdentity>();
+            endpoint.HttpsOptions.ServerCertificate = tls.Certificate;
+            endpoint.HttpsOptions.SslProtocols = RuntimeServiceTlsIdentity.AllowedProtocols;
+            endpoint.HttpsOptions.ClientCertificateMode =
+                Microsoft.AspNetCore.Server.Kestrel.Https.ClientCertificateMode.RequireCertificate;
+            endpoint.HttpsOptions.CheckCertificateRevocation = true;
+            endpoint.HttpsOptions.ClientCertificateValidation = tls.AcceptClientCertificate;
+        }));
+}
 if (runtimeRegistrationEnabled)
+{
     builder.Services.AddHttpClient<MafBuildTestEnvironmentClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    builder.Services.AddScoped<ReviewedRemoteToolResultVerifier>();
+}
 var runtimeUsageEnabled = builder.Services.AddRuntimeUsageSource(builder.Configuration);
+if (remoteToolTlsSection.Exists() && !runtimeUsageEnabled)
+    throw new InvalidOperationException("Remote tool result TLS requires the current native SDK source owner.");
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
 {
@@ -214,6 +251,7 @@ app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)
 {
     app.MapRuntimeRegistrationEndpoints();
+    app.MapReviewedRemoteToolResultEndpoints();
     app.MapRuntimeSuspendResumeEndpoints();
 }
 if (runtimeUsageEnabled)

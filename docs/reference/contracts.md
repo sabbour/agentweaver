@@ -370,6 +370,8 @@ support a retained UI without making a UI part of this contract.
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/message-route` | Events-only owner callback. Confirms the full outbound message matches the durable owner outbox, then validates active session relationship, writer, request/reply correlation, and current execution fences. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/owner-binding` | Events-only current session binding for message claim, presentation, and acknowledgment. Returns `Cache-Control: no-store`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context` | Read-only mapped agent/model/turn context using the shared `RuntimeOwnerContext` contract in `Agentweaver.Abstractions`. Returns no-store metadata only if the child owner row and latest root decision still match, dispatch remains enabled for the confirmed item with no pending gate, and Projects authority/selection remain current; otherwise returns `409`. |
+| `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}` | Reads the immutable accepted BuildTest command metadata. Requires `workPlanId`, `checkpointRevision`, `decisionStateVersion`, `executionFence`, and `acceptedSelectionHash` query values plus current owner and Projects authorization. Version 2 includes the bound workspace-source metadata, never binary seed bytes. Rechecks current selection, decision, fence, and command after store reads. Returns no-store; stale references return `409`. |
+| `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}/workspace-seed` | Uses the same complete reference and authorization to read the original version-2 seed through the existing checkpoint store. Rechecks current authority and command after hydration. Returns bounded raw `application/octet-stream` bytes with no-store, not JSON or a caller-selected URL. Version 1 returns `404`; stale references return `409`. Environment verifies the exact accepted length and SHA-256 digest before execution. |
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/fork-admission` | Events-only owner callback. Requires the forwarded authenticated actor and exact target/event/cursor/idempotency request to match a durable pending fork reservation, and revalidates the current accepted selection and execution fence. Returns a typed `SessionForkAdmissionReceipt` with `Cache-Control: no-store`; an absent, changed, stale, or terminal reservation returns `409`. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}` | Events-only read of the immutable Orchestrator-owned PolicyEvaluation receipt. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}/admission` | Events-only current admission check for that exact owner receipt. Every outcome requires current Core write authority and accepted selection, plus the matching actor/tenant and active owner session/run writer/fence. The owner rechecks authority after SQL row-lock waits, including duplicate receipt paths. Allow also requires the exact unexpired grant/fence; Deny/Error may reference an issued inactive grant but remain non-authorizing immutable facts. Returns no-store. |
@@ -462,6 +464,26 @@ registered provider and resource before proceeding; there is no provider fallbac
 Run cursors are opaque and bound to the project/run; session cursors are additionally
 bound to the session. Callers should return either token unchanged on replay or
 reconnect.
+
+### Private reviewed tool result material
+
+`RemoteToolResultProof` binds the full reviewed call, snapshot, actor and tenant,
+accepted revisions, registration and fence, and native action admission.
+`RemoteToolResultVerificationReceipt` contains the derived result event and exact proof digest.
+These values are not caller-granted authority.
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /internal/runtime/remote-tool-results/verify` | Orchestrator checks the configured native mutual-TLS peer before reading the proof. It reconstructs the current selected call and verifies native action admission and the reserved tool slot. |
+| `POST /internal/sessions/{sessionId}/remote-tool-results` | Events accepts typed `RemoteToolResult` material only from its configured Orchestrator TLS peer, with the original current actor. It stores bytes before the journal reference and returns a fully bound `SessionMaterialAcknowledgment`. |
+| `POST /internal/sessions/{sessionId}/remote-tool-results/read` | Events accepts a call proof, verifies the committed result and current authority, and returns bounded bytes with their acknowledgment. Missing recorded material returns `404`; changed material or authority is not treated as missing. |
+
+All handled responses use `no-store`.
+Generic material routes and public event routes do not grant private result access.
+The shared receipt validator requires exact event, identity, runtime binding, proof,
+source, length, and SHA-256.
+A read template may adopt only the recorded content class; all other proof fields remain exact.
+See the [TLS configuration and unproven acceptance boundary](../architecture/events-sessions#private-result-tls-configuration).
 
 The service also exposes protected internal addressed-message routes:
 

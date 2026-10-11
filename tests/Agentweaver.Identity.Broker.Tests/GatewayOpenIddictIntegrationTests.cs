@@ -1,8 +1,11 @@
+extern alias GatewayHost;
+
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
@@ -116,11 +119,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var cursor = query.TryGetValue("cursor", out var cursorValues)
                     ? cursorValues.SingleOrDefault()
                     : null;
-                var page = cursor is null
-                    ? """{"events":[{"eventId":"00000000-0000-0000-0000-000000000001"}],"nextCursor":"expiry-cursor-1"}"""
-                    : cursor == "expiry-cursor-1"
-                        ? """{"events":[{"eventId":"00000000-0000-0000-0000-000000000002"}],"nextCursor":"expiry-cursor-2"}"""
-                        : $$"""{"events":[],"nextCursor":"{{cursor}}"}""";
+                var page = CreateExpiryEventPage(cursor);
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(page, Encoding.UTF8, "application/json"),
@@ -175,6 +174,31 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(4, Volatile.Read(ref projectRequestCount));
         Assert.Equal(1, Volatile.Read(ref sseEventCount));
         Assert.False(secondSseEvent.Task.IsCompleted);
+    }
+
+    internal static string CreateExpiryEventPage(string? cursor)
+    {
+        if (cursor is not null && cursor != "expiry-cursor-1")
+            return GatewayEventsJournalFixture.SerializePage(new SessionEventPage([], cursor, false));
+
+        var position = cursor is null ? 1 : 2;
+        var envelopeJson = JsonSerializer.Serialize(new
+        {
+            schemaVersion = SessionsContractVersions.CurrentSchemaVersion,
+            eventVersion = SessionsContractVersions.CurrentEventVersion,
+            eventId = Guid.Parse($"00000000-0000-0000-0000-{position:000000000000}"),
+            identity = new SessionIdentity("expiry-project", "expiry-run", "expiry-session"),
+            position,
+            occurredAt = DateTimeOffset.Parse("2026-10-10T00:00:00Z",
+                System.Globalization.CultureInfo.InvariantCulture),
+            payload = (SessionEventPayload)new AcceptedEffectSessionPayload(
+                $"expiry-effect-{position}", "build-test", null),
+            objectReferences = Array.Empty<StoredSessionObjectReference>()
+        }, OrchestratorJsonOptions);
+        var envelope = JsonSerializer.Deserialize<SessionEventEnvelope>(envelopeJson, OrchestratorJsonOptions)
+            ?? throw new InvalidOperationException("The expiry event fixture is invalid.");
+        return GatewayEventsJournalFixture.SerializePage(
+            new SessionEventPage([envelope], $"expiry-cursor-{position}", false));
     }
 
     private async Task<string> IssueTokenForAudienceBrokerAsync(
@@ -273,5 +297,37 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+}
+
+public sealed class GatewayExpiryEventPageProjectionTests
+{
+    [Theory]
+    [InlineData(null, "expiry-cursor-1", 1)]
+    [InlineData("expiry-cursor-1", "expiry-cursor-2", 2)]
+    [InlineData("expiry-cursor-2", "expiry-cursor-2", 0)]
+    public void ExpiryFixturePagesPassTheProductionProjection(
+        string? cursor, string expectedCursor, int expectedPosition)
+    {
+        var projection = typeof(GatewayHost::Agentweaver.Gateway.GatewayOwnerClient).Assembly
+            .GetType("Agentweaver.Gateway.GatewayRunEventProjection", throwOnError: true)!
+            .GetMethod("ProjectPage", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)!;
+        var page = ProjectsConfigBrokerAuthorizationTests.CreateExpiryEventPage(cursor);
+        var projected = Assert.IsType<byte[]>(projection.Invoke(null,
+            [new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes(page)), cursor, 1]));
+        using var document = JsonDocument.Parse(projected);
+        var root = document.RootElement;
+        Assert.Equal(expectedCursor, root.GetProperty("nextCursor").GetString());
+        Assert.False(root.GetProperty("hasMore").GetBoolean());
+        var events = root.GetProperty("events");
+        Assert.Equal(expectedPosition == 0 ? 0 : 1, events.GetArrayLength());
+        if (expectedPosition != 0)
+        {
+            var envelope = Assert.Single(events.EnumerateArray());
+            Assert.Equal(expectedPosition, envelope.GetProperty("position").GetInt32());
+            Assert.Equal(
+                Guid.Parse($"00000000-0000-0000-0000-{expectedPosition:000000000000}"),
+                envelope.GetProperty("eventId").GetGuid());
+        }
     }
 }

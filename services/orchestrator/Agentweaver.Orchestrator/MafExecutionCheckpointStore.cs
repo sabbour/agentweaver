@@ -108,6 +108,11 @@ internal sealed class MafExecutionCheckpointStore
         MafExecutionCheckpointContract.ValidateState(state);
         MafExecutionCheckpointContract.ValidateBuildTestBinding(
             state, _binding.Identity, _binding.ExecutionFence, checkpointId);
+        var originIntents = state.BuildTestIntents.Values.Where(intent =>
+            intent.WorkspaceSeedReference?.Origin.CheckpointId == checkpointId).ToArray();
+        if (originIntents.Length > 1)
+            throw new ArgumentException("One originating checkpoint can store only one BuildTest seed.", nameof(state));
+        var workspaceSeed = originIntents.SingleOrDefault()?.WorkspaceSeed?.ToArray();
         var latest = await _checkpoints.ReadLatestCheckpointInTransactionAsync(
             connection, transaction, _binding, cancellationToken).ConfigureAwait(false);
         await AcquireExecutionLockInTransactionAsync(
@@ -126,7 +131,7 @@ internal sealed class MafExecutionCheckpointStore
                 checkpointId,
                 replayPayload,
                 expectedParent,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken, workspaceSeed).ConfigureAwait(false);
             return new MafExecutionCheckpointSnapshot(replayInfo, state);
         }
 
@@ -158,8 +163,22 @@ internal sealed class MafExecutionCheckpointStore
             checkpointId,
             payload,
             expectedParent,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken, workspaceSeed).ConfigureAwait(false);
         return new MafExecutionCheckpointSnapshot(info, state);
+    }
+
+    internal async Task<MafExecutionBuildTestIntent> HydrateBuildTestIntentAsync(
+        MafExecutionBuildTestIntent intent,
+        CancellationToken cancellationToken)
+    {
+        if (intent.Command.WorkspaceSource is null)
+            return intent;
+        await using var connection = await _bindingConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var bytes = await _checkpoints.ReadBuildTestWorkspaceSeedInTransactionAsync(
+            connection, transaction, _binding, intent, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return intent with { WorkspaceSeed = bytes.ToImmutableArray() };
     }
 
     private async Task<NpgsqlConnection> _bindingConnectionAsync(CancellationToken cancellationToken) =>

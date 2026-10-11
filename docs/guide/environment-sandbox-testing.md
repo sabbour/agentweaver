@@ -20,6 +20,29 @@ These tests cover immutable accepted intent, bounded receipts, collector interru
 The migration/model test generates metadata only; it does not connect to PostgreSQL.
 These results do not prove durable provider effects, Kubernetes isolation, Cilium datapath enforcement, or MAF recovery.
 
+The accepted-command verifier uses a controlled HTTP handler to test version-2 seed retrieval.
+It checks the fixed Core address, full checkpoint reference, original bearer and tenant, and `no-store` requests.
+Cases reject denied or missing seeds, redirects, incorrect lengths or digests, and short or extra bytes.
+The body-stall case checks the client deadline after response headers.
+Changed owner metadata after retrieval prevents an executable command from returning.
+Current-command checks use metadata only and reject changed operation IDs, selections, or execution fences.
+The manager repeats these metadata checks without another seed transfer before provider effects.
+The stored-state test reads and updates version-2 JSON without seed bytes.
+Reconciliation restores the exact verified seed only after the stored command metadata matches.
+These cases do not prove live TLS authority, native provider preparation, or a complete BuildTest run.
+
+Core's matching non-container selection is:
+
+```powershell
+dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj `
+  --filter "FullyQualifiedName~MafBuildTestCommandResolutionTests|FullyQualifiedName~MafBuildTestCheckpointTests|FullyQualifiedName~MafBuildTestExecutionTests" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+It checks recovered version-2 metadata without binary input in JSON, and current owner decision, fence, and selection rejection.
+Version-2 terminal checkpoints recover and replay success, failure, and stale results without seed bytes in JSON.
+Metadata validation does not replace the final execution check that requires the actual seed bytes.
+
 Run the BuildTest owner-store tests with the existing disposable PostgreSQL fixture:
 
 ```powershell

@@ -271,6 +271,46 @@ Core retains that state and its interruption acknowledgement.
 Disposable PostgreSQL tests verify owner-store reservation, restart replay, and terminal-evidence preservation.
 They do not prove command-Pod execution, Kubernetes isolation, Cilium datapath enforcement, or complete native accounting.
 
+### Version 2 repository input candidate
+
+Version 2 binds a credential-free Git bundle and the full baseline inventory to the accepted command.
+The source binding includes the current actor, selection, repository pin, workspace incarnation, branch, and content digests.
+The original execution checkpoint stores the bounded seed in a separate PostgreSQL `bytea` field.
+Later checkpoints retain only the typed origin reference.
+The JSON checkpoint limit remains 4 MiB.
+The seed limit remains 67,188,876 bytes.
+
+Explicit seed reads require the current owner and fence.
+They validate the original intent, declared length, digests, and package before they return bytes.
+Ordinary checkpoint reads do not load the binary field.
+An identical append must match both the JSON metadata and the stored bytes.
+The parent foreign key prevents deletion of an origin that has later checkpoints.
+The seed is source input, not SDK cache data or a produced-output record.
+
+Core's accepted-command route returns metadata only, including the bound seed digest and length.
+The separate `/workspace-seed` route reads the original binary field through the existing checkpoint store.
+It uses the same full checkpoint reference and current actor authorization.
+Core rechecks the accepted selection, owner decision, execution fence, and command after the read.
+Both routes return `Cache-Control: no-store`.
+Version 1 commands have no seed route result.
+
+Environment fetches the raw seed only from its fixed Core owner, not a caller-supplied address.
+The response must be `application/octet-stream`, use `no-store`, and match the accepted length and SHA-256 digest.
+Redirects, short or extra bytes, denied reads, and changed command metadata are errors.
+The client deadline covers both response headers and the complete bounded body.
+Environment rechecks Core metadata after the transfer and before reserving the command.
+Later current-command checks do not fetch the seed again.
+Stored operation updates, request fingerprints, and Core terminal receipts validate the bound metadata without seed bytes.
+Reconciliation restores the freshly verified seed only after it matches the stored command metadata.
+Version 2 still requires the actual validated bytes before execution; metadata alone is not executable input.
+
+The Kubernetes client adds a bounded native WebSocket exchange for fixed preparation and collector containers.
+It retains the existing service-account handler and trusted server certificate.
+The helper must identify the exact Pod UID and request fingerprint before the client sends seed bytes.
+Local TLS tests cover binary transfers at the exact admitted limit and reject invalid identity, protocol, output, or terminal evidence.
+This candidate does not yet connect the image helper, preparation record, writer exclusion, and complete capture through the provider.
+These checks do not prove live Kubernetes execution or complete BuildTest acceptance.
+
 ## Retirement and storage retention
 
 An exact Agent Sandbox `Finished=True` condition with a supported `PodSucceeded`
