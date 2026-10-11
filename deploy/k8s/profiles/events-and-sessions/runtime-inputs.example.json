@@ -1,0 +1,28 @@
+{
+  "subscriptionId": "90ab3701-83f0-4ba1-a90a-f2e68683adab",
+  "resourceGroup": "aw-v1-p0",
+  "clusterName": "aw-v1-p0-aks",
+  "image": null,
+  "imageUser": null,
+  "imageGroup": null,
+  "tlsSecretName": null,
+  "configuration": {
+    "ConnectionStrings__EventsAndSessions": "Host=aw-v1-p0-pg.postgres.database.azure.com;Port=5432;Database=agentweaver;Username=aw-v1-p0-id-events-and-sessions;SSL Mode=VerifyFull",
+    "EventsAndSessions__Database__WorkloadIdentity__TenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",
+    "EventsAndSessions__Database__WorkloadIdentity__ClientId": "3ab39eda-7389-4b5e-b5b6-232d7671e012",
+    "EventsAndSessions__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
+    "EventsAndSessions__Provider__DatabaseName": "agentweaver",
+    "EventsAndSessions__Provider__Schema": "events_sessions",
+    "Identity__Issuer": null,
+    "Identity__Audience": null,
+    "EventsAndSessions__Provider__ResourceId": null,
+    "EventsAndSessions__Provider__ResourceGeneration": null,
+    "EventsAndSessions__Knowledge__BaseAddress": null,
+    "ProjectsConfig__BaseAddress": null,
+    "ProjectsConfig__AuthorizationContext__OwnerBaseAddress": null,
+    "ProjectsConfig__AuthorizationContext__Audience": null,
+    "EventsAndSessions__OrchestratorOwner__OwnerBaseAddress": null,
+    "EventsAndSessions__OrchestratorOwner__Audience": null,
+    "EventsAndSessions__SessionMaterial__ContainerUri": null
+  }
+}
