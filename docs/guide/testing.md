@@ -438,8 +438,8 @@ Deployment requires separate approval for the exact target, subscription, source
 
 Run `node --test scripts/azure/tests/projects-runtime-profile.test.mjs`.
 These pure checks cover exact runtime identity and database inputs, missing
-configuration rejection, immutable product image references, non-root file
-access, private HTTPS, bounded resources, and narrow caller and network rules.
+configuration rejection, immutable product image references, non-root file-access
+settings, private HTTPS, bounded resources, and narrow caller and network rules.
 They check the existing provider catalog reference, source commit format,
 and environment prefix that isolates catalog keys from other startup settings.
 The incomplete example and missing CLI inputs produce errors without output.

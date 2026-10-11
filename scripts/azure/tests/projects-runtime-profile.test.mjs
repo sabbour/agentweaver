@@ -106,7 +106,7 @@ test('passwords, migration identities, Blob credentials, custom trust and comman
   }
   for (const key of ['ConnectionStrings__ProjectsConfigMigration',
     'ProjectsConfig__Migration__WorkloadIdentity__ClientId', 'ProjectsConfig__SkillContentContainerUri',
-    'ProjectsConfig__ProviderCatalog__Registrations__0__ProviderId', 'SSL_CERT_FILE',
+    'ProjectsConfig__ProviderCatalog__Registrations__0__Id', 'SSL_CERT_FILE',
     'AZURE_CLIENT_SECRET', 'Kestrel__Endpoints__RemoteToolResults__Url']) {
     const input = fixture();
     input.configuration[key] = 'forbidden';
@@ -206,8 +206,8 @@ test('catalog environment prefix cannot overwrite database, authentication or li
   const prefix = container.envFrom[1].prefix;
   for (const key of [...Object.keys(input.configuration), ...container.env.map(value => value.name)])
     assert.notEqual(`${prefix}${key}`, key);
-  assert.equal(`${prefix}Registrations__0__ProviderId`,
-    'ProjectsConfig__ProviderCatalog__Registrations__0__ProviderId');
+  assert.equal(`${prefix}Registrations__0__Id`,
+    'ProjectsConfig__ProviderCatalog__Registrations__0__Id');
   assert.deepEqual(item(result, 'ConfigMap').data, input.configuration);
 });
 

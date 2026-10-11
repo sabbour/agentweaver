@@ -35,7 +35,7 @@ It exposes private HTTPS and leaves system certificate trust unchanged.
 
 The provider catalog owner must supply an existing immutable, nonempty ConfigMap
 in the same namespace and its reviewed source commit.
-The ConfigMap uses relative catalog keys, such as `Registrations__0__ProviderId`.
+The ConfigMap uses relative catalog keys, such as `Registrations__0__Id`.
 The profile prefixes them with `ProjectsConfig__ProviderCatalog__`, so they
 cannot replace database, authentication, or HTTPS listener settings.
 The existing .NET loader still validates the catalog; no second resolver or

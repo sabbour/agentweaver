@@ -47,7 +47,7 @@ The image user and group must match the reviewed image.
 
 The catalog owner must supply an existing, immutable, nonempty ConfigMap
 in `agentweaver-v1-p0`, reviewed against the exact `providerCatalog.sourceCommit`.
-Its keys are relative catalog keys, such as `Registrations__0__ProviderId`.
+Its keys are relative catalog keys, such as `Registrations__0__Id`.
 The renderer adds `ProjectsConfig__ProviderCatalog__` through `envFrom.prefix`.
 Catalog keys cannot replace database, authentication, or HTTPS listener settings.
 The real .NET catalog loader remains responsible for catalog validation.
