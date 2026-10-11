@@ -171,7 +171,7 @@ internal sealed class MafExecutionCheckpointStore
         MafExecutionBuildTestIntent intent,
         CancellationToken cancellationToken)
     {
-        if (intent.Command.WorkspaceSource is null)
+        if (intent.EffectiveWorkspaceSource is null)
             return intent;
         await using var connection = await _bindingConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
