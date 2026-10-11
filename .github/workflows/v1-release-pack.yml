@@ -74,6 +74,8 @@ jobs:
       - name: Validate release composition
         if: ${{ github.ref == 'refs/heads/v1' }}
         run: npm run release:validate
+      - uses: docker/setup-buildx-action@v3
+        if: ${{ github.ref == 'refs/heads/v1' }}
       - name: Prepare locked package and image artifacts (no publish)
         if: ${{ github.ref == 'refs/heads/v1' }}
         env:
