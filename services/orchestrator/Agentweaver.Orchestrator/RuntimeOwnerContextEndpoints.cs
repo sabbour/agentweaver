@@ -172,19 +172,24 @@ public static partial class CoordinationEndpoints
             return false;
         var step = snapshot.Workflow.Definition.Steps.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, association.StepId, StringComparison.Ordinal));
-        if (step?.FixedWork is not { } specification)
+        if (step?.FixedWork is null)
             return false;
-        var expected = MafExecutionPlanner.CreateFixedWorkAssociation(
-            snapshot, selectionContext, parent, step, acceptedSelectionHash, executionFence,
-            decisionStateVersion, association.ActivationRevision, childSessionId);
-        return specification.Title == association.Specification.Title &&
-            specification.Task == association.Specification.Task &&
-            specification.RoleId == association.Specification.RoleId &&
-            specification.Phase == association.Specification.Phase &&
-            specification.IsolationChoice == association.Specification.IsolationChoice &&
-            specification.DeclaredOutputs.SequenceEqual(
-                association.Specification.DeclaredOutputs, StringComparer.Ordinal) &&
-            (expected with { Specification = association.Specification }) == association;
+
+        MafExecutionFixedWorkAssociation expected;
+        try
+        {
+            expected = MafExecutionPlanner.CreateFixedWorkAssociation(
+                snapshot, selectionContext, parent, step, acceptedSelectionHash,
+                executionFence, decisionStateVersion, association.ActivationRevision, childSessionId);
+        }
+        catch (CoordinationException exception) when (exception.Code is
+            "maf_fixed_work_unavailable" or "maf_fixed_work_selection_unavailable" or
+            "maf_fixed_work_association_conflict")
+        {
+            return false;
+        }
+
+        return FixedAssociationsMatch(expected, association);
     }
 
     private static RuntimeAcceptedModelSelection ReadModelSelection(

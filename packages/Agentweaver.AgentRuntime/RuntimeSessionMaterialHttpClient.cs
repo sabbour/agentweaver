@@ -141,14 +141,30 @@ public sealed class RuntimeSessionMaterialHttpClient(
     }
 
     internal async Task<SessionMaterialReadResult?> ReadOptionalTurnAsync(
-        SessionIdentity identity, Guid eventId, CancellationToken cancellationToken)
+        RuntimeRegistration registration, SdkSessionFacts facts, Guid eventId,
+        CancellationToken cancellationToken)
     {
+        var binding = registration.Binding;
+        var identity = new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId);
         var result = await RuntimeOwnerHttpTransport.ReadOptionalAsync<SessionMaterialReadResult>(
             client, _address,
             $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/material/{eventId:D}/TurnContent",
             actor, cancellationToken).ConfigureAwait(false);
         if (result is not null)
+        {
             ValidateRead(result, identity, eventId, SessionMaterialKind.TurnContent);
+            var material = result.Material.Reference.Material!;
+            if (material.RuntimeInstanceId != registration.RuntimeInstanceId ||
+                material.RegistrationRevision != registration.Revision ||
+                material.ExecutionFence != binding.ExecutionFence ||
+                material.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+                material.TenantId != binding.TenantId ||
+                material.SdkVersion != facts.SdkVersion ||
+                material.RuntimeVersion != facts.RuntimeVersion ||
+                material.ModelSelectionReference != facts.ModelSelectionReference ||
+                material.ModelId != facts.ModelId)
+                throw new RuntimeAuthorizationException("runtime_material_read_binding_invalid");
+        }
         return result;
     }
 

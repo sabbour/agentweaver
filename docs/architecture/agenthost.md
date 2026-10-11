@@ -71,10 +71,31 @@ sequenceDiagram
 | `POST /runtime/v1/configure` | Authenticated delivery of the pending, purpose-bound configure nonce. No model session starts on delivery alone. |
 | `POST /runtime/v1/configure/activate` | Contract version 1, exact registration, consume/exchange operation IDs, and the delivered configuration bytes. Exact replay returns the existing session. Changed bytes or bindings deny. |
 | `POST /runtime/v1/refresh` | Exact session proof and an operation ID. Rotation rechecks current Identity and owner authority. Exact replay does not rotate again. |
+| `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after the host revalidates the caller, registration, session, Observe grant, and readiness evidence. It does not configure the SDK or send a turn. |
 | `POST /runtime/v1/a2a/message:send` | One `user` message with one `text` part, a GUID message ID, native context ID, exact runtime proof, and `immediate` or `enqueue` delivery. |
 | `GET /runtime/v1/readiness` | Authenticated current readiness receipt. Checks the caller, exact HTTPS configure audience, registration, source authority, and current placement. Does not start a turn or rotate a grant. |
 | `GET /health/live` | Process liveness only. |
 | `GET /health/ready` | Current registration, source authority, lease, isolation, workspace, egress, configuration, and startup budgets. A lost prerequisite returns `503`. |
+
+```mermaid
+sequenceDiagram
+    participant C as Authenticated caller
+    participant H as AgentHost
+    participant O as Orchestrator
+    participant I as Identity
+    participant E as Environment
+    Note over H: Reject configured MaxModelTurns, MaxToolCalls, or MaxPromptTokens before SDK configuration
+    C->>H: GET /runtime/v1/readiness with Broker bearer
+    H->>O: Revalidate current registration
+    O-->>H: Current registration or denial
+    H->>I: Revalidate current Observe and model grants
+    I-->>H: Noncredential grant receipts
+    H->>E: Read current placement and readiness evidence
+    E-->>H: Current lease and startup observations
+    H-->>C: RuntimeHostReadinessReceipt (no-store)
+    Note over H: No SDK start or turn send
+    Note over C,H: Positive hard-capped Hosted activation is rejected before this readiness flow until usage-to-A2A affinity is supported
+```
 
 Runtime responses use `Cache-Control: no-store`.
 Authentication rejection returns `401`.
@@ -89,6 +110,17 @@ Identity returns only the current GitHub user access token and typed proof.
 Refresh tokens and OAuth client secrets stay inside Identity and its protected store.
 BYOK uses the exact selected `SecretRef` and explicit native SDK Provider configuration without Copilot authentication or catalog lookup.
 Neither a cache nor a submitted connection ID grants permission.
+The pinned SDK does not prove which A2A send owns a native usage callback.
+Until that affinity is supported, Hosted Copilot with a positive hard credit limit fails activation with
+`runtime_usage_affinity_unavailable`; the prepared session is cleaned up and the host does not become ready.
+An omitted limit keeps legacy startup, zero still permits startup but blocks dispatch, and BYOK remains token-metered.
+
+The immutable Projects selection's `maxModelTurns`, `maxToolCalls`, and `maxPromptTokens` values are carried
+through `RuntimeOwnerContext` into the registered `RuntimeBinding`. AgentHost does not yet have exact native
+turn/tool accounting or whole-prompt token enforcement, so any non-null value fails activation with
+`runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or model/tool invocation.
+Absent values preserve the legacy path. The RuntimeAction owner also rejects these bindings before issuing an
+action grant. This is a fail-closed admission rule, not numeric enforcement.
 
 AgentHost and the enabled Events native consumer load the same server-owned
 `AgentHost:ModelBindings` map and required `AgentHost:ModelBindingsRevision`.
@@ -136,6 +168,10 @@ Prompt text preserves line breaks, tabs, and fenced code without trimming or cha
 Unsupported control characters, such as NUL, deny before dispatch.
 `immediate` work takes priority over pending `enqueue` work at the next native idle boundary.
 It does not interrupt an active native turn.
+
+Hosted Copilot runs with no hard credit limit retain legacy startup and do not require a price quote.
+A zero hard limit permits startup but blocks model-turn dispatch; a positive hard limit requires both a priceable source and proven usage-to-A2A affinity before readiness or cost admission.
+BYOK remains token-metered and does not use the Copilot nano-AIU price preflight.
 An exact message replay shares the original completion; changed content under the same ID denies.
 Completed responses remain available for the configured host lifetime, independent of the pending-turn limit.
 The configured pending-turn limit rejects excess work explicitly.
@@ -171,12 +207,29 @@ The effective capacity becomes an immutable SDK-source and session-material pin.
 Resume retains that pin if current capacity increases, and rejects a smaller current capacity before the SDK resume call.
 Capability metadata alone does not prove live token enforcement or a hard-truncation guarantee.
 
+Each built-in tool approval checks current owner authority and Policy again.
+The pre-tool callback checks Policy without reserving a tool slot.
+The native call ID binds invocation and secondary permission checks to the current runtime registration and A2A turn.
+Repeated callbacks retain their request IDs for reservation deduplication, but never reuse a cached approval.
+Cancellation, a changed turn, or revoked authority prevents approval after an earlier successful check.
+Secondary permissions also require a fresh Policy check for their exact input.
+These checks do not enable the remote MCP tool hook.
+
 Events stores actual user and assistant content as typed `TurnContent` through the existing Object Store.
 The journal retains authenticated content references, Policy receipts, tool events, and compatible cache references.
 Orchestrator commits native SDK source receipts.
+The pinned SDK does not expose a proven usage-event-to-A2A-send binding.
+AgentHost leaves usage observations uncorrelated rather than copy the active message ID
+or infer ownership from event timestamps. Events therefore withholds cost-turn release
+for an unbound callback, including one delivered after a later send begins.
 Events fetches each receipt and commits immutable usage accounting before AgentHost acknowledges the turn.
+For a bounded cost turn, Events requires the source receipt's A2A ID to equal the
+`CostTurnId`; a later send in the same session cannot release an earlier turn's cost slot.
 Already-weighted nano-AIU is not multiplied again.
 Unknown cost remains `Unpriced`, never zero.
+Before readiness, AgentHost asks Events to verify that the current SDK source can
+be priced against the run's immutable Cost binding. An unpriced result prevents
+readiness and cleans up the prepared session before any model turn.
 
 At a confirmed idle boundary, the runtime captures opaque SDK cache bytes through its custom filesystem.
 Recovery compares session scope, accepted selection, model reference, model ID, prompt-capacity pin, SDK version, and runtime version.
@@ -201,7 +254,7 @@ The source bridge now uses a typed `RuntimeNativeTurnObservation`.
 It retains the actual root usage-event IDs found inside the native completion range.
 Those IDs describe observed membership, not a complete accounting-source set.
 
-Orchestrator exposes three authenticated turn routes under the existing observe grant.
+Orchestrator exposes three authenticated turn-write routes under the existing observe grant.
 Before sending, the MAF source path prepares the immutable dispatch row under the
 current registration, root owner, decision, and checkpoint locks.
 It pins the platform intent, complete request hash, source hash, model, and execution fence.
@@ -233,8 +286,15 @@ These routes reuse migration 015; they add no financial ledger or migration.
 It requires the recorded native range and exactly its observed usage-event references.
 Events joins every reference to its immutable source receipt and actual ledger row.
 The registration, SDK source, platform message, accounting hash, and price must match.
-This read uses the existing Cost lock and transaction; it does not call Source GET.
-Orchestrator then stores the references and changes the dispatch to `completed`.
+Raw SDK usage can have no platform message ID. Events accepts this only after an
+authenticated Core read confirms the persisted turn and its exact observed event set.
+A wrong non-null message ID or an event after native completion still fails.
+Events repeats the Core read after releasing its Cost transaction.
+Core releases its owner locks before requesting the Events snapshot.
+Its final owner transaction rechecks the source grant, checkpoint, report, and revision
+before storing references and changing the dispatch to `completed`.
+Report writes and final completion reject event reuse by another dispatch of the same SDK source.
+This join does not call Source GET or create a source-completion manifest.
 Accounting remains explicitly `priced` or `unpriced`; unknown cost does not become zero.
 The source report stays `partial`, and `hard_cap_serialized` stays false.
 Neither source-completion nor strict retirement fields are populated.

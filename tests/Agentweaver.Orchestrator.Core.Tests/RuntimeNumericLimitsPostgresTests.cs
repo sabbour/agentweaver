@@ -217,6 +217,20 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     [InlineData("tool")]
     public async Task WholeRunQuotaSurvivesOwnerRecoveryAndANewRuntimeUnderANewFence(string kind)
     {
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordinator_decisions
+            SET decision = jsonb_set(decision, ARRAY['envelope', 'workPlanRevisionAttempts'], '1'::jsonb)
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", _root.ProjectId);
+            command.Parameters.AddWithValue("run", _root.RunId);
+            command.Parameters.AddWithValue("session", _root.SessionId);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+        Assert.Equal(1, (await _decisions.InitializeRootAsync(_actor, _root, _selection, default))
+            .State.WorkPlanRevisionAttempts);
         if (kind == "model")
             Assert.True(await PrepareAsync(0));
         else
@@ -227,6 +241,8 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         var failed = await coordination.ReportRunFailureAsync(_actor, child,
             new(status.ExecutionFence, status.StateVersion, 1, "numeric-failure",
                 OwnerRunFailureState.Indeterminate, "runtime_lost", "numeric-attempt"), default, _selection);
+        Assert.Equal(1, (await _decisions.InitializeRootAsync(_actor, _root, _selection, default))
+            .State.WorkPlanRevisionAttempts);
         var recovered = await coordination.RecoverRunExecutionAsync(_actor, _root.ProjectId, _root.RunId,
             new(failed.ExecutionFence, failed.RunStateVersion, "numeric-recovery",
                 "operator_recovery", "numeric-recovery"), default, _selection);
@@ -238,6 +254,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             connection))
             Assert.Equal(1, await command.ExecuteNonQueryAsync());
         var current = await _decisions.InitializeRootAsync(_actor, _root, _selection, default);
+        Assert.Equal(1, current.State.WorkPlanRevisionAttempts);
         await WriteCheckpointAsync(recovered.ExecutionFence, current.StateVersion,
             "numeric-recovered-checkpoint", [_intents[1]]);
         if (kind == "model")
@@ -284,6 +301,181 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         _messages[index] = new(new("message", intent.MessageId, source.SdkSessionId, "user",
             [new("text", prompt)], new(new(1, registration, grant.GrantId, grant.Revision,
                 RuntimeCredentialPurpose.Observe), AddressedMessageDeliveryMode.Enqueue)));
+    }
+
+    [Fact]
+    public async Task ConcurrentNativeReportsCannotReuseAnEventFromTheSameSdkSource()
+    {
+        var admissions = await PrepareNativeAccountingPairAsync();
+        var eventId = Guid.NewGuid();
+        var observations = admissions.Select(admission => NativeObservation(admission, eventId)).ToArray();
+        var reported = await Task.WhenAll(Enumerable.Range(0, 2).Select(index =>
+            TryReserveAsync(async () =>
+            {
+                await RecordNativeAsync(admissions[index], observations[index]);
+                return true;
+            }, "runtime_native_turn_usage_reused")));
+        Assert.Single(reported, value => value);
+        Assert.Equal(1, await NativeDispatchCountAsync("terminal_pending_accounting"));
+    }
+
+    [Fact]
+    public async Task CompetingCompletionsRejectHistoricallyOverlappingNativeReportsUnderTheFinalOwnerLock()
+    {
+        var admissions = await PrepareNativeAccountingPairAsync();
+        var eventId = Guid.NewGuid();
+        var observations = admissions.Select(admission => NativeObservation(admission, eventId)).ToArray();
+        var recorded = new[]
+        {
+            await RecordNativeAsync(admissions[0], observations[0]),
+            new RuntimeNativeTurnRecordedReceipt(admissions[1], observations[1],
+                RuntimeNativeTurnContract.ObservationHash(observations[1]), 3)
+        };
+        // Retain an overlapping row written before the cross-dispatch check existed.
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".maf_execution_dispatches
+            SET dispatch_state = 'terminal_pending_accounting', source_report_status = 'partial',
+                source_report_hash = @hash, source_report_json = @report, owner_revision = owner_revision + 1
+            WHERE dispatch_id = @message AND dispatch_state = 'sending'
+            """, connection))
+        {
+            command.Parameters.AddWithValue("hash", recorded[1].CanonicalPayloadHash);
+            command.Parameters.AddWithValue("report", NpgsqlTypes.NpgsqlDbType.Jsonb,
+                JsonSerializer.Serialize(observations[1], new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            command.Parameters.AddWithValue("message", admissions[1].MessageId);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+        var completed = await Task.WhenAll(recorded.Select(receipt =>
+            TryReserveAsync(async () =>
+            {
+                await CompleteNativeAsync(receipt);
+                return true;
+            }, "runtime_native_turn_usage_reused")));
+        Assert.All(completed, value => Assert.False(value));
+        Assert.Equal(0, await NativeDispatchCountAsync("completed"));
+        Assert.Equal(2, await NativeDispatchCountAsync("terminal_pending_accounting"));
+    }
+
+    [Fact]
+    public async Task NativeCompletionRechecksTheCurrentCheckpointAfterAnUnlockedObservedSnapshotRead()
+    {
+        var admissions = await PrepareNativeAccountingPairAsync();
+        var recorded = await RecordNativeAsync(admissions[0], NativeObservation(admissions[0], Guid.NewGuid()));
+        var store = SourceStore();
+        var read = await store.ExecuteLockedAsync(_registrations[0].RuntimeInstanceId,
+            (connection, transaction, token) => store.ReadNativeTurnWithinTransactionAsync(
+                connection, transaction, _registrations[0], recorded, token), default);
+        Assert.Equal(recorded.CanonicalPayloadHash, read.CanonicalPayloadHash);
+        await AdvanceNativeCheckpointAsync("after-observed-read", _checkpoint.State with
+        {
+            Revision = _checkpoint.State.Revision + 1
+        });
+        Assert.Equal("runtime_native_turn_checkpoint_stale",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => CompleteNativeAsync(recorded))).Code);
+        Assert.Equal(0, await NativeDispatchCountAsync("completed"));
+    }
+
+    [Fact]
+    public async Task ConcurrentExactNativeCompletionsCommitOnceAndReplayTheSameOwnerRevision()
+    {
+        var admissions = await PrepareNativeAccountingPairAsync();
+        var recorded = await RecordNativeAsync(admissions[0], NativeObservation(admissions[0], Guid.NewGuid()));
+        var completions = await Task.WhenAll(CompleteNativeAsync(recorded), CompleteNativeAsync(recorded));
+        Assert.All(completions, receipt => Assert.Equal(recorded.OwnerRevision + 1, receipt.OwnerRevision));
+        Assert.Equal(1, await NativeDispatchCountAsync("completed"));
+    }
+
+    private async Task<RuntimeNativeTurnAdmissionReceipt[]> PrepareNativeAccountingPairAsync()
+    {
+        await RegisterSourceAsync(0, _registrations[0].Binding with { MaxModelTurns = 2 });
+        _registrations[1] = _registrations[0];
+        _grants[1] = _grants[0];
+        _sources[1] = _sources[0];
+        _intents[1] = new("item-1", _registrations[0].Binding.SessionId, Guid.NewGuid(), _intents[0].PromptHash);
+        _messages[1] = _messages[0] with
+        {
+            Message = _messages[0].Message with { MessageId = _intents[1].MessageId }
+        };
+        await AdvanceNativeCheckpointAsync("native-accounting-pair", _checkpoint.State with
+        {
+            Revision = _checkpoint.State.Revision + 1,
+            PendingDispatches = _intents.ToImmutableDictionary(intent => intent.AssociationId)
+        });
+        Assert.True(await PrepareAsync(0));
+        Assert.True(await PrepareAsync(1));
+        return [Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(await BeginAsync(0)),
+            Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(await BeginAsync(1))];
+    }
+
+    private async Task AdvanceNativeCheckpointAsync(string id, MafExecutionCheckpoint state)
+    {
+        var binding = new MafCheckpointBinding(_root, _actor, _registrations[0].Binding.ExecutionFence,
+            MafExecutionCheckpointStore.CurrentSdkVersion, "model:selected", null,
+            MafExecutionCheckpointContract.StoreName);
+        _checkpoint = await new MafExecutionCheckpointStore(
+            new PostgresMafCheckpointStore(fixture.DataSource, _schema, null), binding)
+            .AppendAsync(id, _checkpoint.Info, state, default);
+    }
+
+    private static RuntimeNativeTurnObservation NativeObservation(
+        RuntimeNativeTurnAdmissionReceipt admission, Guid usageEventId) =>
+        new(admission.Source, Guid.NewGuid().ToString("D"), "controlled-native-turn", Guid.NewGuid(),
+            Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow.AddSeconds(-1),
+            "controlled-cursor", new string('d', 64), null) { UsageEventIds = [usageEventId] };
+
+    private Task<RuntimeNativeTurnRecordedReceipt> RecordNativeAsync(
+        RuntimeNativeTurnAdmissionReceipt admission, RuntimeNativeTurnObservation observation)
+    {
+        var store = SourceStore();
+        return store.ExecuteLockedAsync(admission.Registration.RuntimeInstanceId,
+            async (connection, transaction, token) =>
+            {
+                var recorded = await store.RecordNativeTurnWithinTransactionAsync(
+                    connection, transaction, admission.Registration, _grants[0],
+                    new(null!, admission, observation), token);
+                await transaction.CommitAsync(token);
+                return recorded;
+            }, default);
+    }
+
+    private Task<RuntimeNativeTurnAccountingReceipt> CompleteNativeAsync(RuntimeNativeTurnRecordedReceipt recorded)
+    {
+        var registration = recorded.Admission.Registration;
+        var scope = registration.Binding;
+        var reference = new RuntimeUsageCostReceiptReference(
+            recorded.Observation.UsageEventIds[0], new(SdkUsageIdentity.Create(registration.RuntimeInstanceId,
+                recorded.Admission.Source.SdkSessionId, recorded.Observation.UsageEventIds[0].ToString("D")),
+                new(scope.TenantId, scope.ProjectId, scope.RunId, scope.SessionId, scope.AgentId)
+                {
+                    TurnId = scope.TurnId
+                }, new string('e', 64), CostDisposition.Unpriced, null, null, "controlled-cost", null, null,
+                DateTimeOffset.UnixEpoch));
+        var request = new RuntimeNativeTurnAccountingRequest(null!, recorded, [reference]);
+        var snapshot = new RuntimeUsageCostSnapshotReceipt(1,
+            RuntimeUsageSourceReceiptContract.HashSource(registration, recorded.Admission.Source),
+            null, new(null, null, CostDisposition.Unpriced, null, "controlled-cost"),
+            new(scope.TenantId, scope.ProjectId, scope.RunId, 0, true, [], []))
+        {
+            DispatchId = recorded.Admission.MessageId, RepresentedReceipts = [reference]
+        };
+        var store = SourceStore();
+        return store.ExecuteLockedAsync(registration.RuntimeInstanceId, async (connection, transaction, token) =>
+        {
+            var receipt = await store.CompleteNativeTurnWithinTransactionAsync(
+                connection, transaction, registration, _grants[0], request, snapshot, token);
+            await transaction.CommitAsync(token);
+            return receipt;
+        }, default);
+    }
+
+    private async Task<long> NativeDispatchCountAsync(string state)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand(
+            $"SELECT count(*) FROM \"{_schema}\".maf_execution_dispatches WHERE dispatch_state = @state", connection);
+        command.Parameters.AddWithValue("state", state);
+        return (long)(await command.ExecuteScalarAsync())!;
     }
 
     private async Task WriteCheckpointAsync(

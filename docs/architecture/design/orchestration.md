@@ -330,8 +330,18 @@ turn an invalid plan into a dispatchable plan. Accepted plans and the reasons fo
 subsequent revisions are journaled. The grammar validator also applies to built-in
 and generated workflow definitions.
 
-This flowchart shows typed proposals passing deterministic validation into a
-checkpointed MAF execution, with bounded revisions returning through a gate.
+This flowchart shows typed proposals passing deterministic validation into the
+owner-side execution frontier. Ready child work is checkpointed with its spawn
+outbox request. The configured wall-time limit is measured from the persisted
+root-session creation time. After a wall-time or hard-cap limit is reached, the
+dispatcher holds pending intents and reports the limit; already-running child
+turns can settle, but no new or replayed Host message is sent. A platform step
+without a registered executor remains blocked. Every protected Host send, capped
+or uncapped, also requires real Phase B admission bound to the actual current child
+registration, SDK source/native-turn identity, execution fence, pending intent and
+checkpoint, and applicable counters. Phase A and registration/readiness checks are
+not admission. No Phase B producer is wired, so all pending Host sends remain
+pending and their steps are reported unavailable.
 
 ```mermaid
 flowchart TD
@@ -348,16 +358,28 @@ flowchart TD
     V -->|"Yes; conflicts serialized"| H["Confirm generated workflow or scope change"]
     H --> N["Save decision and revision count"]
     N --> S["Snapshot executable definition"]
-    S --> M["Bind steps to MAF executors"]
-    M --> O["Open step: child work and join"]
-    M --> T["Fixed work and platform gates"]
-    O --> X["Checkpointed execution"]
-    T --> X
-    X --> J["Journal decisions and effects"]
-    X --> Y["Request WorkPlan revision"]
-    Y --> L{"Accepted revision limit reached?"}
-    L -->|"Yes"| Z["Hold for human guidance"]
-    L -->|"No"| G
+    S --> DispatchWorkflow["Explicit typed dispatch"]
+    DispatchWorkflow --> RecheckRun["Recheck plan, selection, fence and limits under root-run mutex"]
+    RecheckRun --> O["Stage ready dependency frontier within remaining limits"]
+    O --> X["Phase A: commit child association, spawn outbox, pending intent, Running checkpoint"]
+    X --> ChildRegistration["Read and validate actual current child registration"]
+    ChildRegistration --> W{"Real Phase B admission bound to registration, native source/turn, fence, pending checkpoint, and applicable counters?"}
+    W -->|"Yes"| M["Deliver admitted intents to authenticated ready Hosts"]
+    W -->|"No"| L["Keep pending intent; report unavailable step or reached limit"]
+    M --> J{"Join state matches checkpoint?"}
+    J -->|"Pending exact intent"| K["Atomically checkpoint joined result and Succeeded status"]
+    K --> CompleteFrontier{"Complete dependency frontier?"}
+    CompleteFrontier -->|"No: continue ready work or return incomplete"| DispatchWorkflow
+    CompleteFrontier -->|"Yes"| AppendOutputWitness["Revalidate decision, fence, and checkpoint; append output witness"]
+    AppendOutputWitness --> CompleteResponse["Return complete result"]
+    J -->|"Exact completed replay with checkpointed result"| DispatchWorkflow
+    J -->|"Changed or missing intent/result"| Rj["Reject replay; retain checkpoint"]
+    RecheckRun --> T["Platform executor unavailable"]
+    T --> ReportBlocker["Report blocker; do not fall back to model work"]
+    J --> Y["Replan with diff and gate"]
+    Y --> RevisionLimit{"Accepted revision limit reached?"}
+    RevisionLimit -->|"Yes"| Z["Hold for human guidance"]
+    RevisionLimit -->|"No"| G
 ```
 
 The accepted definition is snapshotted for the run, then bound to real MAF executors.
@@ -462,7 +484,7 @@ merge, or publish by declaring in prose that a step is done.
 | `select_workflow` | Choose an eligible project definition or return the default and validation reasons |
 | `propose_work_plan` | Validate a catalog-bound DAG; return errors or a candidate for confirmation |
 | `revise_work_plan` | Validate changes, compute a scope diff, and require confirmation when its gate applies |
-| `dispatch` | Start ready child work only after confirmation, dependency, policy, and budget checks |
+| `dispatch` | Recheck the confirmed plan, selection, fence, and child limits; persist ready child intents; send only with real Phase B admission; join valid replies; retain pending intents and report unavailable steps otherwise |
 | `steer` | Address and fence a typed message; the receiving turn admits it at its boundary |
 | `request_assembly` | Ask platform executors to collect completed work and gate evidence; do not perform a gate in the coordinator |
 
@@ -668,6 +690,10 @@ before the changed work can dispatch
 ([R12](../decisions/0001-platform-architecture.md#risk-register)).
 The coordinator cannot loop in its prompt to silently authorize a new stage. An
 exhausted budget or invalid revision leaves a visible blocker for the operator.
+The wall-time limit uses the persisted root-session creation time and is checked
+before every Host send. In-flight child turns can settle after the deadline, but
+the dispatch response reports `wallTimeLimitReached` and dependent work cannot
+start after the limit.
 
 Determinism here is about executable boundaries: given the pinned definition and
 accepted decisions, code applies the same validators, transitions, and gates.

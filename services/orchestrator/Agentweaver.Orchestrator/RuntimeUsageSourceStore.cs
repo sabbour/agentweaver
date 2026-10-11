@@ -467,6 +467,8 @@ internal sealed class RuntimeUsageSourceStore(
         var dispatch = await ReadNativeDispatchAsync(
             connection, transaction, registration, request.Admission.MessageId, cancellationToken).ConfigureAwait(false);
         RequireNativeDispatch(dispatch, request.Admission, source.Receipt.CanonicalPayloadHash);
+        await RequireUniqueNativeUsageAsync(
+            connection, transaction, request.Admission, request.Observation, cancellationToken).ConfigureAwait(false);
         var hash = RuntimeNativeTurnContract.ObservationHash(request.Observation);
         if (dispatch.ReportHash is not null)
         {
@@ -549,10 +551,73 @@ internal sealed class RuntimeUsageSourceStore(
             reader.IsDBNull(19) ? null : reader.GetString(19));
     }
 
+    internal async Task<RuntimeNativeTurnRecordedReceipt> ReadNativeTurnWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeNativeTurnRecordedReceipt expected, CancellationToken cancellationToken)
+    {
+        var (_, recorded) = await ReadNativeTurnStateAsync(
+            connection, transaction, registration, expected, cancellationToken).ConfigureAwait(false);
+        return recorded;
+    }
+
+    private async Task<(NativeDispatch Dispatch, RuntimeNativeTurnRecordedReceipt Recorded)> ReadNativeTurnStateAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeNativeTurnRecordedReceipt expected, CancellationToken cancellationToken)
+    {
+        RuntimeNativeTurnContract.ValidateRecorded(expected);
+        var admission = expected.Admission;
+        var source = await ReadCurrentSourceAsync(connection, transaction, registration, cancellationToken)
+            .ConfigureAwait(false);
+        if (admission.Registration != registration || admission.Source != source.Source)
+            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+        var dispatch = await ReadNativeDispatchAsync(
+            connection, transaction, registration, admission.MessageId, cancellationToken).ConfigureAwait(false);
+        RequireNativeDispatch(dispatch, admission, source.CanonicalPayloadHash);
+        if (dispatch.State is not ("terminal_pending_accounting" or "completed") ||
+            dispatch.ReportHash != expected.CanonicalPayloadHash || dispatch.ReportJson is null ||
+            expected.OwnerRevision !=
+                (dispatch.State == "completed" ? dispatch.OwnerRevision - 1 : dispatch.OwnerRevision))
+            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
+        var recorded = new RuntimeNativeTurnRecordedReceipt(
+            admission, Deserialize<RuntimeNativeTurnObservation>(dispatch.ReportJson),
+            dispatch.ReportHash, expected.OwnerRevision);
+        RuntimeNativeTurnContract.ValidateRecorded(recorded);
+        if (recorded.Observation.CompletedAt > timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_native_turn_observation_invalid");
+        await RequireNativeCheckpointAsync(
+            connection, transaction, registration, admission, dispatch, cancellationToken).ConfigureAwait(false);
+        await RequireUniqueNativeUsageAsync(
+            connection, transaction, admission, recorded.Observation, cancellationToken).ConfigureAwait(false);
+        return (dispatch, recorded);
+    }
+
+    private async Task RequireUniqueNativeUsageAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeNativeTurnAdmissionReceipt admission,
+        RuntimeNativeTurnObservation observation, CancellationToken cancellationToken)
+    {
+        if (observation.UsageEventIds.IsEmpty)
+            return;
+        await using var command = new NpgsqlCommand($"""
+            SELECT EXISTS (
+                SELECT 1 FROM {_dispatches}
+                WHERE project_id = @project AND run_id = @run AND dispatch_id <> @message
+                    AND runtime_instance_id = @runtime
+                    AND source_report_json->'source'->>'sdkSessionId' = @sdk_session
+                    AND (source_report_json->'usageEventIds') ?| @events)
+            """, connection, transaction);
+        AddNativeScope(command, admission.Registration, admission.MessageId);
+        command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, admission.Source.RuntimeInstanceId);
+        command.Parameters.AddWithValue("sdk_session", NpgsqlDbType.Text, admission.Source.SdkSessionId);
+        command.Parameters.AddWithValue("events", NpgsqlDbType.Array | NpgsqlDbType.Text,
+            observation.UsageEventIds.Select(id => id.ToString("D")).ToArray());
+        if ((bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!)
+            throw new RuntimeAuthorizationException("runtime_native_turn_usage_reused");
+    }
+
     internal async Task<RuntimeNativeTurnAccountingReceipt> CompleteNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, RuntimeNativeTurnAccountingRequest request,
-        Func<CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>> readSnapshot,
+        RuntimeUsageCostSnapshotReceipt snapshot,
         CancellationToken cancellationToken)
     {
         var snapshotRequest = RuntimeNativeTurnContract.AccountingSnapshotRequest(
@@ -561,21 +626,8 @@ internal sealed class RuntimeUsageSourceStore(
         var source = await ReadSourceAsync(connection, transaction, registration.RuntimeInstanceId, cancellationToken)
             .ConfigureAwait(false) ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
         RequireSource(source, registration, grant);
-        if (admission.Registration != registration || admission.Source != source.Receipt.Source)
-            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
-        var dispatch = await ReadNativeDispatchAsync(
-            connection, transaction, registration, admission.MessageId, cancellationToken).ConfigureAwait(false);
-        RequireNativeDispatch(dispatch, admission, source.Receipt.CanonicalPayloadHash);
-        if (dispatch.State is not ("terminal_pending_accounting" or "completed") ||
-            dispatch.ReportHash != request.Recorded.CanonicalPayloadHash || dispatch.ReportJson is null ||
-            RuntimeNativeTurnContract.ObservationHash(
-                Deserialize<RuntimeNativeTurnObservation>(dispatch.ReportJson)) != dispatch.ReportHash ||
-            request.Recorded.OwnerRevision !=
-                (dispatch.State == "completed" ? dispatch.OwnerRevision - 1 : dispatch.OwnerRevision))
-            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
-        await RequireNativeCheckpointAsync(
-            connection, transaction, registration, admission, dispatch, cancellationToken).ConfigureAwait(false);
-        var snapshot = await readSnapshot(cancellationToken).ConfigureAwait(false);
+        var (dispatch, _) = await ReadNativeTurnStateAsync(
+            connection, transaction, registration, request.Recorded, cancellationToken).ConfigureAwait(false);
         RuntimeUsageCostSnapshotContract.ValidateObservedReceipt(snapshot, snapshotRequest);
         var references = snapshot.RepresentedReceipts.OrderBy(reference => reference.SourceReceiptId)
             .ToImmutableArray();
@@ -758,6 +810,16 @@ internal sealed class RuntimeUsageSourceStore(
             stored.Receipt.CanonicalPayloadHash != RuntimeUsageSourceReceiptContract.HashSource(
                 registration, stored.Receipt.Source))
             throw new RuntimeAuthorizationException("runtime_sdk_source_conflict");
+        return stored.Receipt;
+    }
+
+    internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceForGrantAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeGrantReceipt grant, CancellationToken cancellationToken)
+    {
+        var stored = await ReadSourceAsync(connection, transaction, registration.RuntimeInstanceId, cancellationToken)
+            .ConfigureAwait(false) ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
+        RequireSource(stored, registration, grant);
         return stored.Receipt;
     }
 
