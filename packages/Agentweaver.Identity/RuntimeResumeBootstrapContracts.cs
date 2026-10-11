@@ -13,6 +13,8 @@ public sealed record RuntimeResumeBootstrapRequest(
     Guid ConsumeOperationId,
     Guid ExchangeOperationId)
 {
+    public Guid ResumeAttemptId { get; init; }
+
     public RuntimeResumeBootstrapRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Resume);
@@ -26,6 +28,11 @@ public sealed record RuntimeResumeBootstrapRequest(
         var source = Resume.SourceRelease.HostReceipt.Registration;
         var operations = new[] { BootstrapOperationId, ConsumeOperationId, ExchangeOperationId };
         if (ContractVersion != 1 || Resume.PhaseVersion != 4 ||
+            ResumeAttemptId == Guid.Empty || binding.ResumeOperationId != Resume.OperationId ||
+            binding.ResumeAttemptId != ResumeAttemptId ||
+            BootstrapOperationId != RuntimeResumeAttemptIdentity.Bootstrap(Resume.OperationId, ResumeAttemptId) ||
+            ConsumeOperationId != RuntimeResumeAttemptIdentity.Consume(Resume.OperationId, ResumeAttemptId) ||
+            ExchangeOperationId != RuntimeResumeAttemptIdentity.Exchange(Resume.OperationId, ResumeAttemptId) ||
             operations.Any(operation => operation == Guid.Empty || operation == Resume.OperationId) ||
             operations.Distinct().Count() != operations.Length ||
             Registration.RuntimeInstanceId == source.RuntimeInstanceId ||
@@ -88,6 +95,24 @@ public sealed record RuntimeResumeBootstrapRequest(
             document.RootElement.GetRawText().Length > AddressedMessageValidation.MaximumPayloadLength)
             throw new RuntimeAuthorizationException("runtime_resume_configuration_invalid");
         return result;
+    }
+
+    public RuntimeBootstrapDeliveryReceipt ValidateDelivery(RuntimeBootstrapDeliveryReceipt delivery)
+    {
+        Validate();
+        ArgumentNullException.ThrowIfNull(delivery);
+        var binding = Registration.Binding;
+        var hash = RequireConfigurationAcknowledgment(Resume.SourceRelease.HostReceipt).Reference.Material!.Sha256;
+        if (delivery.OperationId != BootstrapOperationId || delivery.GrantId == Guid.Empty ||
+            delivery.RuntimeInstanceId != Registration.RuntimeInstanceId ||
+            delivery.RegistrationRevision != Registration.Revision || delivery.ConfigurationHash != hash ||
+            delivery.PlacementUid != binding.PlacementUid || delivery.PlacementGeneration != binding.PlacementGeneration ||
+            delivery.ExecutionFence != binding.ExecutionFence ||
+            delivery.EnvironmentCurrentFencingGeneration != binding.EnvironmentCurrentFencingGeneration ||
+            delivery.EnvironmentProviderFencingGeneration != binding.EnvironmentProviderFencingGeneration ||
+            delivery.DeliveredAt >= Registration.ExpiresAt)
+            throw new RuntimeAuthorizationException("runtime_resume_bootstrap_delivery_invalid");
+        return delivery;
     }
 }
 
@@ -169,13 +194,16 @@ public sealed class RuntimeResumeBootstrapHttpClient(HttpClient client, Uri envi
         RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {
         request.Validate();
-        var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeResumeBootstrapReceipt>(
+        var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeResumeBootstrapOutcome>(
             client, _owner, "/internal/runtime/resume/bootstrap", actor, request,
             SessionMaterialValidation.MaximumBytes, false, cancellationToken).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_resume_bootstrap_unavailable");
         if (!actor.Bearer.IsUsable())
             throw new RuntimeAuthorizationException("runtime_resume_actor_expired");
-        return result.ValidateFor(request);
+        result.ValidateFor(request);
+        if (result.StateLoss is { } loss)
+            throw new RuntimeResumeBootstrapStateLostException(loss);
+        return result.Receipt!;
     }
 
 }

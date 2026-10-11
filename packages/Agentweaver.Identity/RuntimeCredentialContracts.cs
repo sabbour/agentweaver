@@ -61,6 +61,10 @@ public sealed record RuntimeBinding(
     public long EnvironmentLeaseRevision { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SandboxImageIdentity? Image { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? ResumeOperationId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? ResumeAttemptId { get; init; }
 }
 
 public enum RuntimeRegistrationState { Active, Revoked }
