@@ -53,6 +53,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/platform/runtime-defaults` | Append platform defaults using an expected revision. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
+| `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` | List bounded skill revision metadata and current assignments for project administrators; omit `cursor` for the first page. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
 | `GET, POST /api/projects/{projectId}/skill-marketplaces/sources` | List or add revisioned project skill sources. |
@@ -76,6 +77,15 @@ service. Projects does not create another loader or catalog. These
 preview/import mappings belong to the Projects producer candidate. They do not
 show that Gateway, MCP, retained Web import, or a runtime-loaded status producer
 is available.
+
+Skill inventory uses a URL-safe opaque continuation cursor. The default page
+size is 25 and the maximum is 50. The cursor binds the project, page size, and
+versioned `skillId`-ascending/revision-descending order. New revisions that sort
+before a cursor do not shift later pages; restart without a cursor to see them.
+Current tenant administrators and project owners can read metadata for active
+or archived projects while their authority remains current. Viewers and callers
+with revoked or stale authority are denied. Inventory contains no instructions,
+resource bytes, or object keys.
 
 ### Reviewed casting proposals and explicit transfers
 
@@ -168,6 +178,13 @@ and returns a digest without storing the content. Project import requires curren
 project write authority, that exact digest, and an idempotency key. Each successful
 import creates an immutable revision with source provenance. Reusing the key for a
 different request or importing against a stale revision returns a conflict.
+
+`GET /api/projects/{projectId}/skills` returns metadata for stored revisions,
+including unassigned and revoked revisions, and exact current assignments with
+the project configuration revision. It uses stable pages of 25 revisions by
+default and accepts page sizes from 1 through 50. The endpoint requires current
+project-admin authority and returns no skill or resource bytes. Revoked metadata
+does not grant permission to load or assign that revision.
 
 `PUT /api/projects/{projectId}/skills/{skillId}/assignment` writes an ordinary
 configuration revision. An enabled assignment pins an imported content revision

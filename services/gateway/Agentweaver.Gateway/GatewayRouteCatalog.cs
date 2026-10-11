@@ -119,6 +119,10 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/skills/{skillId}/assignment",
             "updateProjectSkillAssignment", "Update a project skill assignment",
             body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/skills",
+            "/api/projects/{projectId}/skills",
+            "listProjectSkillInventory", "Read current project skill inventory",
+            ["cursor", "pageSize"], forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);

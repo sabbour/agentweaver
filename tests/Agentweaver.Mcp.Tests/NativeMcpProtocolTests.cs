@@ -797,6 +797,38 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SkillInventoryToolUsesTheGatewayCursorContract()
+    {
+        await InitializeProtocolAsync();
+        var list = await PostRpcAsync(new
+        {
+            jsonrpc = "2.0",
+            id = 2,
+            method = "tools/list",
+            @params = new { },
+        });
+        var tools = list.GetProperty("result").GetProperty("tools");
+        var inventoryTool = Assert.Single(
+            tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() == "agentweaver_listProjectSkillInventory");
+        var inputSchema = inventoryTool.GetProperty("inputSchema");
+        Assert.False(inputSchema.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[] { "projectId" },
+            inputSchema.GetProperty("required").EnumerateArray()
+                .Select(value => value.GetString()).ToArray());
+        var properties = inputSchema.GetProperty("properties");
+        Assert.Equal("string", properties.GetProperty("projectId").GetProperty("type").GetString());
+        Assert.Equal("string", properties.GetProperty("cursor").GetProperty("type").GetString());
+        var pageSize = properties.GetProperty("pageSize");
+        Assert.Equal("integer", pageSize.GetProperty("type").GetString());
+        Assert.Equal(1, pageSize.GetProperty("minimum").GetInt32());
+        Assert.Equal(50, pageSize.GetProperty("maximum").GetInt32());
+        Assert.Equal(25, pageSize.GetProperty("default").GetInt32());
+        Assert.Equal("string", properties.GetProperty("tenantSelector").GetProperty("type").GetString());
+    }
+
+    [Fact]
     public async Task ToolArgumentsAreValidatedAgainstTheAdvertisedSchema()
     {
         await InitializeProtocolAsync();
