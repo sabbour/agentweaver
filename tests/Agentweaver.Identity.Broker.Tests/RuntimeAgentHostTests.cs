@@ -157,6 +157,50 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task ResumeWithCompatibleCacheUsesNativeResumeWithoutReadingJournal()
+    {
+        await using var source = new HostFixture(workflowBound: true);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var request = await PrepareResumeTargetAsync(source, target, timeout.Token);
+        target.MissingMaterialId = null;
+
+        var readiness = await target.ConfigureAsync(timeout.Token);
+
+        Assert.Equal("native-cache", readiness.ResumeCache?.RecoveryMode);
+        var cache = request.Resume.SourceManifest.CacheAcknowledgment!;
+        Assert.Equal(cache.EventId, Assert.Single(target.ResumeCacheReads));
+        var resume = Assert.Single(target.Sdk.Requests, item => item.Method == "session.resume");
+        Assert.Equal(RuntimeContractValidation.NativeSessionId(request.Registration.Binding),
+            resume.Parameters.GetProperty("sessionId").GetString());
+        Assert.DoesNotContain(target.Sdk.Requests, item => item.Method == "session.create");
+        Assert.Empty(target.ResumeEventRequests);
+        Assert.DoesNotContain(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
+    }
+
+    [Fact]
+    public async Task AuthenticatedIncompatibleCacheFallsBackToJournalWithoutNativeResume()
+    {
+        await using var source = new HostFixture(workflowBound: true);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var request = await PrepareResumeTargetAsync(source, target, timeout.Token);
+        target.MissingMaterialId = null;
+        target.Sdk.RuntimeVersion = "controlled-runtime-v2";
+
+        var readiness = await target.ConfigureAsync(timeout.Token);
+
+        Assert.Equal("journal-rebuild", readiness.ResumeCache?.RecoveryMode);
+        Assert.NotNull(readiness.ResumeCache?.JournalRebuild);
+        Assert.Equal(request.Resume.SourceManifest.CacheAcknowledgment!.EventId,
+            Assert.Single(target.ResumeCacheReads));
+        Assert.NotEmpty(target.ResumeEventRequests);
+        Assert.Single(target.Sdk.Requests, item => item.Method == "session.create");
+        Assert.DoesNotContain(target.Sdk.Requests, item => item.Method == "session.resume");
+        Assert.DoesNotContain(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
+    }
+
+    [Fact]
     public async Task ResumeRebuildsFromTheSavedVisibleJournalAndWaitsForAnAuthorizedTurnToWriteCache()
     {
         await using var source = new HostFixture(workflowBound: true);

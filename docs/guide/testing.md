@@ -347,6 +347,7 @@ The native SDK session store and ambient configuration discovery remain disabled
 The custom filesystem captures opaque native cache bytes and restores the same logical session through the actual SDK resume call.
 Missing, incompatible, or corrupt caches rebuild context from journal content without a model-turn replay.
 Resume producer tests reject Events authorization/transport failures, repeated or empty pages with a next cursor, and TURN bytes, reference, hash, or source-binding mismatches before readiness or native session creation.
+Full Host Configure tests also prove that a compatible cache uses native resume and an authenticated incompatible cache falls back to the saved journal.
 The guarded positive scenario records the actual user and assistant content, the Policy receipt, and the native cache reference.
 Separate controlled Host tests require Core's exact current-operation echo before stopping turns and around native cache writes.
 They reject changed operation identity, phase version, or authority, and missing replay cache.
