@@ -23,11 +23,12 @@ public static partial class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         CoordinatorDecisionOwnerStore decisions,
         PostgresMafCheckpointStore checkpoints,
+        SourceControlOwnerStore sourceControlOwner,
         CancellationToken cancellationToken) =>
         ReadCoordinatorBuildTestCommandCoreAsync(
             projectId, runId, sessionId, checkpointId, stepId, workPlanId,
             checkpointRevision, decisionStateVersion, executionFence, acceptedSelectionHash,
-            context, options, projects, decisions, checkpoints, false, cancellationToken);
+            context, options, projects, decisions, checkpoints, sourceControlOwner, false, cancellationToken);
 
     private static Task<IResult> ReadCoordinatorBuildTestSeedAsync(
         string projectId,
@@ -45,11 +46,12 @@ public static partial class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         CoordinatorDecisionOwnerStore decisions,
         PostgresMafCheckpointStore checkpoints,
+        SourceControlOwnerStore sourceControlOwner,
         CancellationToken cancellationToken) =>
         ReadCoordinatorBuildTestCommandCoreAsync(
             projectId, runId, sessionId, checkpointId, stepId, workPlanId,
             checkpointRevision, decisionStateVersion, executionFence, acceptedSelectionHash,
-            context, options, projects, decisions, checkpoints, true, cancellationToken);
+            context, options, projects, decisions, checkpoints, sourceControlOwner, true, cancellationToken);
 
     private static Task<IResult> ReadCoordinatorBuildTestCommandCoreAsync(
         string projectId,
@@ -67,6 +69,7 @@ public static partial class CoordinationEndpoints
         ProjectsRunSelectionClient projects,
         CoordinatorDecisionOwnerStore decisions,
         PostgresMafCheckpointStore checkpoints,
+        SourceControlOwnerStore sourceControlOwner,
         bool includeSeed,
         CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
@@ -91,6 +94,10 @@ public static partial class CoordinationEndpoints
                     "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
             var command = ResolveBuildTestCommand(
                 latest, current, reference, selection.Authorization.TenantId);
+            if (command.WorkspaceSource is { } initialSource)
+                await SourceControlEndpoints.RequireCurrentBuildTestInputAsync(
+                    context, initialSource, reference, options, projects, decisions, sourceControlOwner,
+                    cancellationToken).ConfigureAwait(false);
             if (includeSeed)
             {
                 if (command.WorkspaceSource is null)
@@ -112,6 +119,10 @@ public static partial class CoordinationEndpoints
             if (currentCommand.ImmutableHash != command.ImmutableHash)
                 throw new CoordinationException(
                     "maf_execution_build_test_checkpoint_stale", StatusCodes.Status409Conflict);
+            if (currentCommand.WorkspaceSource is { } source)
+                await SourceControlEndpoints.RequireCurrentBuildTestInputAsync(
+                    context, source, reference, options, projects, decisions, sourceControlOwner,
+                    cancellationToken).ConfigureAwait(false);
             if (includeSeed)
                 return Results.Bytes(command.WorkspaceSeed!.Value.ToArray(), "application/octet-stream");
             return Results.Ok(command);
@@ -151,6 +162,6 @@ public static partial class CoordinationEndpoints
                 plan.IsolationProviderBinding, intent.ExpectedBinding, reference.RunId))
             throw new CoordinationException(
                 "maf_execution_build_test_binding_stale", StatusCodes.Status409Conflict);
-        return intent.ToAcceptedCommand(requireSeed: false);
+        return (intent with { WorkspaceSeed = null }).ToAcceptedCommand(requireSeed: false);
     }
 }

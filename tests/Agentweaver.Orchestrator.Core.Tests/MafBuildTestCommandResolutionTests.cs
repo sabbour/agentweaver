@@ -11,6 +11,54 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 public sealed class MafBuildTestCommandResolutionTests
 {
     [Fact]
+    public void ServerSourceInputResolvesWithoutChangingTheConfirmedCommand()
+    {
+        var (checkpoint, _, original) = SeedFixture();
+        var intent = original with
+        {
+            Command = original.Command with { WorkspaceSource = null },
+            WorkspaceInput = original.Command.WorkspaceSource
+        };
+        checkpoint = checkpoint with
+        {
+            State = checkpoint.State with
+            {
+                BuildTestIntents = checkpoint.State.BuildTestIntents.SetItem(intent.StepId, intent)
+            }
+        };
+        var accepted = CoordinationEndpoints.ResolveBuildTestCommand(
+            checkpoint, Current(intent.Command), intent.CheckpointReference(), "tenant-1");
+
+        Assert.Null(intent.Command.WorkspaceSource);
+        Assert.Equal(original.ToAcceptedCommand().ImmutableHash, accepted.ImmutableHash);
+        Assert.Equal(intent.WorkspaceInput, accepted.WorkspaceSource);
+        Assert.Null(accepted.WorkspaceSeed);
+    }
+
+    [Fact]
+    public void ServerSourceInputDoesNotBypassTheExactConfirmedCommandGuard()
+    {
+        var (checkpoint, _, original) = SeedFixture();
+        var intent = original with
+        {
+            Command = original.Command with { WorkspaceSource = null },
+            WorkspaceInput = original.Command.WorkspaceSource
+        };
+        checkpoint = checkpoint with
+        {
+            State = checkpoint.State with
+            {
+                BuildTestIntents = checkpoint.State.BuildTestIntents.SetItem(intent.StepId, intent)
+            }
+        };
+        var failure = Assert.Throws<CoordinationException>(() => CoordinationEndpoints.ResolveBuildTestCommand(
+            checkpoint, Current(intent.Command with { Arguments = ["different"] }),
+            intent.CheckpointReference(), "tenant-1"));
+
+        Assert.Equal("maf_execution_build_test_binding_stale", failure.Code);
+    }
+
+    [Fact]
     public void RecoveredVersionTwoCommandResolvesMetadataWithoutPuttingSeedBytesInJson()
     {
         var (checkpoint, current, intent) = SeedFixture();
