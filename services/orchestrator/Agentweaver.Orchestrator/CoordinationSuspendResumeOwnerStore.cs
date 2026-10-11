@@ -573,7 +573,7 @@ internal sealed partial class CoordinationOwnerStore
 
         var source = await ReadResumeSourceEvidenceAsync(
             connection, transaction, actor, identity, request.Resume.SourceManifest.ManifestId,
-            request.Resume.SourceManifest.CoreExecutionFence, cancellationToken)
+            run.Fence - 1, cancellationToken)
             .ConfigureAwait(false);
         if (!SessionSuspendResumePhaseMachine.SameJson(source.Manifest, request.Resume.SourceManifest) ||
             !SessionSuspendResumePhaseMachine.SameJson(source.PlacementRelease, request.Resume.SourceRelease))
@@ -599,6 +599,36 @@ internal sealed partial class CoordinationOwnerStore
         await RequireCurrentResumeBootstrapRegistrationInTransactionAsync(
             connection, transaction, request.Registration, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RequireCurrentResumeBootstrapRegistrationInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRegistration expected,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        await using var command = new NpgsqlCommand($"""
+            SELECT revision.runtime_instance_id, revision.revision, revision.binding_json,
+                   revision.binding_hash, revision.state, revision.expires_at
+            FROM {_schema}.runtime_registration_heads AS head
+            JOIN {_schema}.runtime_registration_revisions AS revision
+              ON revision.runtime_instance_id = head.runtime_instance_id
+             AND revision.revision = head.current_revision
+            WHERE head.runtime_instance_id = @runtime
+            FOR SHARE OF head
+            """, connection, transaction);
+        command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, expected.RuntimeInstanceId);
+        RuntimeRegistration? current;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+            current = await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+                ? RuntimeRegistrationStore.ReadRegistration(reader)
+                : null;
+        if (current is null || current != expected ||
+            current.State != RuntimeRegistrationState.Active ||
+            current.ExpiresAt <= _timeProvider.GetUtcNow())
+            throw new CoordinationException(
+                "runtime_registration_stale", StatusCodes.Status409Conflict);
     }
 
     internal async Task<SessionSuspendResumeOperationRecord> BeginSessionResumeAsync(

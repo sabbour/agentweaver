@@ -141,6 +141,10 @@ public sealed class RuntimeAgentHostTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var material = fixture.MaterialClient();
         await using var session = await fixture.ConfigureSessionAsync(material, timeout.Token);
+        await session.RegisterUsageAsync(fixture.SourceClient(), timeout.Token);
+        var nativeFile = await fixture.Sdk.InvokeNativeFilesAsync(
+            "sessionFs.writeFile", "state/events.jsonl", "opaque native events\n", timeout.Token);
+        Assert.Equal(JsonValueKind.Null, nativeFile.ValueKind);
         var acknowledgment = await session.CommitNativeCacheAsync(material, Guid.NewGuid(), timeout.Token);
 
         var recovery = await material.ReadRecoveryAsync(session.Registration, timeout.Token, acknowledgment);
@@ -826,7 +830,8 @@ public sealed class RuntimeAgentHostTests
             using var error = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
             Assert.Equal("runtime_a2a_message_invalid", error.RootElement.GetProperty("code").GetString());
             Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
-            Assert.Empty(fixture.Material);
+            Assert.DoesNotContain(fixture.Material,
+                material => material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
         }
     }
 
@@ -884,7 +889,8 @@ public sealed class RuntimeAgentHostTests
 
         Assert.Equal(expectedCode, failure.Code);
         Assert.Single(fixture.NativeAdmissions);
-        Assert.Empty(fixture.Material);
+        Assert.DoesNotContain(fixture.Material,
+            material => material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
         Assert.Empty(fixture.NativeObservations);
         Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
     }
@@ -1137,7 +1143,8 @@ public sealed class RuntimeAgentHostTests
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.SendAsync(fixture.Message(fixture.Proof(ready)), fixture.Actor, timeout.Token))).Code);
         Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
-        Assert.Empty(fixture.Material);
+        Assert.DoesNotContain(fixture.Material,
+            material => material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
         Assert.Empty(fixture.Usage);
     }
 
@@ -1404,6 +1411,7 @@ public sealed class RuntimeAgentHostTests
         private long _sourceRevision = 1;
         private int _position;
         private readonly ConcurrentDictionary<Guid, SessionMaterialReadResult> _material = new();
+        private readonly ConcurrentDictionary<Guid, SessionMaterialWriteRequest> _materialWrites = new();
         public HostFixture(
             ModelSourceMode sourceMode = ModelSourceMode.HostedCopilot,
             decimal? hardCreditLimit = null,
@@ -1880,6 +1888,13 @@ public sealed class RuntimeAgentHostTests
                 if (dedicatedConfigurationRoute !=
                     (material.Kind == SessionMaterialKind.RuntimeConfiguration))
                     return Response(request, new { }, HttpStatusCode.Forbidden);
+                if (_material.TryGetValue(material.EventId, out var existing))
+                {
+                    if (!_materialWrites.TryGetValue(material.EventId, out var previous) ||
+                        !RuntimeWorkspaceResumeHttpClient.SameJson(previous, material))
+                        return Response(request, new { code = "session_event_conflict" }, HttpStatusCode.Conflict);
+                    return Response(request, existing.Material);
+                }
                 Material.Enqueue(material);
                 MaterialWriteRoutes.Enqueue(path);
                 var b = Configure.Registration.Binding;
@@ -1899,6 +1914,7 @@ public sealed class RuntimeAgentHostTests
                         }
                     });
                 _material[material.EventId] = new(receipt, material.Bytes);
+                _materialWrites[material.EventId] = material;
                 AfterMaterialWrite?.Invoke(material);
                 return Response(request, receipt);
             }

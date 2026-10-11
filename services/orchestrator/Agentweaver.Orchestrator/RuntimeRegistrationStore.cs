@@ -234,7 +234,7 @@ internal sealed class RuntimeRegistrationStore
         await insert.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static RuntimeRegistration ReadRegistration(NpgsqlDataReader reader)
+    internal static RuntimeRegistration ReadRegistration(NpgsqlDataReader reader)
     {
         var binding = JsonSerializer.Deserialize<RuntimeBinding>(reader.GetString(2), JsonOptions)
             ?? throw new InvalidOperationException("A stored runtime binding is invalid.");
