@@ -595,16 +595,22 @@ public sealed record SandboxBuildTestOutputCollectorRequest(
     long MaximumTotalBytes,
     ImmutableArray<SandboxBuildTestOutputObligation> Outputs)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? AcceptedCommandContractVersion { get; init; }
+
     public SandboxBuildTestOutputCollectorRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Checkpoint);
         _ = Checkpoint.Validate();
-        if (OperationId == Guid.Empty ||
+        var commandVersion = AcceptedCommandContractVersion ?? 1;
+        if (commandVersion is not (1 or 2) ||
+            OperationId == Guid.Empty ||
             !SandboxBuildTestHashes.IsPrefixedSha256(ImmutableHash) ||
             !SandboxBuildTestHashes.IsSha256(RequestFingerprint) ||
             !SandboxBuildTestPaths.IsAbsoluteContainerPath(WorkspaceMountPath) ||
             MaximumTotalBytes is < 1 or > SandboxBuildTestLimits.MaximumFileOutputBytes ||
-            Outputs.IsDefaultOrEmpty ||
+            Outputs.IsDefault ||
+            commandVersion == 1 && Outputs.IsEmpty ||
             Outputs.Length > SandboxBuildTestLimits.MaximumOutputObligations ||
             Outputs.Any(output => output is null) ||
             Outputs.Select(output => output.Name).Distinct(StringComparer.Ordinal).Count() != Outputs.Length ||

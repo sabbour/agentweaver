@@ -363,6 +363,11 @@ Missing baseline files, changed undeclared files, and undeclared additional file
 Version 2 output obligations cannot exceed the existing 16 MiB package file limit.
 The complete-tree limits remain 10,000 files and 64 MiB total file content.
 A version 2 command requires this collector even when it declares no output files.
+The collector request records the actual accepted command version.
+Only explicit version 2 permits an empty output list; absent version fields retain strict version 1 behavior.
+The provider checks this version against the accepted command before any transport request.
+Workspace preparation and capture require valid version 2 source input.
+This field supplies no authority and does not change command hashes or receipt versions.
 
 The collector seals the complete document and its exact reference in private Pod state.
 Both remain bound to the operation, source, request fingerprint, native repository path, and collector Pod UID.

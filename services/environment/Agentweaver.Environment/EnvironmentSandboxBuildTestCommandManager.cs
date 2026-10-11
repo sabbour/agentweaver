@@ -1132,7 +1132,10 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             acceptedCommand.Checkpoint,
             workspaceMountPath,
             acceptedCommand.ExecutionOptions.MaximumFileOutputBytes,
-            acceptedCommand.Outputs).Validate();
+            acceptedCommand.Outputs)
+        {
+            AcceptedCommandContractVersion = acceptedCommand.ContractVersion == 2 ? 2 : null
+        }.Validate();
 
     private static string GetPolicyUid(
         SandboxBuildTestOperationSnapshot operation,

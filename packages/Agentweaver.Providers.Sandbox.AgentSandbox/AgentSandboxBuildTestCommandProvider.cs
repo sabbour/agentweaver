@@ -1115,6 +1115,7 @@ public sealed partial class AgentSandboxProvider
             expected.Checkpoint,
             request.ExpectedBinding).ComputeRequestFingerprint(expected);
         if (expected.Outputs.IsEmpty && expected.WorkspaceSource is null ||
+            (collectorRequest.AcceptedCommandContractVersion ?? 1) != expected.ContractVersion ||
             collectorRequest.OperationId != expected.OperationId ||
             collectorRequest.ImmutableHash != expected.ImmutableHash ||
             collectorRequest.RequestFingerprint != expectedFingerprint ||
@@ -1139,7 +1140,10 @@ public sealed partial class AgentSandboxProvider
             request.AcceptedCommand.Checkpoint,
             context.Descriptor.WorkspaceMountPath,
             request.AcceptedCommand.ExecutionOptions.MaximumFileOutputBytes,
-            request.AcceptedCommand.Outputs).Validate();
+            request.AcceptedCommand.Outputs)
+        {
+            AcceptedCommandContractVersion = request.AcceptedCommand.ContractVersion == 2 ? 2 : null
+        }.Validate();
 
     private static bool SameCheckpoint(
         SandboxBuildTestCheckpointReference left,

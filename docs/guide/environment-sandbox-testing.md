@@ -99,6 +99,13 @@ Changed private mounts, command paths, Pod UIDs, or saved preparation receipts f
 The existing TLS exchange cases also check the exact helper command on the Kubernetes `exec` route.
 These added cases are source-only until their approved run completes.
 
+Pure request tests cover empty version 2 preparation and capture, legacy JSON, and unchanged receipt versions.
+Absent or version 1 fields cannot admit empty output lists.
+Default lists and unknown versions remain invalid.
+Controlled Kubernetes tests cover empty version 2 collector creation and restoration.
+Forged or mismatched collector versions fail before any HTTP request.
+The six PostgreSQL acknowledgment cases still require a separately approved run.
+
 ## Controlled actual Host image check
 
 This separate check requires approval for local image construction and execution.

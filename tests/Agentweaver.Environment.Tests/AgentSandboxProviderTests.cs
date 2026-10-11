@@ -481,6 +481,7 @@ public sealed partial class AgentSandboxProviderTests
         public Dictionary<string, string> Logs { get; } = new(StringComparer.Ordinal);
 
         public int CreateCount { get; private set; }
+        public int RequestCount { get; private set; }
         public List<bool> DeleteUidPreconditions { get; } = [];
         public string? LastSandboxClaimsNamespace { get; private set; }
         public bool FailNextClaimCreate { get; set; }
@@ -655,6 +656,7 @@ public sealed partial class AgentSandboxProviderTests
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
+            RequestCount++;
             var path = request.RequestUri!.AbsolutePath.TrimStart('/');
             if (request.Method == HttpMethod.Get)
             {

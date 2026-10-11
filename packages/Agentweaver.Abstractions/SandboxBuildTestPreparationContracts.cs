@@ -61,7 +61,10 @@ public sealed record SandboxBuildTestBindingPreparation(
             _ = Source.Validate();
             _ = new SandboxBuildTestOutputCollectorRequest(
                 OperationId, ImmutableHash, RequestFingerprint, Checkpoint, WorkspaceMountPath,
-                SandboxBuildTestLimits.MaximumFileOutputBytes, Outputs).Validate();
+                SandboxBuildTestLimits.MaximumFileOutputBytes, Outputs)
+            {
+                AcceptedCommandContractVersion = 2
+            }.Validate();
             if (Source.Identity.ProjectId != Checkpoint.ProjectId ||
                 Source.Identity.RunId != Checkpoint.RunId ||
                 Source.Identity.SessionId != Checkpoint.SessionId ||

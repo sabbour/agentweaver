@@ -49,7 +49,10 @@ public sealed partial class AgentSandboxProviderTests
             request.AcceptedCommand.OperationId, request.AcceptedCommand.ImmutableHash,
             fixture.ApiRequest.ComputeRequestFingerprint(request.AcceptedCommand), request.AcceptedCommand.Checkpoint,
             "/workspace/agentweaver/project", request.AcceptedCommand.ExecutionOptions.MaximumFileOutputBytes,
-            request.AcceptedCommand.Outputs);
+            request.AcceptedCommand.Outputs)
+        {
+            AcceptedCommandContractVersion = versionTwo ? 2 : null
+        };
         var collector = await provider.CreateOutputCollectorGatedAsync(request, collectorRequest, CancellationToken.None);
         var collectorSpec = fixture.Handler.GetPod(collector)["spec"]!;
         var container = collectorSpec["containers"]![0]!;
@@ -68,6 +71,63 @@ public sealed partial class AgentSandboxProviderTests
             Assert.NotNull(collectorSpec["activeDeadlineSeconds"]);
             Assert.Equal(SandboxBuildTestLimits.OutputCollectorContainerName, container["name"]!.GetValue<string>());
         }
+    }
+
+    [Fact]
+    public async Task VersionTwoProviderPreparesAndRestoresTheCollectorWithNoDeclaredOutputs()
+    {
+        using var fixture = await CreateBuildTestProviderFixtureAsync(true, emptyOutputs: true);
+        var request = fixture.Request;
+        var pod = await fixture.Provider.CreateGatedAsync(request, CancellationToken.None);
+        await fixture.Provider.ReleaseSchedulingGateAsync(request, pod, CancellationToken.None);
+        var preparation = CompleteBuildTestCommand(fixture, pod)!;
+        Assert.Equal(preparation,
+            await fixture.Provider.PrepareWorkspaceAsync(request, pod, CancellationToken.None));
+        var collectorRequest = new SandboxBuildTestOutputCollectorRequest(
+            request.AcceptedCommand.OperationId, request.AcceptedCommand.ImmutableHash,
+            fixture.ApiRequest.ComputeRequestFingerprint(request.AcceptedCommand), request.AcceptedCommand.Checkpoint,
+            "/workspace/agentweaver/project", request.AcceptedCommand.ExecutionOptions.MaximumFileOutputBytes, [])
+        {
+            AcceptedCommandContractVersion = 2
+        };
+        var collector = await fixture.Provider.CreateOutputCollectorGatedAsync(
+            request, collectorRequest, CancellationToken.None);
+        var container = fixture.Handler.GetPod(collector)["spec"]!["containers"]![0]!;
+        Assert.Equal(SandboxBuildTestLimits.WorkspaceCaptureContainerName, container["name"]!.GetValue<string>());
+        Assert.True(container["volumeMounts"]![0]!["readOnly"]!.GetValue<bool>());
+        Assert.Equal(collector,
+            await fixture.Provider.GetOutputCollectorAsync(request, CancellationToken.None));
+        Assert.Null(await fixture.Provider.CaptureWorkspaceAsync(
+            request, collector, preparation, CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData(false, 2)]
+    [InlineData(true, null)]
+    [InlineData(true, 1)]
+    public async Task CollectorRejectsAChangedAcceptedCommandVersionBeforeTransport(
+        bool versionTwo, int? collectorVersion)
+    {
+        using var fixture = await CreateBuildTestProviderFixtureAsync(versionTwo);
+        var request = fixture.Request;
+        var collectorRequest = new SandboxBuildTestOutputCollectorRequest(
+            request.AcceptedCommand.OperationId, request.AcceptedCommand.ImmutableHash,
+            fixture.ApiRequest.ComputeRequestFingerprint(request.AcceptedCommand), request.AcceptedCommand.Checkpoint,
+            "/workspace/agentweaver/project", request.AcceptedCommand.ExecutionOptions.MaximumFileOutputBytes,
+            request.AcceptedCommand.Outputs)
+        {
+            AcceptedCommandContractVersion = collectorVersion
+        };
+        var requests = fixture.Handler.RequestCount;
+        var creates = fixture.Handler.CreateCount;
+
+        var failure = await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Provider.CreateOutputCollectorGatedAsync(request, collectorRequest, CancellationToken.None));
+
+        Assert.Equal("The trusted output collector request does not match the accepted command.", failure.Message);
+        Assert.Equal(requests, fixture.Handler.RequestCount);
+        Assert.Equal(creates, fixture.Handler.CreateCount);
+        Assert.Empty(fixture.Handler.DeleteUidPreconditions);
     }
 
     [Theory]
@@ -105,7 +165,8 @@ public sealed partial class AgentSandboxProviderTests
         Assert.Empty(fixture.Handler.DeleteUidPreconditions);
     }
 
-    private static async Task<BuildTestProviderFixture> CreateBuildTestProviderFixtureAsync(bool versionTwo)
+    private static async Task<BuildTestProviderFixture> CreateBuildTestProviderFixtureAsync(
+        bool versionTwo, bool emptyOutputs = false)
     {
         var command = SandboxBuildTestCommandContractTests.CreateFixture().Command;
         if (versionTwo)
@@ -119,6 +180,8 @@ public sealed partial class AgentSandboxProviderTests
                 WorkspaceSeed = new byte[1024].ToImmutableArray(),
                 ExecutionOptions = command.ExecutionOptions with { CollectorMode = SandboxBuildTestLimits.WorkspaceCollectorMode }
             };
+        if (emptyOutputs)
+            command = command with { Outputs = [] };
         command = command with { Checkpoint = command.Checkpoint with { ProjectId = "project-a", RunId = "run-a" } };
         command = command with { ImmutableHash = command.ComputeImmutableHash() };
         var options = new AgentSandboxOptions(
