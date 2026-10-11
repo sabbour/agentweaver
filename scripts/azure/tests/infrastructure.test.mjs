@@ -14,6 +14,37 @@ test('Broker container includes the canonical embedded runtime grants before its
   assert.ok(!dockerfile.includes('COPY infra/ infra/'));
 });
 
+test('limited P1 identity setup creates only five isolated identities and exact workload federations', () => {
+  const compiled = runAz([
+    'bicep', 'build', '--file', 'infra/bicep/p1-runtime-identities.bicep', '--stdout',
+  ]);
+  const template = JSON.parse(compiled.stdout);
+  const names = ['projects-config', 'environment', 'knowledge', 'events-and-sessions', 'orchestrator'];
+  assert.deepEqual(template.variables.serviceNames, names);
+  assert.deepEqual(template.parameters.namePrefix.allowedValues, ['aw-v1-p0']);
+  const identities = template.resources.find(resource =>
+    resource.type === 'Microsoft.ManagedIdentity/userAssignedIdentities');
+  assert.equal(identities.copy.count, "[length(variables('services'))]");
+  assert.equal(template.variables.copy.find(variable => variable.name === 'services').count,
+    "[length(variables('serviceNames'))]");
+  assert.equal(identities.location, '[resourceGroup().location]');
+  const federation = template.resources.find(resource =>
+    resource.type === 'Microsoft.Resources/deployments');
+  const credentials = federation.properties.template.resources.find(resource =>
+    resource.type === 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials');
+  assert.equal(credentials.properties.subject,
+    "[format('system:serviceaccount:{0}:{1}', parameters('services')[copyIndex()].namespace, parameters('services')[copyIndex()].serviceAccountName)]");
+  assert.deepEqual(credentials.properties.audiences, ['api://AzureADTokenExchange']);
+  const resources = [...template.resources, ...federation.properties.template.resources];
+  assert.ok(resources.every(resource => [
+    'Microsoft.ManagedIdentity/userAssignedIdentities',
+    'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials',
+    'Microsoft.Resources/deployments',
+  ].includes(resource.type)));
+  assert.doesNotMatch(JSON.stringify(resources), /Microsoft\.Authorization\/roleAssignments/);
+  assert.equal(template.variables.namespace, 'agentweaver-v1-p0');
+});
+
 test('Broker container restores and copies the complete SourceControl project graph', () => {
   const dockerfile = readFileSync('services/identity/Agentweaver.Identity.Broker/Dockerfile', 'utf8');
   const restore = dockerfile.indexOf(
