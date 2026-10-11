@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Collections.Immutable;
 using System.Net.Http.Headers;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -23,32 +24,74 @@ public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifier(
         var actor = await GetActorAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var path = $"/api/projects/{Uri.EscapeDataString(checkpoint.ProjectId)}" +
-                $"/runs/{Uri.EscapeDataString(checkpoint.RunId)}/coordination/sessions/" +
-                $"{Uri.EscapeDataString(checkpoint.SessionId)}/build-test/commands/" +
-                $"{Uri.EscapeDataString(checkpoint.CheckpointId)}/{Uri.EscapeDataString(checkpoint.StepId)}" +
-                $"?workPlanId={Uri.EscapeDataString(checkpoint.WorkPlanId)}" +
-                $"&checkpointRevision={checkpoint.CheckpointRevision.ToString(CultureInfo.InvariantCulture)}" +
-                $"&decisionStateVersion={checkpoint.DecisionStateVersion.ToString(CultureInfo.InvariantCulture)}" +
-                $"&executionFence={checkpoint.ExecutionFence.ToString(CultureInfo.InvariantCulture)}" +
-                $"&acceptedSelectionHash={Uri.EscapeDataString(checkpoint.AcceptedSelectionHash)}";
-            var command = await RuntimeOwnerHttpTransport.SendAsync<SandboxBuildTestAcceptedCommand>(
-                client,
-                options.OrchestratorOwnerAddress,
-                path,
-                actor,
-                null,
-                cancellationToken).ConfigureAwait(false);
-            command = command.Validate();
+            var command = await ReadMetadataAsync(checkpoint, actor, cancellationToken).ConfigureAwait(false);
             if (command.Checkpoint != checkpoint)
                 throw new RuntimeAuthorizationException("buildtest_command_checkpoint_mismatch");
-            return command;
+            if (command.WorkspaceSource is { } source)
+            {
+                var (ownerPath, query) = CommandAddress(checkpoint);
+                var bytes = await RuntimeOwnerHttpTransport.ReadBuildTestSeedAsync(
+                    client, options.OrchestratorOwnerAddress, ownerPath + "/workspace-seed" + query,
+                    actor, source, cancellationToken).ConfigureAwait(false);
+                await VerifyCurrentAsync(command, actor, cancellationToken).ConfigureAwait(false);
+                command = command with { WorkspaceSeed = bytes.ToImmutableArray() };
+            }
+            return command.Validate();
         }
         finally
         {
             actor.Bearer.Invalidate();
         }
     }
+
+    public async Task VerifyCurrentAsync(
+        SandboxBuildTestAcceptedCommand acceptedCommand, CancellationToken cancellationToken)
+    {
+        _ = (acceptedCommand ?? throw new ArgumentNullException(nameof(acceptedCommand))).ValidateMetadata();
+        var actor = await GetActorAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await VerifyCurrentAsync(acceptedCommand, actor, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            actor.Bearer.Invalidate();
+        }
+    }
+
+    private async Task VerifyCurrentAsync(
+        SandboxBuildTestAcceptedCommand acceptedCommand, RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken)
+    {
+        var current = await ReadMetadataAsync(acceptedCommand.Checkpoint, actor, cancellationToken)
+            .ConfigureAwait(false);
+        if (current.Checkpoint != acceptedCommand.Checkpoint || current.ImmutableHash != acceptedCommand.ImmutableHash)
+            throw new RuntimeAuthorizationException("buildtest_command_checkpoint_changed");
+    }
+
+    private async Task<SandboxBuildTestAcceptedCommand> ReadMetadataAsync(
+        SandboxBuildTestCheckpointReference checkpoint, RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken)
+    {
+        if (options is null)
+            throw new RuntimeAuthorizationException("runtime_owner_context_unavailable");
+        var (path, query) = CommandAddress(checkpoint);
+        var command = (await RuntimeOwnerHttpTransport.SendAsync<SandboxBuildTestAcceptedCommand>(
+            client, options.OrchestratorOwnerAddress, path + query, actor, null, cancellationToken)
+            .ConfigureAwait(false)).ValidateMetadata();
+        return command;
+    }
+
+    private static (string Path, string Query) CommandAddress(SandboxBuildTestCheckpointReference checkpoint) =>
+        ($"/api/projects/{Uri.EscapeDataString(checkpoint.ProjectId)}" +
+            $"/runs/{Uri.EscapeDataString(checkpoint.RunId)}/coordination/sessions/" +
+            $"{Uri.EscapeDataString(checkpoint.SessionId)}/build-test/commands/" +
+            $"{Uri.EscapeDataString(checkpoint.CheckpointId)}/{Uri.EscapeDataString(checkpoint.StepId)}",
+        $"?workPlanId={Uri.EscapeDataString(checkpoint.WorkPlanId)}" +
+            $"&checkpointRevision={checkpoint.CheckpointRevision.ToString(CultureInfo.InvariantCulture)}" +
+            $"&decisionStateVersion={checkpoint.DecisionStateVersion.ToString(CultureInfo.InvariantCulture)}" +
+            $"&executionFence={checkpoint.ExecutionFence.ToString(CultureInfo.InvariantCulture)}" +
+            $"&acceptedSelectionHash={Uri.EscapeDataString(checkpoint.AcceptedSelectionHash)}");
 
     private async Task<RuntimeActorAuthorization> GetActorAsync(CancellationToken cancellationToken)
     {

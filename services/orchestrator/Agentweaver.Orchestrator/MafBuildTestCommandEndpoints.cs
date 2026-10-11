@@ -24,6 +24,51 @@ public static partial class CoordinationEndpoints
         CoordinatorDecisionOwnerStore decisions,
         PostgresMafCheckpointStore checkpoints,
         CancellationToken cancellationToken) =>
+        ReadCoordinatorBuildTestCommandCoreAsync(
+            projectId, runId, sessionId, checkpointId, stepId, workPlanId,
+            checkpointRevision, decisionStateVersion, executionFence, acceptedSelectionHash,
+            context, options, projects, decisions, checkpoints, false, cancellationToken);
+
+    private static Task<IResult> ReadCoordinatorBuildTestSeedAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        string checkpointId,
+        string stepId,
+        string workPlanId,
+        long checkpointRevision,
+        long decisionStateVersion,
+        long executionFence,
+        string acceptedSelectionHash,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        PostgresMafCheckpointStore checkpoints,
+        CancellationToken cancellationToken) =>
+        ReadCoordinatorBuildTestCommandCoreAsync(
+            projectId, runId, sessionId, checkpointId, stepId, workPlanId,
+            checkpointRevision, decisionStateVersion, executionFence, acceptedSelectionHash,
+            context, options, projects, decisions, checkpoints, true, cancellationToken);
+
+    private static Task<IResult> ReadCoordinatorBuildTestCommandCoreAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        string checkpointId,
+        string stepId,
+        string workPlanId,
+        long checkpointRevision,
+        long decisionStateVersion,
+        long executionFence,
+        string acceptedSelectionHash,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        PostgresMafCheckpointStore checkpoints,
+        bool includeSeed,
+        CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
             context.Response.Headers.CacheControl = "no-store";
@@ -39,16 +84,37 @@ public static partial class CoordinationEndpoints
             var binding = CreateExecutionCheckpointBinding(
                 identity, actor, current.State.Fence, MafExecutionCheckpointStore.CurrentSdkVersion,
                 PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot));
-            var latest = await new MafExecutionCheckpointStore(checkpoints, binding)
+            var store = new MafExecutionCheckpointStore(checkpoints, binding);
+            var latest = await store
                 .ReadLatestAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new CoordinationException(
+                    "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+            var command = ResolveBuildTestCommand(
+                latest, current, reference, selection.Authorization.TenantId);
+            if (includeSeed)
+            {
+                if (command.WorkspaceSource is null)
+                    throw new CoordinationException(
+                        "maf_execution_workspace_seed_unavailable", StatusCodes.Status404NotFound);
+                var hydrated = await store.HydrateBuildTestIntentAsync(
+                    latest.State.BuildTestIntents[reference.StepId], cancellationToken).ConfigureAwait(false);
+                command = hydrated.ToAcceptedCommand();
+            }
+            latest = await store.ReadLatestAsync(cancellationToken).ConfigureAwait(false)
                 ?? throw new CoordinationException(
                     "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             current = await decisions.ReadCurrentAsync(
                 actor, identity, selection, cancellationToken).ConfigureAwait(false);
-            return Results.Ok(ResolveBuildTestCommand(
-                latest, current, reference, selection.Authorization.TenantId));
+            var currentCommand = ResolveBuildTestCommand(
+                latest, current, reference, selection.Authorization.TenantId);
+            if (currentCommand.ImmutableHash != command.ImmutableHash)
+                throw new CoordinationException(
+                    "maf_execution_build_test_checkpoint_stale", StatusCodes.Status409Conflict);
+            if (includeSeed)
+                return Results.Bytes(command.WorkspaceSeed!.Value.ToArray(), "application/octet-stream");
+            return Results.Ok(command);
         }, cancellationToken);
 
     internal static SandboxBuildTestAcceptedCommand ResolveBuildTestCommand(
@@ -85,6 +151,6 @@ public static partial class CoordinationEndpoints
                 plan.IsolationProviderBinding, intent.ExpectedBinding, reference.RunId))
             throw new CoordinationException(
                 "maf_execution_build_test_binding_stale", StatusCodes.Status409Conflict);
-        return intent.ToAcceptedCommand();
+        return intent.ToAcceptedCommand(requireSeed: false);
     }
 }

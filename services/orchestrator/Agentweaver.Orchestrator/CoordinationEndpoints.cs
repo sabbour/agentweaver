@@ -44,6 +44,9 @@ public static partial class CoordinationEndpoints
         coordination.MapGet(
             "/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}",
             ReadCoordinatorBuildTestCommandAsync);
+        coordination.MapGet(
+            "/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}/workspace-seed",
+            ReadCoordinatorBuildTestSeedAsync);
         coordination.MapGet("/sessions/{sessionId}/tree", ReadSessionTreeAsync);
         coordination.MapGet("/sessions/{sessionId}/status", ReadSessionStatusAsync);
         coordination.MapPost("/sessions/{sessionId}/turn-failure", ReportRunFailureAsync);

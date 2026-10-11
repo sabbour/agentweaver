@@ -64,6 +64,7 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
             acceptedCommand,
             cancellationToken).ConfigureAwait(false);
         var initialOperation = CreateInitialOperation(request, acceptedCommand, timeProvider.GetUtcNow());
+        await commandVerifier.VerifyCurrentAsync(acceptedCommand, cancellationToken).ConfigureAwait(false);
         var reservation = await commandStore.ReserveAsync(
             request,
             acceptedCommand,
@@ -147,6 +148,7 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
             throw new EnvironmentLifecycleException(
                 "buildtest_request_conflict",
                 "The reconciliation request differs from its persisted immutable BuildTest intent.");
+        await commandVerifier.VerifyCurrentAsync(acceptedCommand, cancellationToken).ConfigureAwait(false);
         if (IsTerminal(state.Operation.Status))
             return new(state.Operation, true);
 
@@ -1184,6 +1186,7 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
                 request,
                 acceptedCommand,
                 cancellationToken).ConfigureAwait(false);
+            await commandVerifier.VerifyCurrentAsync(acceptedCommand, cancellationToken).ConfigureAwait(false);
             if (!SameJson(current.ExpectedBinding, state.Operation.ExpectedBinding))
                 return await MarkStaleAsync(state, "sandbox_binding_stale", cancellationToken)
                     .ConfigureAwait(false);

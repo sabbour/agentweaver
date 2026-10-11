@@ -287,6 +287,21 @@ An identical append must match both the JSON metadata and the stored bytes.
 The parent foreign key prevents deletion of an origin that has later checkpoints.
 The seed is source input, not SDK cache data or a produced-output record.
 
+Core's accepted-command route returns metadata only, including the bound seed digest and length.
+The separate `/workspace-seed` route reads the original binary field through the existing checkpoint store.
+It uses the same full checkpoint reference and current actor authorization.
+Core rechecks the accepted selection, owner decision, execution fence, and command after the read.
+Both routes return `Cache-Control: no-store`.
+Version 1 commands have no seed route result.
+
+Environment fetches the raw seed only from its fixed Core owner, not a caller-supplied address.
+The response must be `application/octet-stream`, use `no-store`, and match the accepted length and SHA-256 digest.
+Redirects, short or extra bytes, denied reads, and changed command metadata are errors.
+The client deadline covers both response headers and the complete bounded body.
+Environment rechecks Core metadata after the transfer and before reserving the command.
+Later current-command checks do not fetch the seed again.
+Version 2 still requires the actual validated bytes before execution; metadata alone is not executable input.
+
 The Kubernetes client adds a bounded native WebSocket exchange for fixed preparation and collector containers.
 It retains the existing service-account handler and trusted server certificate.
 The helper must identify the exact Pod UID and request fingerprint before the client sends seed bytes.

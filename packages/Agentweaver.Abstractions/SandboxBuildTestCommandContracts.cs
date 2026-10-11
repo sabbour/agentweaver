@@ -987,6 +987,10 @@ public interface ISandboxBuildTestAcceptedCommandVerifier
     Task<SandboxBuildTestAcceptedCommand> ResolveAsync(
         SandboxBuildTestCheckpointReference checkpoint,
         CancellationToken cancellationToken);
+
+    Task VerifyCurrentAsync(
+        SandboxBuildTestAcceptedCommand acceptedCommand,
+        CancellationToken cancellationToken);
 }
 
 public interface ISandboxBuildTestCommandProvider
