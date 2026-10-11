@@ -100,6 +100,34 @@ test('packages-only preparation leaves service images out while retaining the fu
   assert.equal(provenance.manifestSha256, createHash('sha256').update(JSON.stringify(manifest)).digest('hex'));
 });
 
+test('platform-only preparation excludes only the acceptance Probe', t => {
+  const dir = initRepo(t);
+  const manifest = manifestBase();
+  manifest.components.push({
+    id: 'Agentweaver.FoundationProbe', kind: 'service', version: '0.0.1',
+    project: 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj',
+  });
+  const calls = [];
+  const provenance = packComponents(manifest, {
+    root: dir, dotnet: fakeDotnet(calls), outDir: path.join(dir, 'artifacts', 'release', 'platform'),
+    platformOnly: true,
+  });
+
+  assert.deepEqual(provenance.components.map(({ id }) => id), ['Pkg.A', 'Pkg.B']);
+  assert.equal(provenance.manifestSha256, createHash('sha256').update(JSON.stringify(manifest)).digest('hex'));
+  assert.ok(calls.every(args => !args[1].includes('FoundationProbe')));
+});
+
+test('platform-only preparation rejects conflicting selections before any build or Git access', () => {
+  for (const selection of [{ packagesOnly: true }, { foundationProbeOnly: true }]) {
+    assert.throws(() => packComponents(manifestBase(), {
+      outDir: 'unused', platformOnly: true, ...selection,
+      status() { assert.fail('conflicting selection must not read Git status'); },
+      dotnet() { assert.fail('conflicting selection must not build'); },
+    }), /platform-only preparation cannot combine/);
+  }
+});
+
 test('Probe SDK image preparation embeds independently derived image source metadata in build and publish', t => {
   const dir = initRepo(t);
   const project = 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj';

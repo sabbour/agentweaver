@@ -12,6 +12,11 @@ on:
         required: true
         default: false
         type: boolean
+      platform_only:
+        description: Prepare or publish product components without the acceptance-only Foundation Probe
+        required: true
+        default: false
+        type: boolean
       foundation_probe_sampler_replacement:
         description: Select only the frozen Probe path (false diagnoses; true consumes the separately approved recovery attempt)
         required: true
@@ -46,8 +51,13 @@ jobs:
           EXPECTED_SOURCE: ${{ inputs.expected_source }}
           PROBE_SAMPLER_REPLACEMENT: ${{ inputs.foundation_probe_sampler_replacement }}
           EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
+          PLATFORM_ONLY: ${{ inputs.platform_only }}
         run: |
           test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Dispatch source mismatch"; exit 1; }
+          if [ "$PLATFORM_ONLY" = "true" ] && [ "$PROBE_SAMPLER_REPLACEMENT" = "true" ]; then
+            echo "::error::Platform publication cannot select a Probe replacement" >&2
+            exit 1
+          fi
           if [ "$PROBE_SAMPLER_REPLACEMENT" = "true" ]; then
             test "$EXPECTED_PROBE_DIGEST" = "sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969" || { echo "::error::Probe current digest mismatch"; exit 1; }
           else
@@ -68,9 +78,11 @@ jobs:
         if: ${{ github.ref == 'refs/heads/v1' }}
         env:
           PROBE_SAMPLER_REPLACEMENT: ${{ inputs.foundation_probe_sampler_replacement }}
+          PLATFORM_ONLY: ${{ inputs.platform_only }}
         run: |
           args=()
           if [ "$PROBE_SAMPLER_REPLACEMENT" = "true" ]; then args+=(--foundation-probe-only); fi
+          if [ "$PLATFORM_ONLY" = "true" ]; then args+=(--platform-only); fi
           npm run release:pack -- "${args[@]}"
       - uses: actions/upload-artifact@v4
         if: ${{ github.ref == 'refs/heads/v1' && !cancelled() }}
@@ -98,7 +110,9 @@ jobs:
         env:
           EXPECTED_SOURCE: ${{ inputs.expected_source }}
           EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
+          PLATFORM_ONLY: ${{ inputs.platform_only }}
         run: |
+          test "$PLATFORM_ONLY" != "true" || { echo "::error::Platform publication cannot select a Probe diagnostic"; exit 1; }
           test "$GITHUB_REF" = "refs/heads/v1" || { echo "::error::Diagnostic requires v1"; exit 1; }
           test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Diagnostic source mismatch"; exit 1; }
           test "$EXPECTED_PROBE_DIGEST" = "sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969" || { echo "::error::Diagnostic target mismatch"; exit 1; }
@@ -152,7 +166,11 @@ jobs:
           RELEASE_REGISTRY_USER: ${{ secrets.RELEASE_REGISTRY_USER }}
           RELEASE_REGISTRY_PASSWORD: ${{ secrets.RELEASE_REGISTRY_PASSWORD }}
           DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
-        run: node scripts/release/publish.mjs releases/foundation.json artifacts/release/pack "$GITHUB_SHA" --confirm-publication
+          PLATFORM_ONLY: ${{ inputs.platform_only }}
+        run: |
+          args=()
+          if [ "$PLATFORM_ONLY" = "true" ]; then args+=(--platform-only); fi
+          node scripts/release/publish.mjs releases/foundation.json artifacts/release/pack "$GITHUB_SHA" --confirm-publication "${args[@]}"
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
@@ -180,7 +198,9 @@ jobs:
         env:
           EXPECTED_SOURCE: ${{ inputs.expected_source }}
           EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
+          PLATFORM_ONLY: ${{ inputs.platform_only }}
         run: |
+          test "$PLATFORM_ONLY" != "true" || { echo "::error::Platform publication cannot select a Probe replacement"; exit 1; }
           test "$GITHUB_REF" = "refs/heads/v1" || { echo "::error::Recovery requires v1"; exit 1; }
           test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Recovery source mismatch"; exit 1; }
           test "$GITHUB_RUN_ATTEMPT" = "1" || { echo "::error::Recovery cannot rerun"; exit 1; }

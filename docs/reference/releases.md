@@ -18,7 +18,7 @@
 | `Agentweaver.EventsAndSessions` | Service | `0.0.0` |
 | `Agentweaver.Gateway` | Service | `0.1.0` |
 | `Agentweaver.Mcp` | Service | `0.1.0` |
-| `Agentweaver.Environment` | Library | `0.0.0` |
+| `Agentweaver.Environment` | Service | `0.0.0` |
 | `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `0.0.0` |
 | `Agentweaver.Knowledge` | Service | `0.0.0` |
 
@@ -32,6 +32,8 @@ documentation do not claim deployment or live acceptance.
 The first-party MCP host is a source-only service candidate at `0.1.0`; it validates
 Broker access tokens and delegates to the Gateway, without claiming deployment or
 live acceptance.
+Environment uses its existing executable host and SDK container configuration.
+Its release artifact is a service image, not a NuGet library.
 The Orchestrator Core compatibility entries include both Abstractions and Providers,
 matching its direct project references.
 The runtime library pins its native SDK dependency and references Abstractions
@@ -59,8 +61,32 @@ The base-aware form checks changeset coverage for changed components. CI supplie
 
 `npm run release:pack` builds and packs the manifest components. It writes local package and image artifacts. It does not push them to a registry or package feed.
 
+Use `npm run release:pack -- --platform-only` to prepare every product component
+without the acceptance-only Foundation Probe.
+Use `--platform-only` for the matching publication command.
+The full manifest hash remains in the preparation receipt.
+The publisher rejects a receipt prepared with another component selection.
+This selection cannot combine with `--packages-only` or `--foundation-probe-only`.
+
+```mermaid
+flowchart LR
+  Manifest["Draft component manifest"] --> Selection["Choose component selection"]
+  Selection --> Product["platform-only: product packages and service images"]
+  Selection --> Full["Default: all components, including the acceptance Probe"]
+  Product --> Pack["Prepare exact-source artifacts and hashes"]
+  Full --> Pack
+  Pack --> Publish["Approved publication with the same selection"]
+  Publish --> Evidence["Actual registry digests"]
+  Evidence --> Deploy["Separately approved deployment and live checks"]
+```
+
 ## Publication boundary
 
 The manual publication workflow requires an explicit publish choice and environment approval. It publishes the prepared artifacts only.
 
-The source has no platform release composition or deployment gate. Release preparation does not prove Azure acceptance.
+The `platform_only` workflow input defaults to `false`.
+It selects product preparation and matching ordinary publication.
+Both frozen Probe jobs reject a conflicting platform selection before downloading artifacts.
+The protected `v1-publication` environment remains required for ordinary publication.
+
+The source contains a prepared platform release composition, not an actual deployment or live acceptance gate. Release preparation does not prove Azure acceptance.

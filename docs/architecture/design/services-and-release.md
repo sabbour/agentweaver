@@ -86,7 +86,7 @@ flowchart LR
         Identity["Identity"]
         Config["Projects & Config (project settings and run selections)"]
         Orch["Orchestrator"]
-        Env["Environment manager"]
+        Env["Environment service"]
         Source["Source Control & Merge"]
         Knowledge["Knowledge"]
         Events["Events & Sessions"]
@@ -511,6 +511,11 @@ Preparation uses checked-in .NET lock files and immutable container base-image d
 Source-bound provenance describes prepared packages and local image archives.
 A separate manual workflow can publish those artifacts and record registry digests.
 Partial-publication receipts do not prove completed publication.
+The Environment manifest entry selects its executable service image rather than a library package.
+The default-off `platform_only` workflow input excludes only the acceptance Probe.
+Preparation and publication must use the same selection and full manifest hash.
+It cannot combine with the frozen Probe diagnostic or replacement paths.
+The ordinary protected publication environment remains required.
 The separately approved Probe recovery consumes one new permanent attempt and reuses the original frozen image.
 Its image-source SHA remains separate from the admitted publisher helper SHA.
 Historical claims and receipts remain unchanged. A partial recovery cannot authorize another push.

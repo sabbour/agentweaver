@@ -371,6 +371,46 @@ test('packages-only publication rejects a full composition pack before any exter
   assert.deepEqual(f.externalCalls, []);
 });
 
+test('platform-only publication includes product packages and images but excludes the acceptance Probe', t => {
+  const f = fixture(t, { foundationProbe: true, web: true });
+  const prepared = f.prepare({ platformOnly: true });
+  assert.deepEqual(prepared.components.map(({ id }) => id), ['Pkg', 'Svc', 'Agentweaver.Web']);
+  assert.ok(f.calls.every(args => !args[1].includes('FoundationProbe')));
+
+  const receipt = f.publish({ platformOnly: true });
+  assert.equal(receipt.status, 'published');
+  assert.deepEqual(receipt.planned.map(({ id }) => id), ['Pkg', 'Svc', 'Agentweaver.Web']);
+  assert.deepEqual(receipt.published.map(({ id }) => id), ['Pkg', 'Svc', 'Agentweaver.Web']);
+  assert.ok(!f.externalCalls.some(({ args }) => args.some(arg => arg.includes('foundation-probe'))));
+});
+
+test('platform-only publication rejects full preparation and conflicting selections before external effects', t => {
+  const f = fixture(t, { foundationProbe: true });
+  f.prepare();
+  assert.throws(() => f.publish({ platformOnly: true }),
+    /provenance component selection does not match the platform-only manifest selection/);
+  for (const selection of [{ packagesOnly: true }, { foundationProbeOnly: true }]) {
+    assert.throws(() => f.publish({ platformOnly: true, ...selection }),
+      /platform-only publication cannot combine/);
+  }
+  assert.deepEqual(f.remoteCalls, []);
+  assert.deepEqual(f.externalCalls, []);
+});
+
+test('platform selection defaults off and blocks both frozen Probe routes before artifact download', () => {
+  const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8');
+  assert.match(workflow, /platform_only:[\s\S]*?default: false/);
+  assert.equal((workflow.match(/args\+=\(--platform-only\); fi/g) ?? []).length, 2);
+  for (const name of ['diagnose-probe-sampler', 'publish-probe-sampler']) {
+    const start = workflow.indexOf(`\n  ${name}:`);
+    const end = workflow.indexOf('\n  publish:', start);
+    const job = workflow.slice(start, end === -1 ? undefined : end);
+    const guard = job.indexOf('test "$PLATFORM_ONLY" != "true"');
+    assert.ok(guard >= 0 && guard < job.indexOf('uses: actions/download-artifact@v4'));
+    assert.match(job, /PLATFORM_ONLY: \$\{\{ inputs\.platform_only \}\}/);
+  }
+});
+
 test('Probe-only preparation and publication preserve the existing hyphenated image and exclude other components', t => {
   const f = fixture(t, { foundationProbe: true });
   const prepared = f.prepare({ foundationProbeOnly: true });

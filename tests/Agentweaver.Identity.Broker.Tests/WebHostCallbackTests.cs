@@ -13,6 +13,39 @@ namespace Agentweaver.Identity.Broker.Tests;
 public sealed class WebHostCallbackTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadinessRequiresTheBuiltAppShellWhileLivenessDoesNot(bool appShellExists)
+    {
+        var webRoot = Path.Combine(
+            FindRepositoryRoot(), "artifacts", "web-health-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(webRoot);
+        try
+        {
+            if (appShellExists)
+                await File.WriteAllTextAsync(Path.Combine(webRoot, "index.html"), "<html></html>");
+
+            using var factory = new WebApplicationFactory<WebHost::Program>()
+                .WithWebHostBuilder(builder => builder.UseWebRoot(webRoot));
+            using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+            {
+                BaseAddress = new Uri("https://web.test")
+            });
+
+            using var live = await client.GetAsync("/health/live");
+            Assert.Equal(HttpStatusCode.OK, live.StatusCode);
+            using var ready = await client.GetAsync("/health/ready");
+            Assert.Equal(
+                appShellExists ? HttpStatusCode.OK : HttpStatusCode.ServiceUnavailable,
+                ready.StatusCode);
+        }
+        finally
+        {
+            Directory.Delete(webRoot, recursive: true);
+        }
+    }
+
+    [Theory]
     [InlineData("https://web.test")]
     [InlineData("https://attacker.test")]
     [InlineData("null")]

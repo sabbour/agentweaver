@@ -27,6 +27,19 @@ Use `--foundation-probe-only` with both preparation and publication to select
 only this image. This option cannot combine with `--packages-only`.
 Selection does not change the full manifest hash or permit artifact substitution.
 It does not rebuild or publish the Broker image or eight NuGet packages.
+
+Use `--platform-only` with both preparation and publication to exclude the
+acceptance-only Probe while retaining every product package and service image.
+This option cannot combine with `--packages-only` or `--foundation-probe-only`.
+Publication requires the same selection as the preparation receipt.
+The workflow input `platform_only` defaults to `false`.
+With this input enabled, both frozen Probe jobs reject the selection before
+they download an artifact or run the diagnostic or recovery helper.
+Ordinary product publication still requires the protected `v1-publication` environment.
+`Agentweaver.Environment` is an executable service, not a library package.
+Preparation uses its existing SDK container configuration.
+These selections do not supply deployment configuration or permission to publish.
+
 The user-confirmed initial Probe replacement is one exception to immutable tags.
 Only `ghcr.io/sabbour/agentweaver-foundation-probe:0.0.0` can replace its exact
 approved old index once. The expected old digest is

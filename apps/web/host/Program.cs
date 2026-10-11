@@ -91,6 +91,10 @@ app.MapGet("/auth/callback", async context =>
     await context.Response.SendFileAsync(indexPath, context.RequestAborted);
 });
 
+app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
+app.MapGet("/health/ready", () => File.Exists(indexPath)
+    ? Results.Ok(new { status = "ready" })
+    : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 app.MapFallbackToFile("index.html");
 app.Run();
 
