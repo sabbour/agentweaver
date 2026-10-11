@@ -1471,7 +1471,8 @@ public sealed class EnvironmentEgressManagerTests
             bool effectMayHaveApplied,
             ProviderResourceRef? providerResource,
             bool effectVerified,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken,
+            Func<CancellationToken, Task>? beforeCommitCheck = null) =>
             throw new NotSupportedException();
 
         public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeDetachReconciledAsync(

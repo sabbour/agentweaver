@@ -211,6 +211,48 @@ public static class EnvironmentEndpoints
                 }
             }).RequireAuthorization();
 
+        endpoints.MapPost("/internal/runtime/suspend/resolve", async (
+            RuntimeHostSuspendRequest request,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            [FromServices] TimeProvider timeProvider,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
+            if (!authentication.Succeeded || authentication.Properties?.ExpiresUtc is not { } expiresAt ||
+                expiresAt <= timeProvider.GetUtcNow())
+                return Results.Unauthorized();
+            var bearer = new SecretCredential(caller!.BearerToken, expiresAt, timeProvider);
+            try
+            {
+                return await ExecuteWorkspaceVolumeApiAsync(async () =>
+                    Results.Ok(await manager.ResolveSuspendAsync(
+                        caller, request, new RuntimeActorAuthorization(bearer, caller.TenantSelector),
+                        cancellationToken).ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                bearer.Invalidate();
+            }
+        }).RequireAuthorization();
+
+        endpoints.MapPost("/internal/runtime/suspend/release-placement", async (
+            RuntimeSuspendPlacementReleaseRequest request,
+            HttpContext context,
+            EnvironmentSandboxManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () => Results.Ok(
+                await manager.ReleaseSuspendPlacementAsync(caller!, request, cancellationToken)
+                    .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
+        }).RequireAuthorization();
+
         var workspaceVolumes = endpoints.MapGroup(
                 "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes")
             .RequireAuthorization();
@@ -274,6 +316,38 @@ public static class EnvironmentEndpoints
             static (manager, caller, projectId, runId, environmentId, volumeId, request, token) =>
                 manager.ReleaseAsync(
                     caller, projectId, runId, environmentId, volumeId, request, token));
+        workspaceVolumes.MapPost("/{volumeId}/flush", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            string volumeId,
+            WorkspaceVolumeApiFlushRequest request,
+            HttpContext context,
+            EnvironmentWorkspaceVolumeManager manager,
+            [FromServices] TimeProvider timeProvider,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
+            if (!authentication.Succeeded || authentication.Properties?.ExpiresUtc is not { } expiresAt ||
+                expiresAt <= timeProvider.GetUtcNow())
+                return Results.Unauthorized();
+            var bearer = new SecretCredential(caller!.BearerToken, expiresAt, timeProvider);
+            try
+            {
+                return await ExecuteWorkspaceVolumeApiAsync(async () =>
+                    ToWorkspaceVolumeTransitionResult(await manager.FlushAsync(
+                        caller, projectId, runId, environmentId, volumeId, request,
+                        new RuntimeActorAuthorization(bearer, caller.TenantSelector), cancellationToken)
+                        .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                bearer.Invalidate();
+            }
+        });
         workspaceVolumes.MapPost("/cleanup/retry", async (
             string projectId,
             string runId,
@@ -606,6 +680,12 @@ public static class EnvironmentEndpoints
         catch (ProjectsConfigApiException exception)
         {
             return ToProjectAuthorizationResult(exception);
+        }
+        catch (RuntimeAuthorizationException exception)
+        {
+            return Results.Json(new { code = exception.Code },
+                statusCode: exception.Code == "runtime_owner_denied"
+                    ? StatusCodes.Status403Forbidden : StatusCodes.Status503ServiceUnavailable);
         }
         catch (EnvironmentLifecycleException exception)
         {

@@ -6,7 +6,7 @@ namespace Agentweaver.Environment;
 public sealed record EnvironmentRuntimeBootstrapDeliveryOptions(
     Uri OrchestratorOwnerAddress, Uri BrokerOwnerAddress);
 
-public sealed class EnvironmentRuntimeBootstrapDelivery(
+public sealed partial class EnvironmentRuntimeBootstrapDelivery(
     HttpClient client,
     EnvironmentRuntimeBootstrapDeliveryOptions options,
     EnvironmentRuntimePlacementReader placements,

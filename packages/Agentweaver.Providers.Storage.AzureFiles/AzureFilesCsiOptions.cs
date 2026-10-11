@@ -62,7 +62,8 @@ public static class AzureFilesCsiProviderMetadata
             WorkspaceVolumeCapabilities.ReadWriteOnce,
             WorkspaceVolumeCapabilities.ReadWriteMany,
             WorkspaceVolumeCapabilities.ReadOnlyMany,
-            WorkspaceVolumeCapabilities.ReadOnlyMount);
+            WorkspaceVolumeCapabilities.ReadOnlyMount,
+            WorkspaceVolumeCapabilities.DurableFlush);
 
     public static ProviderRegistration CreateRegistration(AzureFilesCsiOptions options, bool enabled = true)
     {

@@ -11,6 +11,107 @@ namespace Agentweaver.Providers.Storage.AzureFiles.Tests;
 public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
 {
     [Fact]
+    public async Task FlushReturnsOnlyTheExactTrustedProducerReceiptAfterCheckingThePinnedClaimTwice()
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client);
+        var spec = Spec();
+        var resource = await provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(spec, 1, "provision"));
+        var request = FlushRequest(spec, resource);
+        var beforeReads = client.GetClaimCalls;
+        var produced = 0;
+        var receipt = await provider.FlushAsync(request, (exact, _) =>
+        {
+            produced++;
+            Assert.Same(request, exact);
+            return Task.FromResult(FlushReceipt(exact));
+        });
+        Assert.Equal(FlushReceipt(request), receipt);
+        Assert.Equal(1, produced);
+        Assert.Equal(beforeReads + 2, client.GetClaimCalls);
+        Assert.Empty(client.DeletedClaims);
+    }
+
+    [Theory]
+    [InlineData("uid")]
+    [InlineData("access")]
+    [InlineData("capacity")]
+    [InlineData("storage-class")]
+    public async Task ChangedPinnedClaimPreventsTheTrustedProducerFromRunning(string changed)
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client);
+        var spec = Spec();
+        var resource = await provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(spec, 1, "provision"));
+        var key = client.Claims.Keys.Single();
+        var claim = client.Claims[key];
+        client.Claims[key] = changed switch
+        {
+            "uid" => claim with { Uid = "foreign-claim" },
+            "access" => claim with { AccessModes = [WorkspaceVolumeAccessMode.ReadOnlyMany] },
+            "capacity" => claim with { CapacityGiB = claim.CapacityGiB + 1 },
+            _ => claim with { StorageClassName = "foreign-class" }
+        };
+        var produced = false;
+        var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
+            provider.FlushAsync(FlushRequest(spec, resource), (request, _) =>
+            {
+                produced = true;
+                return Task.FromResult(FlushReceipt(request));
+            }));
+        Assert.False(produced);
+        Assert.False(exception.EffectMayHaveApplied);
+    }
+
+    [Fact]
+    public async Task ClaimChangeAfterMountedFlushIsUncertainAndCannotReturnASuccessReceipt()
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client);
+        var spec = Spec();
+        var resource = await provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(spec, 1, "provision"));
+        var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
+            provider.FlushAsync(FlushRequest(spec, resource), (request, _) =>
+            {
+                var key = client.Claims.Keys.Single();
+                client.Claims[key] = client.Claims[key] with { Uid = "replacement" };
+                return Task.FromResult(FlushReceipt(request));
+            }));
+        Assert.True(exception.EffectMayHaveApplied);
+    }
+
+    [Fact]
+    public async Task FlushRejectsSharedVolumesWithoutCallingTheProducer()
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client);
+        var spec = Spec(bindingMode: WorkspaceVolumeBindingMode.Shared);
+        var resource = await provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(spec, 1, "provision"));
+        var produced = false;
+        var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
+            provider.FlushAsync(FlushRequest(spec, resource), (request, _) =>
+            {
+                produced = true;
+                return Task.FromResult(FlushReceipt(request));
+            }));
+        Assert.Equal("durable_flush_unsupported", exception.Code);
+        Assert.False(exception.EffectMayHaveApplied);
+        Assert.False(produced);
+    }
+
+    [Fact]
+    public async Task FlushRejectsAProducerReceiptForAnotherDataGeneration()
+    {
+        var client = new FakeAzureFilesCsiClient();
+        var provider = CreateProvider(client);
+        var spec = Spec();
+        var resource = await provider.ProvisionAsync(new WorkspaceVolumeProvisionRequest(spec, 1, "provision"));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            provider.FlushAsync(FlushRequest(spec, resource), (request, _) =>
+                Task.FromResult(FlushReceipt(request) with { ExpectedDataGeneration = 8, DataGeneration = 9 })));
+    }
+
+    [Fact]
     public async Task ProvisionRetriesByStableClaimAndReturnsTheActualResourceGeneration()
     {
         var client = new FakeAzureFilesCsiClient();
@@ -30,7 +131,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             Assert.Single(first.NegotiatedCapabilities,
                 capability => capability == WorkspaceVolumeCapabilities.ReadWriteMany));
         Assert.DoesNotContain(WorkspaceVolumeCapabilities.ExistingVolumeAttach, first.NegotiatedCapabilities);
-        Assert.DoesNotContain(WorkspaceVolumeCapabilities.DurableFlush, first.NegotiatedCapabilities);
+        Assert.Contains(WorkspaceVolumeCapabilities.DurableFlush, first.NegotiatedCapabilities);
         var registration = AzureFilesCsiProviderMetadata.CreateRegistration(Options);
         Assert.Equal(AzureFilesCsiProviderMetadata.ProviderId, registration.Descriptor.Id);
         Assert.Equal(ProviderSeam.Storage, registration.Descriptor.Seam);
@@ -38,7 +139,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         Assert.DoesNotContain(
             WorkspaceVolumeCapabilities.ExistingVolumeAttach,
             registration.Descriptor.AdvertisedCapabilities);
-        Assert.DoesNotContain(
+        Assert.Contains(
             WorkspaceVolumeCapabilities.DurableFlush,
             registration.Descriptor.AdvertisedCapabilities);
         Assert.DoesNotContain(
@@ -739,6 +840,17 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             spec.OwnerDeletionPolicy,
             resource.ProviderBinding,
             idempotencyKey);
+
+    private static WorkspaceVolumeFlushRequest FlushRequest(
+        WorkspaceVolumeSpec spec, WorkspaceVolumeResource resource) =>
+        new(spec, resource.Resource.Generation,
+            new(new("tenant-1", spec.ProjectId, "run-1", "environment-1"), 1),
+            resource.Resource, 7, "flush-1") { ProviderBinding = resource.ProviderBinding };
+
+    private static WorkspaceVolumeFlushReceipt FlushReceipt(WorkspaceVolumeFlushRequest request) =>
+        new(1, request.EnvironmentFence, new(request.Spec.ProjectId, request.Spec.VolumeId, request.ResourceGeneration),
+            request.Resource, request.ExpectedDataGeneration, request.ExpectedDataGeneration + 1,
+            request.IdempotencyKey, new string('a', 64), null);
 
     private static string ClaimJson(AzureFilesClaimRequest request, string uid, string phase) =>
         JsonSerializer.Serialize(new

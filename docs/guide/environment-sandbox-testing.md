@@ -1,5 +1,27 @@
 # Environment Sandbox testing
 
+Run the suspend flush source checks without PostgreSQL or native mounted storage:
+
+```powershell
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --filter "FullyQualifiedName~WorkspaceVolumeFlushTests|FullyQualifiedName~RuntimeWorkspaceSuspendHttpClientTests|FullyQualifiedName~RuntimeSuspendPlacementReleaseTests|FullyQualifiedName~EnvironmentWorkspaceVolumeApiTests" `
+  --no-restore --verbosity quiet
+dotnet test tests\Agentweaver.Providers.Storage.AzureFiles.Tests\Agentweaver.Providers.Storage.AzureFiles.Tests.csproj `
+  --no-restore --verbosity quiet
+```
+
+These cases check exact next-generation receipts, saved replay, uncertain retry, authority loss, invalid evidence, and authenticated routes.
+The shared client rejects caller-supplied Workspace evidence, changed owner responses, missing no-store, and incomplete flush results.
+Release cases check exact post-flush detach and replay without changing the original attachment.
+They reject stale placement, provider fences, changed counters, missing evidence, and incomplete release responses.
+The Core authority client rejects denied or changed responses and missing, expired, or different actor credentials.
+Fake Kubernetes checks reject changed PVC UIDs, access modes, capacity, and StorageClass.
+The migration consistency test compares metadata only; it does not connect to PostgreSQL.
+The corresponding PostgreSQL case checks saved evidence, replay, and conflict rejection.
+Workspace detach and Sandbox lease cases reject authority lost immediately before commit without advancing their saved state.
+Compilation alone does not prove that case ran.
+These checks do not prove native cache capture, mounted flush durability, placement retirement, or a complete suspend/resume flow.
+
 Run the focused Sandbox source tests from the repository root:
 
 ```powershell

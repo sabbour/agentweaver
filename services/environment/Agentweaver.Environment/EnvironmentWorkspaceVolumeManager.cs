@@ -1,4 +1,5 @@
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
@@ -6,31 +7,80 @@ public sealed record CreateWorkspaceVolumeApiRequest(
     WorkspaceVolumeSpec Specification,
     string IdempotencyKey);
 
-public sealed record WorkspaceVolumeApiTransitionRequest(
-    long ExpectedTransitionRevision,
-    long ExpectedResourceGeneration,
-    long ExpectedDataGeneration,
-    string IdempotencyKey,
-    long? NextDataGeneration = null)
-{
-    public WorkspaceVolumeTransitionRequest ToTransition(
-        string volumeId,
-        WorkspaceVolumeTransitionKind operation) =>
-        new WorkspaceVolumeTransitionRequest(
-            volumeId,
-            operation,
-            ExpectedTransitionRevision,
-            ExpectedResourceGeneration,
-            ExpectedDataGeneration,
-            NextDataGeneration,
-            IdempotencyKey).ValidateFor(operation);
-}
-
 public sealed class EnvironmentWorkspaceVolumeManager(
     IProjectsConfigClient projects,
     IEnvironmentLifecycleStore lifecycleStore,
-    WorkspaceVolumeService workspaceVolumes)
+    WorkspaceVolumeService workspaceVolumes,
+    EnvironmentRuntimeBootstrapDelivery? runtimeDelivery = null)
 {
+    public async Task<WorkspaceVolumeApiFlushRequest> ResolveSuspendAsync(
+        CurrentCallerRequest caller,
+        RuntimeHostSuspendRequest request,
+        RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Proof);
+        ArgumentNullException.ThrowIfNull(request.Proof.Registration);
+        if (request.WorkspaceFlush is not null)
+            throw new RuntimeAuthorizationException("runtime_suspend_resolve_evidence_not_allowed");
+        var delivery = runtimeDelivery ??
+            throw new RuntimeAuthorizationException("workspace_flush_host_unavailable");
+        var binding = request.Proof.Registration.Binding;
+        var (fence, checkAuthorization, _) = await AuthorizeMutationWithProjectCheckAsync(
+            caller, binding.ProjectId, binding.RunId, binding.EnvironmentId, cancellationToken)
+            .ConfigureAwait(false);
+        var context = await delivery.ReadSuspendWorkspaceAsync(request, actor, cancellationToken)
+            .ConfigureAwait(false);
+        var snapshot = await workspaceVolumes.InspectAsync(
+            fence, context.Workspace.Volume.VolumeId, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_suspend_workspace_unavailable");
+        var flush = workspaceVolumes.ResolveFlushRequest(
+            snapshot, context, $"suspend-{request.OperationId:D}-{request.ManifestId:D}");
+        var resolved = new WorkspaceVolumeApiFlushRequest(
+            new WorkspaceVolumeApiTransitionRequest(
+                snapshot.TransitionRevision, snapshot.ResourceGeneration,
+                snapshot.DataGeneration, flush.IdempotencyKey, checked(snapshot.DataGeneration + 1)),
+            request with { WorkspaceFlush = flush }).Validate();
+        await delivery.RequireCurrentSuspendAsync(resolved.Suspend, actor, cancellationToken)
+            .ConfigureAwait(false);
+        await checkAuthorization(cancellationToken).ConfigureAwait(false);
+        return resolved;
+    }
+
+    public async Task<WorkspaceVolumeLifecycleResult> FlushAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        string volumeId,
+        WorkspaceVolumeApiFlushRequest request,
+        RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Transition);
+        ArgumentNullException.ThrowIfNull(request.Suspend);
+        request.Validate();
+        var delivery = runtimeDelivery ??
+            throw new RuntimeAuthorizationException("workspace_flush_host_unavailable");
+        var (fence, checkAuthorization, checkProjectAuthorization) =
+            await AuthorizeMutationWithProjectCheckAsync(
+                caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+        return await workspaceVolumes.FlushAsync(
+            fence,
+            request.Transition.ToTransition(volumeId, WorkspaceVolumeTransitionKind.Flush),
+            (workspace, token) => delivery.SuspendWorkspaceAsync(request.Suspend, workspace, actor, token),
+            cancellationToken,
+            checkAuthorization,
+            async token =>
+            {
+                await checkProjectAuthorization(token).ConfigureAwait(false);
+                await delivery.RequireCurrentSuspendAsync(request.Suspend, actor, token).ConfigureAwait(false);
+                await checkProjectAuthorization(token).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+    }
+
     public async Task<EnvironmentWorkspaceVolumeSnapshot> CreateAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -230,6 +280,20 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             string environmentId,
             CancellationToken cancellationToken)
     {
+        var (fence, checkAuthorization, _) = await AuthorizeMutationWithProjectCheckAsync(
+            caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+        return (fence, checkAuthorization);
+    }
+
+    private async Task<(EnvironmentGenerationFence Fence, Func<CancellationToken, Task> CheckAuthorization,
+        Func<CancellationToken, Task> CheckProjectAuthorization)>
+        AuthorizeMutationWithProjectCheckAsync(
+            CurrentCallerRequest caller,
+            string projectId,
+            string runId,
+            string environmentId,
+            CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(caller);
         ValidateRouteIdentity(projectId, runId, environmentId);
         var initial = await ReadCurrentAuthorizationContextAsync(
@@ -278,7 +342,8 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             await lifecycleStore.RequireActiveAsync(lifecycle.Fence, token).ConfigureAwait(false);
         }
 
-        return (lifecycle.Fence, CheckAuthorization);
+        return (lifecycle.Fence, CheckAuthorization,
+            token => EnsureMutationAuthorizationUnchangedAsync(caller, owner, initial, token));
     }
 
     private async Task EnsureMutationAuthorizationUnchangedAsync(

@@ -108,6 +108,9 @@ if (runtimeBootstrapEnabled)
     builder.Services.AddHttpClient<EnvironmentRuntimeBootstrapDelivery>(client =>
         client.Timeout = TimeSpan.FromSeconds(20))
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    builder.Services.AddHttpClient<EnvironmentRuntimeSuspendReleaseAuthority>(client =>
+        client.Timeout = TimeSpan.FromSeconds(15))
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
 }
 builder.Services.AddSingleton(ciliumOptions);
 builder.Services.AddHttpClient<EnvironmentRuntimeOwnerContextClient>(client => client.Timeout = TimeSpan.FromSeconds(15))

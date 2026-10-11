@@ -193,6 +193,8 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
                 .HasColumnName("expected_provider_binding_json").HasColumnType("jsonb");
             entity.Property(row => row.TargetProviderBindingJson)
                 .HasColumnName("target_provider_binding_json").HasColumnType("jsonb");
+            entity.Property(row => row.FlushEvidenceJson)
+                .HasColumnName("flush_evidence_json").HasColumnType("jsonb");
             entity.Property(row => row.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
             entity.Property(row => row.RequestFingerprint).HasColumnName("request_fingerprint").HasMaxLength(64);
             entity.Property(row => row.State).HasColumnName("effect_state").HasMaxLength(32);
@@ -363,6 +365,7 @@ internal sealed class EnvironmentOwnerEffectRow
     public string? SpecificationJson { get; set; }
     public string? ExpectedProviderBindingJson { get; set; }
     public string? TargetProviderBindingJson { get; set; }
+    public string? FlushEvidenceJson { get; set; }
     public string State { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }

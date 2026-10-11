@@ -1,33 +1,13 @@
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Providers.Storage.AzureFiles;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 
 namespace Agentweaver.Environment;
-
-public sealed record WorkspaceVolumeLifecycleResult(
-    EnvironmentWorkspaceVolumeTransitionReservation Reservation,
-    EnvironmentWorkspaceVolumeTransitionResult? Completion,
-    EnvironmentWorkspaceVolumeSnapshot? CurrentVolume,
-    EnvironmentWorkspaceVolumeCleanupStatus? CleanupStatus = null,
-    string? CleanupFailureCode = null,
-    string? CleanupFailureType = null)
-{
-    public bool CleanupPending =>
-        CleanupFailureCode is not null ||
-        CleanupStatus is { State: not EnvironmentWorkspaceVolumeCleanupState.Completed } ||
-        Reservation.Operation == EnvironmentWorkspaceVolumeOperation.Replace &&
-        CleanupStatus is null &&
-        (Completion?.TransitionState == EnvironmentWorkspaceVolumeTransitionState.Completed ||
-         Reservation.Replayed &&
-         Reservation.TransitionState == EnvironmentWorkspaceVolumeTransitionState.Completed);
-
-    public bool CleanupBlocked =>
-        CleanupStatus is { State: EnvironmentWorkspaceVolumeCleanupState.Blocked };
-}
 
 public sealed class WorkspaceVolumeService
 {
@@ -638,6 +618,30 @@ public sealed class WorkspaceVolumeService
             protocol);
     }
 
+    internal WorkspaceVolumeFlushRequest ResolveFlushRequest(
+        EnvironmentWorkspaceVolumeSnapshot snapshot,
+        EnvironmentRuntimeWorkspaceContext context,
+        string idempotencyKey)
+    {
+        var workspace = context.Workspace.Validate();
+        if (snapshot.EnvironmentFence != workspace.EnvironmentFence ||
+            snapshot.VolumeId != workspace.Volume.VolumeId ||
+            snapshot.ResourceGeneration != workspace.Volume.ResourceGeneration ||
+            snapshot.Resource != workspace.StorageResource ||
+            snapshot.DataGeneration != workspace.DataGeneration ||
+            snapshot.TransitionRevision != context.TransitionRevision ||
+            snapshot.Phase != EnvironmentWorkspaceVolumeState.Attached ||
+            workspace.ReadOnly || workspace.Protocol != WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim)
+            throw new RuntimeAuthorizationException("runtime_suspend_workspace_stale");
+        return new WorkspaceVolumeFlushRequest(
+            ReadSpecification(snapshot, snapshot.EnvironmentFence, snapshot.VolumeId),
+            snapshot.ResourceGeneration, snapshot.EnvironmentFence,
+            snapshot.Resource!, snapshot.DataGeneration, idempotencyKey)
+        {
+            ProviderBinding = snapshot.ProviderBinding
+        }.Validate();
+    }
+
     public async Task FlushAsync(
         WorkspaceVolumeFlushRequest request,
         WorkspaceVolumeResource pinnedResource,
@@ -670,7 +674,138 @@ public sealed class WorkspaceVolumeService
             throw new NotSupportedException("The pinned Storage provider does not advertise durable flush.");
 
         throw new NotSupportedException(
-            "The Storage provider contract has no verified flush operation; DataGeneration was not advanced.");
+            "Flush requires the trusted mounted-workspace producer through the Environment owner path.");
+    }
+
+    public async Task<WorkspaceVolumeLifecycleResult> FlushAsync(
+        EnvironmentGenerationFence environmentFence,
+        WorkspaceVolumeTransitionRequest request,
+        Func<WorkspaceVolumeFlushRequest, CancellationToken, Task<WorkspaceVolumeFlushEvidence>> trustedMountedFlush,
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, Task>? authorizationAndFenceCheck = null,
+        Func<CancellationToken, Task>? beforeCommitCheck = null)
+    {
+        ArgumentNullException.ThrowIfNull(environmentFence);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(trustedMountedFlush);
+        request.ValidateFor(WorkspaceVolumeTransitionKind.Flush);
+        var snapshot = await GetVolumeAsync(environmentFence, request.VolumeId, cancellationToken)
+            .ConfigureAwait(false);
+        var specification = ReadSpecification(snapshot, environmentFence, request.VolumeId);
+        await CheckAuthorizationAndFenceAsync(authorizationAndFenceCheck, cancellationToken).ConfigureAwait(false);
+        var reservation = await ReserveAsync(environmentFence, request, snapshot, cancellationToken)
+            .ConfigureAwait(false);
+        var providerRequest = new WorkspaceVolumeFlushRequest(
+            specification, reservation.ExpectedResourceGeneration, environmentFence,
+            RequirePinnedResource(reservation), reservation.ExpectedDataGeneration, request.IdempotencyKey)
+        {
+            ProviderBinding = reservation.CurrentProviderBinding
+        }.Validate();
+        if (reservation.Replayed &&
+            reservation.TransitionState != EnvironmentWorkspaceVolumeTransitionState.ReconciliationRequired ||
+            !reservation.Replayed &&
+            reservation.TransitionState != EnvironmentWorkspaceVolumeTransitionState.Reserved)
+        {
+            await CheckAuthorizationAndFenceAsync(authorizationAndFenceCheck, cancellationToken).ConfigureAwait(false);
+            return FlushResult(reservation, null,
+                await GetVolumeAsync(environmentFence, request.VolumeId, cancellationToken).ConfigureAwait(false),
+                providerRequest);
+        }
+        if (snapshot.Resource != reservation.CurrentResource ||
+            snapshot.ResourceGeneration != reservation.ExpectedResourceGeneration ||
+            snapshot.DataGeneration != reservation.ExpectedDataGeneration ||
+            snapshot.TransitionRevision != reservation.ExpectedTransitionRevision ||
+            !ProviderBindingsEqual(snapshot.ProviderBinding, reservation.CurrentProviderBinding))
+            throw new InvalidOperationException("The pending flush no longer matches the exact workspace generation.");
+
+        WorkspaceVolumeFlushEvidence? evidence = null;
+        Task<EnvironmentWorkspaceVolumeTransitionResult> MarkUnverified(CancellationToken token) =>
+            _lifecycleStore.CompleteWorkspaceVolumeFlushAsync(
+                reservation.OperationId, environmentFence, true, evidence, false, token);
+        var receipt = await RunEffectAsync(
+            async token =>
+            {
+                var result = await _volumeProvider.FlushAsync(providerRequest, async (exactRequest, producerToken) =>
+                {
+                    if (!SameFlushRequest(providerRequest, exactRequest))
+                        throw new InvalidOperationException("The Storage provider changed the trusted flush request.");
+                    await CheckAuthorizationAndFenceAsync(authorizationAndFenceCheck, producerToken)
+                        .ConfigureAwait(false);
+                    var produced = (await trustedMountedFlush(exactRequest, producerToken).ConfigureAwait(false)).Validate();
+                    produced.Receipt.ValidateFor(providerRequest);
+                    evidence = produced;
+                    return evidence.Receipt;
+                }, token).ConfigureAwait(false) ??
+                    throw new InvalidOperationException("The Storage provider returned no workspace flush receipt.");
+                result.ValidateFor(providerRequest);
+                if (evidence is null || evidence.Receipt != result)
+                    throw new InvalidOperationException("The Storage receipt differs from its completed trusted producer.");
+                return result;
+            },
+            MarkUnverified,
+            cancellationToken,
+            authorizationAndFenceCheck,
+            token => _lifecycleStore.CompleteWorkspaceVolumeFlushAsync(
+                reservation.OperationId, environmentFence, false, null, false, false, token),
+            recordNoEffectBeforeStart: true)
+            .ConfigureAwait(false);
+
+        EnvironmentWorkspaceVolumeTransitionResult? completion = null;
+        await CheckAuthorizationBeforeOwnerCommitAsync(async token =>
+        {
+            await CheckAuthorizationAndFenceAsync(authorizationAndFenceCheck, token).ConfigureAwait(false);
+            completion = await _lifecycleStore.CompleteWorkspaceVolumeFlushAsync(
+                reservation.OperationId, environmentFence, true, evidence, true, token, beforeCommitCheck)
+                .ConfigureAwait(false);
+        }, MarkUnverified).ConfigureAwait(false);
+        if (completion is null ||
+            completion.OperationId != reservation.OperationId ||
+            completion.EnvironmentFence != environmentFence ||
+            completion.Operation != EnvironmentWorkspaceVolumeOperation.Flush ||
+            completion.TargetResourceGeneration != reservation.TargetResourceGeneration ||
+            completion.TargetDataGeneration != reservation.TargetDataGeneration ||
+            completion.TargetTransitionRevision != reservation.TargetTransitionRevision ||
+            completion.FlushEvidence?.Receipt != receipt)
+            throw new InvalidOperationException("The Environment owner did not persist the exact workspace flush evidence.");
+        return FlushResult(reservation, completion, null, providerRequest);
+    }
+
+    private static bool SameFlushRequest(WorkspaceVolumeFlushRequest expected, WorkspaceVolumeFlushRequest actual) =>
+        JsonElement.DeepEquals(
+            JsonSerializer.SerializeToElement(expected, SpecificationJsonOptions),
+            JsonSerializer.SerializeToElement(actual, SpecificationJsonOptions));
+
+    private static WorkspaceVolumeLifecycleResult FlushResult(
+        EnvironmentWorkspaceVolumeTransitionReservation reservation,
+        EnvironmentWorkspaceVolumeTransitionResult? completion,
+        EnvironmentWorkspaceVolumeSnapshot? current,
+        WorkspaceVolumeFlushRequest request)
+    {
+        var evidence = (completion?.FlushEvidence ?? reservation.FlushEvidence)?.Validate();
+        var state = completion?.TransitionState ?? reservation.TransitionState;
+        if (evidence is null && state == EnvironmentWorkspaceVolumeTransitionState.Completed)
+            throw new EnvironmentLifecycleException(
+                "workspace_volume_flush_evidence_missing", "The completed flush has no saved producer evidence.");
+        evidence?.Receipt.ValidateFor(request);
+        RuntimeHostSuspendReceipt? host = null;
+        if (evidence?.RuntimeHostReceipt is { } saved)
+        {
+            try
+            {
+                host = JsonSerializer.Deserialize<RuntimeHostSuspendReceipt>(saved, SpecificationJsonOptions) ??
+                    throw new JsonException("The saved host receipt is empty.");
+            }
+            catch (JsonException)
+            {
+                throw new EnvironmentLifecycleException(
+                    "workspace_volume_host_receipt_corrupt", "The saved runtime host receipt is invalid.");
+            }
+        }
+        return new(reservation, completion, current)
+        {
+            FlushReceipt = evidence?.Receipt,
+            HostSuspendReceipt = host
+        };
     }
 
     private async Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveAsync(
@@ -701,6 +836,11 @@ public sealed class WorkspaceVolumeService
                     fence, request.VolumeId, request.ExpectedTransitionRevision,
                     request.ExpectedResourceGeneration, request.ExpectedDataGeneration,
                     request.IdempotencyKey, cancellationToken),
+            WorkspaceVolumeTransitionKind.Flush =>
+                _lifecycleStore.ReserveWorkspaceVolumeFlushAsync(
+                    fence, request.VolumeId, request.ExpectedTransitionRevision,
+                    request.ExpectedResourceGeneration, request.ExpectedDataGeneration,
+                    request.TargetDataGeneration, request.IdempotencyKey, cancellationToken),
             WorkspaceVolumeTransitionKind.Release =>
                 _lifecycleStore.ReserveWorkspaceVolumeReleaseAsync(
                     fence, request.VolumeId, request.ExpectedTransitionRevision,
@@ -882,6 +1022,7 @@ public sealed class WorkspaceVolumeService
             WorkspaceVolumeTransitionKind.Replace => EnvironmentWorkspaceVolumeOperation.Replace,
             WorkspaceVolumeTransitionKind.Bind => EnvironmentWorkspaceVolumeOperation.Bind,
             WorkspaceVolumeTransitionKind.Unbind => EnvironmentWorkspaceVolumeOperation.Unbind,
+            WorkspaceVolumeTransitionKind.Flush => EnvironmentWorkspaceVolumeOperation.Flush,
             WorkspaceVolumeTransitionKind.Release => EnvironmentWorkspaceVolumeOperation.Release,
             _ => throw new NotSupportedException($"{operation} is not executed by this Storage facade.")
         };
@@ -914,7 +1055,8 @@ public sealed class WorkspaceVolumeService
         Func<CancellationToken, Task<EnvironmentWorkspaceVolumeTransitionResult>> markUnverified,
         CancellationToken cancellationToken,
         Func<CancellationToken, Task>? beforeEffectCheck,
-        Func<CancellationToken, Task<EnvironmentWorkspaceVolumeTransitionResult>>? markNoEffect = null)
+        Func<CancellationToken, Task<EnvironmentWorkspaceVolumeTransitionResult>>? markNoEffect = null,
+        bool recordNoEffectBeforeStart = false)
     {
         var effectStarted = false;
         try
@@ -925,10 +1067,10 @@ public sealed class WorkspaceVolumeService
         }
         catch (Exception effectFailure)
         {
-            if (!effectStarted)
+            if (!effectStarted && !recordNoEffectBeforeStart)
                 ExceptionDispatchInfo.Capture(effectFailure).Throw();
 
-            if (effectFailure is AzureFilesCsiException { EffectMayHaveApplied: false } &&
+            if ((!effectStarted || effectFailure is AzureFilesCsiException { EffectMayHaveApplied: false }) &&
                 markNoEffect is not null)
             {
                 EnvironmentWorkspaceVolumeTransitionResult failed;
