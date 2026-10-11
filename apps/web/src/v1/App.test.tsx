@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   updateMarketplaceSource: vi.fn(),
   removeMarketplaceSource: vi.fn(),
   browseMarketplaceSource: vi.fn(),
+  previewMarketplaceSkillContent: vi.fn(),
+  importMarketplaceSkillContent: vi.fn(),
   previewSkillContent: vi.fn(),
   importSkillContent: vi.fn(),
   updateSkillAssignment: vi.fn(),
@@ -60,6 +62,8 @@ vi.mock('./api', () => ({
     updateMarketplaceSource: mocks.updateMarketplaceSource,
     removeMarketplaceSource: mocks.removeMarketplaceSource,
     browseMarketplaceSource: mocks.browseMarketplaceSource,
+    previewMarketplaceSkillContent: mocks.previewMarketplaceSkillContent,
+    importMarketplaceSkillContent: mocks.importMarketplaceSkillContent,
     previewSkillContent: mocks.previewSkillContent,
     importSkillContent: mocks.importSkillContent,
     updateSkillAssignment: mocks.updateSkillAssignment,
@@ -373,6 +377,8 @@ describe('v1 web project scoping', () => {
     mocks.updateMarketplaceSource.mockReset();
     mocks.removeMarketplaceSource.mockReset();
     mocks.browseMarketplaceSource.mockReset();
+    mocks.previewMarketplaceSkillContent.mockReset();
+    mocks.importMarketplaceSkillContent.mockReset();
     mocks.previewSkillContent.mockReset();
     mocks.importSkillContent.mockReset();
     mocks.updateSkillAssignment.mockReset();
@@ -1296,16 +1302,83 @@ describe('v1 web project scoping', () => {
 
   it('loads marketplace sources through the selected project with the current tenant', async () => {
     mocks.getProjectConfiguration.mockResolvedValue(projectConfiguration('p1', 4));
-    mocks.listMarketplaceSources.mockResolvedValue([]);
+    mocks.listMarketplaceSources.mockResolvedValue([{
+      sourceId: 'source-1',
+      name: 'Team skills',
+      repository: 'example/skills',
+      requestedRef: 'main',
+      subpath: null,
+      revision: 7,
+      state: 'active',
+    }]);
+    mocks.browseMarketplaceSource.mockResolvedValue({
+      sourceId: 'source-1',
+      sourceRevision: 7,
+      requestedRef: 'main',
+      resolvedCommitSha: '0123456789abcdef',
+      candidates: [{ location: 'skills/sample', name: 'Sample skill', description: 'A sample' }],
+      total: 1,
+      page: 1,
+      pageSize: 25,
+      hasMore: false,
+    });
+    mocks.previewMarketplaceSkillContent.mockResolvedValue({
+      name: 'Sample skill',
+      description: 'A sample',
+      contentDigest: 'sha256:source',
+      resourceCount: 0,
+      totalBytes: 14,
+    });
+    mocks.importMarketplaceSkillContent.mockResolvedValue({
+      skillId: 'skill-source',
+      revision: 2,
+      name: 'Sample skill',
+      description: 'A sample',
+      contentDigest: 'sha256:source',
+      resourceCount: 0,
+      totalBytes: 14,
+    });
 
     render(<App />);
 
+    await screen.findByRole('heading', { name: 'Revision 4' });
     await screen.findByRole('heading', { name: 'Skills and marketplace' });
     await waitFor(() => expect(mocks.listMarketplaceSources).toHaveBeenCalledWith(
       'broker-token',
       'p1',
       'tenant-1',
     ));
+    fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
+    await screen.findByText('0123456789abcdef');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
+    await screen.findByLabelText('Marketplace skill preview');
+    fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill' }));
+    await screen.findByText(/The Skills owner imported Sample skill at revision 2/);
+
+    expect(mocks.previewMarketplaceSkillContent).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      'source-1',
+      {
+        expectedSourceRevision: 7,
+        resolvedCommitSha: '0123456789abcdef',
+        selectedPath: 'skills/sample',
+      },
+      'tenant-1',
+    );
+    expect(mocks.importMarketplaceSkillContent).toHaveBeenCalledWith(
+      'broker-token',
+      'p1',
+      'source-1',
+      expect.objectContaining({
+        expectedSourceRevision: 7,
+        resolvedCommitSha: '0123456789abcdef',
+        selectedPath: 'skills/sample',
+        idempotencyKey: expect.any(String),
+        expectedContentDigest: 'sha256:source',
+      }),
+      'tenant-1',
+    );
     expect(screen.getByText(/Runtime load status is not available from this API/)).toBeTruthy();
   });
 

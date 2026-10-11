@@ -225,6 +225,19 @@ describe('Gateway API client', () => {
       page: 2,
       pageSize: 10,
     }, 'tenant-1');
+    const selectedSourceContent = {
+      expectedSourceRevision: 6,
+      resolvedCommitSha: '0123456789abcdef',
+      selectedPath: 'skills/sample',
+    };
+    await client.previewMarketplaceSkillContent(
+      'token', 'project/1', 'source/1', selectedSourceContent, 'tenant-1',
+    );
+    await client.importMarketplaceSkillContent('token', 'project/1', 'source/1', {
+      ...selectedSourceContent,
+      idempotencyKey: 'source-import-intent',
+      expectedContentDigest: 'sha256:source-digest',
+    }, 'tenant-1');
     await client.previewSkillContent('token', candidate, 'tenant-1');
     await client.importSkillContent('token', 'project/1', {
       idempotencyKey: 'upload-intent',
@@ -258,6 +271,12 @@ describe('Gateway API client', () => {
       }, 'tenant-1', 'no-store'],
       ['https://gateway.example.test/api/v1/projects/project%2F1/skill-marketplaces/sources/source%2F1?expectedRevision=5', 'DELETE', undefined, 'tenant-1', 'no-store'],
       ['https://gateway.example.test/api/v1/projects/project%2F1/skill-marketplaces/sources/source%2F1/browse?expectedSourceRevision=6&query=skill+author&page=2&pageSize=10', 'GET', undefined, 'tenant-1', 'no-store'],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skill-marketplaces/sources/source%2F1/preview', 'POST', selectedSourceContent, 'tenant-1', 'no-store'],
+      ['https://gateway.example.test/api/v1/projects/project%2F1/skill-marketplaces/sources/source%2F1/import', 'POST', {
+        ...selectedSourceContent,
+        idempotencyKey: 'source-import-intent',
+        expectedContentDigest: 'sha256:source-digest',
+      }, 'tenant-1', 'no-store'],
       ['https://gateway.example.test/api/v1/skills/preview', 'POST', { candidate }, 'tenant-1', 'no-store'],
       ['https://gateway.example.test/api/v1/projects/project%2F1/skills/import', 'POST', {
         idempotencyKey: 'upload-intent',

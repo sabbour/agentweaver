@@ -113,23 +113,29 @@ path, source revision, content identity, operation ID, and expected skill
 revision; accepted content receipts and runtime assignment remain owned by the
 Skills service. A moving branch/tag or later source removal must not replace
 already accepted bytes. The Projects source reader is implemented, while its
-preview/import route composition with the Skills service is still being
-integrated in this candidate.
+selected-source preview/import contract is admitted. The client preview returns
+metadata and a content digest, not file bytes. Import passes the source revision,
+resolved commit, selected path, digest, and idempotency key to the owner, which
+reads the pinned content. Route publication and deployment remain separate and
+are not implied by this client integration.
 
 The checked-in v1 Gateway catalog maps source list/create/update/tombstone,
-pinned browse, Skills preview/import, and project assignment to these Projects
-owner paths. Its OpenAPI contract includes the owner DTOs, exact required source
-revision query values, and 3 MiB limits for preview/import. The first-party MCP
-catalog is built from that same OpenAPI document.
+pinned browse, local-file Skills preview/import, and project assignment to these
+Projects owner paths. The separate selected-source preview/import contract is
+admitted, but its publication and deployment remain pending. The current
+OpenAPI contract includes the owner DTOs, exact required browse revision query,
+and 3 MiB Skills request limits. The first-party MCP catalog is built from that
+current OpenAPI document.
 
-The retained Web project settings page uses those routes for source management
-and pinned browse. It supports local file preview/import and assignment to agents
-in the current project cast. Marketplace source import remains disabled because
-the public browse response does not include the selected manifest and resources.
-The API also has no actor-safe runtime-loaded status producer; the page reports
-that gap instead of inferring runtime use from an assignment or accepted run
-configuration. These checked-in sources do not establish that the services or
-the complete journey have been published or deployed.
+The retained Web project settings page uses the source management and pinned
+browse routes, then offers explicit selected-source preview and import. The
+source request contains no file bytes; the owner receipt must match the preview
+digest before the imported skill can be assigned to agents in the current
+project cast. Local file preview/import remains a separate path. The API has no
+actor-safe runtime-loaded status producer; the page reports that gap instead of
+inferring runtime use from an assignment or accepted run configuration.
+Publication or deployment of the selected-source routes is not established by
+this client integration.
 
 ## Validation
 

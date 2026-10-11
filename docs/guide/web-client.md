@@ -139,18 +139,23 @@ status.
 
 The Skills and marketplace section uses the same Gateway client and explicit
 tenant selector as project configuration. It manages source settings and browses
-only the selected, owner-reported source revision and commit. Marketplace import
-stays disabled because browse does not return the selected manifest and its
-resources for Skills validation. Local upload is separate: the browser submits
-the selected `SKILL.md` and text resources to Skills preview, then imports only
-after the owner returns a matching digest. The import request keeps one
-idempotency key for retries. Assignment uses the imported revision, digest,
-current project configuration revision, and selected agents from the project's
-current cast. A returned configuration revision is checked before it replaces
-the editor's current revision; assignment is disabled while the editor has
-unsaved changes. The UI reports the saved assignment but does not claim that a
-runtime loaded it. Runtime-loaded status is unavailable from the current
-public API.
+only the selected, owner-reported source revision and commit. A candidate can be
+previewed and imported through the selected-source owner routes, pinned to that
+source revision, resolved commit, and candidate path. The browser sends
+metadata and the preview digest, not source file bytes; the owner reads and
+validates the pinned content. Import uses one idempotency key for retries and
+requires an explicit user action after preview. Local upload remains separate:
+the browser submits the selected `SKILL.md` and text resources to Skills
+preview, then imports only after the owner returns a matching digest.
+
+Assignment uses the imported revision, digest, current project configuration
+revision, and selected agents from the project's current cast. A returned
+configuration revision is checked before it replaces the editor's current
+revision; assignment is disabled while the editor has unsaved changes. The UI
+reports the saved assignment but does not claim that a runtime loaded it.
+Runtime-loaded status is unavailable from the current public API. The
+selected-source route contract is admitted, but its publication and deployment
+are separate; this client does not claim live availability.
 
 When the accepted run configuration selects GitHub App mode, and its owner
 routes have been admitted and configured, the run Selection view reads safe

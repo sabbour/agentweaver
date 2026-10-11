@@ -409,6 +409,19 @@ export interface MarketplaceBrowsePage {
   hasMore: boolean;
 }
 
+export interface MarketplaceSkillContentPreviewRequest {
+  expectedSourceRevision: number;
+  resolvedCommitSha: string;
+  selectedPath: string;
+}
+
+export interface MarketplaceSkillContentImportRequest extends MarketplaceSkillContentPreviewRequest {
+  idempotencyKey: string;
+  expectedContentDigest: string;
+  skillId?: string;
+  expectedRevision?: number | null;
+}
+
 export interface SkillContentResourceRequest {
   relativePath: string;
   content: string;

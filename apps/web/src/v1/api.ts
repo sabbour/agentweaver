@@ -18,6 +18,8 @@ import type {
   KnowledgeRecordWriteResult,
   MarketplaceBrowsePage,
   MarketplaceBrowseRequest,
+  MarketplaceSkillContentImportRequest,
+  MarketplaceSkillContentPreviewRequest,
   MarketplaceSource,
   MarketplaceSourceInput,
   MarketplaceSourceUpdateInput,
@@ -284,6 +286,38 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'sources', sourceId, 'browse')}?${query}`,
       {},
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  previewMarketplaceSkillContent(
+    token: string,
+    projectId: string,
+    sourceId: string,
+    request: MarketplaceSkillContentPreviewRequest,
+    tenantSelector?: string | null,
+  ): Promise<SkillContentPreview> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'sources', sourceId, 'preview')}`,
+      { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  importMarketplaceSkillContent(
+    token: string,
+    projectId: string,
+    sourceId: string,
+    request: MarketplaceSkillContentImportRequest,
+    tenantSelector?: string | null,
+  ): Promise<SkillContentImportReceipt> {
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skill-marketplaces', 'sources', sourceId, 'import')}`,
+      { method: 'POST', body: JSON.stringify(request) },
       this.baseUrl,
       tenantSelector,
     );
