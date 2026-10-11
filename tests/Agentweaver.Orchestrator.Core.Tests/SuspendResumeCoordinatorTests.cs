@@ -113,6 +113,24 @@ public sealed class SuspendResumeCoordinatorTests
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, exception.StatusCode);
     }
 
+    [Theory]
+    [InlineData(12L, 12L, 12L, 12L, true)]
+    [InlineData(12L, 13L, 12L, 13L, true)]
+    [InlineData(12L, 12L, 12L, 13L, false)]
+    [InlineData(12L, 14L, 12L, 13L, false)]
+    [InlineData(13L, 13L, 12L, 13L, false)]
+    [InlineData(12L, null, 12L, 13L, false)]
+    public void ManifestFencePairMustMatchImmutableOwnerAndExpectedClaim(
+        long ownerFence,
+        long? claimedFence,
+        long expectedOwnerFence,
+        long expectedClaimedFence,
+        bool expected)
+    {
+        Assert.Equal(expected, SessionSuspendResumePhaseMachine.MatchesManifestFencePair(
+            ownerFence, claimedFence, expectedOwnerFence, expectedClaimedFence));
+    }
+
     [Fact]
     public async Task CoordinatorReturnsExplicitUnavailableWithoutSuccessShapedFallback()
     {

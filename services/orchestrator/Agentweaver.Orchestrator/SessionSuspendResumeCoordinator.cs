@@ -103,6 +103,14 @@ internal static class SessionSuspendResumePhaseMachine
             or SessionSuspendResumeOperationPhase.Dispatched
             or SessionSuspendResumeOperationPhase.Interrupted;
 
+    internal static bool MatchesManifestFencePair(
+        long ownerExecutionFence,
+        long? claimedExecutionFence,
+        long expectedOwnerExecutionFence,
+        long expectedClaimedExecutionFence) =>
+        ownerExecutionFence == expectedOwnerExecutionFence &&
+        claimedExecutionFence == expectedClaimedExecutionFence;
+
     internal static string ToPersistenceValue(SessionSuspendResumeOperationKind kind) =>
         kind switch
         {

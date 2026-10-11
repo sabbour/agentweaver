@@ -418,7 +418,7 @@ internal sealed partial class CoordinationOwnerStore
         var saved = DeserializeSessionSuspendResumeProgress(progress.GetRawText());
         var source = await ReadResumeSourceEvidenceAsync(
             connection, transaction, actor, identity, request.SourceManifest.ManifestId,
-            run.Fence, cancellationToken).ConfigureAwait(false);
+            run.Fence, run.Fence, cancellationToken).ConfigureAwait(false);
         if (!SessionSuspendResumePhaseMachine.SameJson(source.Manifest, request.SourceManifest) ||
             !SessionSuspendResumePhaseMachine.SameJson(source.PlacementRelease, request.SourceRelease) ||
             saved.ResumeRequest is not { } savedRequest ||
@@ -573,7 +573,7 @@ internal sealed partial class CoordinationOwnerStore
 
         var source = await ReadResumeSourceEvidenceAsync(
             connection, transaction, actor, identity, request.Resume.SourceManifest.ManifestId,
-            run.Fence - 1, cancellationToken)
+            run.Fence - 1, run.Fence, cancellationToken)
             .ConfigureAwait(false);
         if (!SessionSuspendResumePhaseMachine.SameJson(source.Manifest, request.Resume.SourceManifest) ||
             !SessionSuspendResumePhaseMachine.SameJson(source.PlacementRelease, request.Resume.SourceRelease))
@@ -685,7 +685,7 @@ internal sealed partial class CoordinationOwnerStore
         }
 
         var source = await ReadResumeSourceEvidenceAsync(
-            connection, transaction, actor, identity, sourceManifestId, run.Fence,
+            connection, transaction, actor, identity, sourceManifestId, run.Fence, run.Fence,
             cancellationToken).ConfigureAwait(false);
         var operationId = Guid.NewGuid();
         var initialRequest = new RuntimeWorkspaceResumeRequest(
@@ -777,7 +777,7 @@ internal sealed partial class CoordinationOwnerStore
         var previousFence = operation.OwnerExecutionFence;
         var source = await ReadResumeSourceEvidenceAsync(
             connection, transaction, actor, operation.Identity, operation.ManifestId,
-            previousFence, cancellationToken).ConfigureAwait(false);
+            previousFence, previousFence, cancellationToken).ConfigureAwait(false);
         if (!SessionSuspendResumePhaseMachine.SameJson(source.Manifest, request.SourceManifest) ||
             !SessionSuspendResumePhaseMachine.SameJson(source.PlacementRelease, request.SourceRelease) ||
             progress.ResumeExecutionFence is not null)
@@ -914,7 +914,8 @@ internal sealed partial class CoordinationOwnerStore
         CoordinationActor actor,
         SessionIdentity identity,
         Guid sourceManifestId,
-        long currentExecutionFence,
+        long expectedManifestOwnerFence,
+        long expectedClaimedFence,
         CancellationToken cancellationToken)
     {
         Guid operationId;
@@ -952,9 +953,11 @@ internal sealed partial class CoordinationOwnerStore
             if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
                 reader.GetString(0) != identity.RunId ||
                 reader.GetString(1) != identity.SessionId ||
-                reader.IsDBNull(6) ||
-                reader.GetInt64(5) != currentExecutionFence ||
-                reader.GetInt64(6) != currentExecutionFence)
+                !SessionSuspendResumePhaseMachine.MatchesManifestFencePair(
+                    reader.GetInt64(5),
+                    reader.IsDBNull(6) ? null : reader.GetInt64(6),
+                    expectedManifestOwnerFence,
+                    expectedClaimedFence))
                 throw new CoordinationException(
                     "suspend_resume_manifest_unavailable", StatusCodes.Status409Conflict);
 
@@ -981,10 +984,10 @@ internal sealed partial class CoordinationOwnerStore
             operationIssuer != actor.Issuer || operationSubject != actor.Subject ||
             operationKind != "suspend" ||
             phase != SessionSuspendResumeOperationPhase.PlacementReleased ||
-            operationFence != currentExecutionFence ||
+            operationFence != expectedManifestOwnerFence ||
             operationManifestId != sourceManifestId ||
             manifest.State != SessionSuspendResumeManifestState.Suspended ||
-            manifest.CoreExecutionFence != currentExecutionFence)
+            manifest.CoreExecutionFence != expectedManifestOwnerFence)
             throw new CoordinationException(
                 "suspend_resume_manifest_unavailable", StatusCodes.Status409Conflict);
 
