@@ -28,7 +28,7 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         await CoordinationOwnerMigrator.MigrateAsync(_fixture.DataSource, _schema);
-        await ApplyBacklogSchemaAsync();
+        await CoordinationOwnerMigrator.VerifyAsync(_fixture.DataSource, _schema);
 
         var catalog = ProviderCatalog.Create([], [], []).Value!;
         var resolver = new ProviderResolver(catalog);
@@ -48,6 +48,95 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
         await using var command = new NpgsqlCommand(
             $"DROP SCHEMA IF EXISTS \"{_schema}\" CASCADE", connection);
         await command.ExecuteNonQueryAsync();
+    }
+
+    [Fact]
+    public async Task RestrictedRuntimeRoleEditsTheGraphWithoutSchemaOrHistoryWritePrivileges()
+    {
+        var role = _schema + "_runtime";
+        var password = Guid.NewGuid().ToString("N");
+        await using var ownerConnection = await _fixture.DataSource.OpenConnectionAsync();
+        await using (var createRole = new NpgsqlCommand($"""
+            CREATE ROLE "{role}" LOGIN PASSWORD '{password}'
+                NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT
+            """, ownerConnection))
+            await createRole.ExecuteNonQueryAsync();
+
+        try
+        {
+            await using (var grants = new NpgsqlCommand($"""
+                GRANT USAGE ON SCHEMA "{_schema}" TO "{role}";
+                GRANT SELECT ON "{_schema}".coordination_schema_migrations,
+                    "{_schema}".outbox_schema_migrations TO "{role}";
+                GRANT SELECT, INSERT, UPDATE ON "{_schema}".backlog_projects,
+                    "{_schema}".backlog_tasks TO "{role}";
+                GRANT SELECT, INSERT, UPDATE, DELETE ON "{_schema}".backlog_dependencies TO "{role}";
+                """, ownerConnection))
+                await grants.ExecuteNonQueryAsync();
+
+            var connectionString = new NpgsqlConnectionStringBuilder(_fixture.DataSource.ConnectionString)
+            {
+                Username = role,
+                Password = password,
+                Pooling = false
+            }.ConnectionString;
+            await using var runtime = NpgsqlDataSource.Create(connectionString);
+            await CoordinationOwnerMigrator.VerifyAsync(runtime, _schema);
+            var store = new BacklogOwnerStore(runtime, _schema);
+            var task = TaskRef("runtime-task");
+            var prerequisite = TaskRef("runtime-prerequisite");
+            var first = await store.AddTaskAsync(task, 0, CancellationToken.None);
+            Assert.True(first.IsSuccess);
+            var second = await store.AddTaskAsync(prerequisite, first.Value!.Revision, CancellationToken.None);
+            Assert.True(second.IsSuccess);
+            var added = await store.AddDependencyAsync(
+                task, prerequisite, second.Value!.Revision, CancellationToken.None);
+            Assert.True(added.IsSuccess);
+            Assert.Single(added.Value!.Dependencies);
+            var removed = await store.RemoveDependencyAsync(
+                task, prerequisite, added.Value.Revision, CancellationToken.None);
+            Assert.True(removed.IsSuccess);
+            Assert.Empty(removed.Value!.Dependencies);
+            Assert.Equal(4, removed.Value.Revision);
+            var graph = await store.ReadGraphAsync(task.ProjectId, CancellationToken.None);
+            Assert.True(graph.IsSuccess);
+            Assert.Equal(removed.Value.Revision, graph.Value!.Revision);
+            Assert.Equal(2, graph.Value.Tasks.Length);
+            Assert.Contains(graph.Value.Tasks, item => item.Reference == task);
+            Assert.Contains(graph.Value.Tasks, item => item.Reference == prerequisite);
+            Assert.Empty(graph.Value.Dependencies);
+
+            await using var runtimeConnection = await runtime.OpenConnectionAsync();
+            foreach (var sql in new[]
+            {
+                $"CREATE TABLE \"{_schema}\".runtime_forbidden (id integer)",
+                $"ALTER TABLE \"{_schema}\".backlog_tasks ADD COLUMN runtime_forbidden integer",
+                $"DELETE FROM \"{_schema}\".backlog_tasks",
+                $"DELETE FROM \"{_schema}\".backlog_projects",
+                $"TRUNCATE \"{_schema}\".backlog_dependencies",
+                $"TRUNCATE \"{_schema}\".backlog_tasks CASCADE",
+                $"TRUNCATE \"{_schema}\".backlog_projects CASCADE"
+            }.Concat(new[] { "coordination_schema_migrations", "outbox_schema_migrations" }
+                .SelectMany(table => new[]
+                {
+                    $"INSERT INTO \"{_schema}\".{table} (version) VALUES (999)",
+                    $"UPDATE \"{_schema}\".{table} SET version = version",
+                    $"DELETE FROM \"{_schema}\".{table}",
+                    $"TRUNCATE \"{_schema}\".{table}"
+                })))
+            {
+                await using var denied = new NpgsqlCommand(sql, runtimeConnection);
+                var error = await Assert.ThrowsAsync<PostgresException>(() => denied.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, error.SqlState);
+            }
+            await CoordinationOwnerMigrator.VerifyAsync(runtime, _schema);
+        }
+        finally
+        {
+            await using var cleanup = new NpgsqlCommand(
+                $"DROP OWNED BY \"{role}\"; DROP ROLE \"{role}\"", ownerConnection);
+            await cleanup.ExecuteNonQueryAsync();
+        }
     }
 
     [Fact]
@@ -381,20 +470,6 @@ public sealed class BacklogOwnerStorePostgresTests : IAsyncLifetime
 
     private static BacklogTaskReference TaskRef(string taskId) =>
         new("backlog-project", taskId);
-
-    private async Task ApplyBacklogSchemaAsync()
-    {
-        var assembly = typeof(BacklogOwnerStorePostgresTests).Assembly;
-        var resourceName = assembly.GetManifestResourceNames().Single(name =>
-            name.EndsWith("016_project_backlog.sql", StringComparison.Ordinal));
-        await using var resource = assembly.GetManifestResourceStream(resourceName)!;
-        using var reader = new StreamReader(resource);
-        var sql = (await reader.ReadToEndAsync()).Replace(
-            "{schema}", $"\"{_schema}\"", StringComparison.Ordinal);
-        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using var command = new NpgsqlCommand(sql, connection);
-        await command.ExecuteNonQueryAsync();
-    }
 
     private async Task<int> ReadCountAsync(string table, string predicate)
     {
