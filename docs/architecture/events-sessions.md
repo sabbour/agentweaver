@@ -467,6 +467,50 @@ Use these separate settings:
 
 The migration job and its database grants are not provisioned by this source candidate.
 
+## Selected Events workload profile
+
+`deploy/k8s/profiles/events-and-sessions/render.mjs` renders a separate Events profile.
+The ordinary Broker and Foundation Probe compositions do not include it.
+The profile uses existing configuration keys and enables the existing typed session material store.
+It does not add another content API or change ordinary service startup.
+
+The input fixes the approved 1.x target, Events tenant/client identity, database role,
+database name, token path, and `events_sessions` schema.
+It requires the actual Sessions resource ID and generation, Broker issuer,
+three audiences, private Knowledge/Projects/Orchestrator owner addresses, and one explicit Blob container.
+The Blob account must be `awv1p0blob`; credentials, SAS, extra paths, and encoded paths are rejected.
+The connection remains password-free with `VerifyFull`.
+No migration, bootstrap, secret, or additional TLS setting is accepted.
+
+The product image must use `ghcr.io/sabbour/agentweaver.eventsandsessions` with a nonzero immutable digest.
+The operator must review its positive numeric user and group and supply an existing Events TLS Secret.
+These inputs are requirements, not verified image metadata or proof that the Secret exists.
+The PEM files use a read-only Events-only mount and mode `0440`.
+The supplied group also sets `fsGroup`; `/tmp` is the only writable mount, bounded to 64 MiB.
+The private service uses HTTPS on port 8443 and requires current database schema at startup and readiness.
+CPU, memory, namespace, caller labels, DNS names, and outbound destinations remain bounded.
+
+Owner addresses must name the exact private service in `agentweaver-v1-p0`.
+Each address supplies its reviewed HTTPS port; that port must match the selected owner's endpoint port.
+Selected owner Pods must use the corresponding `agentweaver.io/workload` label.
+The profile allows only system-trusted outbound HTTPS.
+Missing trusted endpoints, certificates, image metadata, grants, or migrated tables block deployment.
+It creates none of these prerequisites and does not grant direct Blob access to AgentHost.
+The separate private `RemoteToolResults` listener remains disabled.
+
+The example leaves unresolved operator values as `null` and cannot render successfully.
+After the exact inputs are reviewed, render source from the repository root:
+
+```powershell
+node deploy\k8s\profiles\events-and-sessions\render.mjs .\Temp\events-operator-reviewed.json
+```
+
+This command only prints a Kubernetes JSON list.
+It does not call Azure, Kubernetes, a database, a registry, or a container engine.
+Pure source checks do not prove live TLS/file access, network enforcement, owner availability,
+published images, or a healthy deployment.
+This profile alone does not complete the five-owner deployment or full P1 acceptance.
+
 The [contract reference](../reference/contracts.md) lists routes and configuration.
 The [testing guide](../guide/testing.md) describes the disposable-PostgreSQL tests and
 their limits. There was no earlier v1 Sessions event envelope, so no N-1 event-schema

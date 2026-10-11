@@ -52,6 +52,11 @@
   ],
   "steps": [
     {
+      "type": "note",
+      "over": ["api", "postgres"],
+      "label": "Separate Events profile: explicit image, identity, owners, TLS and Blob inputs. No deployment proof; private result TLS stays disabled."
+    },
+    {
       "type": "message",
       "from": "core",
       "to": "api",
