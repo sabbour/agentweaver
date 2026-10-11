@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   importMarketplaceSkillContent: vi.fn(),
   previewSkillContent: vi.fn(),
   importSkillContent: vi.fn(),
+  listProjectSkillInventory: vi.fn(),
   updateSkillAssignment: vi.fn(),
   getRunStatus: vi.fn(),
   getRunSelection: vi.fn(),
@@ -66,6 +67,7 @@ vi.mock('./api', () => ({
     importMarketplaceSkillContent: mocks.importMarketplaceSkillContent,
     previewSkillContent: mocks.previewSkillContent,
     importSkillContent: mocks.importSkillContent,
+    listProjectSkillInventory: mocks.listProjectSkillInventory,
     updateSkillAssignment: mocks.updateSkillAssignment,
     getRunStatus: mocks.getRunStatus,
     getRunSelection: mocks.getRunSelection,
@@ -381,6 +383,7 @@ describe('v1 web project scoping', () => {
     mocks.importMarketplaceSkillContent.mockReset();
     mocks.previewSkillContent.mockReset();
     mocks.importSkillContent.mockReset();
+    mocks.listProjectSkillInventory.mockReset();
     mocks.updateSkillAssignment.mockReset();
     mocks.getRunStatus.mockReset();
     mocks.getRunSelection.mockReset();

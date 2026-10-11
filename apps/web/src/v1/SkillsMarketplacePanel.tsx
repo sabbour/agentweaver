@@ -14,6 +14,8 @@ import type {
   ProjectSkillAssignment,
   SkillAssignmentRequest,
   SkillContentCandidateRequest,
+  SkillContentInventoryPage,
+  SkillContentInventoryQuery,
   SkillContentImportReceipt,
   SkillContentImportRequest,
   SkillContentPreview,
@@ -59,6 +61,10 @@ export interface SkillsMarketplaceActions {
     projectId: string,
     request: SkillContentImportRequest,
   ): Promise<SkillContentImportReceipt>;
+  listSkillInventory(
+    projectId: string,
+    request: SkillContentInventoryQuery,
+  ): Promise<SkillContentInventoryPage>;
   updateSkillAssignment(
     projectId: string,
     skillId: string,
@@ -95,6 +101,15 @@ type MarketplaceSkillSelection = {
   candidateName: string;
   query: string;
   page: number;
+};
+
+type SkillInventoryView = {
+  projectId: string;
+  actions: SkillsMarketplaceActions;
+  page: SkillContentInventoryPage | null;
+  cursors: Array<string | null>;
+  loading: boolean;
+  error: string | null;
 };
 
 function messageForError(reason: unknown): string {
@@ -175,6 +190,49 @@ function validateSkillImportReceipt(
   }
 }
 
+function validateSkillInventoryPage(result: SkillContentInventoryPage): void {
+  const nullableString = (value: unknown) => value === null || typeof value === 'string';
+  const validRevision = (value: unknown) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+  if (!result ||
+      !Number.isSafeInteger(result.configurationRevision) || result.configurationRevision < 0 ||
+      !Array.isArray(result.assignments) ||
+      !Array.isArray(result.revisions) ||
+      !Number.isSafeInteger(result.pageSize) || result.pageSize < 1 || result.pageSize > 50 ||
+      (result.nextCursor !== null &&
+        (typeof result.nextCursor !== 'string' || result.nextCursor.length === 0)) ||
+      result.assignments.some((assignment) =>
+        !assignment || typeof assignment.skillId !== 'string' || !assignment.skillId ||
+        typeof assignment.enabled !== 'boolean' ||
+        !Number.isSafeInteger(assignment.order) || assignment.order < 0 ||
+        (assignment.revision !== null && !validRevision(assignment.revision)) ||
+        !nullableString(assignment.contentDigest) ||
+        (assignment.agentIds !== null &&
+          (!Array.isArray(assignment.agentIds) ||
+            assignment.agentIds.some((agentId) => typeof agentId !== 'string' || !agentId)))) ||
+      result.revisions.some((revision) =>
+        !revision || typeof revision.skillId !== 'string' || !revision.skillId ||
+        !validRevision(revision.revision) ||
+        typeof revision.name !== 'string' || !revision.name ||
+        typeof revision.description !== 'string' ||
+        typeof revision.contentDigest !== 'string' || !revision.contentDigest ||
+        !Number.isSafeInteger(revision.resourceCount) || revision.resourceCount < 0 ||
+        !Number.isSafeInteger(revision.totalBytes) || revision.totalBytes < 0 ||
+        typeof revision.createdByActorId !== 'string' || !revision.createdByActorId ||
+        typeof revision.createdAt !== 'string' || !Number.isFinite(Date.parse(revision.createdAt)) ||
+        !nullableString(revision.sourceId) ||
+        !nullableString(revision.sourceRevision) ||
+        !nullableString(revision.requestedRef) ||
+        !nullableString(revision.resolvedCommitSha) ||
+        !nullableString(revision.selectedPath) ||
+        typeof revision.isRevoked !== 'boolean' ||
+        !nullableString(revision.revokedByActorId) ||
+        !nullableString(revision.revokedAt) ||
+        (revision.revokedAt !== null && !Number.isFinite(Date.parse(revision.revokedAt))))) {
+    throw new Error('Projects & Config returned an invalid skill inventory.');
+  }
+}
+
 function relativeFilePath(file: File): string {
   return file.webkitRelativePath || file.name;
 }
@@ -239,6 +297,7 @@ export function SkillsMarketplacePanel({
   const activeActions = useRef(actions);
   const sourceRequest = useRef(0);
   const browseRequest = useRef(0);
+  const inventoryRequest = useRef(0);
   const skillRequest = useRef(0);
   const marketplaceRequest = useRef(0);
   const marketplaceBusyRef = useRef<'preview' | 'import' | null>(null);
@@ -258,6 +317,7 @@ export function SkillsMarketplacePanel({
   const [browsePage, setBrowsePage] = useState<MarketplaceBrowsePage | null>(null);
   const [browseResultQuery, setBrowseResultQuery] = useState<string | null>(null);
   const [browsing, setBrowsing] = useState(false);
+  const [skillInventory, setSkillInventory] = useState<SkillInventoryView | null>(null);
   const [marketplaceSelection, setMarketplaceSelection] = useState<MarketplaceSkillSelection | null>(null);
   const [marketplacePreview, setMarketplacePreview] = useState<SkillContentPreview | null>(null);
   const [marketplaceBusy, setMarketplaceBusy] = useState<'preview' | 'import' | null>(null);
@@ -324,10 +384,12 @@ export function SkillsMarketplacePanel({
       if (activeActions.current === actions) return;
       activeActions.current = actions;
       sourceRequest.current += 1;
+      inventoryRequest.current += 1;
       setSources(null);
       setSourcesProjectId(null);
       setSourceError(null);
       setSourceNotice(null);
+      setSkillInventory(null);
       clearMarketplaceBrowse();
       return;
     }
@@ -335,11 +397,13 @@ export function SkillsMarketplacePanel({
     activeProjectId.current = projectId;
     activeActions.current = actions;
     sourceRequest.current += 1;
+    inventoryRequest.current += 1;
     skillRequest.current += 1;
     setSources(null);
     setSourcesProjectId(null);
     setSourceError(null);
     setSourceNotice(null);
+    setSkillInventory(null);
     setSourceDrafts({});
     setNewSource(sourceDraft());
     setSelectedSourceId('');
@@ -415,6 +479,49 @@ export function SkillsMarketplacePanel({
   const currentConfigurationRevision = assignmentSnapshot.projectId === projectId
     ? assignmentSnapshot.revision
     : configurationRevision;
+  const currentSkillInventory = skillInventory?.projectId === projectId &&
+      skillInventory.actions === actions
+    ? skillInventory
+    : null;
+  const skillInventoryPage = currentSkillInventory?.page ?? null;
+
+  const loadSkillInventory = async (
+    cursor: string | null,
+    cursors: Array<string | null>,
+  ) => {
+    if (!actions) return;
+    const scope = projectId;
+    const requestId = ++inventoryRequest.current;
+    setSkillInventory((current) => current?.projectId === scope && current.actions === actions
+      ? { ...current, loading: true, error: null }
+      : { projectId: scope, actions, page: null, cursors: [null], loading: true, error: null });
+    try {
+      const result = await actions.listSkillInventory(scope, {
+        cursor: cursor ?? undefined,
+        pageSize: 25,
+      });
+      if (activeProjectId.current !== scope || inventoryRequest.current !== requestId) return;
+      validateSkillInventoryPage(result);
+      setSkillInventory({
+        projectId: scope,
+        actions,
+        page: result,
+        cursors,
+        loading: false,
+        error: null,
+      });
+    } catch (reason) {
+      if (activeProjectId.current !== scope || inventoryRequest.current !== requestId) return;
+      setSkillInventory((current) => ({
+        projectId: scope,
+        actions,
+        page: current?.projectId === scope && current.actions === actions ? current.page : null,
+        cursors: current?.projectId === scope && current.actions === actions ? current.cursors : [null],
+        loading: false,
+        error: messageForError(reason),
+      }));
+    }
+  };
 
   const updateSourceDraft = (sourceId: string, field: keyof SourceDraft, value: string) => {
     const source = currentSources?.find((item) => item.sourceId === sourceId);
@@ -992,6 +1099,120 @@ export function SkillsMarketplacePanel({
           <p>
             Imported <strong>{importReceipt.name}</strong> · revision {importReceipt.revision} · digest <code>{importReceipt.contentDigest}</code>
           </p>
+        )}
+      </section>
+
+      <section className="v1-stack" aria-labelledby="skill-inventory-heading">
+        <h3 id="skill-inventory-heading">Imported skill inventory</h3>
+        <p className="v1-muted">
+          This owner-provided metadata shows stored revisions and project assignments. It does not show whether a runtime loaded a skill. Reading the inventory requires current project Owner or tenant administrator authority.
+        </p>
+        {currentSkillInventory?.error && (
+          <MessageBar intent="error" role="alert">
+            <MessageBarBody>{currentSkillInventory.error}</MessageBarBody>
+          </MessageBar>
+        )}
+        <div className="v1-actions">
+          <Button
+            appearance="secondary"
+            type="button"
+            disabled={!actions || currentSkillInventory?.loading}
+            onClick={() => void loadSkillInventory(null, [null])}
+          >
+            {currentSkillInventory?.loading ? 'Loading inventory…' :
+              skillInventoryPage ? 'Refresh skill inventory' : 'Load skill inventory'}
+          </Button>
+          {skillInventoryPage?.nextCursor && (
+            <Button
+              appearance="secondary"
+              type="button"
+              disabled={currentSkillInventory?.loading}
+              onClick={() => void loadSkillInventory(
+                skillInventoryPage.nextCursor,
+                [...(currentSkillInventory?.cursors ?? [null]), skillInventoryPage.nextCursor],
+              )}
+            >
+              Next inventory page
+            </Button>
+          )}
+          {(currentSkillInventory?.cursors.length ?? 0) > 1 && (
+            <Button
+              appearance="secondary"
+              type="button"
+              disabled={currentSkillInventory?.loading}
+              onClick={() => {
+                const cursors = currentSkillInventory?.cursors.slice(0, -1) ?? [null];
+                void loadSkillInventory(cursors.at(-1) ?? null, cursors);
+              }}
+            >
+              Previous inventory page
+            </Button>
+          )}
+        </div>
+        {currentSkillInventory?.loading && (
+          <Spinner label="Loading project skill inventory…" />
+        )}
+        {skillInventoryPage && (
+          <div className="v1-stack" aria-label="Project skill inventory">
+            <p className="v1-muted">
+              Configuration revision {skillInventoryPage.configurationRevision} · page {currentSkillInventory?.cursors.length ?? 1} · {skillInventoryPage.pageSize} revisions per page
+            </p>
+            <div className="v1-stack">
+              <h4>Current project assignments</h4>
+              {skillInventoryPage.assignments.length === 0 ? (
+                <p className="v1-muted">No saved skill assignments were returned.</p>
+              ) : skillInventoryPage.assignments.map((assignment) => (
+                <article className="v1-record" key={assignment.skillId}>
+                  <h5>{assignment.skillId}</h5>
+                  <p className="v1-muted">
+                    {assignment.enabled ? 'Enabled' : 'Disabled'} · order {assignment.order} · revision {assignment.revision ?? 'not set'}
+                  </p>
+                  <p className="v1-muted">
+                    Agents: {assignment.agentIds?.length ? assignment.agentIds.join(', ') : 'none recorded'}
+                  </p>
+                  {assignment.contentDigest && <p className="v1-muted">Digest: <code>{assignment.contentDigest}</code></p>}
+                </article>
+              ))}
+            </div>
+            <div className="v1-stack">
+              <h4>Stored revisions</h4>
+              {skillInventoryPage.revisions.length === 0 ? (
+                <p className="v1-muted">No stored skill revisions were returned for this page.</p>
+              ) : skillInventoryPage.revisions.map((revision) => {
+                const assignment = skillInventoryPage.assignments.find((item) =>
+                  item.skillId === revision.skillId);
+                const assignedExactRevision = assignment?.enabled === true &&
+                  assignment.revision === revision.revision &&
+                  assignment.contentDigest === revision.contentDigest;
+                const assignmentSummary = !assignment
+                  ? 'No project assignment'
+                  : assignedExactRevision
+                    ? `Enabled for agents: ${assignment.agentIds?.join(', ') || 'none recorded'}`
+                    : `Project assignment references revision ${assignment.revision ?? 'not set'}`;
+                return (
+                  <article className="v1-record" key={`${revision.skillId}/${revision.revision}`}>
+                    <h5>{revision.name}</h5>
+                    <p className="v1-muted">
+                      <code>{revision.skillId}</code> · revision {revision.revision} · {revision.isRevoked ? 'revoked' : 'not revoked'}
+                    </p>
+                    {revision.description && <p>{revision.description}</p>}
+                    <p className="v1-muted">{assignmentSummary}</p>
+                    <p className="v1-muted">
+                      Digest <code>{revision.contentDigest}</code> · {revision.resourceCount} resource(s) · {revision.totalBytes} byte(s)
+                    </p>
+                    <p className="v1-muted">
+                      {revision.sourceId
+                        ? `Marketplace source ${revision.sourceId} · source revision ${revision.sourceRevision ?? 'unknown'} · commit ${revision.resolvedCommitSha ?? 'unknown'} · ${revision.selectedPath ?? 'repository root'}`
+                        : 'Local upload'}
+                    </p>
+                    <p className="v1-muted">
+                      Created <time dateTime={revision.createdAt}>{revision.createdAt}</time>
+                    </p>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
         )}
       </section>
 
