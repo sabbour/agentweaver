@@ -1,107 +1,204 @@
 using System.Security.Cryptography;
 using System.Text;
-using Agentweaver.Abstractions;
+using System.Text.Json;
 using Agentweaver.Identity;
 using GitHub.Copilot;
 using GitHub.Copilot.Rpc;
 
-#pragma warning disable GHCP001 // Permission callback contracts are pinned to SDK 1.0.18.
+#pragma warning disable GHCP001 // Permission callbacks are pinned to SDK 1.0.18.
 namespace Agentweaver.AgentRuntime;
 
-internal sealed class RuntimeCopilotToolCallAuthorization
+internal sealed class RuntimeCopilotToolCallAuthorization(
+    RuntimeRegistration registration,
+    string sessionId,
+    Func<RuntimeActionRequest, CancellationToken, Task> requireAuthority,
+    RuntimeCopilotTurnObserver turns)
 {
-    private readonly RuntimeRegistration _registration;
-    private readonly string _sessionId;
-    private readonly Func<string, Guid, ReadOnlyMemory<byte>, CancellationToken, Task> _requireActionAuthority;
-    private readonly Func<CancellationToken> _requireActiveToken;
     private readonly object _gate = new();
-    private readonly Dictionary<string, RuntimeCopilotToolCall> _toolCalls = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, NativeToolCall> _calls = new(StringComparer.Ordinal);
+    private Guid? _messageId;
 
-    public RuntimeCopilotToolCallAuthorization(
-        RuntimeRegistration registration,
-        string sessionId,
-        Func<string, Guid, ReadOnlyMemory<byte>, CancellationToken, Task> requireActionAuthority,
-        Func<CancellationToken> requireActiveToken)
-    {
-        _registration = registration ?? throw new ArgumentNullException(nameof(registration));
-        _sessionId = sessionId ?? throw new ArgumentNullException(nameof(sessionId));
-        _requireActionAuthority = requireActionAuthority
-            ?? throw new ArgumentNullException(nameof(requireActionAuthority));
-        _requireActiveToken = requireActiveToken ?? throw new ArgumentNullException(nameof(requireActiveToken));
-    }
-
-    internal Task<PreToolUseHookOutput?> OnPreToolUseAsync(
+    internal async Task<PreToolUseHookOutput?> OnPreToolUseAsync(
         PreToolUseHookInput input, HookInvocation invocation)
     {
-        var actionId = ActionForTool(input.ToolName);
-        if (actionId is null || input.SessionId != _sessionId || invocation.SessionId != _sessionId ||
-            !RuntimeActionContract.ActionIds.Contains(actionId) || actionId == "model.turn")
-            return Task.FromResult<PreToolUseHookOutput?>(new PreToolUseHookOutput
-            {
-                PermissionDecision = "deny",
-                PermissionDecisionReason = "runtime_tool_not_registered"
-            });
-
-        return Task.FromResult<PreToolUseHookOutput?>(
-            new PreToolUseHookOutput { PermissionDecision = "ask" });
+        if (input.SessionId != sessionId || invocation.SessionId != sessionId ||
+            ActionForTool(input.ToolName) is not { } action)
+            return Deny("runtime_tool_not_registered");
+        try
+        {
+            var context = ReadContext();
+            // This callback has no native call ID; it checks policy without reserving a tool slot.
+            var request = CreateRequest(
+                Guid.NewGuid(), action, RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(input)),
+                isInvocation: false);
+            await requireAuthority(request, context.Token).ConfigureAwait(false);
+            RequireContext(context);
+            return new PreToolUseHookOutput { PermissionDecision = "ask" };
+        }
+        catch (RuntimeAuthorizationException failure)
+        {
+            return Deny(failure.Code);
+        }
     }
 
     internal async Task<PermissionDecision> OnPermissionRequestAsync(
         PermissionRequest request, PermissionInvocation invocation)
     {
-        if (invocation.SessionId != _sessionId)
+        if (invocation.SessionId != sessionId)
             return PermissionDecision.Reject("runtime_tool_authority_unavailable");
-
-        RuntimeCopilotToolCall? toolCall;
-        if (request is PermissionRequestHook hook &&
-            IsValidToolCallId(hook.ToolCallId) &&
-            ActionForTool(hook.ToolName) is { } actionId &&
-            RuntimeActionContract.ActionIds.Contains(actionId) && actionId != "model.turn")
-        {
-            var input = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(request);
-            toolCall = GetOrAdd(
-                hook.ToolCallId!,
-                actionId,
-                CreateEventId(_registration, actionId, hook.ToolCallId!),
-                input);
-        }
-        else if (TryGetSecondaryPermission(request, out var permissionKind, out var toolCallId) &&
-            toolCallId is { } id && IsValidToolCallId(id))
-        {
-            toolCall = FindSecondary(id, permissionKind);
-        }
-        else
-        {
-            return PermissionDecision.Reject("runtime_tool_authority_unavailable");
-        }
-
-        if (toolCall is null)
-            return PermissionDecision.Reject("runtime_tool_authority_unavailable");
-
         try
         {
-            await toolCall.Authorization.Value.ConfigureAwait(false);
+            var context = ReadContext();
+            NativeToolCall call;
+            RuntimeActionRequest? secondary = null;
+            if (request is PermissionRequestHook hook &&
+                IsValidCallId(hook.ToolCallId) &&
+                ActionForTool(hook.ToolName) is { } action)
+            {
+                var ownerRequest = CreateRequest(
+                    CreateEventId(context.MessageId, hook.ToolCallId!, "invocation"),
+                    action,
+                    RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(request)),
+                    isInvocation: true);
+                call = GetOrAdd(context, hook.ToolCallId!, ownerRequest);
+            }
+            else if (TryReadSecondary(request, out var kind, out var callId) && IsValidCallId(callId))
+            {
+                call = ReadCall(context, callId!);
+                if (!MatchesPermission(call.Request.ActionId, kind))
+                    return PermissionDecision.Reject("runtime_permission_not_registered");
+                secondary = GetSecondary(call, kind, RuntimeContractValidation.Hash(
+                    JsonSerializer.SerializeToUtf8Bytes(request)));
+            }
+            else
+            {
+                return PermissionDecision.Reject("runtime_native_tool_call_identity_invalid");
+            }
+
+            RequireCall(context, call);
+            await requireAuthority(call.Request, context.Token).ConfigureAwait(false);
+            RequireCall(context, call);
+            if (secondary is not null)
+            {
+                await requireAuthority(secondary, context.Token).ConfigureAwait(false);
+                RequireCall(context, call);
+            }
             return PermissionDecision.ApproveOnce();
         }
         catch (RuntimeAuthorizationException failure)
         {
-            Remove(toolCall);
             return PermissionDecision.Reject(failure.Code);
-        }
-        catch
-        {
-            Remove(toolCall);
-            throw;
         }
     }
 
     internal void Clear()
     {
         lock (_gate)
-            _toolCalls.Clear();
+        {
+            _calls.Clear();
+            _messageId = null;
+        }
     }
 
-    internal static string? ActionForTool(string? toolName) => toolName switch
+    private NativeToolCall GetOrAdd(ActiveContext context, string callId, RuntimeActionRequest request)
+    {
+        lock (_gate)
+        {
+            RequireContext(context);
+            if (_messageId != context.MessageId)
+            {
+                _calls.Clear();
+                _messageId = context.MessageId;
+            }
+            if (_calls.TryGetValue(callId, out var existing))
+            {
+                if (existing.Request != request)
+                    throw new RuntimeAuthorizationException("runtime_native_tool_call_conflict");
+                return existing;
+            }
+            var call = new NativeToolCall(context.MessageId, callId, request);
+            _calls.Add(callId, call);
+            return call;
+        }
+    }
+
+    private NativeToolCall ReadCall(ActiveContext context, string callId)
+    {
+        lock (_gate)
+        {
+            RequireContext(context);
+            return _messageId == context.MessageId && _calls.TryGetValue(callId, out var call)
+                ? call : throw new RuntimeAuthorizationException("runtime_native_tool_call_unavailable");
+        }
+    }
+
+    private RuntimeActionRequest GetSecondary(NativeToolCall call, string kind, string inputHash)
+    {
+        var request = CreateRequest(
+            CreateEventId(call.MessageId, call.CallId, "permission:" + kind),
+            call.Request.ActionId, inputHash, isInvocation: false);
+        lock (_gate)
+        {
+            if (call.Permissions.TryGetValue(kind, out var existing))
+            {
+                if (existing != request)
+                    throw new RuntimeAuthorizationException("runtime_native_tool_call_conflict");
+                return existing;
+            }
+            call.Permissions.Add(kind, request);
+            return request;
+        }
+    }
+
+    private void RequireCall(ActiveContext context, NativeToolCall call)
+    {
+        lock (_gate)
+        {
+            RequireContext(context);
+            if (_messageId != context.MessageId ||
+                !_calls.TryGetValue(call.CallId, out var current) || !ReferenceEquals(call, current))
+                throw new RuntimeAuthorizationException("runtime_native_tool_call_unavailable");
+        }
+    }
+
+    private ActiveContext ReadContext()
+    {
+        var token = turns.RequireActiveToken();
+        if (turns.ActiveA2AMessageId is not { } messageId || messageId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_native_turn_unavailable");
+        token.ThrowIfCancellationRequested();
+        return new(messageId, token);
+    }
+
+    private void RequireContext(ActiveContext expected)
+    {
+        expected.Token.ThrowIfCancellationRequested();
+        if (ReadContext() != expected)
+            throw new RuntimeAuthorizationException("runtime_native_turn_unavailable");
+    }
+
+    private RuntimeActionRequest CreateRequest(Guid eventId, string action, string inputHash, bool isInvocation)
+    {
+        var request = new RuntimeActionRequest(
+            1, registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            eventId, action, inputHash)
+        {
+            IsToolInvocation = isInvocation
+        };
+        RuntimeActionContract.Validate(request);
+        return request;
+    }
+
+    private Guid CreateEventId(Guid messageId, string callId, string phase)
+    {
+        var value = FormattableString.Invariant(
+            $"agentweaver:native-tool:v1\n{registration.RuntimeInstanceId:N}\n{registration.Revision}\n{registration.Binding.ExecutionFence}\n{sessionId}\n{registration.Binding.TurnId}\n{messageId:N}\n{callId}\n{phase}");
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        bytes[15] |= 1;
+        return new Guid(bytes.AsSpan(0, 16));
+    }
+
+    private static string? ActionForTool(string? name) => name switch
     {
         "view" => "tool.read",
         "create" or "edit" => "tool.write",
@@ -112,120 +209,49 @@ internal sealed class RuntimeCopilotToolCallAuthorization
         _ => null
     };
 
-    private RuntimeCopilotToolCall? GetOrAdd(
-        string toolCallId, string actionId, Guid eventId, byte[] input)
-    {
-        lock (_gate)
-        {
-            if (_toolCalls.TryGetValue(toolCallId, out var existing))
-                return existing.Matches(actionId, eventId, input) ? existing : null;
+    private static bool IsValidCallId(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Length <= 256 && !value.Any(char.IsControl);
 
-            var authorization = new Lazy<Task>(
-                () => _requireActionAuthority(actionId, eventId, input, _requireActiveToken()),
-                LazyThreadSafetyMode.ExecutionAndPublication);
-            var toolCall = new RuntimeCopilotToolCall(toolCallId, actionId, eventId, input, authorization);
-            _toolCalls.Add(toolCallId, toolCall);
-            return toolCall;
-        }
-    }
-
-    private RuntimeCopilotToolCall? FindSecondary(
-        string toolCallId, RuntimeToolPermissionKind permissionKind)
-    {
-        lock (_gate)
-            return _toolCalls.TryGetValue(toolCallId, out var toolCall) &&
-                MatchesPermission(toolCall.ActionId, permissionKind)
-                    ? toolCall
-                    : null;
-    }
-
-    private void Remove(RuntimeCopilotToolCall toolCall)
-    {
-        lock (_gate)
-        {
-            if (_toolCalls.TryGetValue(toolCall.ToolCallId, out var current) &&
-                ReferenceEquals(current, toolCall))
-                _toolCalls.Remove(toolCall.ToolCallId);
-        }
-    }
-
-    private static Guid CreateEventId(RuntimeRegistration registration, string actionId, string toolCallId)
-    {
-        var value = FormattableString.Invariant(
-            $"agentweaver:runtime-tool-call:v1\n{registration.RuntimeInstanceId:N}\n{registration.Revision}\n{registration.Binding.ExecutionFence}\n{actionId}\n{toolCallId}");
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value));
-        bytes[15] |= 1;
-        return new Guid(bytes.AsSpan(0, 16));
-    }
-
-    private static bool IsValidToolCallId(string? toolCallId) =>
-        !string.IsNullOrWhiteSpace(toolCallId) && toolCallId.Length <= 256 &&
-        !toolCallId.Any(char.IsControl);
-
-    private static bool TryGetSecondaryPermission(
-        PermissionRequest request,
-        out RuntimeToolPermissionKind permissionKind,
-        out string? toolCallId)
+    private static bool TryReadSecondary(PermissionRequest request, out string kind, out string? callId)
     {
         switch (request)
         {
-            case PermissionRequestRead
-                { RequestSandboxBypass: not true, ManagedApprovalRequired: not true } read:
-                permissionKind = RuntimeToolPermissionKind.Read;
-                toolCallId = read.ToolCallId;
+            case PermissionRequestRead { RequestSandboxBypass: not true, ManagedApprovalRequired: not true } read:
+                kind = "read";
+                callId = read.ToolCallId;
                 return true;
-            case PermissionRequestWrite
-                { RequestSandboxBypass: not true, ManagedApprovalRequired: not true } write:
-                permissionKind = RuntimeToolPermissionKind.Write;
-                toolCallId = write.ToolCallId;
+            case PermissionRequestWrite { RequestSandboxBypass: not true, ManagedApprovalRequired: not true } write:
+                kind = "write";
+                callId = write.ToolCallId;
                 return true;
-            case PermissionRequestShell
-                { RequestSandboxBypass: not true, ManagedApprovalRequired: not true } shell:
-                permissionKind = RuntimeToolPermissionKind.Shell;
-                toolCallId = shell.ToolCallId;
+            case PermissionRequestShell { RequestSandboxBypass: not true, ManagedApprovalRequired: not true } shell:
+                kind = "shell";
+                callId = shell.ToolCallId;
                 return true;
             default:
-                permissionKind = default;
-                toolCallId = null;
+                kind = "";
+                callId = null;
                 return false;
         }
     }
 
-    private static bool MatchesPermission(string actionId, RuntimeToolPermissionKind permissionKind) =>
-        permissionKind switch
-        {
-            RuntimeToolPermissionKind.Read => actionId == "tool.read",
-            RuntimeToolPermissionKind.Write => actionId == "tool.write",
-            RuntimeToolPermissionKind.Shell =>
-                actionId is "exec.shell" or "exec.read" or "exec.write" or "exec.stop",
-            _ => false
-        };
-}
+    private static bool MatchesPermission(string action, string kind) => kind switch
+    {
+        "read" => action == "tool.read",
+        "write" => action == "tool.write",
+        "shell" => action is "exec.shell" or "exec.read" or "exec.write" or "exec.stop",
+        _ => false
+    };
 
-internal enum RuntimeToolPermissionKind
-{
-    Read,
-    Write,
-    Shell
-}
+    private static PreToolUseHookOutput Deny(string reason) =>
+        new() { PermissionDecision = "deny", PermissionDecisionReason = reason };
 
-internal sealed class RuntimeCopilotToolCall(
-    string toolCallId,
-    string actionId,
-    Guid eventId,
-    byte[] input,
-    Lazy<Task> authorization)
-{
-    internal string ToolCallId { get; } = toolCallId;
-    internal string ActionId { get; } = actionId;
-    internal Guid EventId { get; } = eventId;
-    internal Lazy<Task> Authorization { get; } = authorization;
+    private sealed record ActiveContext(Guid MessageId, CancellationToken Token);
 
-    internal bool Matches(string candidateActionId, Guid candidateEventId, byte[] candidateInput) =>
-        ActionId == candidateActionId && EventId == candidateEventId &&
-        Input.AsSpan().SequenceEqual(candidateInput);
-
-    private byte[] Input { get; } = input;
+    private sealed record NativeToolCall(Guid MessageId, string CallId, RuntimeActionRequest Request)
+    {
+        internal Dictionary<string, RuntimeActionRequest> Permissions { get; } = new(StringComparer.Ordinal);
+    }
 }
 
 #pragma warning restore GHCP001

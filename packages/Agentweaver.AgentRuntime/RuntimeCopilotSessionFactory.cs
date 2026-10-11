@@ -76,7 +76,7 @@ public sealed class RuntimeCopilotSessionFactory
         CancellationToken cancellationToken,
         SkillRuntimeContentProjectionV1 acceptedSkills,
         RuntimeSessionRecovery? recovery = null,
-        Func<string, Guid, ReadOnlyMemory<byte>, CancellationToken, Task>? requireActionAuthority = null,
+        Func<RuntimeActionRequest, CancellationToken, Task>? requireActionAuthority = null,
         RuntimeMcpServerEndpoint? mcpServer = null)
     {
         ArgumentNullException.ThrowIfNull(requireCreationAuthority);
@@ -166,7 +166,7 @@ public sealed class RuntimeCopilotSessionFactory
             var sdkSessionId = RuntimeContractValidation.NativeSessionId(binding);
             toolAuthorization = requireActionAuthority is null ? null :
                 new RuntimeCopilotToolCallAuthorization(
-                    registration, sdkSessionId, requireActionAuthority, turns.RequireActiveToken);
+                    registration, sdkSessionId, requireActionAuthority, turns);
             if (recovery is not null)
             {
                 var recordedLimit = recovery.Cache?.Material.Reference.Material?.MaxPromptTokens;

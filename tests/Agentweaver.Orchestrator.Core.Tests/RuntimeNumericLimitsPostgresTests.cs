@@ -217,6 +217,20 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     [InlineData("tool")]
     public async Task WholeRunQuotaSurvivesOwnerRecoveryAndANewRuntimeUnderANewFence(string kind)
     {
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".coordinator_decisions
+            SET decision = jsonb_set(decision, ARRAY['envelope', 'workPlanRevisionAttempts'], '1'::jsonb)
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+            """, connection))
+        {
+            command.Parameters.AddWithValue("project", _root.ProjectId);
+            command.Parameters.AddWithValue("run", _root.RunId);
+            command.Parameters.AddWithValue("session", _root.SessionId);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+        Assert.Equal(1, (await _decisions.InitializeRootAsync(_actor, _root, _selection, default))
+            .State.WorkPlanRevisionAttempts);
         if (kind == "model")
             Assert.True(await PrepareAsync(0));
         else
@@ -227,6 +241,8 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         var failed = await coordination.ReportRunFailureAsync(_actor, child,
             new(status.ExecutionFence, status.StateVersion, 1, "numeric-failure",
                 OwnerRunFailureState.Indeterminate, "runtime_lost", "numeric-attempt"), default, _selection);
+        Assert.Equal(1, (await _decisions.InitializeRootAsync(_actor, _root, _selection, default))
+            .State.WorkPlanRevisionAttempts);
         var recovered = await coordination.RecoverRunExecutionAsync(_actor, _root.ProjectId, _root.RunId,
             new(failed.ExecutionFence, failed.RunStateVersion, "numeric-recovery",
                 "operator_recovery", "numeric-recovery"), default, _selection);
@@ -238,6 +254,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             connection))
             Assert.Equal(1, await command.ExecuteNonQueryAsync());
         var current = await _decisions.InitializeRootAsync(_actor, _root, _selection, default);
+        Assert.Equal(1, current.State.WorkPlanRevisionAttempts);
         await WriteCheckpointAsync(recovered.ExecutionFence, current.StateVersion,
             "numeric-recovered-checkpoint", [_intents[1]]);
         if (kind == "model")

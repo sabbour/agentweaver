@@ -198,6 +198,14 @@ The effective capacity becomes an immutable SDK-source and session-material pin.
 Resume retains that pin if current capacity increases, and rejects a smaller current capacity before the SDK resume call.
 Capability metadata alone does not prove live token enforcement or a hard-truncation guarantee.
 
+Each built-in tool approval checks current owner authority and Policy again.
+The pre-tool callback checks Policy without reserving a tool slot.
+The native call ID binds invocation and secondary permission checks to the current runtime registration and A2A turn.
+Repeated callbacks retain their request IDs for reservation deduplication, but never reuse a cached approval.
+Cancellation, a changed turn, or revoked authority prevents approval after an earlier successful check.
+Secondary permissions also require a fresh Policy check for their exact input.
+These checks do not enable the remote MCP tool hook.
+
 Events stores actual user and assistant content as typed `TurnContent` through the existing Object Store.
 The journal retains authenticated content references, Policy receipts, tool events, and compatible cache references.
 Orchestrator commits native SDK source receipts.

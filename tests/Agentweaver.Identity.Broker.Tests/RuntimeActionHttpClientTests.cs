@@ -7,6 +7,7 @@ using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
 using Xunit;
 
+#pragma warning disable GHCP001 // Permission callback contracts are pinned to SDK 1.0.18.
 namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RuntimeActionHttpClientTests
@@ -22,20 +23,20 @@ public sealed class RuntimeActionHttpClientTests
             BeforeTurnResponse = token => release.Task.WaitAsync(token)
         };
         var registration = RuntimeCopilotSessionTests.Registration();
-        var actions = new List<(string Action, Guid EventId)>();
+        var actions = new List<RuntimeActionRequest>();
         await using var session = await RuntimeCopilotSessionTests.Factory(external).CreateAsync(
             registration, registration.Binding.ModelSelectionReference!,
             RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token,
-            requireActionAuthority: (action, eventId, input, token) =>
+            requireActionAuthority: (request, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                Assert.Equal("tool.read", action);
-                Assert.NotEqual(Guid.Empty, eventId);
-                Assert.NotEmpty(input.ToArray());
-                actions.Add((action, eventId));
+                Assert.Equal("tool.read", request.ActionId);
+                Assert.NotEqual(Guid.Empty, request.EventId);
+                Assert.Equal(64, request.InputHash.Length);
+                actions.Add(request);
                 return Task.CompletedTask;
             });
-        var turn = session.SendTurnAsync("A bounded user request.", timeout.Token);
+        var turn = session.SendTurnAsync("A bounded user request.", timeout.Token, Guid.NewGuid());
         await external.TurnReceived.Task.WaitAsync(timeout.Token);
         const string toolCallId = "read-call-1";
         try
@@ -48,9 +49,11 @@ public sealed class RuntimeActionHttpClientTests
                     sessionId = session.Facts.SdkSessionId, timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     workingDirectory = "/workspace", toolName = "view", toolArgs = new { path = "readme.txt" }
                 }
+
+                #pragma warning restore GHCP001
             }, timeout.Token);
             Assert.Equal("ask", response.GetProperty("output").GetProperty("permissionDecision").GetString());
-            Assert.Empty(actions);
+            Assert.False(Assert.Single(actions).IsToolInvocation);
             await external.EmitPermissionRequestAsync(new
             {
                 requestId = "read-hook-permission",
@@ -62,8 +65,8 @@ public sealed class RuntimeActionHttpClientTests
                 }
             });
             await external.PermissionDecisionHandled.Task.WaitAsync(timeout.Token);
-            var action = Assert.Single(actions);
-            Assert.Equal("tool.read", action.Action);
+            var action = Assert.Single(actions, request => request.IsToolInvocation);
+            Assert.Equal("tool.read", action.ActionId);
             Assert.NotEqual(Guid.Empty, action.EventId);
         }
         finally
@@ -190,18 +193,18 @@ public sealed class RuntimeActionHttpClientTests
             BeforeTurnResponse = token => release.Task.WaitAsync(token)
         };
         var registration = RuntimeCopilotSessionTests.Registration();
-        var actions = new List<(string Action, Guid EventId)>();
+        var actions = new List<RuntimeActionRequest>();
         await using var session = await RuntimeCopilotSessionTests.Factory(external).CreateAsync(
             registration, registration.Binding.ModelSelectionReference!,
             RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token,
-            requireActionAuthority: (action, eventId, input, token) =>
+            requireActionAuthority: (request, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                Assert.NotEmpty(input.ToArray());
-                actions.Add((action, eventId));
+                Assert.Equal(64, request.InputHash.Length);
+                actions.Add(request);
                 return Task.CompletedTask;
             });
-        var turn = session.SendTurnAsync("A bounded user request.", timeout.Token);
+        var turn = session.SendTurnAsync("A bounded user request.", timeout.Token, Guid.NewGuid());
         await external.TurnReceived.Task.WaitAsync(timeout.Token);
         var toolCallId = "test-tool-call-" + tool;
         var response = await external.InvokeSdkCallbackAsync("hooks.invoke", new
@@ -215,7 +218,10 @@ public sealed class RuntimeActionHttpClientTests
         }, timeout.Token);
         Assert.Equal(tool == "unregistered-tool" ? "deny" : "ask",
             response.GetProperty("output").GetProperty("permissionDecision").GetString());
-        Assert.Empty(actions);
+        if (tool == "unregistered-tool")
+            Assert.Empty(actions);
+        else
+            Assert.False(Assert.Single(actions).IsToolInvocation);
         release.TrySetResult();
         Assert.Equal(external.AssistantResponse, await turn);
     }
@@ -231,18 +237,18 @@ public sealed class RuntimeActionHttpClientTests
             BeforeTurnResponse = token => release.Task.WaitAsync(token)
         };
         var registration = RuntimeCopilotSessionTests.Registration();
-        var authorized = new TaskCompletionSource<(string Action, Guid EventId, byte[] Input)>(
+        var authorized = new TaskCompletionSource<RuntimeActionRequest>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         await using var session = await RuntimeCopilotSessionTests.Factory(external).CreateAsync(
             registration, registration.Binding.ModelSelectionReference!,
             RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token,
-            requireActionAuthority: (action, eventId, input, token) =>
+            requireActionAuthority: (request, token) =>
             {
                 token.ThrowIfCancellationRequested();
-                authorized.TrySetResult((action, eventId, input.ToArray()));
+                authorized.TrySetResult(request);
                 return Task.CompletedTask;
             });
-        var turn = session.SendTurnAsync("A bounded user request.", timeout.Token);
+        var turn = session.SendTurnAsync("A bounded user request.", timeout.Token, Guid.NewGuid());
         await external.TurnReceived.Task.WaitAsync(timeout.Token);
 
         const string toolCallId = "native-call-42";
@@ -261,11 +267,17 @@ public sealed class RuntimeActionHttpClientTests
         });
 
         var nativeAction = await authorized.Task.WaitAsync(timeout.Token);
-        Assert.Equal("exec.shell", nativeAction.Action);
+        Assert.Equal("exec.shell", nativeAction.ActionId);
         Assert.NotEqual(Guid.Empty, nativeAction.EventId);
-        using var input = JsonDocument.Parse(nativeAction.Input);
-        Assert.Equal(toolCallId, input.RootElement.GetProperty("toolCallId").GetString());
-        Assert.Equal("bash", input.RootElement.GetProperty("toolName").GetString());
+        GitHub.Copilot.PermissionRequest expected = JsonSerializer.Deserialize<GitHub.Copilot.PermissionRequestHook>(
+            JsonSerializer.Serialize(new
+            {
+                kind = "hook", toolName = "bash", toolCallId,
+                toolArgs = new { command = "bounded" }
+            }), new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.Equal(RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(expected)),
+            nativeAction.InputHash);
+        Assert.True(nativeAction.IsToolInvocation);
 
         await external.PermissionDecisionHandled.Task.WaitAsync(timeout.Token);
         var permissionDecision = Assert.Single(external.Requests,

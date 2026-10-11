@@ -19,6 +19,13 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
         {
             IsToolInvocation = isToolInvocation, DispatchId = dispatchId, CostTurnId = costTurnId
         };
+        await RequireAsync(request, requireCurrentAuthority, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task RequireAsync(
+        RuntimeActionRequest request, Func<CancellationToken, Task> requireCurrentAuthority,
+        CancellationToken cancellationToken)
+    {
         RuntimeActionContract.Validate(request);
         await requireCurrentAuthority(cancellationToken).ConfigureAwait(false);
         var admitted = await SendAdmissionAsync(

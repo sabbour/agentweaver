@@ -97,6 +97,15 @@ npm run test:release
 
 Missing Docker, image-pull permission, or PostgreSQL startup fails the integration suite. Testcontainers does not clean up unrelated containers or contact production resources.
 
+### Focused MAF review corrections
+
+Managed tool-callback tests check repeated invocation and secondary permission requests after authority revocation.
+They also check cancellation and a turn change during an authority wait.
+Stable native call IDs prevent duplicate reservations; they do not cache permission to run a tool.
+Managed revision tests retain the exhausted attempt count through gate replay, fence advance, and saved-state recovery.
+PostgreSQL quota tests also check the saved revision count before failure, after failure, and after recovery.
+Compiling those PostgreSQL tests does not prove that they passed against a database.
+
 ### Opt-in native Redis Memory tests
 
 `RedisMemoryNativeIntegrationTests` are skipped unless
