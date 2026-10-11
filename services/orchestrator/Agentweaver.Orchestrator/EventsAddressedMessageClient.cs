@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
 
@@ -393,6 +394,52 @@ internal sealed class EventsAddressedMessageClient(
 
             return new(new ProducedRunCaptureJournalEntry(proof, position), bytes);
         }
+    }
+
+    internal async Task<SessionMaterialReadResult> ReadSessionMaterialAsync(
+        HttpContext context,
+        SessionIdentity identity,
+        Guid eventId,
+        SessionMaterialKind kind,
+        RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(actor);
+        if (eventId == Guid.Empty || kind != SessionMaterialKind.SdkCache)
+            throw new ArgumentException("A recorded SDK cache event is required.");
+        var owner = RequireEventsOwner(context, identity);
+        var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<SessionMaterialReadResult>(
+            httpClient,
+            owner,
+            $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/material/{eventId:D}/SdkCache",
+            actor,
+            body: null,
+            maximumBytes: checked(SessionMaterialValidation.MaximumBytes * 2),
+            allowNotFound: false,
+            cancellationToken).ConfigureAwait(false)
+            ?? throw new CoordinationException(
+                "events_session_material_unavailable", StatusCodes.Status502BadGateway);
+        try
+        {
+            SessionMaterialValidation.Validate(result.Material.Reference);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new CoordinationException(
+                "events_session_material_invalid", StatusCodes.Status502BadGateway, exception);
+        }
+        if (result.Material.ContractVersion != 1 ||
+            result.Material.Identity != identity ||
+            result.Material.EventId != eventId ||
+            result.Material.Position < 1 ||
+            result.Material.Reference.Material?.Kind != kind ||
+            result.Bytes is not { Length: > 0 and <= SessionMaterialValidation.MaximumBytes } ||
+            result.Bytes.LongLength != result.Material.Reference.ByteLength ||
+            Hash(result.Bytes) != result.Material.Reference.Material.Sha256)
+            throw new CoordinationException(
+                "events_session_material_invalid", StatusCodes.Status502BadGateway);
+        return result;
     }
 
     public async Task<MessageAdmissionReceipt> AdmitAsync(

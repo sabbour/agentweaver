@@ -83,6 +83,10 @@ public static class RuntimeContractValidation
         }
         else if (binding.EnvironmentLifecycleGeneration != 0 || binding.EnvironmentLeaseRevision != 0)
             throw new RuntimeAuthorizationException("runtime_binding_invalid");
+        if (binding.ResumeOperationId.HasValue != binding.ResumeAttemptId.HasValue ||
+            binding.ResumeOperationId == Guid.Empty || binding.ResumeAttemptId == Guid.Empty ||
+            binding.ResumeOperationId.HasValue && binding.PlacementProviderId is null)
+            throw new RuntimeAuthorizationException("runtime_resume_binding_invalid");
         if (binding.Image is { } image)
         {
             try

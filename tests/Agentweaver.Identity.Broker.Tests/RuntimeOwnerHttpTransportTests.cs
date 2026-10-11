@@ -102,6 +102,50 @@ public sealed class RuntimeOwnerHttpTransportTests
     }
 
     [Fact]
+    public void SandboxTransportUsesPinnedSocketCallbackWithoutProxyOrRedirect()
+    {
+        using var handler = RuntimeSandboxHttpTransport.CreateHandler();
+
+        Assert.False(handler.AllowAutoRedirect);
+        Assert.False(handler.UseProxy);
+        Assert.NotNull(handler.ConnectCallback);
+    }
+
+    [Fact]
+    public async Task BoundedRequestCarriesTheExactValidatedSandboxEndpoint()
+    {
+        var endpoint = new SandboxRuntimeHttpsEndpoint(
+            new Uri("https://runtime.project.test:8443/"), "10.42.1.8", "pod-uid", "service-uid").Validate();
+        var expected = new RuntimeBootstrapRequest(Guid.NewGuid(), Guid.NewGuid(), new string('a', 64));
+        var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal(
+                new Uri(endpoint.Address, "/internal/runtime/bootstrap/configure"),
+                request.RequestUri);
+            Assert.True(request.Options.TryGetValue(
+                new HttpRequestOptionsKey<SandboxRuntimeHttpsEndpoint>("Agentweaver.SandboxRuntimeEndpoint"),
+                out var actualEndpoint));
+            Assert.Equal(endpoint, actualEndpoint);
+            return Task.FromResult(Response(request, expected));
+        });
+        using var client = new HttpClient(handler);
+
+        var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeBootstrapRequest>(
+            client,
+            endpoint.Address,
+            "/internal/runtime/bootstrap/configure",
+            new(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), null),
+            expected,
+            1024,
+            false,
+            default,
+            endpoint);
+
+        Assert.Equal(expected, result);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
     public async Task RegistrationClientAcceptsTheOrchestratorCanonicalStringEnumContract()
     {
         var registration = new RuntimeRegistration(Guid.NewGuid(), 1,

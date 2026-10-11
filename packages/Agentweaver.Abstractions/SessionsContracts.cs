@@ -25,7 +25,8 @@ public enum SessionEventKind
     ArtifactReference,
     CacheReference,
     AddressedMessage,
-    ProducedRunCapture
+    ProducedRunCapture,
+    RuntimeConfiguration
 }
 
 public enum PolicyEvaluationOutcome
@@ -116,6 +117,7 @@ public sealed record StoredSessionObjectReference(
 [JsonDerivedType(typeof(CacheReferenceSessionPayload), "cache_reference")]
 [JsonDerivedType(typeof(AddressedMessageSessionPayload), "addressed_message")]
 [JsonDerivedType(typeof(ProducedRunCaptureSessionPayload), "produced_run_capture")]
+[JsonDerivedType(typeof(RuntimeConfigurationSessionPayload), "runtime_configuration")]
 public abstract record SessionEventPayload;
 
 public sealed record TurnSessionPayload(string Role, SessionObjectReference Content) : SessionEventPayload;
@@ -161,6 +163,8 @@ public sealed record CacheReferenceSessionPayload(
     SessionObjectReference Cache,
     string RuntimeVersion,
     string BindingId) : SessionEventPayload;
+
+public sealed record RuntimeConfigurationSessionPayload(SessionObjectReference? Configuration) : SessionEventPayload;
 
 public sealed record AddressedMessageSessionPayload(
     Guid MessageId,
@@ -410,6 +414,7 @@ public static class SessionEventPayloadValidation
         CacheReferenceSessionPayload => SessionEventKind.CacheReference,
         AddressedMessageSessionPayload => SessionEventKind.AddressedMessage,
         ProducedRunCaptureSessionPayload => SessionEventKind.ProducedRunCapture,
+        RuntimeConfigurationSessionPayload => SessionEventKind.RuntimeConfiguration,
         _ => throw new ArgumentException("The session event kind is not supported.", nameof(payload))
     };
 
@@ -419,7 +424,8 @@ public static class SessionEventPayloadValidation
         return eventVersion switch
         {
             SessionsContractVersions.InitialEventVersion =>
-                payload is not (PolicyEvaluationSessionPayload or ProducedRunCaptureSessionPayload),
+                payload is not (PolicyEvaluationSessionPayload or ProducedRunCaptureSessionPayload or
+                    RuntimeConfigurationSessionPayload),
             SessionsContractVersions.CurrentEventVersion => true,
             _ => false
         };
@@ -460,6 +466,13 @@ public static class SessionEventPayloadValidation
                 RequireToken(cache.RuntimeVersion, nameof(cache.RuntimeVersion));
                 RequireToken(cache.BindingId, nameof(cache.BindingId));
                 return [ValidateReference(cache.Cache)];
+            case RuntimeConfigurationSessionPayload configuration:
+                if (configuration.Configuration is not { } reference)
+                    return [];
+                SessionMaterialValidation.Validate(reference);
+                if (reference.Material!.Kind != SessionMaterialKind.RuntimeConfiguration)
+                    throw new ArgumentException("A private Runtime configuration reference is required.", nameof(payload));
+                return [ValidateReference(reference)];
             case ProducedRunCaptureSessionPayload capture:
                 ProducedRunCaptureContractValidation.Validate(capture);
                 return [ValidateReference(capture.Package)];

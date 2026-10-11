@@ -18,6 +18,20 @@ public static class RuntimeRegistrationEndpoints
             services.GetRequiredService<TimeProvider>()));
         services.AddHttpClient<RuntimeEnvironmentContextClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
             .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+        services.AddHttpClient("runtime-suspend-environment", client => client.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+        services.AddHttpClient("runtime-suspend-host", client => client.Timeout = TimeSpan.FromSeconds(30))
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+        services.AddScoped(serviceProvider => new RuntimeWorkspaceSuspendHttpClient(
+            serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-suspend-environment"),
+            serviceProvider.GetRequiredService<RuntimeRegistrationOwnerOptions>().EnvironmentOwnerAddress,
+            serviceProvider.GetRequiredService<TimeProvider>()));
+        services.AddScoped(serviceProvider => new RuntimeWorkspaceResumeHttpClient(
+            serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-suspend-environment"),
+            serviceProvider.GetRequiredService<RuntimeRegistrationOwnerOptions>().EnvironmentOwnerAddress));
+        services.AddScoped(serviceProvider => new RuntimeResumeBootstrapHttpClient(
+            serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-suspend-environment"),
+            serviceProvider.GetRequiredService<RuntimeRegistrationOwnerOptions>().EnvironmentOwnerAddress));
         services.AddScoped<RuntimeRegistrationOwner>();
         services.AddScoped<RuntimeSkillContentOwner>();
         services.AddScoped<RuntimeActionOwner>();

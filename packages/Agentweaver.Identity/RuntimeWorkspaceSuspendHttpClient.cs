@@ -265,6 +265,7 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
             material.AcceptedSelectionHash != binding.AcceptedSelectionHash)
             throw new RuntimeAuthorizationException("runtime_suspend_receipt_invalid");
         SessionMaterialValidation.Validate(cache.Reference!);
+        RuntimeResumeBootstrapRequest.RequireConfigurationAcknowledgment(receipt);
         RuntimeNativeTurnContract.ValidateRecorded(receipt.NativeTurn);
         if (receipt.NativeTurn.Admission.Registration != registration)
             throw new RuntimeAuthorizationException("runtime_suspend_native_turn_binding_invalid");

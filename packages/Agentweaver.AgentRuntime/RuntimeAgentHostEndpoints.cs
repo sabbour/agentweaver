@@ -24,6 +24,10 @@ public static class RuntimeAgentHostEndpoints
             (HttpContext context, RuntimeHostConfigureRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.ConfigureAsync(request, actor, token))).RequireAuthorization();
+        endpoints.MapPost(configure.AbsolutePath + "/resume-state",
+            (HttpContext context, RuntimeResumeBootstrapRequest request, CancellationToken token) =>
+                ExecuteAsync(context, configure, timeProvider,
+                    actor => host.ReadResumeBootstrapStateAsync(request, actor, token))).RequireAuthorization();
         endpoints.MapPost("/runtime/v1/refresh",
             (HttpContext context, RuntimeHostRefreshRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
@@ -36,10 +40,14 @@ public static class RuntimeAgentHostEndpoints
             (HttpContext context, RuntimeA2ASendRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.SendAsync(request, actor, token))).RequireAuthorization();
-        endpoints.MapPost("/runtime/v1/suspend/native-evidence",
+        endpoints.MapPost("/runtime/v1/suspend",
             (HttpContext context, RuntimeHostSuspendRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.SuspendAsync(request, actor, token))).RequireAuthorization();
+        endpoints.MapPost("/runtime/v1/workspace/resume",
+            (HttpContext context, RuntimeWorkspaceResumeRequest request, CancellationToken token) =>
+                ExecuteAsync(context, configure, timeProvider,
+                    actor => host.VerifyWorkspaceResumeAsync(request, actor, token))).RequireAuthorization();
         endpoints.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
         endpoints.MapGet("/health/ready", async (HttpContext context, CancellationToken token) =>
         {
@@ -94,6 +102,11 @@ public static class RuntimeAgentHostEndpoints
         catch (HttpRequestException)
         {
             return Results.Json(new { code = "runtime_owner_unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (PlatformNotSupportedException)
+        {
+            return Results.Json(new { code = "runtime_workspace_flush_unsupported" },
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
         catch (OperationCanceledException) when (!context.RequestAborted.IsCancellationRequested)

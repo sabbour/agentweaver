@@ -42,6 +42,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private readonly HttpClient _http;
     private readonly IRuntimeRegistrationOwner _owner;
     private readonly RuntimeCopilotSessionFactory _sessions;
+    private readonly Func<string, WorkspaceVolumeFlushRequest, CancellationToken,
+        Task<WorkspaceVolumeFlushReceipt>> _flushWorkspace;
     private readonly TimeProvider _time;
     private readonly SemaphoreSlim _configure = new(1, 1);
     private readonly object _queueLock = new();
@@ -61,6 +63,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private RuntimeUsageSourceHttpClient? _usageSource;
     private Task? _usage;
     private RuntimeHostSuspendRequest? _suspendRequest;
+    private SessionMaterialAcknowledgment? _configurationAcknowledgment;
+    private RuntimeHostResumeCacheReceipt? _resumeCacheReceipt;
     private PendingTurn? _lastTurn;
     private DateTimeOffset? _configuredAt;
     private DateTimeOffset? _readyAt;
@@ -73,11 +77,23 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         IRuntimeRegistrationOwner owner,
         RuntimeCopilotSessionFactory sessions,
         TimeProvider timeProvider)
+        : this(options, http, owner, sessions, timeProvider, MountedWorkspaceFlush.FlushAndCreateReceiptAsync)
+    {
+    }
+
+    internal RuntimeAgentHost(
+        RuntimeAgentHostOptions options,
+        HttpClient http,
+        IRuntimeRegistrationOwner owner,
+        RuntimeCopilotSessionFactory sessions,
+        TimeProvider timeProvider,
+        Func<string, WorkspaceVolumeFlushRequest, CancellationToken, Task<WorkspaceVolumeFlushReceipt>> flushWorkspace)
     {
         _options = options.Validate();
         _http = http;
         _owner = owner;
         _sessions = sessions;
+        _flushWorkspace = flushWorkspace ?? throw new ArgumentNullException(nameof(flushWorkspace));
         _time = timeProvider;
         _dispatcher = DispatchAsync();
     }
@@ -108,9 +124,29 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     public async Task<RuntimeHostReadinessReceipt> ConfigureAsync(
         RuntimeHostConfigureRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
-        if (request.ContractVersion != 1 || request.Configuration.ValueKind != JsonValueKind.Object ||
-            request.Configuration.GetRawText().Length > AddressedMessageValidation.MaximumPayloadLength)
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
+        var resumeBootstrap = request.ResumeBootstrap;
+        if (request.ContractVersion != 1)
             throw new RuntimeAuthorizationException("runtime_configuration_invalid");
+        byte[] configurationBytes;
+        if (resumeBootstrap is null)
+        {
+            if (request.Configuration.ValueKind != JsonValueKind.Object ||
+                request.Configuration.GetRawText().Length > AddressedMessageValidation.MaximumPayloadLength)
+                throw new RuntimeAuthorizationException("runtime_configuration_invalid");
+            configurationBytes = System.Text.Encoding.UTF8.GetBytes(request.Configuration.GetRawText());
+        }
+        else
+        {
+            resumeBootstrap.Validate();
+            if (request.Configuration.ValueKind != JsonValueKind.Null ||
+                request.Registration != resumeBootstrap.Registration ||
+                request.ConsumeOperationId != resumeBootstrap.ConsumeOperationId ||
+                request.ExchangeOperationId != resumeBootstrap.ExchangeOperationId)
+                throw new RuntimeAuthorizationException("runtime_resume_bootstrap_request_invalid");
+            configurationBytes = [];
+        }
         await _configure.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -125,6 +161,14 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             }
             var retained = _actor;
             _material ??= new(_http, _options.EventsAddress, retained);
+            if (resumeBootstrap is not null)
+            {
+                await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, token).ConfigureAwait(false);
+                var savedConfiguration = await new RuntimeResumeConfigurationHttpClient(
+                    _http, _options.EventsAddress).ReadAsync(resumeBootstrap, retained, token).ConfigureAwait(false);
+                await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, token).ConfigureAwait(false);
+                configurationBytes = savedConfiguration.Bytes;
+            }
             var skillContent = new RuntimeSkillContentHttpClient(
                 _http, _options.OrchestratorAddress, retained);
             await ReadPlacementAsync(request.Registration, retained, token).ConfigureAwait(false);
@@ -139,13 +183,32 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 _options.Image, _material, new(_http, _options.OrchestratorAddress, retained),
                 async (registration, cancellation) =>
                 {
+                    if (resumeBootstrap is not null)
+                        await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, cancellation)
+                            .ConfigureAwait(false);
                     await ReadPlacementAsync(registration, retained, cancellation).ConfigureAwait(false);
+                    if (resumeBootstrap is not null)
+                        await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, cancellation)
+                            .ConfigureAwait(false);
                 }, capturedMcpServer: capturedMcpServer.Endpoint);
-            var bytes = System.Text.Encoding.UTF8.GetBytes(request.Configuration.GetRawText());
             _session = await receiver.ConfigureAsync(
-                bootstrap, bytes, request.ConsumeOperationId, request.ExchangeOperationId, token).ConfigureAwait(false);
+                bootstrap, configurationBytes, request.ConsumeOperationId, request.ExchangeOperationId,
+                token, resumeBootstrap).ConfigureAwait(false);
             var configuredSession = _session
                 ?? throw new RuntimeAuthorizationException("runtime_session_unavailable");
+            if (resumeBootstrap is not null)
+            {
+                await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, token).ConfigureAwait(false);
+                _resumeCacheReceipt = new RuntimeHostResumeCacheReceipt(
+                    1,
+                    resumeBootstrap.Resume.OperationId,
+                    resumeBootstrap.Resume.SourceManifest.ManifestId,
+                    configuredSession.Registration,
+                    resumeBootstrap.Resume.SourceManifest.CacheAcknowledgment
+                        ?? throw new RuntimeAuthorizationException("runtime_resume_cache_unavailable"),
+                    configuredSession.Facts,
+                    "native-cache").ValidateFor(resumeBootstrap);
+            }
             _configuredAt ??= _time.GetUtcNow();
             var source = _usageSource ??= new(_http, _options.OrchestratorAddress, retained);
             if (_usage is null)
@@ -185,6 +248,18 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 _usage = PersistUsageAsync(configuredSession, source, retained);
             }
             await configuredSession.RequireCurrentAsync(token).ConfigureAwait(false);
+            if (resumeBootstrap is not null)
+                await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, token).ConfigureAwait(false);
+            var configurationAcknowledgment = await _material.WriteRuntimeConfigurationAsync(
+                configuredSession, request.ConsumeOperationId, configurationBytes, token).ConfigureAwait(false);
+            if (configurationAcknowledgment.EventId != request.ConsumeOperationId ||
+                _configurationAcknowledgment is { } previousConfiguration &&
+                    !RuntimeWorkspaceResumeHttpClient.SameJson(previousConfiguration, configurationAcknowledgment))
+                throw new RuntimeAuthorizationException("runtime_configuration_acknowledgment_conflict");
+            _configurationAcknowledgment = configurationAcknowledgment;
+            await configuredSession.RequireCurrentAsync(token).ConfigureAwait(false);
+            if (resumeBootstrap is not null)
+                await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, token).ConfigureAwait(false);
             _readyAt ??= _time.GetUtcNow();
             return await ReadinessAsync(token).ConfigureAwait(false);
         }
@@ -271,8 +346,27 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         if (request.OperationId == Guid.Empty || request.ManifestId == Guid.Empty || request.PhaseVersion <= 0 ||
             request.OperationId == request.ManifestId)
             throw new RuntimeAuthorizationException("runtime_suspend_request_invalid");
-        var session = await RequireSessionAsync(request.Proof, actor, token).ConfigureAwait(false);
+        var workspaceFlush = request.WorkspaceFlush
+            ?? throw new RuntimeAuthorizationException("runtime_workspace_flush_request_missing");
+        workspaceFlush.Validate();
+        var proof = request.Proof;
+        if (proof is null)
+            throw new RuntimeAuthorizationException("runtime_suspend_request_invalid");
+        var session = await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
         await RequireCurrentSuspendAsync(request, actor, token).ConfigureAwait(false);
+        var binding = session.Registration.Binding;
+        var owner = workspaceFlush.EnvironmentFence.Owner;
+        if (owner.TenantId != binding.TenantId ||
+            owner.ProjectId != binding.ProjectId ||
+            owner.RunId != binding.RunId ||
+            owner.EnvironmentId != binding.EnvironmentId ||
+            workspaceFlush.EnvironmentFence.LifecycleGeneration != binding.EnvironmentLifecycleGeneration ||
+            workspaceFlush.Spec.ProjectId != binding.ProjectId ||
+            workspaceFlush.Spec.EnvironmentId != binding.EnvironmentId &&
+                (workspaceFlush.Spec.BindingMode != WorkspaceVolumeBindingMode.Shared ||
+                 !workspaceFlush.Spec.AuthorizedEnvironmentIds.Contains(
+                      binding.EnvironmentId, StringComparer.Ordinal)))
+            throw new RuntimeAuthorizationException("runtime_workspace_flush_scope_invalid");
         Task[] admitted;
         lock (_queueLock)
         {
@@ -293,9 +387,117 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         await RequireCurrentSuspendAsync(request, actor, token).ConfigureAwait(false);
         await session.FlushUsageAsync(token).ConfigureAwait(false);
         RequireAvailable();
-        return await session.SuspendAsync(
+        var receipt = await session.SuspendAsync(
             _material!, request, cancellation => RequireCurrentSuspendAsync(request, actor, cancellation), token)
             .ConfigureAwait(false);
+        var flushReceipt = await _flushWorkspace(
+            _sessions.WorkingDirectory, workspaceFlush, token).ConfigureAwait(false);
+        await RequireCurrentSuspendAsync(request, actor, token).ConfigureAwait(false);
+        var completed = receipt with
+        {
+            WorkspaceFlush = flushReceipt,
+            ConfigurationAcknowledgment = _configurationAcknowledgment
+                ?? throw new RuntimeAuthorizationException("runtime_configuration_acknowledgment_unavailable")
+        };
+        RuntimeResumeBootstrapRequest.RequireConfigurationAcknowledgment(completed);
+        return completed;
+    }
+
+    public async Task<RuntimeHostWorkspaceResumeReceipt> VerifyWorkspaceResumeAsync(
+        RuntimeWorkspaceResumeRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
+        request.Validate();
+        if (request.RestoredWorkspace is null)
+            throw new RuntimeAuthorizationException("runtime_resume_verify_workspace_required");
+
+        await RequireCurrentResumeAsync(request, actor, token).ConfigureAwait(false);
+        var treeHash = await MountedWorkspaceFlush.ComputeTreeSha256Async(
+            _sessions.WorkingDirectory, token).ConfigureAwait(false);
+        await RequireCurrentResumeAsync(request, actor, token).ConfigureAwait(false);
+        return new RuntimeHostWorkspaceResumeReceipt(
+            1,
+            request.OperationId,
+            request.SourceManifest.ManifestId,
+            request.RestoredWorkspace,
+            treeHash).ValidateFor(request);
+    }
+
+    public async Task<RuntimeResumeHostStateReceipt> ReadResumeBootstrapStateAsync(
+        RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
+        request.Validate();
+        await _configure.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            RequireAvailable();
+            await RequireCurrentResumeBootstrapAsync(request, actor, token).ConfigureAwait(false);
+            await RequireCurrentResumeRegistrationAsync(request, actor, token).ConfigureAwait(false);
+            var state = ReadResumeBootstrapState(request);
+            await RequireCurrentResumeBootstrapAsync(request, actor, token).ConfigureAwait(false);
+            await RequireCurrentResumeRegistrationAsync(request, actor, token).ConfigureAwait(false);
+            return new RuntimeResumeHostStateReceipt(
+                1,
+                request.Resume.OperationId,
+                request.Resume.SourceManifest.ManifestId,
+                request.Registration,
+                request.ResumeAttemptId,
+                state).ValidateFor(request);
+        }
+        finally
+        {
+            _configure.Release();
+        }
+    }
+
+    private async Task RequireCurrentResumeRegistrationAsync(
+        RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        var current = await _owner.ReadCurrentAsync(
+            request.Registration.RuntimeInstanceId, actor, token).ConfigureAwait(false);
+        RequireRegistration(current, actor);
+        if (current != request.Registration)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+    }
+
+    private RuntimeResumeHostState ReadResumeBootstrapState(RuntimeResumeBootstrapRequest request)
+    {
+        if (_registration is null || _registration != request.Registration)
+            return RuntimeResumeHostState.Missing;
+        if (_receiver is null)
+        {
+            if (_session is null && _resumeCacheReceipt is null && _configurationAcknowledgment is null)
+                return RuntimeResumeHostState.Missing;
+            throw new RuntimeAuthorizationException("runtime_resume_host_state_unavailable");
+        }
+
+        switch (_receiver.State)
+        {
+            case RuntimeBootstrapReceiverState.Empty:
+                if (_session is null && _resumeCacheReceipt is null && _configurationAcknowledgment is null)
+                    return RuntimeResumeHostState.Missing;
+                throw new RuntimeAuthorizationException("runtime_resume_host_state_unavailable");
+            case RuntimeBootstrapReceiverState.Pending:
+            case RuntimeBootstrapReceiverState.Configuring:
+                return RuntimeResumeHostState.BootstrapPresent;
+            case RuntimeBootstrapReceiverState.Ready:
+                if (_session is { } session &&
+                    session.Registration == request.Registration &&
+                    _resumeCacheReceipt is { } cache &&
+                    cache.OperationId == request.Resume.OperationId &&
+                    cache.SourceManifestId == request.Resume.SourceManifest.ManifestId &&
+                    cache.Registration == request.Registration)
+                {
+                    cache.ValidateFor(request);
+                    return RuntimeResumeHostState.Activated;
+                }
+                return RuntimeResumeHostState.BootstrapPresent;
+            default:
+                throw new RuntimeAuthorizationException("runtime_resume_host_state_unavailable");
+        }
     }
 
     private async Task RequireCurrentSuspendAsync(
@@ -306,6 +508,28 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             actor, request, token).ConfigureAwait(false);
         if (current != request)
             throw new RuntimeAuthorizationException("runtime_suspend_authority_changed");
+        token.ThrowIfCancellationRequested();
+    }
+
+    private async Task RequireCurrentResumeAsync(
+        RuntimeWorkspaceResumeRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        var current = await RuntimeOwnerHttpTransport.SendAsync<RuntimeWorkspaceResumeRequest>(
+            _http, _options.OrchestratorAddress, "/internal/runtime/resume/require-current",
+            actor, request, token).ConfigureAwait(false);
+        if (current != request)
+            throw new RuntimeAuthorizationException("runtime_resume_authority_changed");
+        token.ThrowIfCancellationRequested();
+    }
+
+    private async Task RequireCurrentResumeBootstrapAsync(
+        RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        var current = await RuntimeOwnerHttpTransport.SendAsync<RuntimeResumeBootstrapRequest>(
+            _http, _options.OrchestratorAddress, "/internal/runtime/resume/require-bootstrap-current",
+            actor, request, token).ConfigureAwait(false);
+        if (!RuntimeWorkspaceResumeHttpClient.SameJson(current, request))
+            throw new RuntimeAuthorizationException("runtime_resume_authority_changed");
         token.ThrowIfCancellationRequested();
     }
 
@@ -325,6 +549,10 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         RequireAvailable();
         if (_readyAt is null || _session is not { } session || _actor is not { } configuredActor)
             throw new RuntimeAuthorizationException("runtime_host_not_ready");
+        ValidateConfigurationAcknowledgment(
+            _configurationAcknowledgment
+                ?? throw new RuntimeAuthorizationException("runtime_configuration_acknowledgment_unavailable"),
+            session);
         var actor = requestActor ?? configuredActor;
         if (requestActor is not null)
             await RequireCallerAsync(session.Registration, requestActor, token).ConfigureAwait(false);
@@ -332,7 +560,35 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         var phases = await ReadPlacementAsync(session.Registration, actor, token).ConfigureAwait(false);
         RequireAvailable();
         return new(1, session.Registration.RuntimeInstanceId, session.Registration.Revision,
-            session.Registration.Binding.ExecutionFence, _options.Image, phases, session.SourceGrant);
+            session.Registration.Binding.ExecutionFence, _options.Image, phases, session.SourceGrant)
+        {
+            ResumeCache = _resumeCacheReceipt
+        };
+    }
+
+    private static void ValidateConfigurationAcknowledgment(
+        SessionMaterialAcknowledgment acknowledgment, AuthorizedRuntimeSession session)
+    {
+        SessionMaterialValidation.Validate(acknowledgment.Reference);
+        var registration = session.Registration;
+        var binding = registration.Binding;
+        var material = acknowledgment.Reference.Material!;
+        if (acknowledgment.ContractVersion != 1 || acknowledgment.EventId == Guid.Empty ||
+            acknowledgment.Position <= 0 ||
+            acknowledgment.Identity != new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId) ||
+            material.Kind != SessionMaterialKind.RuntimeConfiguration ||
+            material.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            material.RegistrationRevision != registration.Revision ||
+            material.ExecutionFence != binding.ExecutionFence ||
+            material.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+            material.TenantId != binding.TenantId ||
+            material.Sha256 != session.SourceGrant.ConfigurationHash ||
+            material.SdkVersion != session.Facts.SdkVersion ||
+            material.RuntimeVersion != session.Facts.RuntimeVersion ||
+            material.ModelSelectionReference != session.Facts.ModelSelectionReference ||
+            material.ModelId != session.Facts.ModelId ||
+            material.MaxPromptTokens != session.Facts.MaxPromptTokens)
+            throw new RuntimeAuthorizationException("runtime_configuration_acknowledgment_invalid");
     }
 
     private async Task<AuthorizedRuntimeSession> RequireSessionAsync(

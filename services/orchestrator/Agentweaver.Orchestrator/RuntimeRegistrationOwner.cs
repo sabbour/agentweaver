@@ -58,6 +58,31 @@ internal sealed class RuntimeRegistrationOwner(
         return registration;
     }
 
+    internal async Task<RuntimeRegistration> RevokeAfterPlacementReleaseAsync(
+        RuntimeRegistration expected,
+        CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.Validate(expected);
+        if (expected.State != RuntimeRegistrationState.Active ||
+            expected.Revision == long.MaxValue)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+
+        var current = await registrations.ReadAsync(
+            expected.RuntimeInstanceId, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_registration_unknown");
+        var revoked = expected with
+        {
+            Revision = checked(expected.Revision + 1),
+            State = RuntimeRegistrationState.Revoked
+        };
+        if (current == revoked)
+            return current;
+        if (current != expected)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+        return await registrations.RevokeAsync(
+            expected.RuntimeInstanceId, expected.Revision, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<RuntimeRegistration> ReadCurrentAsync(
         HttpContext context, Guid runtimeInstanceId, CancellationToken cancellationToken) =>
         await ExecuteCurrentAsync(context, runtimeInstanceId,

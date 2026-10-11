@@ -95,6 +95,14 @@ short-lived credential out of band to the exact registered placement. Its receip
 contains references, the configuration hash, and placement/fence evidence, not a
 credential value. A missing registered delivery adapter must report unavailable.
 
+`RuntimeWorkspaceResumeHttpClient` separates new placement preparation from content verification.
+Its source request contains Core's saved manifest and exact recorded suspend producer evidence.
+The second request contains Core's saved new Workspace context.
+Only the final receipt combines the actual Host tree hash with the verified new Network generation.
+Neither stage requires an already configured Runtime.
+The optional observed Runtime endpoint pins the Pod address while retaining normal HTTPS Service-name verification.
+These contracts do not prove a mounted restore, native TLS, or a deployed resume.
+
 The configure and observation credential purposes are separate. Default JSON and
 diagnostic strings omit credential values. These contracts alone do not establish
 a runtime channel or prove SDK provenance.

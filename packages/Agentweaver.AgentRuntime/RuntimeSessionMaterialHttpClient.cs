@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 
@@ -24,6 +25,10 @@ public sealed class RuntimeSessionMaterialHttpClient(
         AuthorizedRuntimeSession session, Guid eventId, byte[] nativeFiles, CancellationToken cancellationToken) =>
         WriteAsync(session, eventId, SessionMaterialKind.SdkCache, nativeFiles, null, cancellationToken);
 
+    internal Task<SessionMaterialAcknowledgment> WriteRuntimeConfigurationAsync(
+        AuthorizedRuntimeSession session, Guid eventId, byte[] configuration, CancellationToken cancellationToken) =>
+        WriteAsync(session, eventId, SessionMaterialKind.RuntimeConfiguration, configuration, null, cancellationToken);
+
     internal Task<SessionMaterialAcknowledgment> WriteRemoteToolResultAsync(
         RemoteToolResultProof proof, ReadOnlyMemory<byte> resultBytes, CancellationToken cancellationToken) =>
         Task.FromException<SessionMaterialAcknowledgment>(
@@ -48,8 +53,18 @@ public sealed class RuntimeSessionMaterialHttpClient(
             MaxPromptTokens = session.Facts.MaxPromptTokens
         };
         SessionMaterialValidation.Validate(request);
+        if (kind == SessionMaterialKind.RuntimeConfiguration)
+        {
+            using var document = JsonDocument.Parse(bytes);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                throw new RuntimeAuthorizationException("runtime_configuration_invalid");
+        }
+        var route = kind == SessionMaterialKind.RuntimeConfiguration
+            ? "runtime-configuration"
+            : "material";
         var receipt = await RuntimeOwnerHttpTransport.SendAsync<SessionMaterialAcknowledgment>(
-            client, _address, $"/internal/sessions/{Uri.EscapeDataString(registration.Binding.SessionId)}/material",
+            client, _address,
+            $"/internal/sessions/{Uri.EscapeDataString(registration.Binding.SessionId)}/{route}",
             actor, request, cancellationToken).ConfigureAwait(false);
         Validate(receipt);
         var material = receipt.Reference.Material!;
@@ -73,10 +88,26 @@ public sealed class RuntimeSessionMaterialHttpClient(
     }
 
     internal async Task<RuntimeSessionRecovery> ReadRecoveryAsync(
-        RuntimeRegistration registration, CancellationToken cancellationToken)
+        RuntimeRegistration registration,
+        CancellationToken cancellationToken,
+        SessionMaterialAcknowledgment? expectedCacheAcknowledgment = null)
     {
         var binding = registration.Binding;
         var identity = new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId);
+        if (expectedCacheAcknowledgment is { } expectedCache)
+        {
+            SessionMaterialValidation.Validate(expectedCache.Reference);
+            if (expectedCache.ContractVersion != 1 || expectedCache.Identity != identity ||
+                expectedCache.EventId == Guid.Empty ||
+                expectedCache.Reference.Material!.Kind != SessionMaterialKind.SdkCache)
+                throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
+            var recordedCache = await ReadRecordedAsync(
+                identity, expectedCache.EventId, SessionMaterialKind.SdkCache, cancellationToken)
+                .ConfigureAwait(false);
+            if (!RuntimeWorkspaceResumeHttpClient.SameJson(recordedCache.Material, expectedCache))
+                throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
+            return new(identity, binding.TenantId, recordedCache, Array.Empty<(string Role, string Content)>());
+        }
         var turns = new List<(string Role, string Content)>();
         SessionEventEnvelope? latestCache = null;
         long lastPosition = 0;
@@ -175,6 +206,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
             throw new ArgumentException("A recorded session event and material kind are required.");
         if (kind == SessionMaterialKind.RemoteToolResult)
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_route_unavailable");
+        if (kind == SessionMaterialKind.RuntimeConfiguration)
+            throw new RuntimeAuthorizationException("runtime_configuration_route_unavailable");
         var result = await RuntimeOwnerHttpTransport.SendAsync<SessionMaterialReadResult>(
             client, _address,
             $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/material/{eventId:D}/{kind}",
