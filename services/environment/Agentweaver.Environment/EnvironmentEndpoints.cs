@@ -211,6 +211,42 @@ public static class EnvironmentEndpoints
                 }
             }).RequireAuthorization();
 
+        MapRuntimeResume("prepare");
+        MapRuntimeResume("verify");
+
+        void MapRuntimeResume(string stage) => endpoints.MapPost(
+            $"/internal/runtime/resume/{stage}", async (
+                RuntimeWorkspaceResumeRequest request,
+                HttpContext context,
+                [FromServices] TimeProvider timeProvider,
+                CancellationToken cancellationToken) =>
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                if (!TryReadCaller(context, out var caller))
+                    return Results.Unauthorized();
+                var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
+                if (!authentication.Succeeded || authentication.Properties?.ExpiresUtc is not { } expiresAt ||
+                    expiresAt <= timeProvider.GetUtcNow())
+                    return Results.Unauthorized();
+                var manager = context.RequestServices.GetService<EnvironmentRuntimeWorkspaceResumeManager>();
+                if (manager is null)
+                    return Results.Json(new { code = "runtime_resume_owner_unavailable" },
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                var bearer = new SecretCredential(caller!.BearerToken, expiresAt, timeProvider);
+                try
+                {
+                    var actor = new RuntimeActorAuthorization(bearer, caller.TenantSelector);
+                    return await ExecuteSandboxApiAsync(async () => stage == "prepare"
+                        ? Results.Ok(await manager.PrepareAsync(request, actor, cancellationToken).ConfigureAwait(false))
+                        : Results.Ok(await manager.VerifyAsync(request, actor, cancellationToken).ConfigureAwait(false)),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    bearer.Invalidate();
+                }
+            }).RequireAuthorization();
+
         endpoints.MapPost("/internal/runtime/suspend/resolve", async (
             RuntimeHostSuspendRequest request,
             HttpContext context,

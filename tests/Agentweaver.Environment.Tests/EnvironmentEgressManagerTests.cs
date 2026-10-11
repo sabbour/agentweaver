@@ -45,7 +45,7 @@ public sealed class EnvironmentEgressManagerTests
         Dns(EgressProtocol.Udp)
     ];
 
-    private static EffectiveNetworkPolicySelection Selection(
+    internal static EffectiveNetworkPolicySelection Selection(
         ImmutableArray<EffectiveProviderCandidate>? candidates = null) =>
         new(
             ProjectId,
@@ -86,7 +86,7 @@ public sealed class EnvironmentEgressManagerTests
         CiliumEgressCapabilities.Dns
     ];
 
-    private static CiliumEgressProviderOptions Options() =>
+    internal static CiliumEgressProviderOptions Options() =>
         new(
             "agentweaver",
             new Version(1, 0, 0),
@@ -164,7 +164,7 @@ public sealed class EnvironmentEgressManagerTests
             expectedPrevious,
             idempotencyKey ?? $"policy-{generation}-after-{expectedPrevious}");
 
-    private static EnvironmentEgressManager Manager(
+    internal static EnvironmentEgressManager Manager(
         FakeProjectsConfigClient projects,
         FakeCiliumPolicyResourceStore store,
         FakeEnvironmentLifecycleStore? lifecycleStore = null)
@@ -1057,7 +1057,7 @@ public sealed class EnvironmentEgressManagerTests
         Assert.Equal(1, reconciled.Binding.AppliedIntentGeneration);
     }
 
-    private sealed class FakeProjectsConfigClient(
+    internal sealed class FakeProjectsConfigClient(
         IEnumerable<ProjectAuthorizationContextResponse> authorizations,
         EffectiveNetworkPolicySelection selection) : IProjectsConfigClient
     {
@@ -1096,7 +1096,7 @@ public sealed class EnvironmentEgressManagerTests
         }
     }
 
-    private sealed class FakeEnvironmentLifecycleStore : IEnvironmentLifecycleStore
+    internal class FakeEnvironmentLifecycleStore : IEnvironmentLifecycleStore
     {
         private readonly Dictionary<(string Tenant, string Project, string Run, string Environment), EnvironmentLifecycleSnapshot>
             _owners = [];
@@ -1136,9 +1136,10 @@ public sealed class EnvironmentEgressManagerTests
             return Task.FromResult(snapshot);
         }
 
-        public Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
+        public virtual async Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
             EnvironmentLifecycleTransitionRequest request,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Func<CancellationToken, Task>? beforeCommitCheck = null)
         {
             var key = Key(request.Owner);
             var expectedGeneration = _owners.TryGetValue(key, out var current)
@@ -1149,8 +1150,10 @@ public sealed class EnvironmentEgressManagerTests
             var snapshot = new EnvironmentLifecycleSnapshot(
                 new EnvironmentGenerationFence(request.Owner, expectedGeneration + 1),
                 request.TargetState);
+            if (beforeCommitCheck is not null)
+                await beforeCommitCheck(cancellationToken);
             _owners[key] = snapshot;
-            return Task.FromResult(new EnvironmentLifecycleTransitionResult(snapshot, false));
+            return new EnvironmentLifecycleTransitionResult(snapshot, false);
         }
 
         public Task<EnvironmentNetworkEffectReservation> ReserveNetworkEffectAsync(
@@ -1314,7 +1317,7 @@ public sealed class EnvironmentEgressManagerTests
             return Task.FromResult(reservation);
         }
 
-        public Task<EnvironmentWorkspaceVolumeSnapshot?> GetWorkspaceVolumeAsync(
+        public virtual Task<EnvironmentWorkspaceVolumeSnapshot?> GetWorkspaceVolumeAsync(
             EnvironmentGenerationFence environmentFence,
             string volumeId,
             CancellationToken cancellationToken) =>
@@ -1430,7 +1433,7 @@ public sealed class EnvironmentEgressManagerTests
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeAttachAsync(
+        public virtual Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeAttachAsync(
             EnvironmentGenerationFence environmentFence,
             string volumeId,
             long expectedTransitionRevision,
@@ -1440,7 +1443,7 @@ public sealed class EnvironmentEgressManagerTests
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeAttachAsync(
+        public virtual Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeAttachAsync(
             Guid operationId,
             EnvironmentGenerationFence environmentFence,
             bool effectMayHaveApplied,
@@ -1455,7 +1458,7 @@ public sealed class EnvironmentEgressManagerTests
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeDetachAsync(
+        public virtual Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeDetachAsync(
             EnvironmentGenerationFence environmentFence,
             string volumeId,
             long expectedTransitionRevision,
@@ -1465,7 +1468,7 @@ public sealed class EnvironmentEgressManagerTests
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeDetachAsync(
+        public virtual Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeDetachAsync(
             Guid operationId,
             EnvironmentGenerationFence environmentFence,
             bool effectMayHaveApplied,
@@ -1561,7 +1564,7 @@ public sealed class EnvironmentEgressManagerTests
             (owner.TenantId, owner.ProjectId, owner.RunId, owner.EnvironmentId);
     }
 
-    private sealed class FakeCiliumPolicyResourceStore : ICiliumPolicyResourceStore
+    internal sealed class FakeCiliumPolicyResourceStore : ICiliumPolicyResourceStore
     {
         private readonly Dictionary<(string Namespace, string Name), CiliumNetworkPolicyDocument> _resources = [];
         private long _version;

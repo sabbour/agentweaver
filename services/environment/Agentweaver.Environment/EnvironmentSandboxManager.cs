@@ -97,6 +97,8 @@ public sealed record EnvironmentSandboxPlacementProjectionV1(
     public EnvironmentRuntimeWorkspaceEvidence? RuntimeWorkspace { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public EnvironmentSandboxConsumerPinV1? ProviderPin { get; init; }
+    [JsonIgnore]
+    public RuntimeWorkspaceResumeRequest? RuntimeResume { get; init; }
 }
 
 public sealed record EnvironmentSandboxConsumerPinV1(
@@ -131,13 +133,37 @@ public sealed class EnvironmentSandboxManager(
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    public async Task<EnvironmentSandboxResult> ProvisionAsync(
+    public Task<EnvironmentSandboxResult> ProvisionAsync(
         CurrentCallerRequest caller,
         string projectId,
         string runId,
         string environmentId,
         SandboxProvisionApiRequest request,
+        CancellationToken cancellationToken) =>
+        ProvisionCoreAsync(caller, projectId, runId, environmentId, request, cancellationToken);
+
+    internal Task<EnvironmentSandboxResult> ProvisionResumeAsync(
+        CurrentCallerRequest caller,
+        SandboxProvisionApiRequest request,
+        RuntimeWorkspaceResumeRequest resume,
+        Func<CancellationToken, Task> requireCurrent,
         CancellationToken cancellationToken)
+    {
+        resume.Validate();
+        var owner = resume.SourceManifest.EnvironmentFence!.Owner;
+        return ProvisionCoreAsync(caller, owner.ProjectId, owner.RunId, owner.EnvironmentId,
+            request, cancellationToken, resume, requireCurrent);
+    }
+
+    private async Task<EnvironmentSandboxResult> ProvisionCoreAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        SandboxProvisionApiRequest request,
+        CancellationToken cancellationToken,
+        RuntimeWorkspaceResumeRequest? resume = null,
+        Func<CancellationToken, Task>? requireCurrent = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         request = request.Validate();
@@ -163,6 +189,8 @@ public sealed class EnvironmentSandboxManager(
             optionsSnapshot,
             JsonSerializer.SerializeToElement(context.Selection.RunSelection, JsonOptions),
             JsonSerializer.SerializeToElement(request, JsonOptions));
+        if (requireCurrent is not null)
+            await requireCurrent(cancellationToken).ConfigureAwait(false);
         var reservation = await leaseStore.ReserveProvisionAsync(
             context.Fence,
             request.IdempotencyKey,
@@ -171,6 +199,8 @@ public sealed class EnvironmentSandboxManager(
         var lease = reservation.Lease;
         if (lease.State != SandboxLeaseState.Provisioning)
         {
+            if (requireCurrent is not null)
+                await requireCurrent(cancellationToken).ConfigureAwait(false);
             if (lease.State == SandboxLeaseState.Active && lease.IsCurrent)
                 return await ObserveAsync(
                     caller,
@@ -187,6 +217,8 @@ public sealed class EnvironmentSandboxManager(
         SandboxProvisionedResource? provisioned = null;
         try
         {
+            if (requireCurrent is not null)
+                await requireCurrent(cancellationToken).ConfigureAwait(false);
             var plannedResource = SandboxResourceIdentity.CreatePlannedReference(
                 candidate.ProviderId,
                 candidate.OptionsRevision,
@@ -215,8 +247,13 @@ public sealed class EnvironmentSandboxManager(
                     request,
                     provisionRequest.Workspace,
                     selector.MatchLabels,
-                    workspaceAttachmentTransitionRevision.Value),
+                    workspaceAttachmentTransitionRevision.Value)
+                {
+                    RuntimeResume = resume
+                },
                 JsonOptions);
+            if (requireCurrent is not null)
+                await requireCurrent(cancellationToken).ConfigureAwait(false);
             lease = await leaseStore.SaveProviderRequestAsync(
                 lease.OperationId,
                 context.Fence,
@@ -225,6 +262,8 @@ public sealed class EnvironmentSandboxManager(
             if (lease.State != SandboxLeaseState.Provisioning)
                 return ToResult(lease);
 
+            if (requireCurrent is not null)
+                await requireCurrent(cancellationToken).ConfigureAwait(false);
             workspaceAttachmentAttempted = true;
             await AttachWorkspaceForSandboxAsync(
                 context.Fence,
@@ -251,6 +290,8 @@ public sealed class EnvironmentSandboxManager(
 
             await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
             await lifecycleStore.RequireActiveAsync(context.Fence, cancellationToken).ConfigureAwait(false);
+            if (requireCurrent is not null)
+                await requireCurrent(cancellationToken).ConfigureAwait(false);
             providerCallStarted = true;
             provisioned = await sandboxProvider.ProvisionAsync(
                 provisionRequest, cancellationToken).ConfigureAwait(false);
@@ -308,6 +349,7 @@ public sealed class EnvironmentSandboxManager(
             !providerCallStarted && exception is (ArgumentException or
                 InvalidOperationException or
                 NotSupportedException or
+                RuntimeAuthorizationException or
                 ProjectsConfigApiException or
                 EnvironmentLifecycleException or
                 CiliumPolicyException or
@@ -336,6 +378,8 @@ public sealed class EnvironmentSandboxManager(
             effectMayHaveApplied: true,
             cancellationToken).ConfigureAwait(false);
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        if (requireCurrent is not null)
+            await requireCurrent(cancellationToken).ConfigureAwait(false);
         if (lease.State != SandboxLeaseState.Active)
             return ToResult(lease);
         return await ObserveAsync(
@@ -464,7 +508,7 @@ public sealed class EnvironmentSandboxManager(
                 {
                     RuntimeWorkspace = ProjectRuntimeWorkspace(lifecycle.Fence, currentLease!, workspace)
                 };
-            if (projection is not null && includeRuntimeReadiness)
+            if (projection is not null && (includeRuntimeReadiness || projection.RuntimeResume is not null))
             {
                 var pinnedLease = currentLease!;
                 var selection = pinnedLease.ProvisionIntent.SelectionSnapshot
@@ -480,7 +524,10 @@ public sealed class EnvironmentSandboxManager(
                 await egressManager.VerifyNetworkForSandboxAsync(
                     caller, lifecycle.Fence, selected, provision.NetworkPolicyGeneration,
                     callbackCancellationToken, runBoundRead).ConfigureAwait(false);
-                var describe = CreateDescribeRequest(pinnedLease);
+                var describe = CreateDescribeRequest(pinnedLease) with
+                {
+                    RequireRuntimeEndpoint = projection.RuntimeResume is not null
+                };
                 var observation = (await sandboxProvider.DescribeAsync(describe, callbackCancellationToken)
                     .ConfigureAwait(false)).ValidateFor(describe);
                 await egressManager.VerifyNetworkForSandboxAsync(
@@ -1804,6 +1851,7 @@ public sealed class EnvironmentSandboxManager(
             provisionedResource.Placement)
         {
             Image = image,
+            RuntimeResume = ReadRuntimeResume(lease),
             ProviderPin = new(1, binding.ProviderId, binding.AdapterVersion,
                 binding.OptionsSchemaVersion, binding.OptionsRevision, provisionedResource.Resource,
                 provisionedResource.NegotiatedCapabilities)
@@ -1844,7 +1892,28 @@ public sealed class EnvironmentSandboxManager(
         SandboxProvisionApiRequest Request,
         SandboxWorkspaceAttachment Workspace,
         ImmutableDictionary<string, string> EgressSelectorLabels,
-        long WorkspaceAttachmentTransitionRevision);
+        long WorkspaceAttachmentTransitionRevision)
+    {
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public RuntimeWorkspaceResumeRequest? RuntimeResume { get; init; }
+    }
+
+    private static RuntimeWorkspaceResumeRequest? ReadRuntimeResume(SandboxLeaseSnapshot lease)
+    {
+        var request = lease.ProvisionIntent.ProviderRequest;
+        if (request.ValueKind != JsonValueKind.Object ||
+            !request.TryGetProperty("runtimeResume", out var resume) || resume.ValueKind == JsonValueKind.Null)
+            return null;
+        try
+        {
+            return (resume.Deserialize<RuntimeWorkspaceResumeRequest>(JsonOptions)
+                ?? throw new JsonException("The retained resume request is empty.")).Validate();
+        }
+        catch (JsonException exception)
+        {
+            throw new EnvironmentLifecycleException("sandbox_resume_binding_invalid", exception.Message);
+        }
+    }
 
     private sealed record AuthorizedSandboxContext(
         EnvironmentGenerationFence Fence,

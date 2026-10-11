@@ -509,6 +509,11 @@ No patch, minor, or major version receives inferred compatibility.
 Draft services can omit image digests until actual publication.
 Preparation uses checked-in .NET lock files and immutable container base-image digests.
 Source-bound provenance describes prepared packages and local image archives.
+AgentHost preparation uses its existing pinned native Dockerfile and committed input files.
+One component record binds a Docker-save archive and measured OCI archive to the same image config.
+Publication rechecks both archives, actual OCI byte sizes, source/tree labels, and the pinned native runtime before registry login.
+The saved OCI digest remains separate from the actual published registry digest.
+Gateway and MCP use the existing digest-pinned SDK container pattern.
 A separate manual workflow can publish those artifacts and record registry digests.
 Partial-publication receipts do not prove completed publication.
 The Environment manifest entry selects its executable service image rather than a library package.

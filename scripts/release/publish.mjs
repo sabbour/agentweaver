@@ -14,6 +14,10 @@ import {
 import { componentImageRepository } from './pack.mjs';
 import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
 import { runPublicationCommand as command } from './command.mjs';
+import {
+  AGENTHOST_ID, validateAgentHostArtifact, verifyAgentHostArchives, verifyLoadedAgentHostImage,
+} from './agenthost-image.mjs';
+import { measureAgentHostArchiveSync } from './measure-agenthost-image.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (message) => { throw new Error(`manual publication: ${message}`); };
@@ -148,6 +152,7 @@ function parseRegistry(value) {
 
 export function publishArtifacts(manifestPath, outDir, sourceSha, {
   root = process.cwd(), confirmed = false, env = process.env, run = command,
+  measureAgentHostArchive = measureAgentHostArchiveSync,
   writeFileSync: writeReceipt = writeFileSync,
   packagesOnly = false,
   foundationProbeOnly = false,
@@ -229,7 +234,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     const kind = component.kind === 'service' ? 'image' : 'package';
     const filename = kind === 'image' ? `${component.id}.${component.version}.tar.gz`
       : `${path.basename(component.project, '.csproj')}.${component.version}.nupkg`;
-    const artifactFilename = component.project === WEB_PROJECT_PATH
+    const artifactFilename = component.project === WEB_PROJECT_PATH || component.id === AGENTHOST_ID
       ? `${component.id}.${component.version}.tar`
       : filename;
     const matches = provenance.artifacts.filter((artifact) =>
@@ -237,12 +242,16 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     if (matches.length !== 1) fail(`missing unique artifact for ${component.id}`);
     const artifact = matches[0];
     const file = path.join(directory, artifactFilename);
-    if (hash(readFileSync(file)) !== artifact.sha256) fail(`artifact hash mismatch for ${component.id}`);
+    if (component.id !== AGENTHOST_ID && hash(readFileSync(file)) !== artifact.sha256)
+      fail(`artifact hash mismatch for ${component.id}`);
     const componentProvenance = provenance.components[index];
     const localImageReference = component.project === WEB_PROJECT_PATH
       ? validateWebArtifact(component, artifact, componentProvenance, sourceSha, root, git)
       : undefined;
-    selected.push({ component, artifact, file, localImageReference });
+    const agentHost = component.id === AGENTHOST_ID
+      ? validateAgentHostArtifact(component, artifact, componentProvenance, root, directory, sourceSha, git, measureAgentHostArchive)
+      : undefined;
+    selected.push({ component, artifact, file, localImageReference: agentHost?.imageReference ?? localImageReference, agentHost });
   }
   const hasPackages = selected.some(({ artifact }) => artifact.kind === 'package');
   const hasImages = selected.some(({ artifact }) => artifact.kind === 'image');
@@ -361,9 +370,16 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   receipt.claimSha = createRecord('claim', { ...receipt, status: 'claimed' });
   let publicationError;
   try {
-    for (const { component, artifact, file, localImageReference } of selected) {
+    for (const { component, artifact, file, localImageReference, agentHost } of selected) {
       if (localImageReference === undefined) continue;
+      if (agentHost) verifyAgentHostArchives(agentHost.archives, directory);
       run('docker', ['load', '--input', file]);
+      if (agentHost) {
+        verifyLoadedAgentHostImage(localImageReference, agentHost.measured, agentHost.source, component.version,
+          args => run('docker', args));
+        verifyAgentHostArchives(agentHost.archives, directory);
+        continue;
+      }
       let image;
       try {
         image = JSON.parse(run('docker', ['image', 'inspect', '--format', '{{json .}}', localImageReference]));
@@ -378,16 +394,15 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       }
     }
     if (hasImages) run('docker', ['login', registry.host, '--username', env.RELEASE_REGISTRY_USER, '--password-stdin'], env.RELEASE_REGISTRY_PASSWORD);
-    for (const { component, artifact, file } of selected) {
+    for (const { component, artifact, file, localImageReference, agentHost } of selected) {
       if (artifact.kind === 'package') {
         run('dotnet', ['nuget', 'push', file, '--source', env.RELEASE_NUGET_SOURCE, '--api-key', env.RELEASE_NUGET_API_KEY]);
         receipt.published.push({ id: component.id, version: component.version, kind: 'package', feed: env.RELEASE_NUGET_SOURCE, sha256: artifact.sha256 });
       } else {
-        const local = component.project === WEB_PROJECT_PATH
-          ? artifact.imageReference
-          : `${componentImageRepository(component.id)}:${component.version}`;
+        const local = agentHost ? agentHost.measured.image.configDigest
+          : localImageReference ?? `${componentImageRepository(component.id)}:${component.version}`;
         const remote = `${imageRepositories.get(component.id)}:${component.version}`;
-        if (component.project !== WEB_PROJECT_PATH) run('docker', ['load', '--input', file]);
+        if (localImageReference === undefined) run('docker', ['load', '--input', file]);
         if (replaceProbe) {
           const config = JSON.parse(run('docker', ['inspect', '--format', '{{json .Config}}', local]));
           const source = resolveProbeImageSource({ repoRoot: root });
@@ -427,7 +442,14 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
           }
           receipt[replacementField].originalIndexAndPlatformsRetained = true;
         } else {
-          receipt.published.push({ id: component.id, version: component.version, kind: 'image', image: digest, archiveSha256: artifact.sha256 });
+          receipt.published.push({
+            id: component.id, version: component.version, kind: 'image', image: digest, archiveSha256: artifact.sha256,
+            ...(agentHost ? {
+              ociArchiveSha256: artifact.ociArchive.sha256,
+              imageConfigDigest: agentHost.measured.image.configDigest,
+              preparedOciMeasurement: agentHost.measured,
+            } : {}),
+          });
         }
       }
     }

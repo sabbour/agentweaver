@@ -34,7 +34,8 @@ public sealed class EnvironmentEgressManager(
     public async Task<EnvironmentEgressOperationResult> ApplyAndVerifyAsync(
         CurrentCallerRequest caller,
         ApplyEnvironmentEgressRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? requireCurrent = null)
     {
         try
         {
@@ -82,6 +83,8 @@ public sealed class EnvironmentEgressManager(
                     requireRunSelection: true,
                     cancellationToken).ConfigureAwait(false);
 
+                if (requireCurrent is not null)
+                    await requireCurrent(cancellationToken).ConfigureAwait(false);
                 providerCallStarted = true;
                 await cilium.ApplyAsync(
                     selector,

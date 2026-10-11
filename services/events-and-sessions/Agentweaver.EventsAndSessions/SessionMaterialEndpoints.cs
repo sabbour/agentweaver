@@ -2,7 +2,9 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Azure;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Authentication;
 using System.Text.Json;
 
 namespace Agentweaver.EventsAndSessions;
@@ -22,6 +24,18 @@ internal sealed class SessionMaterialRuntimeClient(HttpClient client, Coordinati
         RuntimeOwnerHttpTransport.SendAsync<RuntimeSdkSourceReceipt>(
             client, Address, $"/internal/runtime/sources/{runtimeInstanceId:D}", actor, null, cancellationToken);
 
+    internal async Task RequireResumeBootstrapCurrentAsync(
+        RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
+    {
+        request.Validate();
+        var current = await RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeResumeBootstrapRequest>(
+            client, Address, "/internal/runtime/resume/require-bootstrap-current", actor, request,
+            SessionMaterialValidation.MaximumBytes, false, cancellationToken).ConfigureAwait(false);
+        if (current is null || !actor.Bearer.IsUsable() ||
+            !JsonElement.DeepEquals(JsonSerializer.SerializeToElement(request),
+                JsonSerializer.SerializeToElement(current)))
+            throw new RuntimeAuthorizationException("runtime_resume_bootstrap_authority_changed");
+    }
 }
 
 internal sealed class SessionMaterialApplicationService(
@@ -29,10 +43,21 @@ internal sealed class SessionMaterialApplicationService(
     SessionMaterialStore material, PostgresSessionsJournal journal, ISessionsProviderBinder bindings,
     TimeProvider timeProvider)
 {
-    internal async Task<SessionMaterialAcknowledgment> WriteAsync(
-        HttpContext context, string sessionId, SessionMaterialWriteRequest request, CancellationToken cancellationToken)
+    internal Task<SessionMaterialAcknowledgment> WriteAsync(
+        HttpContext context, string sessionId, SessionMaterialWriteRequest request, CancellationToken cancellationToken) =>
+        WriteCoreAsync(context, sessionId, request, false, cancellationToken);
+
+    internal Task<SessionMaterialAcknowledgment> WriteConfigurationAsync(
+        HttpContext context, string sessionId, SessionMaterialWriteRequest request, CancellationToken cancellationToken) =>
+        WriteCoreAsync(context, sessionId, request, true, cancellationToken);
+
+    private async Task<SessionMaterialAcknowledgment> WriteCoreAsync(
+        HttpContext context, string sessionId, SessionMaterialWriteRequest request,
+        bool configurationRoute, CancellationToken cancellationToken)
     {
         SessionMaterialValidation.Validate(request);
+        if (configurationRoute != (request.Kind == SessionMaterialKind.RuntimeConfiguration))
+            throw new RuntimeAuthorizationException("runtime_configuration_protected_route_required");
         if (request.Kind == SessionMaterialKind.RemoteToolResult)
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_write_requires_orchestrator");
         var first = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
@@ -91,8 +116,59 @@ internal sealed class SessionMaterialApplicationService(
             }, cancellationToken).ConfigureAwait(false);
     }
 
+    internal async Task<SessionMaterialReadResult> ReadResumeConfigurationAsync(
+        HttpContext context, RuntimeResumeBootstrapRequest request, CancellationToken cancellationToken)
+    {
+        request.Validate();
+        var registration = request.Registration;
+        var first = await projects.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+        NativeUsageApplicationService.RequireReadAuthority(first);
+        RequireScope(first, registration.Binding.TenantId, registration.Binding.ProjectId, registration.Binding.RunId);
+        var bearer = await NativeUsageApplicationService.BearerAsync(context, timeProvider).ConfigureAwait(false);
+        try
+        {
+            var actor = new RuntimeActorAuthorization(bearer, first.TenantId);
+            await runtime.RequireResumeBootstrapCurrentAsync(request, actor, cancellationToken).ConfigureAwait(false);
+            var pinned = await journal.GetProviderBindingAsync(
+                context.User, registration.Binding.SessionId, cancellationToken).ConfigureAwait(false);
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var source = RuntimeResumeBootstrapRequest.RequireConfigurationAcknowledgment(
+                request.Resume.SourceRelease.HostReceipt);
+            var result = await material.ReadAsync(
+                context.User, source.Identity.SessionId, source.EventId, SessionMaterialKind.RuntimeConfiguration,
+                async (recorded, token) =>
+                {
+                    if (recorded != source.Reference.Material)
+                        throw new RuntimeAuthorizationException("runtime_resume_configuration_changed");
+                    await RequireCurrentAsync(token).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
+            request.ValidateConfiguration(result);
+            await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+            return result;
+
+            async Task RequireCurrentAsync(CancellationToken token)
+            {
+                var current = await projects.GetCurrentAsync(context, token).ConfigureAwait(false);
+                NativeUsageApplicationService.RequireReadAuthority(current);
+                RequireScope(current, registration.Binding.TenantId,
+                    registration.Binding.ProjectId, registration.Binding.RunId);
+                await bindings.VerifyPinnedAsync(context.User, pinned, token).ConfigureAwait(false);
+                if (await runtime.ReadCurrentAsync(registration.RuntimeInstanceId, actor, token).ConfigureAwait(false)
+                    != registration)
+                    throw new RuntimeAuthorizationException("runtime_resume_bootstrap_registration_changed");
+                await runtime.RequireResumeBootstrapCurrentAsync(request, actor, token).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            bearer.Invalidate();
+        }
+    }
+
     internal static void RequireMaterialReadAuthority(ProjectsAuthorizationContextResponse authority, SessionMaterialKind kind)
     {
+        if (kind == SessionMaterialKind.RuntimeConfiguration)
+            throw new RuntimeAuthorizationException("runtime_configuration_read_requires_resume_owner");
         if (kind == SessionMaterialKind.SdkCache)
         {
             NativeUsageApplicationService.RequireReadAuthority(authority);
@@ -132,6 +208,28 @@ public static class SessionMaterialEndpoints
 
     public static void MapSessionMaterialEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapPost("/internal/runtime/resume/configuration",
+            (HttpContext context, CancellationToken token) =>
+                ExecuteProtectedConfigurationAsync(context, async () =>
+                {
+                    var request = await context.Request.ReadFromJsonAsync<RuntimeResumeBootstrapRequest>(
+                        cancellationToken: token).ConfigureAwait(false)
+                        ?? throw new ArgumentException("A saved Runtime resume request is required.");
+                    return await context.RequestServices.GetRequiredService<SessionMaterialApplicationService>()
+                        .ReadResumeConfigurationAsync(context, request, token).ConfigureAwait(false);
+                }))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/sessions/{sessionId}/runtime-configuration",
+            (HttpContext context, string sessionId, CancellationToken token) =>
+                ExecuteProtectedConfigurationAsync(context, async () =>
+                {
+                    var request = await context.Request.ReadFromJsonAsync<SessionMaterialWriteRequest>(
+                        cancellationToken: token).ConfigureAwait(false)
+                        ?? throw new ArgumentException("An accepted Runtime configuration is required.");
+                    return await context.RequestServices.GetRequiredService<SessionMaterialApplicationService>()
+                        .WriteConfigurationAsync(context, sessionId, request, token).ConfigureAwait(false);
+                }))
+            .RequireAuthorization();
         endpoints.MapPost("/internal/sessions/{sessionId}/material",
             (HttpContext context, string sessionId,
                 [FromServices] SessionMaterialApplicationService service, CancellationToken token) =>
@@ -158,8 +256,22 @@ public static class SessionMaterialEndpoints
         "turnContent" or "TurnContent" => SessionMaterialKind.TurnContent,
         "sdkCache" or "SdkCache" => SessionMaterialKind.SdkCache,
         "remoteToolResult" or "RemoteToolResult" => SessionMaterialKind.RemoteToolResult,
+        "runtimeConfiguration" or "RuntimeConfiguration" => SessionMaterialKind.RuntimeConfiguration,
         _ => throw new ArgumentException("A supported session material kind is required.", nameof(kind))
     };
+
+    private static Task<IResult> ExecuteProtectedConfigurationAsync<T>(HttpContext context, Func<Task<T>> action)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        if (!context.Request.IsHttps ||
+            context.Features.Get<ITlsHandshakeFeature>()?.Protocol is not (SslProtocols.Tls12 or SslProtocols.Tls13))
+            return Task.FromResult<IResult>(Results.Json(
+                new { error = "runtime_configuration_direct_https_required" },
+                statusCode: StatusCodes.Status503ServiceUnavailable));
+        if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } limit)
+            limit.MaxRequestBodySize = 2 * SessionMaterialValidation.MaximumBytes;
+        return ExecuteAsync(context, action);
+    }
 
     private static async Task<IResult> ExecuteAsync<T>(
         HttpContext context, Func<Task<T>> action, bool missingCacheIsNotFound = false)

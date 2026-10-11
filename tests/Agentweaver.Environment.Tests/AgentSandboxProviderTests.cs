@@ -322,6 +322,28 @@ public sealed partial class AgentSandboxProviderTests
             observation.StartupPhases,
             phase => phase.Phase is SandboxStartupPhase.Configured or SandboxStartupPhase.Ready);
         Assert.Null(observation.StartupFailure);
+        if (agentHostProfile)
+        {
+            handler.EnableRuntimeEndpoint();
+            var endpointRequest = new SandboxDescribeRequest(
+                fence, provisioned.Resource, 1, provisioned.ProviderBinding, leaseCreatedAt)
+            {
+                RequireRuntimeEndpoint = true
+            };
+            var endpointObservation = await provider.DescribeAsync(endpointRequest);
+            Assert.Equal(new SandboxRuntimeHttpsEndpoint(
+                new("https://sandbox-a.agentweaver.svc.cluster.local:8443/"),
+                "10.2.3.4", "pod-uid", "service-uid"), endpointObservation.RuntimeEndpoint);
+            Assert.Equal(SandboxObservedState.Pending, endpointObservation.State);
+            foreach (var fault in new[] { "foreign-service-owner", "foreign-pod-selector", "foreign-dns" })
+            {
+                handler.SetRuntimeEndpointFault(fault);
+                Assert.Equal("sandbox_runtime_endpoint_unavailable",
+                    (await Assert.ThrowsAsync<SandboxProviderException>(() =>
+                        provider.DescribeAsync(endpointRequest))).Code);
+                handler.SetRuntimeEndpointFault(null);
+            }
+        }
         handler.ImageEventPodUid = "different-pod-uid";
         var mismatchedEvent = await provider.DescribeAsync(new(
             fence, provisioned.Resource, 1, provisioned.ProviderBinding, leaseCreatedAt));
@@ -644,6 +666,33 @@ public sealed partial class AgentSandboxProviderTests
 
         public void SetPodStateMount(string path) =>
             _podList!["items"]![0]!["spec"]!["containers"]![0]!["volumeMounts"]![1]!["mountPath"] = path;
+
+        public void EnableRuntimeEndpoint()
+        {
+            var sandbox = _resources[
+                "apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes/sandbox-a"];
+            sandbox["status"]!["service"] = "sandbox-a";
+            sandbox["status"]!["serviceFQDN"] = "sandbox-a.agentweaver.svc.cluster.local";
+            _podList!["items"]![0]!["status"]!["podIP"] = "10.2.3.4";
+            _resources["api/v1/namespaces/agentweaver/services/sandbox-a"] = JsonNode.Parse("""
+                {"apiVersion":"v1","kind":"Service",
+                 "metadata":{"name":"sandbox-a","namespace":"agentweaver","uid":"service-uid",
+                   "ownerReferences":[{"kind":"Sandbox","uid":"sandbox-uid","controller":true}]},
+                 "spec":{"selector":{"egress.example/selector":"environment-a"}}}
+                """)!;
+        }
+
+        public void SetRuntimeEndpointFault(string? fault)
+        {
+            var service = _resources["api/v1/namespaces/agentweaver/services/sandbox-a"];
+            service["metadata"]!["ownerReferences"]![0]!["uid"] =
+                fault == "foreign-service-owner" ? "foreign" : "sandbox-uid";
+            service["spec"]!["selector"]!["egress.example/selector"] =
+                fault == "foreign-pod-selector" ? "foreign" : "environment-a";
+            _resources["apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes/sandbox-a"]
+                ["status"]!["serviceFQDN"] = fault == "foreign-dns"
+                    ? "foreign.example.com" : "sandbox-a.agentweaver.svc.cluster.local";
+        }
 
         public void SetPodImageId(string imageId)
         {

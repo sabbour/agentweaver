@@ -356,7 +356,7 @@ The manual workflow has a separate publication choice.
   package to a feed.
   .NET components retain their checked-in `packages.lock.json`; `Agentweaver.Web`
   binds its committed npm lockfile and ASP.NET host `packages.lock.json`.
-  .NET services use native `PublishContainer` with an explicit immutable
+  Other .NET services use native `PublishContainer` with an explicit immutable
   `<ContainerBaseImage>...@sha256:...</ContainerBaseImage>` in their project.
   Exactly one active declaration is required; XML comments do not supply a pin.
   Multiple active declarations, including conditional declarations, block preparation.
@@ -369,6 +369,22 @@ The manual workflow has a separate publication choice.
   Its provenance binds the exact source tree, npm and host lockfiles, Dockerfile,
   Vite and host publish outputs, image ID, base-image digest, source/version labels,
   and `linux/amd64` platform.
+  AgentHost uses its existing native-runtime Dockerfile, not an SDK-only image.
+  Preparation stages only committed inputs, including every dependency lockfile.
+  Its pinned base images must already be available locally.
+  A Buildx builder with multiple-output support writes an OCI archive and loads the image.
+  The existing Dockerfile still performs its locked restore and checksum-verified native download.
+  Preparation retains `<id>.<version>.tar` and `<id>.<version>.oci.tar`.
+  One component record requires both archive hashes, sizes, and matching image-config digests.
+  The existing OCI measurer checks actual manifest, config, and compressed layer bytes.
+  It does not trust a saved byte total or Docker's filesystem size.
+  The saved image is loaded and checked against the measured config and source/tree labels.
+  Its network-disabled native check must report the pinned SDK, runtime, and protocol.
+  Publication repeats these checks before registry login and tags the verified config digest.
+  Missing or changed archives, wrong labels, size failures, and runtime failures block publication.
+  The receipt keeps the prepared OCI measurement separate from the actual registry digest.
+  Docker may encode the pushed manifest differently; the local OCI digest is not a registry claim.
+  Gateway and MCP retain SDK container preparation with the existing pinned ASP.NET base.
   Provenance records lock hashes and image archive hashes, not fabricated registry digests.
   A failed preparation produces no completed provenance.
   Partial output must not mix with a later run.

@@ -4,14 +4,18 @@ using Agentweaver.Identity;
 namespace Agentweaver.Environment;
 
 public sealed record EnvironmentRuntimeBootstrapDeliveryOptions(
-    Uri OrchestratorOwnerAddress, Uri BrokerOwnerAddress);
+    Uri OrchestratorOwnerAddress, Uri BrokerOwnerAddress)
+{
+    public Uri? EventsOwnerAddress { get; init; }
+}
 
 public sealed partial class EnvironmentRuntimeBootstrapDelivery(
     HttpClient client,
     EnvironmentRuntimeBootstrapDeliveryOptions options,
     EnvironmentRuntimePlacementReader placements,
     EnvironmentRuntimeBootstrapProfileRegistry profiles,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    IEnvironmentRuntimeResumeBootstrapStore? resumeBootstraps = null)
 {
     private readonly RuntimeRegistrationHttpClient _owner = new(
         client, options.OrchestratorOwnerAddress);
@@ -21,6 +25,15 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
     {
         if (request.ContractVersion != 1)
             throw new RuntimeAuthorizationException("runtime_configuration_invalid");
+        if (request.ResumeBootstrap is { } resume)
+        {
+            resume.Validate();
+            if (resume.Registration != request.Registration ||
+                request.Configuration.ValueKind is not (System.Text.Json.JsonValueKind.Null or
+                    System.Text.Json.JsonValueKind.Undefined))
+                throw new RuntimeAuthorizationException("runtime_resume_configuration_caller_input_denied");
+            await RequireCurrentResumeBootstrapAsync(resume, actor, cancellationToken).ConfigureAwait(false);
+        }
         var registration = await ReadCurrentAsync(request.Registration.RuntimeInstanceId, actor, cancellationToken)
             .ConfigureAwait(false);
         if (registration != request.Registration)
@@ -32,8 +45,10 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         var endpoint = placement.ConfigureEndpoint;
         if (endpoint.AbsolutePath != "/runtime/v1/configure")
             throw new RuntimeAuthorizationException("runtime_configuration_version_unavailable");
-        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeHostReadinessReceipt>(
-            client, new Uri(endpoint.GetLeftPart(UriPartial.Authority) + "/"),
+        if (request.ResumeBootstrap is { } beforeDelivery)
+            await RequireCurrentResumeBootstrapAsync(beforeDelivery, actor, cancellationToken).ConfigureAwait(false);
+        var receipt = await SendToHostAsync<RuntimeHostReadinessReceipt>(
+            placement,
             endpoint.AbsolutePath + "/activate", actor,
             request with { McpServer = placement.McpServer }, cancellationToken).ConfigureAwait(false);
         var currentPlacement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
@@ -52,6 +67,14 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
             receipt.SourceGrant.ExpiresAt > registration.ExpiresAt || !actor.Bearer.IsUsable())
             throw new RuntimeAuthorizationException("runtime_activation_receipt_invalid");
         cancellationToken.ThrowIfCancellationRequested();
+        if (request.ResumeBootstrap is { } verifiedResume)
+        {
+            if (receipt.SourceGrant.ExpiresAt <= timeProvider.GetUtcNow())
+                throw new RuntimeAuthorizationException("runtime_resume_source_grant_expired");
+            (receipt.ResumeCache ?? throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_missing"))
+                .ValidateFor(verifiedResume);
+            await RequireCurrentResumeBootstrapAsync(verifiedResume, actor, cancellationToken).ConfigureAwait(false);
+        }
         return receipt;
     }
 
@@ -79,8 +102,8 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         if (before != registration)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
         var endpoint = placement.ConfigureEndpoint;
-        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapDeliveryReceipt>(
-            client, new Uri(endpoint.GetLeftPart(UriPartial.Authority) + "/"),
+        var receipt = await SendToHostAsync<RuntimeBootstrapDeliveryReceipt>(
+            placement,
             endpoint.AbsolutePath, actor, request, cancellationToken).ConfigureAwait(false);
         var currentPlacement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
         RequireGrant(await verifier.VerifyPendingBootstrapDeliveryAsync(

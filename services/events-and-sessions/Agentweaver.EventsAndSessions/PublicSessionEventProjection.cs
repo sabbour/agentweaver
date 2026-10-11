@@ -42,6 +42,22 @@ internal static class PublicSessionEventProjection
         }
 
         var storedReferences = envelope.ObjectReferences.Select(reference => reference.Reference).ToArray();
+        if (envelope.Payload is RuntimeConfigurationSessionPayload configuration)
+        {
+            if (configuration.Configuration is null)
+            {
+                if (storedReferences.Length != 0)
+                    throw InvalidEvent();
+                return envelope;
+            }
+            if (configuration.Configuration.Material?.Kind != SessionMaterialKind.RuntimeConfiguration ||
+                storedReferences.Length != 1 || !SameReference(storedReferences[0], configuration.Configuration))
+                throw InvalidEvent();
+            return new SessionEventEnvelope(
+                envelope.SchemaVersion, envelope.EventVersion, envelope.EventId, envelope.Identity,
+                envelope.Position, envelope.OccurredAt, new RuntimeConfigurationSessionPayload(null),
+                ImmutableArray<StoredSessionObjectReference>.Empty);
+        }
         var hasPrivateMarker =
             payloadReferences.Any(HasPrivateMarker) ||
             storedReferences.Any(HasPrivateMarker) ||
@@ -95,6 +111,8 @@ internal static class PublicSessionEventProjection
     }
 
     private static bool HasPrivateMarker(SessionObjectReference reference) =>
+        reference.Purpose.Contains("runtime-configuration", StringComparison.OrdinalIgnoreCase) ||
+        reference.Material?.Kind == SessionMaterialKind.RuntimeConfiguration ||
         reference.Purpose.Contains("remote-tool-result", StringComparison.OrdinalIgnoreCase) ||
         reference.Material is
         {

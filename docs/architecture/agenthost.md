@@ -432,6 +432,29 @@ Fixture configuration and TLS files use mode `0440`.
 This is simulated POSIX access proof, not a live Azure Files receipt or deployed TLS acceptance.
 The receipt and native status remain exact-candidate CI artifacts, not publication or live Sandbox acceptance.
 
+Release preparation now uses this same Dockerfile with only committed inputs.
+It retains both a Docker-save archive and an OCI archive in one component record.
+Both hashes and sizes are required, with the same measured image-config digest.
+The existing measurer verifies the retained OCI bytes, source/tree labels, version, and platform.
+Preparation loads the saved image and checks its pinned native runtime without network or model access.
+Publication measures the OCI archive again and repeats the loaded-image and runtime checks before registry login.
+It tags the verified config digest, not an unchecked mutable local tag.
+Missing or changed archives, wrong image identity or labels, and failed size or runtime checks block publication.
+The publication receipt records the actual registry digest separately from the prepared OCI measurement.
+This source does not apply versions, publish an image, or prove deployed startup.
+
+```mermaid
+flowchart LR
+    Source["Committed source and existing Dockerfile"] --> Build["Stage source and build one image"]
+    Build --> Saved["Docker-save archive"]
+    Build --> OCI["OCI archive"]
+    OCI --> Measure["Verify actual compressed bytes"]
+    Saved --> Load["Load and check matching config"]
+    Measure --> Load
+    Load --> Runtime["Check pinned native runtime without network"]
+    Runtime --> Publish["Separate approved publication"]
+```
+
 ## BuildTest output collector mode
 
 `--build-test-output-collector-v1` selects the trusted Linux file collector before web configuration or native SDK startup.

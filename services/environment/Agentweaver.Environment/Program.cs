@@ -103,10 +103,20 @@ if (runtimeBootstrapEnabled)
                 "Environment Runtime bootstrap requires an Orchestrator owner address."))),
         RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(
             runtimeBrokerAddress ?? throw new InvalidOperationException(
-                "Environment Runtime bootstrap requires a Broker owner address."))));
+                "Environment Runtime bootstrap requires a Broker owner address."))))
+    {
+        EventsOwnerAddress = builder.Configuration["Environment:RuntimeBootstrap:EventsOwnerAddress"] is { } eventsAddress
+            ? RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(eventsAddress))
+            : null
+    };
     builder.Services.AddSingleton(runtimeDeliveryOptions);
+    builder.Services.AddScoped<IEnvironmentRuntimeResumeBootstrapStore, EnvironmentRuntimeResumeBootstrapStore>();
     builder.Services.AddHttpClient<EnvironmentRuntimeBootstrapDelivery>(client =>
         client.Timeout = TimeSpan.FromSeconds(20))
+        .ConfigurePrimaryHttpMessageHandler(RuntimeSandboxHttpTransport.CreateHandler);
+    builder.Services.AddScoped<EnvironmentRuntimeWorkspaceResumeManager>();
+    builder.Services.AddHttpClient<EnvironmentRuntimeSuspendReleaseAuthority>(client =>
+        client.Timeout = TimeSpan.FromSeconds(15))
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
     builder.Services.AddHttpClient<EnvironmentRuntimeSuspendReleaseAuthority>(client =>
         client.Timeout = TimeSpan.FromSeconds(15))
