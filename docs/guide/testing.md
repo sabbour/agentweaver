@@ -7,6 +7,32 @@ Open WorkPlan link and a recovered checkpoint association, not runtime permissio
 The runtime-owner context matcher separately checks the confirmed Fixed step.
 Compilation does not prove PostgreSQL execution.
 
+Two pure tests read the embedded Core and Sessions update-guard migrations.
+They check the exact five tables, unconditional rejection, and unchanged deletion rules.
+Five PostgreSQL cases check restricted-role inserts, row locks, update rejection, and trigger-disable rejection.
+Another 25 PostgreSQL cases check startup rejection of missing, disabled, wrong-function, column-limited, and conditional triggers.
+These 30 PostgreSQL cases compile but have not run for this source change.
+Checkpoint corruption and size-limit cases insert malformed fixtures directly.
+Decision-version cases append new decisions instead of changing saved rows.
+
+Each restricted-role case grants `SELECT`, `INSERT`, and `UPDATE` on only the column below.
+The column grant permits row locks; the trigger rejects all updates, including an unchanged value.
+
+| Owner migration | Table | Test role's only `UPDATE` column |
+| --- | --- | --- |
+| Core `021` | `coordinator_decisions` | `decision_id` |
+| Core `021` | `maf_workflow_checkpoints` | `checkpoint_id` |
+| Sessions `008` | `sessions` | `session_id` |
+| Sessions `008` | `session_provider_bindings` | `run_id` |
+| Sessions `008` | `session_fork_lineage` | `target_session_id` |
+
+Startup checks the migration record and each named row-level `BEFORE UPDATE` trigger.
+Each trigger must use the owner's schema-qualified `reject_row_lock_record_update()` function.
+It must be enabled for ordinary execution, with no column filter, condition, or arguments.
+The migration revokes public access to the function and rejects updates with SQLSTATE `55000`.
+It adds no `DELETE` or `TRUNCATE` trigger and changes no foreign-key deletion rule.
+These source checks do not prove installed database permissions or deployed behavior.
+
 The shared Broker coordination test reserves seven child slots: four registered
 children, including its Fixed child, plus three confirmed WorkPlan items.
 It keeps the two-active-child limit and checks that one more active child is rejected.
@@ -50,6 +76,7 @@ exact `413` rejection before uploading its body. The one-MiB limit is unchanged.
 | Blob tests | Azure SDK requests, streamed data, create-only writes, and missing-object results through a fake HTTP transport. | Live credentials, permissions, durability, or cloud access. |
 | Telemetry tests | In-process OpenTelemetry setup and Azure Monitor exporter behavior through an injected transport. | Azure Monitor ingestion. |
 | Azure tooling tests | Target, source, digest, command, and acceptance guards through fake `az` and `git` executors. | A live Azure call or provisioned resource. |
+| P1 PostgreSQL initializer source tests | Canonical database grant comparisons, pre-write rejection, five exact principal mappings and memberships, function ownership and EXECUTE grants, ordered role-stage checks, partial-stage receipts, and original-error preservation when the failure receipt fails. The existing Foundation Probe test project compiles the same dependency-free helper used by the initializer. | Initializer execution, PostgreSQL catalog or transaction behavior, live Entra principal creation, installed mutation guards, runtime identity proof, or deployment. |
 | Foundation Probe tests | Receipt and token checks, provider pins, exact-version Key Vault read, owned Blob cleanup, PostgreSQL effects, and trace evidence. | Azure resource access or Identity broker redemption. |
 | AgentHost tests | Actual native SDK transport, authenticated configure/refresh/A2A, exact replay, current owner/source rejection, guarded effects, turn content, idle-boundary priority, accounting acknowledgment, cache recovery, and exact startup-time ceilings. CI separately measures the compressed amd64 OCI image and starts its image-owned pinned runtime with non-executable private mounts, without network or a model call. | Automatic scheduling, deployed TLS/Sandbox placement, live OAuth/entitlement, paid model execution, or publication. |
 
@@ -62,6 +89,13 @@ rejected. Merge settlement coverage cancels the caller after GitHub accepts the 
 checks that the merged SHA remains durable and can be replayed from another host.
 
 ## Run tests
+
+Run the bounded initializer source tests with
+`dotnet test tests/Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresInitializerTests`.
+This selection does not start the project's PostgreSQL containers.
+Both initializer execution blocks remain active.
+See the [operator source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
+before interpreting these checks as evidence.
 
 Shared-model and run-admission source tests cover reference-versus-model-ID resolution,
 configuration revision/hash mismatch, disabled models, accepted connection binding,
@@ -256,11 +290,11 @@ The disposable-PostgreSQL tests cover concurrent duplicates, content conflicts,
 restart, immutable history, transaction rollback, and exact run/agent totals.
 Receipt tests read the committed hash and immutable price through a separate
 PostgreSQL connection. Duplicate retries return the identical receipt.
-Migration tests cover fresh Events version 7, admitted version-3 and version-4 upgrades,
+Migration tests cover fresh Events version 8, admitted version-3 and version-4 upgrades,
 the legacy version-2 project-fact layout, and rejected version gaps.
-The Orchestrator migration fixture covers versions 8 through 16 and versions 18 through 20.
+The Orchestrator migration fixture covers versions 8 through 16 and versions 18 through 21.
 It checks fresh initialization and existing version-19 and version-20 schemas that lack resources 016 and 018.
-The final history must contain exactly 19 registered versions; version 17 remains unregistered.
+The final history must contain exactly 20 registered versions; version 17 remains unregistered.
 Tests reject unknown versions, missing prerequisites, missing tables, and a missing or disabled snapshot trigger.
 Repeated initialization preserves the original history and applies no resource twice.
 Backlog and reviewed-snapshot tests use the production migrator, not separate SQL setup.
