@@ -116,6 +116,36 @@ public sealed class MafExecutionPlannerTests
     }
 
     [Fact]
+    public void MissingExecutorDoesNotBlockOptionalPlatformStep()
+    {
+        var definition = WorkflowTestData.Definition(
+            WorkflowDefinitionOrigin.BuiltIn,
+            WorkflowTestData.Open("implement", 0, []),
+            WorkflowTestData.Platform("build-test", 1, ["implement"]) with
+            {
+                Cardinality = new WorkflowCardinality(0, 1)
+            });
+        var result = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(definition),
+            WorkflowTestData.Plan(WorkflowTestData.Item("implementation")),
+            WorkflowTestData.SelectionContext());
+        Assert.True(result.IsValid, string.Join("; ", result.Issues.Select(issue => issue.Message)));
+        var snapshot = result.Value!;
+        var afterJoin = MafExecutionProgress.Empty with
+        {
+            WorkItems = MafExecutionProgress.Empty.WorkItems
+                .Add("implementation", MafExecutionTaskStatus.Succeeded)
+        };
+
+        var frontier = MafExecutionPlanner.BuildFrontier(
+            snapshot, afterJoin, 1, 0, 8, 2, _ => false);
+
+        Assert.Empty(frontier.ReadyActions);
+        Assert.Empty(frontier.UnavailableExecutorStepIds);
+        Assert.True(frontier.IsComplete);
+    }
+
+    [Fact]
     public void InvalidConcurrencyAndUnknownProgressFailClosed()
     {
         var snapshot = CreateSnapshot(WorkflowTestData.Item("implementation"));

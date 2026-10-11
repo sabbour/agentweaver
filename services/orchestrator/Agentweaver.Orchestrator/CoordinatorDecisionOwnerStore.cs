@@ -1157,11 +1157,12 @@ internal sealed class CoordinatorDecisionOwnerStore
             return [];
         if (state.ConfirmedWorkPlan is null)
             return [new ActionGrantIntent(CoordinatorTypedActionIds.ProposeWorkPlan, "work-plan")];
-        if (!state.CanDispatch)
+        if (!state.CanDispatch || state.ConfirmedWorkPlan is not { } confirmedPlan)
             return [];
 
         var intents = ImmutableArray.CreateBuilder<ActionGrantIntent>();
         intents.Add(new ActionGrantIntent(CoordinatorTypedActionIds.ReviseWorkPlan, "work-plan"));
+        intents.Add(new ActionGrantIntent(CoordinatorTypedActionIds.Dispatch, confirmedPlan.Plan.Id));
         foreach (var step in state.SelectedWorkflow.Definition.Steps
                      .Where(step => step.Mode == WorkflowStepMode.Platform && step.PlatformGate is not null))
             intents.Add(new ActionGrantIntent(CoordinatorTypedActionIds.RequestAssembly, step.Id));

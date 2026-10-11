@@ -21,6 +21,9 @@ public sealed class ProjectConfigurationValidatorTests
             MaxConcurrentChildren = 2,
             MaxWallTimeSeconds = 3600,
             MaxPromptTokens = 20000,
+            MaxRevisionAttempts = 8,
+            CopilotSoftCreditLimit = 10m,
+            CopilotHardCreditLimit = 20m,
         },
     };
 

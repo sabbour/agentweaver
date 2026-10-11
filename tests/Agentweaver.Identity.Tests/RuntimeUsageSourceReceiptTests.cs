@@ -485,6 +485,7 @@ public sealed class RuntimeUsageSourceReceiptTests
         Assert.Equal(5, receipt.Usage.Measurement.CacheWriteTokens);
         Assert.Equal(1234567.25m, receipt.Usage.Measurement.ProviderUnits);
         Assert.Equal(2.5m, receipt.Usage.SdkSource!.ModelMultiplier);
+        Assert.NotEqual(Guid.Empty, receipt.Usage.A2AMessageId);
         foreach (var usage in new[]
         {
             receipt.Usage with { Attribution = receipt.Usage.Attribution with { TurnId = "foreign-turn" } },
@@ -493,6 +494,7 @@ public sealed class RuntimeUsageSourceReceiptTests
             receipt.Usage with { SdkSource = receipt.Usage.SdkSource! with { AcceptedSelectionHash = new string('b', 64) } },
             receipt.Usage with { SdkSource = receipt.Usage.SdkSource! with { RegistrationRevision = 2 } },
             receipt.Usage with { SdkSource = receipt.Usage.SdkSource! with { SdkSessionId = "foreign-session" } },
+            receipt.Usage with { A2AMessageId = Guid.Empty },
             receipt.Usage with { Measurement = receipt.Usage.Measurement with { RequestCount = 1 } }
         })
             Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.ValidateUsage(
@@ -507,6 +509,16 @@ public sealed class RuntimeUsageSourceReceiptTests
         Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.Validate(changed));
         Assert.NotEqual(receipt.CanonicalPayloadHash,
             RuntimeUsageSourceReceiptContract.Hash(changed.Registration, changed.Usage));
+        Assert.NotEqual(receipt.CanonicalPayloadHash,
+            RuntimeUsageSourceReceiptContract.Hash(receipt.Registration,
+                receipt.Usage with { A2AMessageId = Guid.NewGuid() }));
+
+        var legacyUsage = receipt.Usage with { A2AMessageId = null };
+        var legacyJson = JsonSerializer.SerializeToElement(
+            legacyUsage, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.False(legacyJson.TryGetProperty("a2aMessageId", out _));
+        Assert.Equal(LegacyHash(receipt.Registration, legacyUsage),
+            RuntimeUsageSourceReceiptContract.Hash(receipt.Registration, legacyUsage));
     }
 
     [Fact]
@@ -599,7 +611,10 @@ public sealed class RuntimeUsageSourceReceiptTests
         var observation = new SdkUsageObservation(
             SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, eventId),
             eventId, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
-            17, 11, 7, 5, 3, 1234567.25m, 12.5m);
+            17, 11, 7, 5, 3, 1234567.25m, 12.5m)
+        {
+            A2AMessageId = Guid.NewGuid()
+        };
         var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation);
         return new(1, Guid.NewGuid(), registration, usage,
             RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
@@ -650,5 +665,26 @@ public sealed class RuntimeUsageSourceReceiptTests
         })
             Assert.Throws<RuntimeAuthorizationException>(() =>
                 RuntimeUsageSourceReceiptContract.ValidateUsage(registration, invalid));
+    }
+
+    private static string LegacyHash(RuntimeRegistration registration, UsageSubmission usage)
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+        var legacyUsage = new
+        {
+            usage.EventId,
+            usage.OccurredAt,
+            usage.Attribution,
+            usage.ModelBinding,
+            usage.Measurement,
+            usage.SdkSource,
+            usage.SdkEventId
+        };
+        return RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
+            new { Registration = registration, Usage = legacyUsage }, options));
     }
 }

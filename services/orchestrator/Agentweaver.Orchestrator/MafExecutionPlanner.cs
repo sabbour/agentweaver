@@ -304,6 +304,12 @@ internal static class MafExecutionPlanner
                     continue;
                 if (!hasNonModelExecutor(step))
                 {
+                    if (step.Cardinality.Minimum == 0)
+                    {
+                        stepStatuses[step.Id] = MafExecutionTaskStatus.Succeeded;
+                        continue;
+                    }
+
                     unavailable.Add(step.Id);
                     continue;
                 }

@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Npgsql;
 using NpgsqlTypes;
 

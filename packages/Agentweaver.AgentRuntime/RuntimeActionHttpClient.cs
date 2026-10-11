@@ -10,12 +10,14 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
     internal async Task RequireAsync(
         RuntimeRegistration registration, string actionId, ReadOnlyMemory<byte> input,
         Func<CancellationToken, Task> requireCurrentAuthority, CancellationToken cancellationToken,
-        bool isToolInvocation = false, Guid? dispatchId = null)
+        bool isToolInvocation = false, Guid? dispatchId = null, Guid? costTurnId = null,
+        Guid? eventId = null)
     {
         var request = new RuntimeActionRequest(1, registration.RuntimeInstanceId, registration.Revision,
-            registration.Binding.ExecutionFence, Guid.NewGuid(), actionId, RuntimeContractValidation.Hash(input.Span))
+            registration.Binding.ExecutionFence, eventId ?? Guid.NewGuid(), actionId,
+            RuntimeContractValidation.Hash(input.Span))
         {
-            IsToolInvocation = isToolInvocation, DispatchId = dispatchId
+            IsToolInvocation = isToolInvocation, DispatchId = dispatchId, CostTurnId = costTurnId
         };
         RuntimeActionContract.Validate(request);
         await requireCurrentAuthority(cancellationToken).ConfigureAwait(false);
@@ -38,6 +40,13 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
         await requireCurrentAuthority(cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
     }
+
+    internal Task RequireAsync(
+        RuntimeRegistration registration, string actionId, Guid eventId, ReadOnlyMemory<byte> input,
+        Func<CancellationToken, Task> requireCurrentAuthority, CancellationToken cancellationToken,
+        Guid? costTurnId = null) =>
+        RequireAsync(registration, actionId, input, requireCurrentAuthority, cancellationToken,
+            costTurnId: costTurnId, eventId: eventId);
 
     private async Task<RuntimeActionAdmission> SendAdmissionAsync(
         string path, object request, Func<CancellationToken, Task> requireCurrentAuthority,

@@ -311,6 +311,7 @@ public sealed class CoordinatorDecisionState
         CoordinatorOutcomeSpecSnapshot? outcomeSpec,
         bool outcomeConfirmed,
         int nextClarifyingQuestionIndex,
+        int workPlanRevisionAttempts,
         WorkflowDefinitionSnapshot? selectedWorkflow,
         bool workflowConfirmed,
         WorkPlanSnapshot? confirmedWorkPlan,
@@ -318,15 +319,18 @@ public sealed class CoordinatorDecisionState
         WorkPlanScopeDiff? lastScopeDiff,
         CoordinatorGateRequest? pendingGate,
         ImmutableArray<CoordinatorGateDecisionReceipt> decisionReceipts) =>
-        (Fence, OutcomeSpec, OutcomeConfirmed, NextClarifyingQuestionIndex, SelectedWorkflow, WorkflowConfirmed,
+        (Fence, OutcomeSpec, OutcomeConfirmed, NextClarifyingQuestionIndex, WorkPlanRevisionAttempts,
+            SelectedWorkflow, WorkflowConfirmed,
             ConfirmedWorkPlan, CandidateWorkPlan, LastScopeDiff, PendingGate, DecisionReceipts) =
-        (fence, outcomeSpec, outcomeConfirmed, nextClarifyingQuestionIndex, selectedWorkflow, workflowConfirmed,
+        (fence, outcomeSpec, outcomeConfirmed, nextClarifyingQuestionIndex, workPlanRevisionAttempts,
+            selectedWorkflow, workflowConfirmed,
             confirmedWorkPlan, candidateWorkPlan, lastScopeDiff, pendingGate, decisionReceipts);
 
     public long Fence { get; }
     public CoordinatorOutcomeSpecSnapshot? OutcomeSpec { get; }
     public bool OutcomeConfirmed { get; }
     public int NextClarifyingQuestionIndex { get; }
+    public int WorkPlanRevisionAttempts { get; }
     public WorkflowDefinitionSnapshot? SelectedWorkflow { get; }
     public bool WorkflowConfirmed { get; }
     public WorkPlanSnapshot? ConfirmedWorkPlan { get; }
@@ -349,7 +353,7 @@ public sealed class CoordinatorDecisionState
             throw new ArgumentOutOfRangeException(nameof(fence), "Fence must be positive.");
 
         return new CoordinatorDecisionState(
-            fence, null, false, 0, null, false, null, null, null, null, []);
+            fence, null, false, 0, 0, null, false, null, null, null, null, []);
     }
 
     public static WorkflowValidationResult<CoordinatorDecisionState> Restore(
@@ -363,7 +367,8 @@ public sealed class CoordinatorDecisionState
         WorkPlanSnapshot? candidateWorkPlan,
         WorkPlanScopeDiff? lastScopeDiff,
         CoordinatorGateRequest? pendingGate,
-        ImmutableArray<CoordinatorGateDecisionReceipt> decisionReceipts)
+        ImmutableArray<CoordinatorGateDecisionReceipt> decisionReceipts,
+        int workPlanRevisionAttempts = 0)
     {
         var issues = ImmutableArray.CreateBuilder<WorkflowValidationIssue>();
         if (fence <= 0)
@@ -377,6 +382,10 @@ public sealed class CoordinatorDecisionState
             issues.Add(Issue(WorkflowValidationCode.InvalidDecisionGate,
                 "decisionState.nextClarifyingQuestionIndex",
                 "Clarifying-question progress must be within the outcome specification."));
+        if (workPlanRevisionAttempts < 0)
+            issues.Add(Issue(WorkflowValidationCode.InvalidDecisionGate,
+                "decisionState.workPlanRevisionAttempts",
+                "Work-plan revision attempts cannot be negative."));
         if (outcomeConfirmed && nextClarifyingQuestionIndex != questionCount)
             issues.Add(Issue(WorkflowValidationCode.OutcomeConfirmationRequired,
                 "decisionState.outcome",
@@ -477,6 +486,7 @@ public sealed class CoordinatorDecisionState
                 outcomeSpec,
                 outcomeConfirmed,
                 nextClarifyingQuestionIndex,
+                workPlanRevisionAttempts,
                 selectedWorkflow,
                 workflowConfirmed,
                 confirmedWorkPlan,
@@ -600,6 +610,7 @@ public sealed class CoordinatorDecisionState
         bool setOutcomeSpec = false,
         bool? outcomeConfirmed = null,
         int? nextClarifyingQuestionIndex = null,
+        int? workPlanRevisionAttempts = null,
         WorkflowDefinitionSnapshot? selectedWorkflow = null,
         bool setSelectedWorkflow = false,
         bool? workflowConfirmed = null,
@@ -617,6 +628,7 @@ public sealed class CoordinatorDecisionState
             setOutcomeSpec ? outcomeSpec : OutcomeSpec,
             outcomeConfirmed ?? OutcomeConfirmed,
             nextClarifyingQuestionIndex ?? NextClarifyingQuestionIndex,
+            workPlanRevisionAttempts ?? WorkPlanRevisionAttempts,
             setSelectedWorkflow ? selectedWorkflow : SelectedWorkflow,
             workflowConfirmed ?? WorkflowConfirmed,
             setConfirmedWorkPlan ? confirmedWorkPlan : ConfirmedWorkPlan,
@@ -1023,13 +1035,15 @@ public static class CoordinatorDecisionFlow
                 candidateWorkPlan: null,
                 setCandidateWorkPlan: true,
                 lastScopeDiff: diff,
-                setLastScopeDiff: true)
+                setLastScopeDiff: true,
+                workPlanRevisionAttempts: checked(state.WorkPlanRevisionAttempts + 1))
             : state.Copy(
                 candidateWorkPlan: candidate,
                 setCandidateWorkPlan: true,
                 lastScopeDiff: diff,
                 setLastScopeDiff: true,
-                pendingGate: gate);
+                pendingGate: gate,
+                workPlanRevisionAttempts: checked(state.WorkPlanRevisionAttempts + 1));
 
         return Success(
             next,

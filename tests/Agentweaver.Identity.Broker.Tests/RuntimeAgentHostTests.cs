@@ -358,13 +358,12 @@ public sealed class RuntimeAgentHostTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task MaterialAcknowledgmentMustRetainTheActualNarrowedPromptCapacity(bool changed)
+    public async Task MaterialAcknowledgmentMustMatchTheSessionPromptCapacity(bool changed)
     {
-        await using var fixture = new HostFixture(maxPromptTokens: 2048)
+        await using var fixture = new HostFixture()
         {
             MaterialPromptCapacityChanged = changed
         };
-        fixture.Sdk.MaxPromptTokens = 1024;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var ready = await fixture.ConfigureAsync(timeout.Token);
         var send = fixture.Host.SendAsync(fixture.Message(fixture.Proof(ready)), fixture.Actor, timeout.Token);
@@ -380,7 +379,7 @@ public sealed class RuntimeAgentHostTests
             Assert.Contains(fixture.Material, request => request.Kind == SessionMaterialKind.SdkCache);
         }
         Assert.NotEmpty(fixture.Material);
-        Assert.All(fixture.Material, request => Assert.Equal(1024, request.MaxPromptTokens));
+        Assert.All(fixture.Material, request => Assert.Null(request.MaxPromptTokens));
     }
 
     [Fact]
@@ -706,6 +705,178 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task UnpricedCostPreflightCleansPreparedSessionBeforeReadinessOrModelSend()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m) { CostPreflightPriced = false };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.DeliverAsync(timeout.Token);
+
+        Assert.Equal("runtime_cost_preflight_unpriced",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.ConfigureAsync(fixture.Configure, fixture.Actor, timeout.Token))).Code);
+        Assert.Equal(1, fixture.CostPreflightRequests);
+        Assert.Equal(1, fixture.SourceRevocations);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Equal("runtime_host_not_ready",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.ReadinessAsync(timeout.Token))).Code);
+    }
+
+    [Fact]
+    public async Task CostPreflightMustPinTheExactRegisteredUsageSource()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m) { CostPreflightSourceHashMismatch = true };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.DeliverAsync(timeout.Token);
+
+        Assert.Equal("runtime_cost_preflight_source_mismatch",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.ConfigureAsync(fixture.Configure, fixture.Actor, timeout.Token))).Code);
+        Assert.Equal(1, fixture.CostPreflightRequests);
+        Assert.Equal(1, fixture.SourceRevocations);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Fact]
+    public async Task PositiveHardCreditLimitCannotBecomeReadyWithoutUsageAffinity()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.DeliverAsync(timeout.Token);
+
+        Assert.Equal("runtime_usage_affinity_unavailable",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.ConfigureAsync(fixture.Configure, fixture.Actor, timeout.Token))).Code);
+        Assert.Equal(1, fixture.CostPreflightRequests);
+        Assert.Equal(1, fixture.SourceRevocations);
+        Assert.Empty(fixture.CostTurnRequests);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Empty(fixture.Material);
+        Assert.Equal("runtime_host_not_ready",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.ReadinessAsync(timeout.Token))).Code);
+    }
+
+    [Theory]
+    [InlineData(1, null, null)]
+    [InlineData(null, 1, null)]
+    [InlineData(null, null, 1024)]
+    public async Task ConfiguredNumericRunPolicyFailsBeforeReadyOrNativeSessionCreation(
+        int? maxModelTurns,
+        int? maxToolCalls,
+        int? maxPromptTokens)
+    {
+        await using var fixture = new HostFixture(
+            maxModelTurns: maxModelTurns,
+            maxToolCalls: maxToolCalls,
+            maxPromptTokens: maxPromptTokens);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.DeliverAsync(timeout.Token);
+
+        Assert.Equal("runtime_numeric_limits_unsupported",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.ConfigureAsync(fixture.Configure, fixture.Actor, timeout.Token))).Code);
+        Assert.Empty(fixture.Sdk.Requests);
+        Assert.Equal(0, fixture.CostPreflightRequests);
+        Assert.Empty(fixture.CostTurnRequests);
+        Assert.Empty(fixture.Material);
+        Assert.Equal("runtime_host_not_ready",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.ReadinessAsync(timeout.Token))).Code);
+    }
+
+    [Fact]
+    public async Task UnbudgetedHostedCopilotKeepsLegacyStartupAndSelectionHash()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        Assert.Equal(0, fixture.CostPreflightRequests);
+        var bindingWire = JsonSerializer.SerializeToElement(fixture.Registration.Binding, HostFixture.Json);
+        Assert.False(bindingWire.TryGetProperty("copilotHardCreditLimit", out _));
+
+        fixture.Sdk.BeforeTurnResponse = _ => fixture.Sdk.EmitUsageAsync(fixture.Sdk.UsageData());
+        var message = fixture.Message(fixture.Proof(ready));
+        var response = await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
+
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
+        var receipt = Assert.Single(fixture.Usage);
+        Assert.Null(receipt.Usage.A2AMessageId);
+        Assert.Equal(fixture.Registration.Binding.AcceptedSelectionHash,
+            receipt.Usage.SdkSource!.AcceptedSelectionHash);
+        Assert.Equal(fixture.Registration.Binding.AcceptedSelectionHash,
+            bindingWire.GetProperty("acceptedSelectionHash").GetString());
+        Assert.Null(fixture.Registration.Binding.CopilotHardCreditLimit);
+    }
+
+    [Fact]
+    public async Task LateUsageCallbacksRemainUncorrelatedInsteadOfBeingBoundToTheNextA2AMessage()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var firstUsageCreatedAt = default(DateTimeOffset);
+        var send = 0;
+        fixture.Sdk.BeforeTurnResponse = async cancellationToken =>
+        {
+            if (Interlocked.Increment(ref send) == 1)
+            {
+                firstUsageCreatedAt = DateTimeOffset.UtcNow;
+                return;
+            }
+            await fixture.Sdk.EmitUsageAsync(
+                fixture.Sdk.UsageData(), eventId: Guid.NewGuid(), timestamp: firstUsageCreatedAt);
+            await fixture.Sdk.EmitUsageAsync(
+                fixture.Sdk.UsageData(), eventId: Guid.NewGuid(), timestamp: DateTimeOffset.UtcNow);
+        };
+        var first = fixture.Message(proof);
+        var second = fixture.Message(proof);
+
+        await fixture.Host.SendAsync(first, fixture.Actor, timeout.Token);
+        await fixture.Host.SendAsync(second, fixture.Actor, timeout.Token);
+
+        Assert.NotEqual(first.Message.MessageId, second.Message.MessageId);
+        var receipts = fixture.Usage.ToArray();
+        Assert.Equal(2, receipts.Length);
+        Assert.All(receipts, receipt => Assert.Null(receipt.Usage.A2AMessageId));
+    }
+
+    [Fact]
+    public async Task ZeroHardCreditLimitAllowsStartupButBlocksCostTurnDispatch()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        Assert.Equal(0, fixture.CostPreflightRequests);
+
+        Assert.Equal("runtime_cost_budget_exhausted",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                fixture.Host.SendAsync(fixture.Message(fixture.Proof(ready)), fixture.Actor, timeout.Token))).Code);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Empty(fixture.Material);
+        Assert.Empty(fixture.Usage);
+    }
+
+    [Fact]
+    public async Task ByokStartsAndAccountsUsageWithoutCopilotCostPreflight()
+    {
+        await using var fixture = new HostFixture(ModelSourceMode.Byok);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        Assert.Equal(0, fixture.CostPreflightRequests);
+
+        fixture.Sdk.BeforeTurnResponse = _ => fixture.Sdk.EmitUsageAsync(fixture.Sdk.UsageData());
+        var response = await fixture.Host.SendAsync(fixture.Message(fixture.Proof(ready)), fixture.Actor, timeout.Token);
+
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
+        var usage = Assert.Single(fixture.Usage).Usage;
+        Assert.Equal(SdkMeterSources.ByokTokens, usage.ModelBinding!.MeterSource);
+        Assert.Equal("tokens", usage.Measurement!.ProviderUnit);
+        Assert.Null(usage.Measurement.ProviderUnits);
+        Assert.Equal(1, fixture.Accounted);
+    }
+
+    [Fact]
     public async Task CompletedMessageReplaySurvivesMoreTurnsThanThePendingCapacity()
     {
         await using var fixture = new HostFixture();
@@ -834,6 +1005,8 @@ public sealed class RuntimeAgentHostTests
         var request = fixture.Configure;
         using var anonymous = await client.PostAsJsonAsync("/runtime/v1/configure/activate", request, HostFixture.Json, timeout.Token);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        using var anonymousReadiness = await client.GetAsync("/runtime/v1/readiness", timeout.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousReadiness.StatusCode);
         client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
         client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
         using var wrongAudience = await client.PostAsJsonAsync("http://runtime.test/runtime/v1/configure/activate",
@@ -845,10 +1018,22 @@ public sealed class RuntimeAgentHostTests
         Assert.Equal(HttpStatusCode.OK, configured.StatusCode);
         Assert.True(configured.Headers.CacheControl?.NoStore);
         var ready = await configured.Content.ReadFromJsonAsync<RuntimeHostReadinessReceipt>(HostFixture.Json, timeout.Token);
-        using var turn = await client.PostAsJsonAsync("/runtime/v1/a2a/message:send",
-            fixture.Message(fixture.Proof(ready!)), HostFixture.Json, timeout.Token);
+        using var readiness = await client.GetAsync("/runtime/v1/readiness", timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, readiness.StatusCode);
+        Assert.True(readiness.Headers.CacheControl?.NoStore);
+        var currentReadiness = await readiness.Content.ReadFromJsonAsync<RuntimeHostReadinessReceipt>(
+            HostFixture.Json, timeout.Token);
+        Assert.NotNull(currentReadiness);
+        Assert.Equal(JsonSerializer.Serialize(ready), JsonSerializer.Serialize(currentReadiness));
+        Assert.DoesNotContain(fixture.Sdk.Requests, sdkRequest => sdkRequest.Method == "session.send");
+        var message = fixture.Message(fixture.Proof(ready!));
+        using var turn = await client.PostAsJsonAsync(
+            "/runtime/v1/a2a/message:send", message, HostFixture.Json, timeout.Token);
         Assert.Equal(HttpStatusCode.OK, turn.StatusCode);
         var answer = await turn.Content.ReadFromJsonAsync<RuntimeA2AResponse>(HostFixture.Json, timeout.Token);
+        Assert.Equal("message", answer!.Kind);
+        Assert.NotEqual(message.Message.MessageId, answer.MessageId);
+        Assert.Equal(message.Message.ContextId, answer.ContextId);
         Assert.Equal("agent", answer!.Role);
         Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(answer.Parts).Text);
         client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token + "invalid");
@@ -856,6 +1041,11 @@ public sealed class RuntimeAgentHostTests
             new RuntimeHostRefreshRequest(fixture.Proof(ready!), Guid.NewGuid()), HostFixture.Json, timeout.Token);
         Assert.Equal(HttpStatusCode.Unauthorized, forged.StatusCode);
         Assert.Equal(0, fixture.Rotations);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        fixture.Registration = fixture.Registration with { Revision = 2 };
+        using var staleReadiness = await client.GetAsync("/runtime/v1/readiness", timeout.Token);
+        Assert.Equal(HttpStatusCode.Forbidden, staleReadiness.StatusCode);
+        Assert.Contains("runtime_registration_stale", await staleReadiness.Content.ReadAsStringAsync());
     }
 
     private sealed class HostFixture : IAsyncDisposable
@@ -874,7 +1064,13 @@ public sealed class RuntimeAgentHostTests
         private long _sourceRevision = 1;
         private int _position;
         private readonly ConcurrentDictionary<Guid, SessionMaterialReadResult> _material = new();
-        public HostFixture(bool workflowBound = false, int? maxPromptTokens = null)
+        public HostFixture(
+            ModelSourceMode sourceMode = ModelSourceMode.HostedCopilot,
+            decimal? hardCreditLimit = null,
+            int? maxModelTurns = null,
+            int? maxToolCalls = null,
+            int? maxPromptTokens = null,
+            bool workflowBound = false)
         {
             Time = new() { Now = DateTimeOffset.UtcNow };
             Token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
@@ -890,26 +1086,57 @@ public sealed class RuntimeAgentHostTests
                 {
                     ConfigureEndpoint = new("https://runtime.test/runtime/v1/configure"),
                     PlacementProviderId = "sandbox-test", EnvironmentLifecycleGeneration = 1,
-                    EnvironmentLeaseRevision = 1, Image = Image, ModelConnectionId = Guid.NewGuid(),
-                    ModelConnectionScope = ProjectAuthorityResourceType.Project,
-                    WorkflowStepId = workflowBound ? "implement" : null, MaxPromptTokens = maxPromptTokens
+                    EnvironmentLeaseRevision = 1, Image = Image,
+                    ModelSourceMode = sourceMode,
+                    ModelCredentialReference = sourceMode == ModelSourceMode.Byok
+                        ? new SecretRef("accepted-model-key", "v1") : null,
+                    ModelConnectionId = sourceMode == ModelSourceMode.HostedCopilot
+                        ? Guid.NewGuid() : null,
+                    ModelConnectionScope = sourceMode == ModelSourceMode.HostedCopilot
+                        ? ProjectAuthorityResourceType.Project : null,
+                    WorkflowStepId = workflowBound ? "implement" : null,
+                    MaxModelTurns = maxModelTurns,
+                    MaxToolCalls = maxToolCalls,
+                    MaxPromptTokens = maxPromptTokens,
+                    CopilotHardCreditLimit = hardCreditLimit
                 }
             };
             Sdk = new()
             {
                 EmitUsageAfterCreate = false, ExpectedAvailableToolsCount = 7, PersistNativeSessionState = true,
-                EmitNativeCompletionReceipt = workflowBound
+                EmitNativeCompletionReceipt = workflowBound,
+                Byok = sourceMode == ModelSourceMode.Byok
             };
-            var factory = RuntimeCopilotSessionTests.Factory(Sdk);
+            var modelBindings = new RuntimeModelBindingsResolver("legacy-unversioned",
+                new Dictionary<string, RuntimeModelBinding>
+                {
+                    ["accepted-model-reference"] = new("controlled-model", sourceMode,
+                        sourceMode == ModelSourceMode.Byok
+                            ? new RuntimeByokProvider("openai", new Uri("https://byok.test/v1"), "responses")
+                            : null)
+                });
+            if (sourceMode == ModelSourceMode.Byok)
+                Registration = Registration with
+                {
+                    Binding = Registration.Binding with
+                    {
+                        ModelBindingPin = modelBindings.Pin("accepted-model-reference", sourceMode)
+                    }
+                };
+            var factory = new RuntimeCopilotSessionFactory(Sdk.Connection,
+                Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), modelBindings);
             var b = Registration.Binding;
             var owner = new RuntimeOwnerContext(1, b.ActorIssuer, b.ActorId, b.TenantId, b.ProjectId, b.RunId,
                 b.SessionId, b.AgentId, b.ModelSelectionReference!, b.TurnId, b.ProjectRevision,
                 b.ProjectConfigurationRevision, b.PlatformRuntimeRevision, b.ContextRevision,
                 b.AcceptedSelectionHash, b.ExecutionFence, 1, 1, 1)
             {
+                ModelCredentialReference = b.ModelCredentialReference,
+                ModelBindingPin = b.ModelBindingPin,
                 ModelSourceMode = b.ModelSourceMode, ModelConnectionId = b.ModelConnectionId,
                 ModelConnectionScope = b.ModelConnectionScope, WorkflowStepId = b.WorkflowStepId,
-                MaxPromptTokens = b.MaxPromptTokens
+                MaxModelTurns = b.MaxModelTurns, MaxToolCalls = b.MaxToolCalls,
+                MaxPromptTokens = b.MaxPromptTokens, CopilotHardCreditLimit = b.CopilotHardCreditLimit
             };
             var placement = new EnvironmentRuntimeBootstrapContext(1, b.TenantId, b.ProjectId, b.RunId, b.EnvironmentId,
                 1, b.EnvironmentCurrentFencingGeneration, b.EnvironmentProviderFencingGeneration, 1, Registration.ExpiresAt,
@@ -942,6 +1169,7 @@ public sealed class RuntimeAgentHostTests
         public ConcurrentQueue<RuntimeNativeTurnBeginRequest> NativeAdmissions { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnObservationRequest> NativeObservations { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnAccountingRequest> NativeAccounting { get; } = new();
+        public ConcurrentQueue<Guid> CostTurnRequests { get; } = new();
         public string? NativeAccountingFault { get; set; }
         public string? NativeAdmissionFault { get; set; }
         public string? NativeRecordFault { get; set; }
@@ -957,6 +1185,10 @@ public sealed class RuntimeAgentHostTests
         public Guid? MissingMaterialId { get; set; }
         public int Accounted { get; private set; }
         public int Rotations { get; private set; }
+        public int CostPreflightRequests { get; private set; }
+        public bool CostPreflightPriced { get; set; } = true;
+        public bool CostPreflightSourceHashMismatch { get; set; }
+        public int SourceRevocations { get; private set; }
 
         public Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(CancellationToken token) =>
             Host.ReceiveAsync(new(Registration.RuntimeInstanceId, Guid.NewGuid(), _bootstrap, _hash,
@@ -1073,15 +1305,21 @@ public sealed class RuntimeAgentHostTests
                     Grant(_source, RuntimeCredentialPurpose.Observe, revision: ++_sourceRevision), new string('e', 64), false));
             }
             if (path == "/internal/runtime/source/revoke")
+            {
+                SourceRevocations++;
                 return Response(request, Grant(_source, RuntimeCredentialPurpose.Observe, RuntimeCredentialState.Revoked, ++_sourceRevision));
+            }
             if (path == "/internal/runtime/model-session/grant")
             {
+                var binding = Configure.Registration.Binding;
+                var byok = binding.ModelSourceMode == ModelSourceMode.Byok;
                 _model = new("model-grant", 1, Configure.Registration.RuntimeInstanceId, Configure.Registration.Revision,
-                    Configure.Registration.Binding.ModelSelectionReference!, new("copilot-user", "v1"),
+                    binding.ModelSelectionReference!, binding.ModelCredentialReference ?? new("copilot-user", "v1"),
                     RuntimeSecretPurposes.ModelSession, Configure.Registration.ExpiresAt)
                 {
-                    SourceMode = ModelSourceMode.HostedCopilot, ConnectionId = Configure.Registration.Binding.ModelConnectionId,
-                    ConnectionRevision = 1, CredentialKind = RuntimeModelCredentialKind.GitHubUserAccess
+                    SourceMode = binding.ModelSourceMode, ConnectionId = binding.ModelConnectionId,
+                    ConnectionRevision = byok ? null : 1,
+                    CredentialKind = byok ? RuntimeModelCredentialKind.ByokKey : RuntimeModelCredentialKind.GitHubUserAccess
                 };
                 return Response(request, _model);
             }
@@ -1094,10 +1332,35 @@ public sealed class RuntimeAgentHostTests
                 if (path.EndsWith("/authorize", StringComparison.Ordinal))
                 {
                     var action = await ReadAsync<RuntimeActionRequest>(request, token);
+                    if (action.CostTurnId is { } costTurnId)
+                        CostTurnRequests.Enqueue(costTurnId);
                     _admission = new(1, action, action.EventId.ToString("N"), "1", action.EventId,
                         PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed);
                 }
                 return Response(request, _admission!);
+            }
+            if (path.EndsWith("/cost-preflight", StringComparison.Ordinal))
+            {
+                var preflight = await ReadAsync<RuntimeUsageCostPreflightRequest>(request, token);
+                if (preflight.ContractVersion != 1 || _facts is null)
+                    throw new InvalidOperationException("The exact registered runtime source is required.");
+                CostPreflightRequests++;
+                var rateCard = new CostRateCard(
+                    "fixture-rate-card", "1", _facts.MeterSource, "AIC", 1m,
+                    ImmutableDictionary<string, decimal>.Empty.WithComparers(StringComparer.Ordinal)
+                        .Add(_facts.ModelId, 1m));
+                var costBinding = new CostBinding(
+                    _facts.MeterSource, "fixture.cost", "1.0.0", 1, "fixture-revision",
+                    "fixture-resource", 1,
+                    ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal), rateCard);
+                return Response(request, new RuntimeUsageCostPreflightReceipt(
+                    1, Registration.RuntimeInstanceId, Registration.Revision,
+                    Registration.Binding.ExecutionFence, _facts.ModelSelectionReference, _facts.ModelId,
+                    _facts.MeterSource, _facts.AcceptedSelectionHash,
+                    CostPreflightSourceHashMismatch
+                        ? new string('f', 64)
+                        : RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts),
+                    costBinding, CostPreflightPriced, CostPreflightPriced ? null : "fixture-unpriced"));
             }
             if (path.StartsWith("/internal/runtime/sources/", StringComparison.Ordinal))
             {
@@ -1210,7 +1473,7 @@ public sealed class RuntimeAgentHostTests
                             _facts.ModelSelectionReference, _facts.ModelId)
                         {
                             MaxPromptTokens = MaterialPromptCapacityChanged
-                                ? _facts.MaxPromptTokens + 1 : _facts.MaxPromptTokens
+                                ? (_facts.MaxPromptTokens ?? 1024) + 1 : _facts.MaxPromptTokens
                         }
                     });
                 _material[material.EventId] = new(receipt, material.Bytes);

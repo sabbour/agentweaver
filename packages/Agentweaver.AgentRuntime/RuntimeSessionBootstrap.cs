@@ -112,9 +112,9 @@ public sealed class RuntimeSessionBootstrap(
             session = await sessions.CreateAsync(
                 registration, modelReference, modelCredential.Credential, RequireSourceAuthorityAsync,
                 cancellationToken, acceptedSkills, recovery,
-                actions is null ? null : (action, input, toolInvocation, token) =>
+                actions is null ? null : (action, eventId, input, token) =>
                     actions.RequireAsync(registration, action, input, RequireSourceAuthorityAsync, token,
-                        isToolInvocation: toolInvocation),
+                        isToolInvocation: true, eventId: eventId),
                 capturedMcpServer);
             await RequireSourceAuthorityAsync(cancellationToken);
             authorized = new AuthorizedRuntimeSession(registration, source.Receipt, source.Credential,

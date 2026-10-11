@@ -705,8 +705,9 @@ All runtime responses are no-store.
 | Method and path | Contract |
 | --- | --- |
 | `POST /runtime/v1/configure` | `RuntimeBootstrapDeliveryRequest`. Delivers the pending configure nonce without activating a model session. |
-| `POST /runtime/v1/configure/activate` | `RuntimeHostConfigureRequest`: version 1, exact registration, consume/exchange operation IDs, and delivered configuration. Exact replay returns the existing immutable session. |
+| `POST /runtime/v1/configure/activate` | `RuntimeHostConfigureRequest`: version 1, exact registration, consume/exchange operation IDs, and delivered configuration. Exact replay returns the existing immutable session. Hosted Copilot with a positive hard credit limit fails with `runtime_usage_affinity_unavailable` until native usage callbacks can be bound to their exact A2A send; the prepared session is cleaned up and readiness is withheld. |
 | `POST /runtime/v1/refresh` | `RuntimeHostRefreshRequest`: exact `RuntimeHostSessionProof` and operation ID. Current Identity and owner authority control rotation and replay. |
+| `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after it revalidates the caller, current registration, session, Observe grant, and readiness evidence. It does not start an SDK session or send a turn. |
 | `POST /runtime/v1/a2a/message:send` | `RuntimeA2ASendRequest`: one user text message, GUID message ID, native context ID, exact runtime proof, and delivery mode. `immediate` precedes pending `enqueue` work only at the next native idle boundary. |
 | `GET /health/live` | Process liveness. It does not prove permission or readiness. |
 | `GET /health/ready` | Fresh registration/source/lease/isolation/workspace/egress evidence plus authenticated configuration and measured startup ceilings. Missing evidence returns `503`. |
@@ -734,6 +735,7 @@ Identity verifies the separate purpose-bound nonce for those operations.
 | Method and path | Source contract |
 | --- | --- |
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations` | Accepts only `EnvironmentId` and `ProfileId`. Derives model, optional exact model `SecretRef`, agent, turn, selection, fence, lease, provider, and endpoint pins from current owners. |
+| `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations` | Requires the current authenticated child owner. It reads no more than 64 scoped registration IDs in pages of 32, revalidates each against current authority, and returns one current match. It returns `409` for no match, ambiguity, or candidate-limit overflow. |
 | `GET /internal/runtime/registrations/{runtimeInstanceId}` | Revalidates the active session/work item, accepted selection, current lease/profile, and registration revision. A raw storage read is not authorization. |
 | `GET /internal/runtime/registrations/{runtimeInstanceId}/skills` | Revalidates the current registration and accepted run selection, then returns only the enabled skill revisions assigned to its active agent, with exact instructions, resources, digests, and registration binding. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Public Environment control read. Requires current `WriteProjects`; returns the exact active, unexpired, owner-fenced lease projection. |
@@ -741,7 +743,7 @@ Identity verifies the separate purpose-bound nonce for those operations.
 | `GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}` | Uses the canonical manager's retained lease callback to read current Orchestrator context and match a registered profile to the exact placement. Requires current run-bound `ReadRunSelection`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/environments/{environmentId}/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/workspace` | Returns `EnvironmentRuntimeWorkspaceContext` with the current placement, exact validated Workspace mount negotiation, and attached transition revision. One owner lock protects both lease and Workspace during the Core context read. Requires current run-bound `ReadRunSelection`. This is metadata, not flush or content evidence. |
 | `POST /internal/runtime/sources/{runtimeInstanceId}` | Registers actual immutable SDK facts under the validated bearer and separate observe credential. Rechecks current owner and grant authority after waits. |
-| `POST /internal/runtime/observations` | Commits a native SDK observation under the exact current registration/source grant. Identical SDK events return the original source receipt. Changed content conflicts. |
+| `POST /internal/runtime/observations` | Commits a native SDK observation, including optional A2A message correlation, under the exact current registration/source grant. Identical SDK events return the original source receipt. Changed content conflicts. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/usage-receipts/{receiptId}` | Returns the immutable source receipt only after fresh accepted-selection and run-read checks. Events cannot substitute caller-supplied usage. |
 
 `Environment:RuntimeBootstrap:Profiles` configures exact owner/profile/provider
@@ -792,6 +794,10 @@ These source contracts do not claim a live token-count or truncation guarantee.
 requires the authenticated current run owner and returns `Cache-Control: no-store`.
 The response contains the active child turn, accepted revisions and hash, and
 agent/model reference from its confirmed WorkPlan item.
+For a Fixed workflow step, the agent, model reference, and step instead come from
+the running association in the root's owner-created `coordinator-execution`
+checkpoint; that association must match the active child and current accepted
+selection, execution fence, and decision version.
 The accepted platform or project selection also supplies `ModelSourceMode`.
 Runtime registration and model-grant receipts retain that mode.
 Missing or incompatible modes deny SDK startup without a personal provider fallback.

@@ -83,12 +83,12 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                 if (recordedId == Guid.Empty)
                     throw new ArgumentException("A non-empty A2A message identity is required.", nameof(userEventId));
                 await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
-                var binding = Registration.Binding;
                 if (await material.ReadOptionalTurnAsync(
-                    new(binding.ProjectId, binding.RunId, binding.SessionId), recordedId, cancellationToken)
+                    Registration, Facts, recordedId, cancellationToken)
                     .ConfigureAwait(false) is not null)
                     throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
             }
+            RequireSupportedCostTurnAffinity();
             await CommitTurnContentAsync(material, userEventId ?? Guid.NewGuid(), "user", prompt, cancellationToken)
                 .ConfigureAwait(false);
             await _actions.RequireAsync(Registration, "model.turn", System.Text.Encoding.UTF8.GetBytes(prompt),
@@ -102,6 +102,13 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         {
             _executionGate.Release();
         }
+    }
+
+    internal void RequireSupportedCostTurnAffinity()
+    {
+        if (Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+            Registration.Binding.CopilotHardCreditLimit is > 0)
+            throw new RuntimeAuthorizationException("runtime_usage_affinity_unavailable");
     }
 
     internal async Task<(string Response, RuntimeNativeTurnRecordedReceipt Receipt)> SendNativeTurnAsync(
@@ -125,9 +132,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             RequireTurnAdmission();
             _lastNativeTurn = null;
             await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
-            var binding = Registration.Binding;
             if (await material.ReadOptionalTurnAsync(
-                new(binding.ProjectId, binding.RunId, binding.SessionId), message.MessageId, cancellationToken)
+                Registration, Facts, message.MessageId, cancellationToken)
                 .ConfigureAwait(false) is not null)
                 throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
             await _actions.RequireAsync(Registration, "model.turn", System.Text.Encoding.UTF8.GetBytes(prompt),

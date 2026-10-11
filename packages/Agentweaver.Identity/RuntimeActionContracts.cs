@@ -19,6 +19,9 @@ public sealed record RuntimeActionRequest(
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? DispatchId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CostTurnId { get; init; }
 }
 
 public sealed record RuntimeActionAdmission(
@@ -48,6 +51,9 @@ public static class RuntimeActionContract
             request.IsToolInvocation && request.ActionId == "model.turn" ||
             request.DispatchId is { } dispatchId &&
                 (dispatchId == Guid.Empty || request.ActionId != "model.turn"))
+            throw new RuntimeAuthorizationException("runtime_action_invalid");
+        if (request.CostTurnId is { } costTurnId &&
+            (costTurnId == Guid.Empty || request.ActionId != "model.turn"))
             throw new RuntimeAuthorizationException("runtime_action_invalid");
         RuntimeContractValidation.ValidateHash(request.InputHash);
     }

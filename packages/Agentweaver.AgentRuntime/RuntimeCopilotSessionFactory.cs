@@ -76,7 +76,7 @@ public sealed class RuntimeCopilotSessionFactory
         CancellationToken cancellationToken,
         SkillRuntimeContentProjectionV1 acceptedSkills,
         RuntimeSessionRecovery? recovery = null,
-        Func<string, ReadOnlyMemory<byte>, bool, CancellationToken, Task>? requireActionAuthority = null,
+        Func<string, Guid, ReadOnlyMemory<byte>, CancellationToken, Task>? requireActionAuthority = null,
         RuntimeMcpServerEndpoint? mcpServer = null)
     {
         ArgumentNullException.ThrowIfNull(requireCreationAuthority);
@@ -126,6 +126,7 @@ public sealed class RuntimeCopilotSessionFactory
         var turns = new RuntimeCopilotTurnObserver();
         var nativeFiles = new RuntimeNativeSessionFiles(
             token, (_connection as UriRuntimeConnection)?.ConnectionToken ?? "");
+        RuntimeCopilotToolCallAuthorization? toolAuthorization = null;
         var skillProvider = new RuntimeAcceptedSkillProvider(acceptedSkills);
         var recoveryMode = RuntimeSessionRecoveryMode.Fresh;
         string? recoveryReason = null;
@@ -163,6 +164,9 @@ public sealed class RuntimeCopilotSessionFactory
             var binding = registration.Binding;
             var maxPromptTokens = ResolvePromptCapacity(binding.MaxPromptTokens, supportedPromptTokens);
             var sdkSessionId = RuntimeContractValidation.NativeSessionId(binding);
+            toolAuthorization = requireActionAuthority is null ? null :
+                new RuntimeCopilotToolCallAuthorization(
+                    registration, sdkSessionId, requireActionAuthority, turns.RequireActiveToken);
             if (recovery is not null)
             {
                 var recordedLimit = recovery.Cache?.Material.Reference.Material?.MaxPromptTokens;
@@ -222,72 +226,25 @@ public sealed class RuntimeCopilotSessionFactory
                     ? [] : ["view", "create", "edit", "bash", "read_bash", "write_bash", "stop_bash"];
                 options.WorkingDirectory = _workingDirectory;
                 options.CreateSessionFsProvider = _ => nativeFiles;
-                options.OnPermissionRequest = async (request, invocation) =>
-                {
-                    if (requireActionAuthority is null || invocation.SessionId != sdkSessionId)
-                        return GitHub.Copilot.Rpc.PermissionDecision.Reject("runtime_tool_authority_unavailable");
-                    var actionId = request switch
-                    {
-                        PermissionRequestRead { RequestSandboxBypass: not true, ManagedApprovalRequired: not true } => "tool.read",
-                        PermissionRequestWrite { RequestSandboxBypass: not true, ManagedApprovalRequired: not true } => "tool.write",
-                        PermissionRequestShell { RequestSandboxBypass: not true, ManagedApprovalRequired: not true } => "exec.shell",
-                        _ => null
-                    };
-                    if (actionId is null)
-                        return GitHub.Copilot.Rpc.PermissionDecision.Reject("runtime_permission_not_registered");
-                    try
-                    {
-                        await requireActionAuthority(actionId, JsonSerializer.SerializeToUtf8Bytes(request), false,
-                            turns.RequireActiveToken()).ConfigureAwait(false);
-                        return GitHub.Copilot.Rpc.PermissionDecision.ApproveOnce();
-                    }
-                    catch (RuntimeAuthorizationException failure)
-                    {
-                        return GitHub.Copilot.Rpc.PermissionDecision.Reject(failure.Code);
-                    }
-                };
-                if (requireActionAuthority is not null)
+                options.OnPermissionRequest = toolAuthorization is null
+                    ? (_, _) => Task.FromResult(GitHub.Copilot.Rpc.PermissionDecision.Reject(
+                        "runtime_tool_authority_unavailable"))
+                    : toolAuthorization.OnPermissionRequestAsync;
+                if (toolAuthorization is not null)
                     options.Hooks = new SessionHooks
                     {
-                        OnPreToolUse = async (input, invocation) =>
-                        {
-                            var actionId = input.ToolName switch
-                            {
-                                "view" => "tool.read",
-                                "create" or "edit" => "tool.write",
-                                "bash" => "exec.shell",
-                                "read_bash" => "exec.read",
-                                "write_bash" => "exec.write",
-                                "stop_bash" => "exec.stop",
-                                _ => null
-                            };
-                            if (actionId is null || input.SessionId != sdkSessionId || invocation.SessionId != sdkSessionId)
-                                return new PreToolUseHookOutput
-                                {
-                                    PermissionDecision = "deny", PermissionDecisionReason = "runtime_tool_not_registered"
-                                };
-                            try
-                            {
-                                await requireActionAuthority(actionId, JsonSerializer.SerializeToUtf8Bytes(input), true,
-                                    turns.RequireActiveToken()).ConfigureAwait(false);
-                                return new PreToolUseHookOutput { PermissionDecision = "ask" };
-                            }
-                            catch (RuntimeAuthorizationException failure)
-                            {
-                                return new PreToolUseHookOutput
-                                {
-                                    PermissionDecision = "deny", PermissionDecisionReason = failure.Code
-                                };
-                            }
-                        }
+                        OnPreToolUse = toolAuthorization.OnPreToolUseAsync
                     };
                 options.OnEvent = sessionEvent =>
                 {
+                    // The pinned SDK does not prove which A2A send owns a usage event.
                     if (sessionEvent is AssistantUsageEvent nativeUsage &&
-                        !usage.Writer.TryWrite(new(nativeUsage, null, turns.ActiveA2AMessageId)))
+                        !usage.Writer.TryWrite(new(nativeUsage, null, null)))
                         usage.Writer.TryComplete(new RuntimeAuthorizationException(
                             "runtime_usage_pending_capacity_exceeded"));
                     turns.Observe(sessionEvent);
+                    if (sessionEvent is SessionIdleEvent or SessionErrorEvent)
+                        toolAuthorization?.Clear();
                 };
                 options.RemoteSession = GitHub.Copilot.Rpc.RemoteSessionMode.Off;
                 if (recoveryMode == RuntimeSessionRecoveryMode.JournalRebuild)
