@@ -480,6 +480,35 @@ public static class EnvironmentEndpoints
                     : Results.Ok(result);
             }, cancellationToken).ConfigureAwait(false);
         });
+        sandboxes.MapGet("/build-test/commands/{operationId:guid}/workspace-capture", async (
+            string projectId, string runId, string environmentId, Guid operationId,
+            HttpContext context,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () => Results.Bytes(
+                (await manager.ReadWorkspaceCaptureAsync(caller!, projectId, runId, environmentId,
+                    operationId, cancellationToken).ConfigureAwait(false)).ToArray(),
+                "application/octet-stream"), cancellationToken).ConfigureAwait(false);
+        });
+        sandboxes.MapPost("/build-test/commands/{operationId:guid}/workspace-capture/acknowledge", async (
+            string projectId, string runId, string environmentId, Guid operationId,
+            SandboxBuildTestWorkspaceCaptureAcknowledgmentRequest request,
+            HttpContext context,
+            [FromServices] EnvironmentSandboxBuildTestCommandManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () => Results.Ok(
+                await manager.AcknowledgeWorkspaceCaptureAsync(caller!, projectId, runId, environmentId,
+                    operationId, request, cancellationToken).ConfigureAwait(false)),
+                cancellationToken).ConfigureAwait(false);
+        });
         sandboxes.MapPost("/abandon", async (
             string projectId,
             string runId,

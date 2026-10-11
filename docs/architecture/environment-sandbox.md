@@ -15,9 +15,9 @@ tested.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'" alt="Environment resolves Core's immutable accepted BuildTest command and persists its stable operation before provider effects. It rechecks current authorization and exact Sandbox, Workspace, and Cilium bindings. A gated command Pod uses an offline policy; a separate read-only collector Pod starts only after verified command success and returns a bounded no-follow file receipt tied to its UID and the request fingerprint. Uncertain effects reconcile the same operation, while Core retains MAF state." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'" alt="Core saves the accepted repository seed before Environment reserves one stable operation. The native command Pod prepares that exact repository before command execution. A separate read-only collector seals the full baseline and declared output bytes from the prepared native path. Environment stores exact references, not file bytes. Core retains the document through Source Control and obtains the durable Events acknowledgment. Environment verifies that acknowledgment through Core before deleting the exact native Pods. Core then commits the terminal receipt under current owner checks." />
   </a>
-  <figcaption>BuildTest command and output evidence sequence. Required outputs come from a separate pinned collector on the exact Workspace PVC. Command logs are not file evidence; Core retains MAF checkpoint and run-state ownership.</figcaption>
+  <figcaption>BuildTest repository preparation and output admission. Version 2 retains full native output until the journal acknowledges it. Command logs are not file evidence. Core owns workflow completion.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-buildtest-command.drawio'">Open editable draw.io source</a></p>
 
@@ -78,6 +78,8 @@ continues to enforce the configured Environment audience for both routes.
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands` | Resolve the accepted Core checkpoint, reserve its immutable command intent, and execute the stable BuildTest operation. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}` | Read the exact persisted operation under the current owner and Sandbox binding. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}/reconcile` | Reconcile the same operation and immutable intent; do not create a replacement operation. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}/workspace-capture` | Return the exact sealed version 2 native document as bounded binary bytes with no-store, after current owner checks. The digest and length must match the stored capture reference. After acknowledgment, read retained bytes through Source Control instead. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}/workspace-capture/acknowledge` | Accept the original API request and exact Events journal acknowledgment. Verify it through Core, save the acknowledgment, then request exact-UID native Pod cleanup. Retry preserves the same capture and acknowledgment. |
 | `POST /internal/provider-lifecycle/reports` | Provider report route. It fails closed until provider identity authentication and Core interruption acknowledgement are admitted. |
 
 Provider lifecycle reports have a durable idempotent contract and lease/fence
@@ -237,7 +239,7 @@ Core returns the immutable accepted command, execution options, selection hash, 
 The manager records the intent and request fingerprint in the existing `owner_effects` row before provider effects.
 Attempts, Pod references, and results use the same operation.
 The store writes UTC timestamps at PostgreSQL microsecond precision so JSON and row timestamps agree after restart.
-A terminal snapshot is immutable except for its update timestamp.
+A terminal snapshot is immutable except for its update timestamp and one verified version 2 journal acknowledgment.
 Identical saves and additional durable attempt markers cannot replace its status, Pod references, or evidence.
 An uncertain create remains `ReconciliationRequired`; it does not authorize another Pod.
 Command create, read, and reconcile responses use `SandboxBuildTestOperationResult`, which contains the operation and replay flag.
@@ -271,7 +273,7 @@ Core retains that state and its interruption acknowledgement.
 Disposable PostgreSQL tests verify owner-store reservation, restart replay, and terminal-evidence preservation.
 They do not prove command-Pod execution, Kubernetes isolation, Cilium datapath enforcement, or complete native accounting.
 
-### Version 2 repository input candidate
+### Version 2 repository preparation and full output
 
 Version 2 binds a credential-free Git bundle and the full baseline inventory to the accepted command.
 The source binding includes the current actor, selection, repository pin, workspace incarnation, branch, and content digests.
@@ -339,17 +341,54 @@ The source can construct an output document from the accepted seed and a complet
 It rejects missing baseline files, changed undeclared files, and outputs that differ from their declared evidence.
 It uses a private Git index and disables hooks, filters, external diff commands, and network protocols.
 The shared prepared-repository path retains the existing owner-scoped hash.
-The saved managed tests cover document encoding only, not preparation receipts or Git output execution.
-These foundations do not connect or prove the provider, image helper, or owner acknowledgement flow.
+The same Source Control package constructs the native output document.
+This does not create another output store or a second model runtime.
 
 The Kubernetes client adds a bounded native WebSocket exchange for fixed preparation and collector containers.
 It retains the existing service-account handler and trusted server certificate.
 The helper must identify the exact Pod UID and request fingerprint before the client sends seed bytes.
 Local TLS tests cover binary transfers at the exact admitted limit and reject invalid identity, protocol, output, or terminal evidence.
-This candidate does not yet connect the image helper, preparation record, writer exclusion, and complete capture through the provider.
-Managed source-input checks cover binding, checkpoint recovery, conflicts, missing bytes, and unchanged legacy commands.
-They do not prove the authenticated PostgreSQL preparation transaction or live provider execution.
-These checks do not prove live Kubernetes execution or complete BuildTest acceptance.
+The provider uses this exchange to prepare the repository before command execution.
+The pinned AgentHost image contains Git and the shared Source Control package.
+Its trusted init container receives the exact accepted seed and calls the existing repository-preparation helper.
+The command starts only after the preparation receipt matches its operation, checkpoint, source digest, native path, and Pod UID.
+Its working directory is the prepared repository, not another local checkout.
+The command container cannot mount the helper's private state volume.
+
+After verified command success, a separate read-only collector reads the entire prepared repository through native no-follow file descriptors.
+It excludes only the root Git metadata directory.
+Symlinks, special files, nested mounts, changed file identities, and incomplete trees prevent capture.
+The full package retains every baseline file and each declared output.
+Missing baseline files, changed undeclared files, and undeclared additional files are errors.
+Version 2 output obligations cannot exceed the existing 16 MiB package file limit.
+The complete-tree limits remain 10,000 files and 64 MiB total file content.
+A version 2 command requires this collector even when it declares no output files.
+
+The collector seals the complete document and its exact reference in private Pod state.
+Both remain bound to the operation, source, request fingerprint, native repository path, and collector Pod UID.
+A restart or retry reuses those sealed bytes instead of recapturing the tree.
+A complete pending write is verified and promoted unchanged.
+An incomplete unsealed write can be retried only under the exact private-state binding, with an explicit diagnostic.
+Foreign or corrupt complete state remains an error.
+The native command is not restarted during capture recovery.
+
+Environment persists preparation and capture references, never seed or file-package bytes in operation JSON.
+Core reads the exact binary document from Environment's fixed owner route only when Source Control has not retained it.
+The transfer requires no-store, the exact document length and digest, and current owner checks before and after the read.
+Core validates the accepted seed, full baseline, declared outputs, document sections, and native capture reference.
+It then uses the existing Source Control pending-package rows and Events produced-output admission path.
+Retry reconstructs the same document from retained pending or admitted bytes without a native export.
+
+Environment receives the exact Events journal acknowledgment through its acknowledgment route.
+It asks Core to verify the canonical admitted record, object reference, positive journal position, and all capture bindings.
+Current command checks surround that verification.
+Environment saves the verified acknowledgment before requesting deletion of the exact collector and command Pod UIDs.
+Cleanup retries preserve the stored acknowledgment and do not execute or export the command again.
+Core's final owner transaction rereads the admitted capture and persists the preparation, full capture reference, and acknowledgment before completing the workflow step.
+Owner locks do not remain held across HTTP waits.
+
+Controlled source tests cover full binary documents, baseline preservation, exact references, acknowledgment checks, and response-loss replay.
+They do not prove native Kubernetes execution, deployed PVC isolation, Cilium enforcement, or complete BuildTest acceptance.
 
 ## Retirement and storage retention
 

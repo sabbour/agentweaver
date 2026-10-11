@@ -117,13 +117,33 @@ public static class RuntimeOwnerHttpTransport
         SandboxBuildTestWorkspaceSource source, CancellationToken cancellationToken)
     {
         _ = source.Validate();
+        return await ReadBuildTestBytesAsync(client, ownerAddress, path, actor,
+            source.SeedByteLength, source.SeedSha256, "buildtest_seed", cancellationToken).ConfigureAwait(false);
+    }
+
+    public static Task<byte[]> ReadBuildTestCaptureAsync(
+        HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
+        SandboxBuildTestWorkspaceCaptureReference capture, CancellationToken cancellationToken)
+    {
+        if (capture.DocumentByteLength is < ProducedRunCaptureLimits.DocumentHeaderBytes or
+                > ProducedRunCaptureLimits.MaximumDocumentBytes ||
+            capture.DocumentSha256 is not { Length: 64 } || !capture.DocumentSha256.All(Uri.IsHexDigit))
+            throw new RuntimeAuthorizationException("buildtest_capture_contract_invalid");
+        return ReadBuildTestBytesAsync(client, ownerAddress, path, actor,
+            capture.DocumentByteLength, capture.DocumentSha256, "buildtest_capture", cancellationToken);
+    }
+
+    private static async Task<byte[]> ReadBuildTestBytesAsync(
+        HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
+        long byteLength, string sha256, string codePrefix, CancellationToken cancellationToken)
+    {
         var owner = RequireOwnerAddress(ownerAddress);
         var endpoint = new Uri(owner, path);
         if (!path.StartsWith("/", StringComparison.Ordinal) ||
             path.StartsWith("//", StringComparison.Ordinal) ||
             endpoint.Scheme != owner.Scheme || endpoint.Authority != owner.Authority ||
             endpoint.Fragment.Length != 0)
-            throw new RuntimeAuthorizationException("buildtest_seed_owner_address_invalid");
+            throw new RuntimeAuthorizationException(codePrefix + "_owner_address_invalid");
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (client.Timeout != Timeout.InfiniteTimeSpan)
             deadline.CancelAfter(client.Timeout);
@@ -143,9 +163,9 @@ public static class RuntimeOwnerHttpTransport
                     ? "runtime_owner_denied" : "runtime_owner_unavailable");
         if (response.Headers.CacheControl?.NoStore != true ||
             response.Content.Headers.ContentType?.MediaType != "application/octet-stream" ||
-            response.Content.Headers.ContentLength is { } length && length != source.SeedByteLength)
-            throw new RuntimeAuthorizationException("buildtest_seed_contract_invalid");
-        var bytes = new byte[checked((int)source.SeedByteLength)];
+            response.Content.Headers.ContentLength is { } length && length != byteLength)
+            throw new RuntimeAuthorizationException(codePrefix + "_contract_invalid");
+        var bytes = new byte[checked((int)byteLength)];
         await using var stream = await response.Content.ReadAsStreamAsync(readToken).ConfigureAwait(false);
         try
         {
@@ -153,12 +173,12 @@ public static class RuntimeOwnerHttpTransport
         }
         catch (EndOfStreamException)
         {
-            throw new RuntimeAuthorizationException("buildtest_seed_contract_invalid");
+            throw new RuntimeAuthorizationException(codePrefix + "_contract_invalid");
         }
         if (await stream.ReadAsync(new byte[1], readToken).ConfigureAwait(false) != 0 ||
             !CryptographicOperations.FixedTimeEquals(
-                SHA256.HashData(bytes), Convert.FromHexString(source.SeedSha256)))
-            throw new RuntimeAuthorizationException("buildtest_seed_integrity_invalid");
+                SHA256.HashData(bytes), Convert.FromHexString(sha256)))
+            throw new RuntimeAuthorizationException(codePrefix + "_integrity_invalid");
         return bytes;
     }
 

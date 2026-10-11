@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Sandbox.AgentSandbox;
@@ -551,20 +552,24 @@ public sealed partial class AgentSandboxProvider
         var policy = isCollector
             ? ToPolicyDescriptor(request.CollectorPolicy!)
             : ToPolicyDescriptor(request.CommandPolicy);
-        var containerName = GetBuildTestContainerName(role);
+        var workspaceCapture = isCollector && command.WorkspaceSource is not null;
+        var containerName = workspaceCapture
+            ? SandboxBuildTestLimits.WorkspaceCaptureContainerName : GetBuildTestContainerName(role);
         var image = isCollector
             ? command.ExecutionOptions.CollectorImageReference
             : command.ExecutionOptions.ImageReference;
         var executable = isCollector
             ? command.ExecutionOptions.CollectorExecutableReference
             : command.ExecutableReference;
-        var arguments = isCollector
+        var arguments = workspaceCapture
+            ? WorkspaceHelperArguments(request, context, preparing: false, "hold")
+            : isCollector
             ? command.ExecutionOptions.CollectorAssemblyArguments
                 .Add(command.ExecutionOptions.CollectorMode)
                 .Add(EncodeCollectorRequest(collectorRequest!))
             : command.Arguments;
-        var workingDirectory = isCollector
-            ? context.Descriptor.WorkspaceMountPath
+        var workingDirectory = !isCollector && command.WorkspaceSource is { } source
+            ? context.Descriptor.WorkspaceMountPath.TrimEnd('/') + "/" + source.PreparedRepositoryRelativePath
             : context.Descriptor.WorkspaceMountPath;
         if (!isCollector && command.WorkingDirectory != ".")
             throw new SandboxProviderException(
@@ -637,7 +642,7 @@ public sealed partial class AgentSandboxProvider
                 : []
         };
 
-        return JsonSerializer.SerializeToElement(new
+        var manifest = JsonSerializer.SerializeToElement(new
         {
             apiVersion = "v1",
             kind = "Pod",
@@ -689,6 +694,8 @@ public sealed partial class AgentSandboxProvider
                 containers = new[] { container }
             }
         }, JsonOptions);
+        return command.WorkspaceSource is null
+            ? manifest : AddWorkspacePodContainers(manifest, request, context, isCollector);
     }
 
     private ImmutableDictionary<string, string> BuildTestPodLabels(
@@ -810,17 +817,23 @@ public sealed partial class AgentSandboxProvider
             collectorRequest ??= CreateCollectorRequest(request, context);
         var expectedImage = isCollector ? options.CollectorImageReference : options.ImageReference;
         var expectedExecutable = isCollector ? options.CollectorExecutableReference : command.ExecutableReference;
-        var expectedArguments = isCollector
+        var workspaceCapture = isCollector && command.WorkspaceSource is not null;
+        var expectedArguments = workspaceCapture
+            ? WorkspaceHelperArguments(request, context, preparing: false, "hold")
+            : isCollector
             ? options.CollectorAssemblyArguments
                 .Add(options.CollectorMode)
                 .Add(EncodeCollectorRequest(collectorRequest
                     ?? throw ProviderResourceMismatch("The BuildTest collector request is missing.")))
             : command.Arguments;
-        var expectedContainerName = GetBuildTestContainerName(role);
+        var expectedContainerName = workspaceCapture
+            ? SandboxBuildTestLimits.WorkspaceCaptureContainerName : GetBuildTestContainerName(role);
         if (ReadOptionalString(spec, "runtimeClassName") != context.Options.RuntimeClassName ||
             ReadOptionalString(spec, "restartPolicy") != "Never" ||
-            !TryGetInt64(spec, "activeDeadlineSeconds", out var timeout) ||
-            timeout != options.TimeoutSeconds ||
+            (workspaceCapture
+                ? spec.TryGetProperty("activeDeadlineSeconds", out _)
+                : !TryGetInt64(spec, "activeDeadlineSeconds", out var timeout) ||
+                    timeout != options.TimeoutSeconds) ||
             !TryGetInt64(spec, "terminationGracePeriodSeconds", out var gracePeriod) ||
             gracePeriod != 1 ||
             !TryGetBoolean(spec, "automountServiceAccountToken", out var automount) ||
@@ -841,7 +854,11 @@ public sealed partial class AgentSandboxProvider
 
         var containers = RequiredArray(spec, "containers");
         if (containers.GetArrayLength() != 1 ||
-            TryGetArray(spec, "initContainers") is { } initContainers && initContainers.GetArrayLength() != 0 ||
+            (command.WorkspaceSource is not null && !isCollector
+                ? TryGetArray(spec, "initContainers") is not { } preparationContainers ||
+                    preparationContainers.GetArrayLength() != 1
+                : TryGetArray(spec, "initContainers") is { } initContainers &&
+                    initContainers.GetArrayLength() != 0) ||
             TryGetArray(spec, "ephemeralContainers") is { } ephemeralContainers &&
                 ephemeralContainers.GetArrayLength() != 0)
             throw ProviderResourceMismatch("The BuildTest Pod must contain only its pinned command container.");
@@ -849,12 +866,16 @@ public sealed partial class AgentSandboxProvider
         if (ReadOptionalString(container, "name") != expectedContainerName ||
             ReadOptionalString(container, "image") != expectedImage ||
             ReadOptionalString(container, "imagePullPolicy") != "Always" ||
-            ReadOptionalString(container, "workingDir") != context.Descriptor.WorkspaceMountPath ||
+            ReadOptionalString(container, "workingDir") !=
+                (!isCollector && command.WorkspaceSource is { } source
+                    ? context.Descriptor.WorkspaceMountPath.TrimEnd('/') + "/" + source.PreparedRepositoryRelativePath
+                    : context.Descriptor.WorkspaceMountPath) ||
             !JsonStringArrayMatches(container, "command", [expectedExecutable]) ||
             !JsonStringArrayMatches(container, "args", expectedArguments) ||
             !ContainerResourcesMatch(container, options) ||
             !ContainerSecurityContextMatches(container) ||
-            !WorkspaceVolumeMatches(spec, container, context, isCollector))
+            !WorkspaceVolumeMatches(spec, container, context, isCollector,
+                hasPrivateState: workspaceCapture, hasPrivateVolume: command.WorkspaceSource is not null))
             throw ProviderResourceMismatch("The BuildTest command container differs from its immutable accepted manifest.");
         if (isCollector)
         {
@@ -864,6 +885,9 @@ public sealed partial class AgentSandboxProvider
         else if (TryGetArray(container, "env") is { } environment && environment.GetArrayLength() != 0 ||
                  TryGetArray(container, "envFrom") is { } envFrom && envFrom.GetArrayLength() != 0)
             throw ProviderResourceMismatch("A BuildTest command Pod cannot receive environment variables.");
+
+        if (command.WorkspaceSource is not null)
+            ValidateWorkspacePodContainers(spec, request, context, isCollector);
 
         var gates = ReadSchedulingGates(pod);
         if (requireGate == true && (gates.Length != 1 || gates[0] != BuildTestGateName) ||
@@ -937,12 +961,15 @@ public sealed partial class AgentSandboxProvider
         JsonElement spec,
         JsonElement container,
         BuildTestContext context,
-        bool readOnly)
+        bool readOnly,
+        bool hasPrivateState = false,
+        bool hasPrivateVolume = false)
     {
         var volumes = TryGetArray(spec, "volumes");
         var mounts = TryGetArray(container, "volumeMounts");
-        if (volumes is not { } volumeArray || volumeArray.GetArrayLength() != 1 ||
-            mounts is not { } mountArray || mountArray.GetArrayLength() != 1)
+        if (volumes is not { } volumeArray ||
+            volumeArray.GetArrayLength() != (hasPrivateState || hasPrivateVolume ? 2 : 1) ||
+            mounts is not { } mountArray || mountArray.GetArrayLength() != (hasPrivateState ? 2 : 1))
             return false;
         var volume = volumeArray[0];
         var claim = TryGetObject(volume, "persistentVolumeClaim");
@@ -1087,7 +1114,7 @@ public sealed partial class AgentSandboxProvider
         var expectedFingerprint = new SandboxBuildTestApiRequest(
             expected.Checkpoint,
             request.ExpectedBinding).ComputeRequestFingerprint(expected);
-        if (expected.Outputs.IsEmpty ||
+        if (expected.Outputs.IsEmpty && expected.WorkspaceSource is null ||
             collectorRequest.OperationId != expected.OperationId ||
             collectorRequest.ImmutableHash != expected.ImmutableHash ||
             collectorRequest.RequestFingerprint != expectedFingerprint ||

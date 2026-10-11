@@ -54,6 +54,28 @@ public sealed class KubernetesBuildTestWorkspaceIoTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task NativeExecKeepsTheExactHelperCommandAndBinaryInput(bool preparing)
+    {
+        await using var server = await NativeServer.StartAsync("exec");
+        var input = preparing ? ImmutableArray.Create<byte>(0, 255, 128) : ImmutableArray<byte>.Empty;
+        var command = ImmutableArray.Create(
+            "dotnet", "/app/Agentweaver.AgentHost.dll", SandboxBuildTestLimits.WorkspaceCollectorMode,
+            "encoded-request", preparing ? "prepare" : "export");
+        var client = new KubernetesAgentSandboxClient(server.Client);
+
+        var output = await client.ExchangeBuildTestWorkspaceAsync(
+            Pod, Fingerprint, input, preparing, 100, CancellationToken.None, command);
+
+        Assert.Equal(command.ToArray(), server.Command);
+        Assert.Equal(input.ToArray(), server.Input.ToArray());
+        Assert.Equal(new byte[] { 0, 255, 128, 10 }, output.ToArray());
+        Assert.True(server.InputClosed);
+        Assert.Equal(2, server.PodReads);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task NativeWebSocketUsesPinnedHttpHandlerAndTransfersBinarySeedOnlyAfterBoundReady(bool preparing)
@@ -111,6 +133,7 @@ public sealed class KubernetesBuildTestWorkspaceIoTests
         public int PodReads { get; private set; }
         public int AuthorizedRequests { get; private set; }
         public string? Container { get; private set; }
+        public string[]? Command { get; private set; }
         public bool InputClosed { get; private set; }
 
         public static async Task<NativeServer> StartAsync(string fault)
@@ -144,7 +167,9 @@ public sealed class KubernetesBuildTestWorkspaceIoTests
                     await context.Response.WriteAsJsonAsync(new { metadata = new { uid } });
                     return;
                 }
-                Assert.EndsWith("/attach", context.Request.Path.Value);
+                Assert.EndsWith(fault == "exec" ? "/exec" : "/attach", context.Request.Path.Value);
+                if (fault == "exec")
+                    server.Command = context.Request.Query["command"].Select(value => value!).ToArray();
                 Assert.Equal("true", context.Request.Query["stdin"].ToString());
                 Assert.Equal("true", context.Request.Query["stdout"].ToString());
                 Assert.Equal("true", context.Request.Query["stderr"].ToString());

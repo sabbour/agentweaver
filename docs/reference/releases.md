@@ -37,6 +37,8 @@ matching its direct project references.
 The runtime library pins its native SDK dependency and references Abstractions
 and Identity. Environment now references Identity for its separate bootstrap
 profile contract. The separate AgentHost service entry describes the unpublished executable and pinned image definition.
+AgentHost also references Source Control for the trusted version 2 BuildTest repository and full-output helpers.
+The manifest records that direct compatibility dependency.
 CI builds an exact-source amd64 image, measures its compressed OCI bytes, and checks native SDK startup without model execution.
 These components do not publish credentials or prove deployment or paid-model acceptance.
 

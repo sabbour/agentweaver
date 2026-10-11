@@ -251,6 +251,19 @@
           "Agentweaver.Abstractions": "[0.0.0, )"
         }
       },
+      "agentweaver.providers": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )"
+        }
+      },
+      "agentweaver.sourcecontrol": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Providers": "[0.0.0, )"
+        }
+      },
       "agentweaver.telemetry": {
         "type": "Project",
         "dependencies": {

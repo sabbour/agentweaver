@@ -91,7 +91,7 @@ their external boundaries.
 | `Agentweaver.Orchestrator.Core` | Workflow validation and the platform-singleton AGT YAML Policy adapter. | `Agentweaver.Abstractions`, `Agentweaver.Providers`, `Microsoft.AgentGovernance` |
 | `Agentweaver.Identity` | Trusted actor, exact secret grants, separate runtime nonce contracts, and fixed owner HTTP transport. | `Agentweaver.Abstractions` |
 | `Agentweaver.AgentRuntime` | Authenticated bootstrap, guarded native turns/tools, actual turn content, accounting acknowledgment, and compatible SDK-cache or journal recovery. | `Agentweaver.Abstractions`, `Agentweaver.Identity`, `GitHub.Copilot.SDK` |
-| `Agentweaver.AgentHost` | Unpublished HTTPS runtime executable, exact image/native-runtime verification, priority at idle boundaries, and measured readiness. No automatic scheduler. | `Agentweaver.AgentRuntime`, `Agentweaver.Telemetry` |
+| `Agentweaver.AgentHost` | Unpublished HTTPS runtime executable, exact image/native-runtime verification, priority at idle boundaries, measured readiness, and trusted BuildTest repository preparation/full-output collection. No automatic scheduler. | `Agentweaver.AgentRuntime`, `Agentweaver.Telemetry`, `Agentweaver.SourceControl` |
 | `Agentweaver.Secrets.AzureKeyVault` | Exact-version Azure Key Vault adapter. | `Agentweaver.Abstractions` |
 | `Agentweaver.Persistence.Postgres` | Service-schema outbox, consumer inbox, and relay library. | — |
 | `Agentweaver.ObjectStore.AzureBlob` | Opaque-object Azure Blob adapter. | `Agentweaver.Abstractions` |

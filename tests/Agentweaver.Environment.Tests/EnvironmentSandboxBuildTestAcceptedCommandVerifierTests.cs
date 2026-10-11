@@ -15,6 +15,66 @@ namespace Agentweaver.Environment.Tests;
 
 public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifierTests
 {
+    [Theory]
+    [InlineData("valid", 3)]
+    [InlineData("position", 2)]
+    [InlineData("denied", 2)]
+    [InlineData("owner-changed", 3)]
+    public async Task AcknowledgmentIsCheckedByCoreAndCurrentCommandMetadataBeforeAndAfterIt(
+        string fault, int expectedRequests)
+    {
+        var command = CreateSeedCommand();
+        var verification = SandboxBuildTestWorkspaceCaptureTests.Verification(command);
+        var requests = new List<string>();
+        var handler = new AcknowledgmentHandler(async request =>
+        {
+            requests.Add(request.RequestUri!.AbsolutePath);
+            Assert.Equal("tenant", Assert.Single(request.Headers.GetValues("X-Agentweaver-Tenant")));
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            Assert.True(request.Headers.CacheControl?.NoStore);
+            object payload = command;
+            if (request.Method == HttpMethod.Post)
+            {
+                Assert.EndsWith("/workspace-capture/verify", requests[^1]);
+                var bytes = await request.Content!.ReadAsByteArrayAsync();
+                var body = JsonSerializer.Deserialize<SandboxBuildTestWorkspaceCaptureAcknowledgmentVerification>(
+                    bytes, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+                Assert.Equal(verification.Capture, body.Capture);
+                Assert.Equal(verification.Reference.DocumentSha256, body.Reference.DocumentSha256);
+                Assert.DoesNotContain("workspaceSeed", Encoding.UTF8.GetString(bytes));
+                payload = fault == "position" ? verification.Capture with { Position = 18 } : verification.Capture;
+            }
+            else if (fault == "owner-changed" && requests.Count == 3)
+            {
+                var changed = command with { OperationId = Guid.NewGuid() };
+                payload = changed with { ImmutableHash = changed.ComputeImmutableHash() };
+            }
+            var response = new HttpResponseMessage(fault == "denied" && requests.Count == 2
+                ? HttpStatusCode.Forbidden : HttpStatusCode.OK);
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+            response.Content = new StringContent(JsonSerializer.Serialize(payload,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)), Encoding.UTF8, "application/json");
+            return response;
+        });
+        using var client = new HttpClient(handler);
+        if (fault == "valid")
+            await CreateVerifier(client).VerifyWorkspaceCaptureAcknowledgmentAsync(
+                command, verification, CancellationToken.None);
+        else
+        {
+            var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                CreateVerifier(client).VerifyWorkspaceCaptureAcknowledgmentAsync(command, verification, CancellationToken.None));
+            Assert.Equal(fault switch
+            {
+                "position" => "buildtest_capture_acknowledgment_changed",
+                "denied" => "runtime_owner_denied",
+                _ => "buildtest_command_checkpoint_changed"
+            }, failure.Code);
+        }
+        Assert.Equal(expectedRequests, requests.Count);
+        Assert.DoesNotContain(requests, path => path.Contains("/workspace-seed", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task CurrentCommandCheckUsesOnlyOwnerMetadataWithoutFetchingTheSeedAgain()
     {
@@ -186,6 +246,17 @@ public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifierTests
     private static EnvironmentSandboxBuildTestAcceptedCommandVerifier CreateVerifier(HttpClient client) =>
         new(client, new HttpContextAccessor { HttpContext = CreateAuthenticatedContext() },
             TimeProvider.System, new(new Uri("https://orchestrator.example/"), new Uri("https://broker.example/")));
+
+    private sealed class AcknowledgmentHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = await send(request);
+            response.RequestMessage = request;
+            return response;
+        }
+    }
 
     private static SandboxBuildTestAcceptedCommand CreateSeedCommand()
     {
