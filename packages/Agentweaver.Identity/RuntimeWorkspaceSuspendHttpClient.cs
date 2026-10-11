@@ -81,12 +81,83 @@ public sealed record WorkspaceVolumeLifecycleResult(
         CleanupStatus is { State: EnvironmentWorkspaceVolumeCleanupState.Blocked };
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeSuspendPlacementReleaseRequest(
+    RuntimeHostSuspendReceipt HostReceipt,
+    long FlushTransitionRevision)
+{
+    public RuntimeSuspendPlacementReleaseRequest Validate()
+    {
+        RuntimeWorkspaceSuspendHttpClient.ValidateRecordedHostReceipt(HostReceipt);
+        var flush = HostReceipt.WorkspaceFlush!.Validate();
+        var binding = HostReceipt.Registration.Binding;
+        var owner = flush.EnvironmentFence.Owner;
+        if (FlushTransitionRevision < 3 || FlushTransitionRevision == long.MaxValue ||
+            binding.TenantId != owner.TenantId || binding.ProjectId != owner.ProjectId ||
+            binding.RunId != owner.RunId || binding.EnvironmentId != owner.EnvironmentId ||
+            binding.EnvironmentLifecycleGeneration != flush.EnvironmentFence.LifecycleGeneration ||
+            binding.PlacementGeneration < 1 || binding.EnvironmentProviderFencingGeneration < 1 ||
+            string.IsNullOrWhiteSpace(binding.PlacementProviderId) ||
+            string.IsNullOrWhiteSpace(binding.PlacementUid))
+            throw new RuntimeAuthorizationException("runtime_suspend_release_request_invalid");
+        return this;
+    }
+}
+
+public sealed record RuntimeSuspendPlacementReleaseReceipt(
+    int ContractVersion,
+    Guid OperationId,
+    Guid ManifestId,
+    EnvironmentGenerationFence EnvironmentFence,
+    ProviderResourceRef SandboxResource,
+    long ProviderFencingGeneration,
+    SandboxLeaseState State,
+    WorkspaceVolumeReference WorkspaceVolume,
+    ProviderResourceRef WorkspaceResource,
+    long WorkspaceDataGeneration,
+    long WorkspaceTransitionRevision)
+{
+    public RuntimeSuspendPlacementReleaseReceipt ValidateFor(RuntimeSuspendPlacementReleaseRequest request)
+    {
+        request.Validate();
+        var host = request.HostReceipt;
+        var binding = host.Registration.Binding;
+        var flush = host.WorkspaceFlush!;
+        var providerId = binding.PlacementProviderId
+            ?? throw new RuntimeAuthorizationException("runtime_suspend_release_request_invalid");
+        if (ContractVersion != 1 || OperationId != host.OperationId || ManifestId != host.ManifestId ||
+            EnvironmentFence != flush.EnvironmentFence ||
+            SandboxResource != new ProviderResourceRef(
+                ProviderSeam.Sandbox, providerId, binding.PlacementUid,
+                binding.PlacementGeneration) ||
+            ProviderFencingGeneration != binding.EnvironmentProviderFencingGeneration ||
+            State != SandboxLeaseState.Released ||
+            WorkspaceVolume != flush.Volume || WorkspaceResource != flush.Resource ||
+            WorkspaceDataGeneration != flush.DataGeneration ||
+            WorkspaceTransitionRevision != checked(request.FlushTransitionRevision + 1))
+            throw new RuntimeAuthorizationException("runtime_suspend_release_receipt_invalid");
+        return this;
+    }
+}
+
 public sealed class RuntimeWorkspaceSuspendHttpClient(
     HttpClient client, Uri environmentOwnerAddress, TimeProvider? timeProvider = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly Uri _owner = RuntimeOwnerHttpTransport.RequireOwnerAddress(environmentOwnerAddress);
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+
+    public async Task<RuntimeSuspendPlacementReleaseReceipt> ReleasePlacementAsync(
+        RuntimeSuspendPlacementReleaseRequest request, RuntimeActorAuthorization actor,
+        CancellationToken cancellationToken)
+    {
+        request.Validate();
+        var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeSuspendPlacementReleaseReceipt>(
+            client, _owner, "/internal/runtime/suspend/release-placement", actor, request,
+            SessionMaterialValidation.MaximumBytes, false, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_suspend_release_unavailable");
+        return result.ValidateFor(request);
+    }
 
     public async Task<WorkspaceVolumeApiFlushRequest> ResolveAsync(
         RuntimeHostSuspendRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
@@ -155,24 +226,39 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
     public static void ValidateHostReceipt(
         RuntimeHostSuspendReceipt receipt, RuntimeHostSuspendRequest request, DateTimeOffset now)
     {
-        if (receipt is null || receipt.SourceGrant is null || receipt.CacheAcknowledgment is null ||
-            receipt.WorkspaceFlush is null || receipt.NativeTurn is null || request.WorkspaceFlush is null)
+        ValidateRecordedHostReceipt(receipt);
+        if (request.WorkspaceFlush is null)
             throw new RuntimeAuthorizationException("runtime_suspend_receipt_invalid");
         var registration = request.Proof.Registration;
+        var grant = receipt.SourceGrant;
+        if (receipt.OperationId != request.OperationId || receipt.ManifestId != request.ManifestId ||
+            receipt.Registration != registration ||
+            grant.GrantId != request.Proof.SourceGrantId || grant.Revision != request.Proof.SourceGrantRevision ||
+            request.Proof.Purpose != RuntimeCredentialPurpose.Observe || grant.ExpiresAt <= now)
+            throw new RuntimeAuthorizationException("runtime_suspend_receipt_invalid");
+        receipt.WorkspaceFlush!.ValidateFor(request.WorkspaceFlush);
+    }
+
+    public static void ValidateRecordedHostReceipt(RuntimeHostSuspendReceipt receipt)
+    {
+        if (receipt is null || receipt.Registration?.Binding is null ||
+            receipt.SourceGrant is null || receipt.CacheAcknowledgment is null ||
+            receipt.WorkspaceFlush is null || receipt.NativeTurn is null)
+            throw new RuntimeAuthorizationException("runtime_suspend_receipt_invalid");
+        var registration = receipt.Registration;
         var grant = receipt.SourceGrant;
         var cache = receipt.CacheAcknowledgment;
         var binding = registration.Binding;
         var identity = new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId);
         var material = cache.Reference?.Material;
-        if (receipt.ContractVersion != 1 || receipt.OperationId != request.OperationId ||
-            receipt.ManifestId != request.ManifestId || receipt.Registration != registration ||
-            grant.GrantId != request.Proof.SourceGrantId || grant.Revision != request.Proof.SourceGrantRevision ||
+        if (receipt.ContractVersion != 1 || receipt.OperationId == Guid.Empty ||
+            receipt.ManifestId == Guid.Empty || grant.GrantId == Guid.Empty || grant.Revision < 1 ||
             grant.RuntimeInstanceId != registration.RuntimeInstanceId ||
             grant.RegistrationRevision != registration.Revision ||
             grant.Purpose != RuntimeCredentialPurpose.Observe || grant.State != RuntimeCredentialState.Active ||
             grant.Audience != binding.ObservationEndpoint ||
-            grant.ExpiresAt <= now || grant.ExpiresAt > registration.ExpiresAt ||
-            cache.ContractVersion != 1 || cache.Identity != identity || cache.EventId != request.ManifestId ||
+            grant.ExpiresAt > registration.ExpiresAt ||
+            cache.ContractVersion != 1 || cache.Identity != identity || cache.EventId != receipt.ManifestId ||
             cache.Position < 1 || material?.Kind != SessionMaterialKind.SdkCache ||
             material.TenantId != binding.TenantId || material.RuntimeInstanceId != registration.RuntimeInstanceId ||
             material.RegistrationRevision != registration.Revision || material.ExecutionFence != binding.ExecutionFence ||
@@ -182,7 +268,7 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
         RuntimeNativeTurnContract.ValidateRecorded(receipt.NativeTurn);
         if (receipt.NativeTurn.Admission.Registration != registration)
             throw new RuntimeAuthorizationException("runtime_suspend_native_turn_binding_invalid");
-        receipt.WorkspaceFlush.ValidateFor(request.WorkspaceFlush);
+        receipt.WorkspaceFlush.Validate();
     }
 
     private static bool SameJson<T>(T expected, T actual) =>
