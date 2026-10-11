@@ -180,6 +180,17 @@ must occur in the list; do not infer compatibility from semver proximity.
 Semantic versions have `major.minor.patch` and optional prerelease/build
 suffixes; a prerelease numeric identifier cannot have a leading zero.
 
+The draft now accepts planned `0.1.0` dependencies on 43 existing direct
+consumer relationships while retaining every current `0.0.0` entry.
+These declarations use the same reviewed consumer and dependency source.
+Pure preparation changes version fields without changing runtime code, API
+contracts, package pins, or the component selection.
+Later source changes need their own compatibility decision.
+The pending plan targets 18 product components at `0.1.0`, Gateway and MCP
+at `0.2.0`, and the acceptance-only Probe at `0.0.1`.
+No component version has been applied, and the manifest remains a draft.
+This is not a final `1.0.0` platform release or permission to publish.
+
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
 The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
 Its current manifest/project baseline is `0.0.0`.

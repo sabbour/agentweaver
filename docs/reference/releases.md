@@ -59,6 +59,15 @@ The base-aware form checks changeset coverage for changed components. CI supplie
 
 `npm run release:plan` writes a source-bound plan under ignored `artifacts/release/`. It does not change component versions.
 
+The draft declares `0.1.0` support for 43 existing direct dependency relationships.
+Each declaration retains the current `0.0.0` entry.
+The basis is the same reviewed consumer and dependency source compiled together.
+Pure preparation changes their version fields, not runtime code, API contracts, or dependency pins.
+This is not a general compatibility rule for later source changes.
+The source-bound plan targets 18 product components at `0.1.0`, Gateway and MCP at `0.2.0`, and the Probe at `0.0.1`.
+These are pending component versions, not a final `1.0.0` platform release.
+The checked-in component versions remain unchanged and the manifest remains a draft.
+
 `npm run release:apply` updates manifest versions, project version mirrors, changelog, archive records, and a receipt. It requires a clean tree and a valid source-bound plan.
 
 `npm run release:pack` builds and packs the manifest components. It writes local package and image artifacts. It does not push them to a registry or package feed.
@@ -72,7 +81,7 @@ This selection cannot combine with `--packages-only` or `--foundation-probe-only
 
 ```mermaid
 flowchart LR
-  Manifest["Draft component manifest"] --> Selection["Choose component selection"]
+  Manifest["Draft manifest with explicit dependency versions"] --> Selection["Choose component selection"]
   Selection --> Product["platform-only: product packages and service images"]
   Selection --> Full["Default: all components, including the acceptance Probe"]
   Product --> Pack["Prepare exact-source artifacts and hashes"]
