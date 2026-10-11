@@ -13,15 +13,28 @@ internal static class CoordinatorWorkflowCatalog
         "1.0.0",
         "coordinator-catalog-v1",
         WorkflowDefinitionOrigin.BuiltIn,
-        1,
+        32,
         [
+            new WorkflowStepDefinition(
+                "implementation",
+                "Complete bounded implementation work for the confirmed outcome.",
+                WorkflowStepMode.Open,
+                0,
+                new WorkflowCardinality(0, 8),
+                [],
+                ["engineer", "researcher"],
+                ["execution", "research", "validation"],
+                ["worktree", "sandboxed"],
+                ["sandbox.workspace.write"],
+                null,
+                null),
             new WorkflowStepDefinition(
                 "build-test",
                 "Record a typed platform build-and-test request.",
                 WorkflowStepMode.Platform,
-                0,
+                1,
                 new WorkflowCardinality(0, 1),
-                [],
+                ["implementation"],
                 [],
                 [],
                 [],
@@ -93,28 +106,104 @@ internal static class CoordinatorWorkflowCatalog
     }
 
     public static int ReadMaxChildren(JsonElement selection)
-        => ReadRunLimit(selection, "maxChildren", allowZero: true, maximum: 100);
+        => ReadRunLimit(selection, "maxChildren", minimum: 0, maximum: 100);
 
     public static int ReadMaxConcurrentChildren(JsonElement selection)
-        => ReadRunLimit(selection, "maxConcurrentChildren", allowZero: false, maximum: 32);
+        => ReadRunLimit(selection, "maxConcurrentChildren", minimum: 1, maximum: 32);
+
+    public static int ReadMaxWallTimeSeconds(JsonElement selection)
+        => ReadRunLimit(selection, "maxWallTimeSeconds", minimum: 60, maximum: 86400);
+
+    public static bool IsWallTimeLimitReached(
+        DateTimeOffset runStartedAt,
+        int maxWallTimeSeconds,
+        DateTimeOffset now)
+    {
+        if (runStartedAt == default)
+            throw new ArgumentOutOfRangeException(nameof(runStartedAt));
+        return now >= runStartedAt.AddSeconds(maxWallTimeSeconds);
+    }
+
+    public static (
+        int? MaxModelTurns,
+        int? MaxToolCalls,
+        int? MaxPromptTokens,
+        int? MaxRevisionAttempts,
+        decimal? CopilotSoftCreditLimit,
+        decimal? CopilotHardCreditLimit)
+        ReadRuntimeBudgetLimits(JsonElement selection)
+    {
+        var runLimits = ReadRunLimits(selection);
+        var maxModelTurns = ReadOptionalBoundedInt(runLimits, "maxModelTurns", 1, 1000);
+        var maxToolCalls = ReadOptionalBoundedInt(runLimits, "maxToolCalls", 1, 10000);
+        var maxPromptTokens = ReadOptionalBoundedInt(runLimits, "maxPromptTokens", 1024, 200000);
+        var maxRevisionAttempts = ReadOptionalNonNegativeInt(runLimits, "maxRevisionAttempts");
+        var softCreditLimit = ReadOptionalNonNegativeDecimal(runLimits, "copilotSoftCreditLimit");
+        var hardCreditLimit = ReadOptionalNonNegativeDecimal(runLimits, "copilotHardCreditLimit");
+        if (softCreditLimit is { } soft && hardCreditLimit is { } hard && soft > hard)
+            throw new CoordinationException(
+                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+        return (
+            maxModelTurns, maxToolCalls, maxPromptTokens,
+            maxRevisionAttempts, softCreditLimit, hardCreditLimit);
+    }
 
     private static int ReadRunLimit(
         JsonElement selection,
         string propertyName,
-        bool allowZero,
+        int minimum,
         int maximum)
     {
-        if (selection.ValueKind != JsonValueKind.Object ||
-            !selection.TryGetProperty("runLimits", out var runLimits) ||
-            runLimits.ValueKind != JsonValueKind.Object ||
-            !runLimits.TryGetProperty(propertyName, out var maxChildren) ||
-            !maxChildren.TryGetInt32(out var value) ||
-            value < (allowZero ? 0 : 1) ||
+        var runLimits = ReadRunLimits(selection);
+        if (!runLimits.TryGetProperty(propertyName, out var limitValue) ||
+            !limitValue.TryGetInt32(out var value) ||
+            value < minimum ||
             value > maximum)
             throw new CoordinationException(
                 "projects_run_selection_contract_invalid",
                 StatusCodes.Status502BadGateway);
         return value;
+    }
+
+    private static JsonElement ReadRunLimits(JsonElement selection)
+    {
+        if (selection.ValueKind != JsonValueKind.Object ||
+            !selection.TryGetProperty("runLimits", out var runLimits) ||
+            runLimits.ValueKind != JsonValueKind.Object)
+            throw new CoordinationException(
+                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+        return runLimits;
+    }
+
+    private static int? ReadOptionalNonNegativeInt(JsonElement runLimits, string propertyName)
+    {
+        if (!runLimits.TryGetProperty(propertyName, out var value) || value.ValueKind == JsonValueKind.Null)
+            return null;
+        if (!value.TryGetInt32(out var result) || result < 0)
+            throw new CoordinationException(
+                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+        return result;
+    }
+
+    private static int? ReadOptionalBoundedInt(
+        JsonElement runLimits, string propertyName, int minimum, int maximum)
+    {
+        if (!runLimits.TryGetProperty(propertyName, out var value) || value.ValueKind == JsonValueKind.Null)
+            return null;
+        if (!value.TryGetInt32(out var result) || result < minimum || result > maximum)
+            throw new CoordinationException(
+                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+        return result;
+    }
+
+    private static decimal? ReadOptionalNonNegativeDecimal(JsonElement runLimits, string propertyName)
+    {
+        if (!runLimits.TryGetProperty(propertyName, out var value) || value.ValueKind == JsonValueKind.Null)
+            return null;
+        if (!value.TryGetDecimal(out var result) || result < 0)
+            throw new CoordinationException(
+                "projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
+        return result;
     }
 
     private static JsonElement GetProjectConfiguration(JsonElement selection)

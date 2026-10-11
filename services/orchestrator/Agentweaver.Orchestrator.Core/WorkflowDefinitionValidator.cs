@@ -4,6 +4,9 @@ namespace Agentweaver.Orchestrator.Core;
 
 public static class WorkflowDefinitionValidator
 {
+    public static bool IsValidOutputPath(string? path) =>
+        WorkflowValidationSupport.IsValidOutputPath(path);
+
     public static WorkflowValidationResult<WorkflowDefinitionSnapshot> ValidateAndSnapshot(
         WorkflowDefinition? definition)
     {

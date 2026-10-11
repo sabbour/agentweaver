@@ -34,7 +34,7 @@ public sealed record NativeRuntimeManifest(string SdkVersion, string RuntimeVers
             ?? throw new InvalidOperationException("The image-owned native runtime manifest is missing.");
         var sdkVersion = typeof(CopilotClient).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion?.Split('+')[0];
-        if (manifest.SdkVersion != "1.0.11" || manifest.SdkVersion != sdkVersion ||
+        if (manifest.SdkVersion != "1.0.18" || manifest.SdkVersion != sdkVersion ||
             manifest.RuntimeVersion != "1.0.79" ||
             manifest.ArchiveSha512 is not { Length: 128 } || manifest.ArchiveSha512.Any(character =>
                 character is not (>= '0' and <= '9' or >= 'a' and <= 'f')))

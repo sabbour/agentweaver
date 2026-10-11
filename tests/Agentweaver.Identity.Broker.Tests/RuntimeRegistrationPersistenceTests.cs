@@ -66,6 +66,47 @@ public sealed class RuntimeRegistrationPersistenceTests(PostgresContainerFixture
         Assert.Equal(1L, await count.ExecuteScalarAsync());
     }
 
+    [Fact]
+    public async Task CandidateIdPagesReturnTheCompleteSessionScopedSet()
+    {
+        var connectionString = await postgres.CreateDatabaseAsync();
+        await using var source = NpgsqlDataSource.Create(connectionString);
+        await CreateSchemaAsync(source);
+        var store = new RuntimeRegistrationStore(source, "runtime_test", TimeProvider.System);
+        var binding = Binding();
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(2);
+        var first = await store.RegisterAsync(binding, expiresAt, CancellationToken.None);
+        var second = await store.RegisterAsync(binding with { ProfileId = "other-profile" },
+            expiresAt, CancellationToken.None);
+        var otherSession = await store.RegisterAsync(binding with { SessionId = "other-session" },
+            expiresAt, CancellationToken.None);
+        var otherRun = await store.RegisterAsync(binding with { RunId = "other-run" },
+            expiresAt, CancellationToken.None);
+        var otherProject = await store.RegisterAsync(binding with { ProjectId = "other-project" },
+            expiresAt, CancellationToken.None);
+
+        var candidateIds = new List<Guid>();
+        Guid? afterRuntimeInstanceId = null;
+        IReadOnlyList<Guid> page;
+        do
+        {
+            page = await store.ReadCandidateRuntimeIdsPageAsync(
+                binding.ProjectId, binding.RunId, binding.SessionId, afterRuntimeInstanceId,
+                pageSize: 1, CancellationToken.None);
+            candidateIds.AddRange(page);
+            if (page.Count > 0)
+                afterRuntimeInstanceId = page[^1];
+        } while (page.Count > 0);
+
+        Assert.Equal(2, candidateIds.Count);
+        Assert.Equal(2, candidateIds.Distinct().Count());
+        Assert.Contains(first.RuntimeInstanceId, candidateIds);
+        Assert.Contains(second.RuntimeInstanceId, candidateIds);
+        Assert.DoesNotContain(otherSession.RuntimeInstanceId, candidateIds);
+        Assert.DoesNotContain(otherRun.RuntimeInstanceId, candidateIds);
+        Assert.DoesNotContain(otherProject.RuntimeInstanceId, candidateIds);
+    }
+
     private static async Task CreateSchemaAsync(NpgsqlDataSource source)
     {
         await using var resource = typeof(RuntimeRegistrationPersistenceTests).Assembly

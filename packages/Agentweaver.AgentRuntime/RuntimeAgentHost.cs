@@ -110,6 +110,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         {
             RequireAvailable();
             await RequireCallerAsync(request.Registration, actor, token).ConfigureAwait(false);
+            RuntimeContractValidation.RequireSupportedNumericRunLimits(request.Registration.Binding);
             var receiver = _receiver ?? throw new RuntimeAuthorizationException("runtime_delivery_unavailable");
             if (_actor is null)
             {
@@ -129,14 +130,47 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             var bytes = System.Text.Encoding.UTF8.GetBytes(request.Configuration.GetRawText());
             _session = await receiver.ConfigureAsync(
                 bootstrap, bytes, request.ConsumeOperationId, request.ExchangeOperationId, token).ConfigureAwait(false);
+            var configuredSession = _session
+                ?? throw new RuntimeAuthorizationException("runtime_session_unavailable");
             _configuredAt ??= _time.GetUtcNow();
             var source = new RuntimeUsageSourceHttpClient(_http, _options.OrchestratorAddress, retained);
             if (_usage is null)
             {
-                await _session.RegisterUsageAsync(source, token).ConfigureAwait(false);
-                _usage = PersistUsageAsync(_session, source, retained);
+                try
+                {
+                    await configuredSession.RegisterUsageAsync(source, token).ConfigureAwait(false);
+                    if (configuredSession.Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+                        configuredSession.Registration.Binding.CopilotHardCreditLimit is > 0)
+                        await new RuntimeUsageCostPreflightHttpClient(
+                            _http, _options.EventsAddress, retained)
+                            .EnsurePricedAsync(configuredSession, token).ConfigureAwait(false);
+                    configuredSession.RequireSupportedCostTurnAffinity();
+                    await configuredSession.RequireCurrentAsync(token).ConfigureAwait(false);
+                }
+                catch (Exception failure) when (failure is not OutOfMemoryException)
+                {
+                    var prepared = _receiver;
+                    _receiver = null;
+                    _session = null;
+                    _readyAt = null;
+                    if (prepared is not null)
+                    {
+                        try
+                        {
+                            await prepared.DisposeAsync().ConfigureAwait(false);
+                        }
+                        catch (Exception cleanupFailure) when (cleanupFailure is not OutOfMemoryException)
+                        {
+                            throw new AggregateException(
+                                "Runtime preparation failed and its prepared session could not be cleaned up.",
+                                failure, cleanupFailure);
+                        }
+                    }
+                    throw;
+                }
+                _usage = PersistUsageAsync(configuredSession, source, retained);
             }
-            await _session.RequireCurrentAsync(token).ConfigureAwait(false);
+            await configuredSession.RequireCurrentAsync(token).ConfigureAwait(false);
             _readyAt ??= _time.GetUtcNow();
             return await ReadinessAsync(token).ConfigureAwait(false);
         }
@@ -175,7 +209,20 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         var session = await RequireSessionAsync(message.Metadata.Runtime, actor, token).ConfigureAwait(false);
         if (message.ContextId != session.Facts.SdkSessionId)
             throw new RuntimeAuthorizationException("runtime_a2a_context_invalid");
-        var fingerprint = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(request));
+        if (session.Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+            session.Registration.Binding.CopilotHardCreditLimit is 0)
+            throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+        var fingerprint = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            message.Kind,
+            message.MessageId,
+            message.ContextId,
+            message.Role,
+            message.Parts,
+            message.Metadata.Runtime.Registration,
+            message.Metadata.Runtime.Purpose,
+            message.Metadata.DeliveryMode
+        }));
         PendingTurn pending;
         lock (_queueLock)
         {
@@ -201,11 +248,25 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         return await pending.Completion.Task.WaitAsync(token).ConfigureAwait(false);
     }
 
-    public async Task<RuntimeHostReadinessReceipt> ReadinessAsync(CancellationToken token)
+    public Task<RuntimeHostReadinessReceipt> ReadinessAsync(CancellationToken token) =>
+        ReadinessAsyncCore(null, token);
+
+    public Task<RuntimeHostReadinessReceipt> ReadinessAsync(
+        RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        return ReadinessAsyncCore(actor, token);
+    }
+
+    private async Task<RuntimeHostReadinessReceipt> ReadinessAsyncCore(
+        RuntimeActorAuthorization? requestActor, CancellationToken token)
     {
         RequireAvailable();
-        if (_readyAt is null || _session is not { } session || _actor is not { } actor)
+        if (_readyAt is null || _session is not { } session || _actor is not { } configuredActor)
             throw new RuntimeAuthorizationException("runtime_host_not_ready");
+        var actor = requestActor ?? configuredActor;
+        if (requestActor is not null)
+            await RequireCallerAsync(session.Registration, requestActor, token).ConfigureAwait(false);
         await session.RequireCurrentAsync(token).ConfigureAwait(false);
         var phases = await ReadPlacementAsync(session.Registration, actor, token).ConfigureAwait(false);
         RequireAvailable();
@@ -301,7 +362,13 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             owner.ModelSourceMode != binding.ModelSourceMode ||
             owner.ModelCredentialReference != binding.ModelCredentialReference ||
             owner.ModelConnectionId != binding.ModelConnectionId ||
-            owner.ModelConnectionScope != binding.ModelConnectionScope)
+            owner.ModelConnectionScope != binding.ModelConnectionScope ||
+            owner.MaxModelTurns != binding.MaxModelTurns ||
+            owner.MaxToolCalls != binding.MaxToolCalls ||
+            owner.MaxPromptTokens != binding.MaxPromptTokens ||
+            owner.MaxRevisionAttempts != binding.MaxRevisionAttempts ||
+            owner.CopilotSoftCreditLimit != binding.CopilotSoftCreditLimit ||
+            owner.CopilotHardCreditLimit != binding.CopilotHardCreditLimit)
             throw new RuntimeAuthorizationException("runtime_owner_context_stale");
         var phases = observation.StartupPhases;
         if (phases.IsDefault || phases.Length != 3 ||

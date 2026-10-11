@@ -108,6 +108,85 @@ owner persists accepted definitions and decisions, exact-request gate state, wor
 position, and MAF checkpoints in its own PostgreSQL schema. The full dispatch engine
 remains a separate slice.
 
+The Core models a project-scoped, revisioned backlog dependency graph. It rejects
+cross-project, self, missing, duplicate, and cyclic edges; only unclaimed, unarchived,
+non-provisional tasks can have their dependencies edited. Effective edge changes
+advance the graph revision, while idempotent no-ops preserve it. Readiness evaluation
+binds graph and task revisions to owner-projected prerequisite task/execution
+revisions. A successful Merge gate uses the `Merged` state; a fully evidenced workflow
+without a Merge gate uses `Completed` instead. Both states require current task and
+execution evidence. Captured outputs require verified proof; explicit no-output
+completion requires a current owner seal and no Merge gate. Incomplete,
+archived, cancelled, delegated, failed, indeterminate, or stale prerequisites block
+readiness. The evaluator does not make snapshots current; its owner must re-read and
+recheck them after waits. Required output proof is accepted only as an owner-supplied
+verified reference; Core neither creates nor verifies it.
+
+The Orchestrator owner candidate persists these tasks and dependencies and exposes
+run-scoped routes under `/api/projects/{projectId}/runs/{runId}/backlog` for graph
+reads, task creation/state/archive, dependency edits, and claims. Mutations carry the
+expected graph revision; task state and archive operations also carry the task
+revision, while claims include an idempotency key. A claim locks graph and task rows
+before accepted-run and decision state, then commits the task's exact revision with
+its accepted root/run, selection hash, fence, decision version, and token-free intent.
+The route revalidates current authority immediately before commit; if that check fails,
+the claim, accepted root, decision, and outbox intent roll back together.
+Prerequisite evidence must join the task to that exact accepted root and the whole
+confirmed WorkPlan, including every required output; one merged item cannot satisfy
+the task. Missing,
+legacy, or unknown plan, capture, merge, or acknowledgment evidence is indeterminate.
+Closed-root evidence uses a dedicated read-only checkpoint path; ordinary checkpoint
+reads remain active-only. The claim transaction rechecks the closed-root checkpoint,
+complete output set, and witness integrity. Migration 015 defines
+`owner_evidence_json` as a bounded JSON array. Its SQL is packaged as an embedded
+resource and registered with the explicit migrator; this source change does not apply
+it to a shared or live database. The MAF dispatch candidate now
+appends a completed-plan witness before returning: an explicit empty witness when
+there are no output obligations, or typed capture rows and, when selected, a typed
+Merge intent for non-empty output sets. The bounded C3/MAF source composition is
+admitted. Whole-producer runtime acceptance remains pending. Positive evidence is
+accepted only after current owner rereads and exact serializer reconstruction.
+For each claim, the current owner lock covers enumeration of all admitted captures
+for the accepted root and selection, then each typed proof and pin is reread in the
+same transaction. A non-empty witness must name the sole admitted capture; a second
+or differently named capture blocks it. A no-output witness is rebuilt from the
+actual capture inventory, so a late capture with a non-empty manifest invalidates it.
+An inventory above the 100-capture bound rejects evaluation with an explicit limit
+error; it is not truncated.
+The admitted contract requires complete root-scoped 014 capture manifests to match
+the whole WorkPlan output obligations exactly by unique path and path/hash/length;
+ambiguous paths, extra or missing files, and partial evidence remain indeterminate.
+When the accepted workflow selects one Merge platform operation, each output row
+binds to that operation's current 012 intent for the same accepted workflow,
+WorkPlan, and root. The consumer must recheck the current owner binding, repository
+pin, persisted merged state, MergeSha, and current typed approval receipt; approval
+alone is not proof. `mergeIntentId` must be present on every output row. Explicit
+`null` is valid only with source-owned proof that no Merge operation was selected;
+omitted fields, ambiguous or optional/conditional activation without an absence
+proof, and missing or stale owner rows remain indeterminate. Empty outputs or an
+empty evidence array cannot bypass required platform owner operations. Capture
+admission and Merge completion remain separate facts: neither proves that the
+captured OutputTreeSha is included in the intent HeadSha or MergeSha.
+`NotRequired` requires explicit owner-derived absence evidence, not merely an empty
+output contract.
+Migration 016 remains unregistered, and whole-producer runtime acceptance remains
+pending. The bounded C3/MAF source composition is admitted, but these routes are not
+yet deployable. The 015 schema source is packaged and registered. This source change
+does not apply it to a shared or live database. No child dispatch or successful
+output verification is implied.
+
+The separate MAF child-dispatch slice stages only the ready dependency frontier and
+enforces child, concurrency, wall-time, and sticky Copilot/AIC hard-cap limits. A
+root-run mutex serializes dispatch; the hard cap is not a monetary estimate or a
+second accounting ledger. Phase A commits each child association, spawn outbox
+request, pending dispatch intent, and `Running` checkpoint together. Phase A does not
+authorize a Host send. After Phase A, the dispatcher reads and validates the actual
+current child registration. Every protected send, capped or uncapped, requires real
+Phase B admission bound to that registration, SDK source/native-turn identity,
+execution fence, pending intent/checkpoint, and applicable counters. Without an
+admitted Phase B producer, dispatch leaves send intents pending and reports their
+steps unavailable.
+
 Non-empty or fixed-work plans also require a trusted Sandbox binding. The owner
 validates the accepted candidate against the server catalog, asks its registered
 resource adapter to resolve an existing resource and return the original
@@ -217,8 +296,18 @@ turn an invalid plan into a dispatchable plan. Accepted plans and the reasons fo
 subsequent revisions are journaled. The grammar validator also applies to built-in
 and generated workflow definitions.
 
-This flowchart shows typed proposals passing deterministic validation into a
-checkpointed MAF execution, with bounded revisions returning through a gate.
+This flowchart shows typed proposals passing deterministic validation into the
+owner-side execution frontier. Ready child work is checkpointed with its spawn
+outbox request. The configured wall-time limit is measured from the persisted
+root-session creation time. After a wall-time or hard-cap limit is reached, the
+dispatcher holds pending intents and reports the limit; already-running child
+turns can settle, but no new or replayed Host message is sent. A platform step
+without a registered executor remains blocked. Every protected Host send, capped
+or uncapped, also requires real Phase B admission bound to the actual current child
+registration, SDK source/native-turn identity, execution fence, pending intent and
+checkpoint, and applicable counters. Phase A and registration/readiness checks are
+not admission. No Phase B producer is wired, so all pending Host sends remain
+pending and their steps are reported unavailable.
 
 ```mermaid
 flowchart TD
@@ -235,20 +324,71 @@ flowchart TD
     R -->|"Attempts exhausted"| Z["Hold for human guidance"]
     V -->|"Yes; conflicts serialized"| H["Confirm generated workflow or scope change"]
     H --> S["Snapshot executable definition"]
-    S --> M["Bind steps to MAF executors"]
-    M --> O["Open step: child work and join"]
-    M --> T["Fixed work and platform gates"]
-    O --> X["Checkpointed execution"]
-    T --> X
-    X --> J["Journal decisions and effects"]
-    X --> Y["Replan with diff and gate"]
+    S --> D["Explicit typed dispatch"]
+    D -->     F["Recheck plan, selection, fence and limits under root-run mutex"]
+    F --> O["Stage ready dependency frontier within remaining limits"]
+    O --> X["Phase A: commit child association, spawn outbox, pending intent, Running checkpoint"]
+    X --> R["Read and validate actual current child registration"]
+    R --> W{"Real Phase B admission bound to registration, native source/turn, fence, pending checkpoint, and applicable counters?"}
+    W -->|"Yes"| M["Deliver admitted intents to authenticated ready Hosts"]
+    W -->|"No"| L["Keep pending intent; report unavailable step or reached limit"]
+    M --> J{"Join state matches checkpoint?"}
+    J -->|"Pending exact intent"| K["Atomically checkpoint joined result and Succeeded status"]
+    K --> CompleteFrontier{"Complete dependency frontier?"}
+    CompleteFrontier -->|"No: continue ready work or return incomplete"| D
+    CompleteFrontier -->|"Yes"| AppendOutputWitness["Revalidate decision, fence, and checkpoint; append output witness"]
+    AppendOutputWitness --> CompleteResponse["Return complete result"]
+    J -->|"Exact completed replay with checkpointed result"| D
+    J -->|"Changed or missing intent/result"| Rj["Reject replay; retain checkpoint"]
+    F --> T["Platform executor unavailable"]
+    T --> B["Report blocker; do not fall back to model work"]
+    J --> Y["Replan with diff and gate"]
     Y --> G
 ```
 
-The accepted definition is snapshotted for the run, then bound to real MAF executors.
-Child work within an open step fans out only within validated limits and joins at
-that step's boundary. Checkpoints preserve the current step, pending children, and
-gates. The journal preserves what was proposed, accepted, dispatched, and observed.
+The accepted definition is snapshotted for the run. The explicit
+`/sessions/{sessionId}/actions/dispatch` route rechecks the confirmed plan version,
+accepted selection, execution fence, and configured child limits. It stages each
+ready open or fixed child within the remaining child and concurrency slots. Phase A
+commits each child association, spawn outbox request, pending dispatch intent, and
+`Running` checkpoint in one owner transaction; it does not authorize a Host send.
+After Phase A, the dispatcher reads and validates the actual current child
+registration. Every protected send, including uncapped runs, children, frontiers,
+and recovery attempts, requires real Phase B admission bound to that registration,
+SDK source/native-turn identity, execution fence, pending intent/checkpoint, and
+applicable counters. Readiness, Phase A, and a null hard-credit limit are not send
+authority. No Phase B producer is wired, so dispatch leaves send intents pending and
+reports their steps unavailable. Before any admitted send, the owner rechecks current
+Projects authority and decision state,
+then verifies the exact pending intent and checkpoint in a short owner transaction.
+That transaction commits before the Host request; it never holds database locks
+across the network call. A completed replay returns its checkpointed result without
+sending again.
+If concurrent dispatch requests observe the same completed child, only a replay
+with the same intent and exact checkpointed result is acknowledged; changed or
+missing results remain conflicts. Only that atomic join can checkpoint a child as
+`Succeeded`: observing a `Completed` Host lifecycle alone cannot satisfy a join.
+While its dispatch intent is pending, replay keeps the child `Running`; without a
+pending intent or checkpointed result, a completed child is `Indeterminate`.
+Detached children retain their prior checkpoint status and cannot unblock dependent
+work through lifecycle observation alone. An `Archived` child remains joined only
+when its `Succeeded` status, execution fence, and checkpointed result agree.
+Platform steps are reported unavailable until a real executor is registered; they
+are not converted into model tasks. There is no background scheduler. When the final
+dependency frontier succeeds, explicit dispatch revalidates the current decision,
+fence, and exact checkpoint in a transaction and appends the complete-plan
+output-witness record before returning. The append-only witness checks every plan
+output obligation against its checkpoint and binds typed admitted root-capture
+evidence and, when required, the selected merge operation's current approval receipt.
+An empty output set receives an explicit witness only after the same typed
+current-owner capture and merge discovery; admitted captures containing files are
+rejected. The merge association identifies the approved operation; it does not prove
+the captured output tree is included in the merge SHA. The witness does not prove complete Host send membership or
+end-to-end output completion. Host-source completeness remains `Partial` or
+`Unknown`; absent complete native send-membership and priced usage evidence, cap
+retirement is not claimed. Native platform gates and broader recovery remain
+incomplete. The journal preserves what was proposed, accepted, dispatched, and
+observed.
 The [Sessions seam](provider-seams.md#sessions) supplies the authoritative journal;
 its opaque Copilot conversation cache is only a resume aid
 ([Sessions and coordination](sessions-and-coordination.md#durable-history-and-resume-aids)).
@@ -268,7 +408,7 @@ merge, or publish by declaring in prose that a step is done.
 | `select_workflow` | Choose an eligible project definition or return the default and validation reasons |
 | `propose_work_plan` | Validate a catalog-bound DAG; return errors or a candidate for confirmation |
 | `revise_work_plan` | Validate changes, compute a scope diff, and require confirmation when its gate applies |
-| `dispatch` | Start ready child work only after confirmation, dependency, policy, and budget checks |
+| `dispatch` | Recheck the confirmed plan, selection, fence, and child limits; persist ready child intents; send only with real Phase B admission; join valid replies; retain pending intents and report unavailable steps otherwise |
 | `steer` | Address and fence a typed message; the receiving turn admits it at its boundary |
 | `request_assembly` | Ask platform executors to collect completed work and gate evidence; do not perform a gate in the coordinator |
 
@@ -396,6 +536,10 @@ before the changed work can dispatch
 ([R12](../decisions/0001-platform-architecture.md#risk-register)).
 The coordinator cannot loop in its prompt to silently authorize a new stage. An
 exhausted budget or invalid revision leaves a visible blocker for the operator.
+The wall-time limit uses the persisted root-session creation time and is checked
+before every Host send. In-flight child turns can settle after the deadline, but
+the dispatch response reports `wallTimeLimitReached` and dependent work cannot
+start after the limit.
 
 Determinism here is about executable boundaries: given the pinned definition and
 accepted decisions, code applies the same validators, transitions, and gates.

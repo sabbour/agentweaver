@@ -35,7 +35,7 @@ public sealed class NativeRuntimeManifestTests
             File.WriteAllText(Path.Combine(native, "copilot.sha256"),
                 change == "checksum" ? new string('0', 64) : Convert.ToHexStringLower(SHA256.HashData(content)));
             var manifest = new NativeRuntimeManifest(
-                change == "sdk" ? "1.0.10" : "1.0.11",
+                change == "sdk" ? "1.0.17" : "1.0.18",
                 change == "runtime" ? "1.0.92" : "1.0.79",
                 change == "archive" ? null! : new string('a', 128));
             File.WriteAllText(Path.Combine(directory, "runtime-manifest.json"),

@@ -1,7 +1,7 @@
 # AgentHost source candidate
 
 The unpublished AgentHost executable runs the sole model harness inside the selected Sandbox.
-It uses `GitHub.Copilot.SDK` 1.0.11 and the compatible native runtime 1.0.79.
+It uses `GitHub.Copilot.SDK` 1.0.18 and the compatible native runtime 1.0.79.
 Microsoft Agent Framework remains an Orchestrator dependency, not an AgentHost runtime.
 This source does not provide an automatic scheduler, deployment, live OAuth acceptance, or paid model evidence.
 
@@ -23,9 +23,30 @@ It repeats current authority checks after remote waits and before protected effe
 | `POST /runtime/v1/configure` | Authenticated delivery of the pending, purpose-bound configure nonce. No model session starts on delivery alone. |
 | `POST /runtime/v1/configure/activate` | Contract version 1, exact registration, consume/exchange operation IDs, and the delivered configuration bytes. Exact replay returns the existing session. Changed bytes or bindings deny. |
 | `POST /runtime/v1/refresh` | Exact session proof and an operation ID. Rotation rechecks current Identity and owner authority. Exact replay does not rotate again. |
+| `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after the host revalidates the caller, registration, session, Observe grant, and readiness evidence. It does not configure the SDK or send a turn. |
 | `POST /runtime/v1/a2a/message:send` | One `user` message with one `text` part, a GUID message ID, native context ID, exact runtime proof, and `immediate` or `enqueue` delivery. |
 | `GET /health/live` | Process liveness only. |
 | `GET /health/ready` | Current registration, source authority, lease, isolation, workspace, egress, configuration, and startup budgets. A lost prerequisite returns `503`. |
+
+```mermaid
+sequenceDiagram
+    participant C as Authenticated caller
+    participant H as AgentHost
+    participant O as Orchestrator
+    participant I as Identity
+    participant E as Environment
+    Note over H: Reject configured MaxModelTurns, MaxToolCalls, or MaxPromptTokens before SDK configuration
+    C->>H: GET /runtime/v1/readiness with Broker bearer
+    H->>O: Revalidate current registration
+    O-->>H: Current registration or denial
+    H->>I: Revalidate current Observe and model grants
+    I-->>H: Noncredential grant receipts
+    H->>E: Read current placement and readiness evidence
+    E-->>H: Current lease and startup observations
+    H-->>C: RuntimeHostReadinessReceipt (no-store)
+    Note over H: No SDK start or turn send
+    Note over C,H: Positive hard-capped Hosted activation is rejected before this readiness flow until usage-to-A2A affinity is supported
+```
 
 Runtime responses use `Cache-Control: no-store`.
 Authentication rejection returns `401`.
@@ -38,6 +59,17 @@ Identity returns only the current GitHub user access token and typed proof.
 Refresh tokens and OAuth client secrets stay inside Identity and its protected store.
 BYOK uses the exact selected `SecretRef` and explicit native SDK Provider configuration without Copilot authentication or catalog lookup.
 Neither a cache nor a submitted connection ID grants permission.
+The pinned SDK does not prove which A2A send owns a native usage callback.
+Until that affinity is supported, Hosted Copilot with a positive hard credit limit fails activation with
+`runtime_usage_affinity_unavailable`; the prepared session is cleaned up and the host does not become ready.
+An omitted limit keeps legacy startup, zero still permits startup but blocks dispatch, and BYOK remains token-metered.
+
+The immutable Projects selection's `maxModelTurns`, `maxToolCalls`, and `maxPromptTokens` values are carried
+through `RuntimeOwnerContext` into the registered `RuntimeBinding`. AgentHost does not yet have exact native
+turn/tool accounting or whole-prompt token enforcement, so any non-null value fails activation with
+`runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or model/tool invocation.
+Absent values preserve the legacy path. The RuntimeAction owner also rejects these bindings before issuing an
+action grant. This is a fail-closed admission rule, not numeric enforcement.
 
 ## Turns, tools, and durability
 
@@ -51,6 +83,10 @@ Prompt text preserves line breaks, tabs, and fenced code without trimming or cha
 Unsupported control characters, such as NUL, deny before dispatch.
 `immediate` work takes priority over pending `enqueue` work at the next native idle boundary.
 It does not interrupt an active native turn.
+
+Hosted Copilot runs with no hard credit limit retain legacy startup and do not require a price quote.
+A zero hard limit permits startup but blocks model-turn dispatch; a positive hard limit requires both a priceable source and proven usage-to-A2A affinity before readiness or cost admission.
+BYOK remains token-metered and does not use the Copilot nano-AIU price preflight.
 An exact message replay shares the original completion; changed content under the same ID denies.
 Completed responses remain available for the configured host lifetime, independent of the pending-turn limit.
 The configured pending-turn limit rejects excess work explicitly.
@@ -58,9 +94,18 @@ The configured pending-turn limit rejects excess work explicitly.
 Events stores actual user and assistant content as typed `TurnContent` through the existing Object Store.
 The journal retains authenticated content references, Policy receipts, tool events, and compatible cache references.
 Orchestrator commits native SDK source receipts.
+The pinned SDK does not expose a proven usage-event-to-A2A-send binding.
+AgentHost leaves usage observations uncorrelated rather than copy the active message ID
+or infer ownership from event timestamps. Events therefore withholds cost-turn release
+for an unbound callback, including one delivered after a later send begins.
 Events fetches each receipt and commits immutable usage accounting before AgentHost acknowledges the turn.
+For a bounded cost turn, Events requires the source receipt's A2A ID to equal the
+`CostTurnId`; a later send in the same session cannot release an earlier turn's cost slot.
 Already-weighted nano-AIU is not multiplied again.
 Unknown cost remains `Unpriced`, never zero.
+Before readiness, AgentHost asks Events to verify that the current SDK source can
+be priced against the run's immutable Cost binding. An unpriced result prevents
+readiness and cleans up the prepared session before any model turn.
 
 At a confirmed idle boundary, the runtime captures opaque SDK cache bytes through its custom filesystem.
 Recovery compares session scope, accepted selection, model reference, model ID, SDK version, and runtime version.

@@ -36,23 +36,39 @@ presentation, and acknowledgment.
 
 Mapped child spawn checks the latest root decision envelope under the root-session
 owner lock and rejects a pending gate or a changed actor, accepted-selection hash,
-fence, dispatch state, or confirmed WorkPlan item. Registration and spawn recheck live
-Projects authority before their owner transactions commit. The read-only runtime-owner
+fence, dispatch state, or confirmed WorkPlan item. Interactive registration and spawn
+routes recheck live Projects authority before their owner transactions commit. MAF
+dispatch rechecks Projects before opening its spawn transaction, then binds the current
+decision, fence, and checkpoint inside that transaction. Before each Host send it repeats the
+authority check and verifies the durable pending intent; the transaction closes before
+the network request. The read-only runtime-owner
 context endpoint returns mapped agent/model/turn metadata only after re-reading the
 child owner row and root decision and checking authority and selection again; a stale
 mapping or decision returns a conflict. The current status endpoint reports durable
-owner run state and its fence/version/cause, not live AgentHost health. These routes do
-not add a full dispatch engine, automatic AgentHost scheduler, or runtime delivery.
+owner run state and its fence/version/cause, not live AgentHost health. The explicit
+typed dispatch route stages only ready open/fixed child work within the configured
+child and concurrency limits. Each child, spawn outbox request, dispatch intent, and
+checkpoint update commit together before the ready batch is sent concurrently to an
+authenticated, currently ready AgentHost. The owner validates the SDK-context-bound
+reply and records the result; a later explicit dispatch reconciles child outcomes
+and exposes newly ready dependencies. Pending intents retain their identity for
+replay. A root-run mutex serializes dispatch, and the sticky Copilot/AIC hard-cap
+floor is not a monetary estimate or a second accounting ledger. The output-witness
+helper and store are not yet consumed by owner dispatch, so Host-source completeness
+remains `Partial` or `Unknown`; cap retirement is not claimed without complete
+native send-membership and priced usage evidence. The route does not schedule
+itself. Native platform-gate execution and broader recovery remain incomplete.
 
 The owner persists accepted definitions, decisions, pending gate request IDs, step
 position, and child references in its PostgreSQL schema. Its MAF checkpoint refers to
 an opaque Object Store SDK cache blob with SDK version and pinned-model metadata; a
 missing or incompatible cache triggers explicit journal-based context rebuilding,
 never external-effect replay. A valid correlated reply makes request input available
-without approving its gate, and acknowledgment remains receipt-only. Automatic
-AgentHost scheduling, a background delivery relay, consistency manifests, Knowledge
-records, the full dispatch engine, and product UI/MCP integration remain outside this
-slice. The Orchestrator also owns current grant and redacted PolicyEvaluation receipt
+without approving its gate, and acknowledgment remains receipt-only. Automatic AgentHost scheduling, a background delivery relay,
+consistency manifests, Knowledge records, native platform-gate execution,
+source-complete usage and recovery enforcement, and product UI/MCP integration
+remain outside this slice. The
+Orchestrator also owns current grant and redacted PolicyEvaluation receipt
 production. Events & Sessions fetches those immutable owner receipts by ID and
 revalidates current admission before and within its native journal transaction.
 
@@ -125,8 +141,42 @@ checks its current decision version, selection hash, and fence before storing
 that association. Unmapped legacy children remain usable for existing operations
 but cannot provide runtime ownership. The authenticated `runtime-owner-context`
 GET derives agent, model reference, and deterministic turn identity from the
-current accepted selection, confirmed plan, and active child turn. It rechecks
-the root decision and current Projects authority before returning.
+current accepted selection, confirmed WorkPlan item or running Fixed-step
+association in the root's owner-created `coordinator-execution` checkpoint, and
+active child turn. A Fixed association must match the current accepted selection,
+execution fence, decision version, and child identity. The endpoint rechecks the
+root decision and current Projects authority before returning.
+
+The authenticated session-scoped runtime-registration `GET` first resolves that
+current child context, then pages the Orchestrator's own registration IDs for the
+exact project, run, and session. It revalidates every candidate against current
+owner and Environment placement state. The bounded scan returns one current
+registration only. It returns an explicit conflict if it finds no match, multiple
+matches, or more than 64 candidates. This read does not authorize configure delivery.
+
+```mermaid
+sequenceDiagram
+    participant C as Authenticated caller
+    participant O as Orchestrator owner
+    participant P as Projects and session owners
+    participant D as Registration store
+    participant E as Environment owner
+    C->>O: GET session runtime-registrations
+    O->>P: Validate caller, accepted selection, decision, and child
+    P-->>O: Current RuntimeOwnerContext
+    O->>D: Page IDs scoped to project, run, and session
+    loop Each bounded candidate
+        O->>P: Revalidate current child authority
+        O->>E: Revalidate current registration placement
+        E-->>O: Current binding or stale/unavailable
+    end
+    O->>P: Recheck child context
+    alt Exactly one current registration
+        O-->>C: Registration (no-store)
+    else No match, ambiguity, or candidate-limit overflow
+        O-->>C: 409 explicit outcome
+    end
+```
 
 The `Agentweaver.AgentRuntime` library uses the pinned native Copilot SDK.
 Its model catalog, effective model ID, SDK session ID/version, nullable

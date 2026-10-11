@@ -50,6 +50,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public bool PersistNativeSessionState { get; set; }
     public TaskCompletionSource TurnReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public TaskCompletionSource AbortAcknowledged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource PermissionDecisionHandled { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     public Guid UsageEventId { get; } = Guid.NewGuid();
     public DateTimeOffset UsageTimestamp { get; } = DateTimeOffset.UtcNow;
     public RuntimeConnection Connection => RuntimeConnection.ForUri(
@@ -80,7 +82,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
         }
     }
 
-    public async Task EmitUsageAsync(object data, string? agentId = null)
+    public async Task EmitUsageAsync(
+        object data, string? agentId = null, Guid? eventId = null, DateTimeOffset? timestamp = null)
     {
         await WriteAsync(new
         {
@@ -92,10 +95,32 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                 @event = new
                 {
                     type = "assistant.usage",
-                    id = UsageEventId,
-                    timestamp = UsageTimestamp,
+                    id = eventId ?? UsageEventId,
+                    timestamp = timestamp ?? UsageTimestamp,
                     parentId = (Guid?)null,
                     agentId,
+                    data
+                }
+            }
+        });
+    }
+
+    public async Task EmitPermissionRequestAsync(object data)
+    {
+        await WriteAsync(new
+        {
+            jsonrpc = "2.0",
+            method = "session.event",
+            @params = new
+            {
+                sessionId = _sessionId ?? throw new InvalidOperationException("No native session exists."),
+                @event = new
+                {
+                    type = "permission.requested",
+                    id = Guid.NewGuid(),
+                    timestamp = DateTimeOffset.UtcNow,
+                    parentId = (Guid?)null,
+                    agentId = (string?)null,
                     data
                 }
             }
@@ -268,6 +293,13 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                             }
                             result = new { success = AbortSucceeds };
                             break;
+                        case "session.permissions.handlePendingPermissionRequest":
+                            Assert.Equal(_sessionId, parameters.GetProperty("sessionId").GetString());
+                            Assert.False(string.IsNullOrWhiteSpace(parameters.GetProperty("requestId").GetString()));
+                            Assert.Equal("approve-once",
+                                parameters.GetProperty("result").GetProperty("kind").GetString());
+                            result = new { success = true, applied = true };
+                            break;
                         case "session.options.update":
                             Assert.True(parameters.GetProperty("skipCustomInstructions").GetBoolean());
                             Assert.True(parameters.GetProperty("customAgentsLocalOnly").GetBoolean());
@@ -281,11 +313,18 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                                 await _turnStop.CancelAsync();
                             result = new { success = true };
                             break;
+                        case "session.detach":
+                            Assert.Equal(_sessionId, parameters.GetProperty("sessionId").GetString());
+                            result = new { success = true };
+                            break;
                         default:
-                            throw new InvalidOperationException($"Unexpected actual SDK method: {method}");
+                            throw new InvalidOperationException(
+                                $"Unexpected actual SDK method: {method}; params: {parameters.GetRawText()}");
                     }
                     await WriteAsync(new { jsonrpc = "2.0", id = id.Clone(), result });
                     Console.WriteLine($"Controlled native SDK {DateTimeOffset.UtcNow:O}: {method} response completed.");
+                    if (method == "session.permissions.handlePendingPermissionRequest")
+                        PermissionDecisionHandled.TrySetResult();
                     if (method == "session.create" && EmitUsageAfterCreate)
                         await EmitUsageAsync(UsageData());
                     if (method == "session.send")

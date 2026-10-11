@@ -8,11 +8,15 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
     private readonly Uri _address = RuntimeOwnerHttpTransport.RequireOwnerAddress(orchestratorAddress);
 
     internal async Task RequireAsync(
-        RuntimeRegistration registration, string actionId, ReadOnlyMemory<byte> input,
-        Func<CancellationToken, Task> requireCurrentAuthority, CancellationToken cancellationToken)
+        RuntimeRegistration registration, string actionId, Guid eventId, ReadOnlyMemory<byte> input,
+        Func<CancellationToken, Task> requireCurrentAuthority, CancellationToken cancellationToken,
+        Guid? costTurnId = null)
     {
         var request = new RuntimeActionRequest(1, registration.RuntimeInstanceId, registration.Revision,
-            registration.Binding.ExecutionFence, Guid.NewGuid(), actionId, RuntimeContractValidation.Hash(input.Span));
+            registration.Binding.ExecutionFence, eventId, actionId, RuntimeContractValidation.Hash(input.Span))
+        {
+            CostTurnId = costTurnId
+        };
         RuntimeActionContract.Validate(request);
         await requireCurrentAuthority(cancellationToken).ConfigureAwait(false);
         var admitted = await RuntimeOwnerHttpTransport.SendAsync<RuntimeActionAdmission>(

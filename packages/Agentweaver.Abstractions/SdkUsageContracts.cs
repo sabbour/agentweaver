@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
@@ -35,7 +36,11 @@ public sealed record SdkUsageObservation(
     long? CacheWriteTokens,
     long? ReasoningTokens,
     decimal? TotalNanoAiu,
-    decimal? DurationMilliseconds);
+    decimal? DurationMilliseconds)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? A2AMessageId { get; init; }
+}
 
 public static class SdkUsageIdentity
 {

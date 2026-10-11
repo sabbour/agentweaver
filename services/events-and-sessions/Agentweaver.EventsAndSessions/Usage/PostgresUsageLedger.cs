@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -119,6 +120,40 @@ public sealed class PostgresUsageLedger : IUsageLedger
     {
         UsageLedgerValidation.ValidateRunScope(tenantId, projectId, runId);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        return await ReadRunTotalsAsync(
+            connection, null, tenantId, projectId, runId, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<UsageRunTotals> GetRunTotalsWithinSnapshotAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string tenantId,
+        string projectId,
+        string runId,
+        string meterSource,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        if (transaction.Connection != connection ||
+            transaction.IsolationLevel != System.Data.IsolationLevel.RepeatableRead)
+            throw new ArgumentException("A repeatable-read usage transaction is required.", nameof(transaction));
+        UsageLedgerValidation.ValidateRunScope(tenantId, projectId, runId);
+        RuntimeContractValidation.ValidateIdentifier(meterSource);
+        return await ReadRunTotalsAsync(
+            connection, transaction, tenantId, projectId, runId, meterSource, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<UsageRunTotals> ReadRunTotalsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string tenantId,
+        string projectId,
+        string runId,
+        string? meterFilter,
+        CancellationToken cancellationToken)
+    {
         await using var command = new NpgsqlCommand($"""
             SELECT l.agent_id, l.meter_source, l.price_unit, r.unit,
                    l.input_tokens, l.output_tokens, l.cached_tokens, l.reasoning_tokens,
@@ -128,11 +163,14 @@ public sealed class PostgresUsageLedger : IUsageLedger
             LEFT JOIN {_quotedSchema}.usage_rate_cards r
                 ON r.card_id = l.rate_card_id AND r.version = l.rate_card_version
             WHERE l.tenant_id = @tenant_id AND l.project_id = @project_id AND l.run_id = @run_id
+              AND (@meter_source IS NULL OR l.meter_source = @meter_source)
             ORDER BY l.agent_id, l.event_id
-            """, connection);
+            """, connection, transaction);
         command.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Varchar, tenantId);
         command.Parameters.AddWithValue("project_id", NpgsqlDbType.Varchar, projectId);
         command.Parameters.AddWithValue("run_id", NpgsqlDbType.Varchar, runId);
+        command.Parameters.AddWithValue(
+            "meter_source", NpgsqlDbType.Varchar, (object?)meterFilter ?? DBNull.Value);
 
         var agents = new Dictionary<string, AgentAccumulator>(StringComparer.Ordinal);
         var runAmounts = new Dictionary<(string MeterSource, string Unit), AmountAccumulator>();

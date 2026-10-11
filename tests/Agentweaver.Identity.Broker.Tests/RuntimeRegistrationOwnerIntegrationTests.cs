@@ -102,6 +102,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         routes.Add("orchestrator.test", () => factory.Server.CreateHandler());
         var enrollmentPath = $"/internal/projects/{owner.ProjectId}/runs/{owner.RunId}" +
             $"/coordination/sessions/{owner.SessionId}/runtime-registrations";
+        using var unavailable = await SendAsync(
+            client, HttpMethod.Get, enrollmentPath, runToken, [owner.TenantId]);
+        await AssertStatusAsync(unavailable, HttpStatusCode.Conflict);
+        Assert.Contains("runtime_registration_unavailable",
+            await unavailable.Content.ReadAsStringAsync());
         TraceNativeStage(failures, "Runtime registration begin.");
         using var response = await SendJsonAsync(client, HttpMethod.Post, enrollmentPath,
             runToken, new RegisterRuntimeRequest(environmentOwner.EnvironmentId, "runtime-profile"));
@@ -123,6 +128,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(environment.Lease.ProvisionedResource!.Resource.ProviderId,
             registration.Binding.PlacementProviderId);
         Assert.Equal(environment.Lease.ProvisionedResource.Resource.ResourceId, registration.Binding.PlacementUid);
+        using var discovered = await SendAsync(
+            client, HttpMethod.Get, enrollmentPath, runToken, [owner.TenantId]);
+        await AssertStatusAsync(discovered, HttpStatusCode.OK);
+        Assert.True(discovered.Headers.CacheControl?.NoStore);
+        Assert.Equal(registration,
+            await discovered.Content.ReadFromJsonAsync<RuntimeRegistration>(CoordinationJsonOptions));
         using var current = await SendAsync(client, HttpMethod.Get,
             $"/internal/runtime/registrations/{registration.RuntimeInstanceId:D}", runToken, [owner.TenantId]);
         await AssertStatusAsync(current, HttpStatusCode.OK);
@@ -597,12 +608,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(refreshed,
             await session.RefreshAsync(refreshOperation, previousSource.Revision, cancellationToken));
         TraceNativeStage(failures, "Guarded actual model turn and native cache begin.");
-        var answer = await session.SendTurnAsync("A bounded user request.", material, cancellationToken);
+        var turnId = Guid.NewGuid();
+        const string turnPrompt = "A bounded user request.";
+        var answer = await session.SendTurnAsync(
+            turnPrompt, material, cancellationToken, turnId);
         Assert.Equal(sdk.AssistantResponse, answer);
         Assert.Equal(4, objects.Writes);
+        var sdkTurns = sdk.Requests.Count(request => request.Method == "session.send");
+        Assert.Equal(answer, await session.SendTurnAsync(turnPrompt, material, cancellationToken, turnId));
+        Assert.Equal(sdkTurns, sdk.Requests.Count(request => request.Method == "session.send"));
+        Assert.Equal("runtime_turn_conflict",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => session.SendTurnAsync(
+                "A different prompt.", material, cancellationToken, turnId))).Code);
+        Assert.Equal(sdkTurns, sdk.Requests.Count(request => request.Method == "session.send"));
         var recovery = await material.ReadRecoveryAsync(session.Registration, cancellationToken);
         Assert.NotNull(recovery.Cache);
-        Assert.Contains(recovery.Turns, turn => turn == ("user", "A bounded user request."));
+        Assert.Contains(recovery.Turns, turn => turn == ("user", turnPrompt));
         Assert.Contains(recovery.Turns, turn => turn == ("assistant", sdk.AssistantResponse));
         Assert.Equal(session.Facts.SdkVersion, recovery.Cache.Material.Reference.Material!.SdkVersion);
         Assert.DoesNotContain(sdk.SdkCredential, System.Text.Encoding.UTF8.GetString(recovery.Cache.Bytes));

@@ -67,23 +67,58 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         await _executionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            var turnEventId = userEventId ?? Guid.NewGuid();
+            byte[] promptBytes;
+            try
+            {
+                promptBytes = new System.Text.UTF8Encoding(false, true).GetBytes(prompt);
+            }
+            catch (System.Text.EncoderFallbackException)
+            {
+                throw new ArgumentException("A valid UTF-8 prompt is required.", nameof(prompt));
+            }
+            var assistantEventId = userEventId is { } requestEventId
+                ? CreateAssistantResponseEventId(requestEventId)
+                : Guid.NewGuid();
             if (userEventId is { } recordedId)
             {
                 if (recordedId == Guid.Empty)
                     throw new ArgumentException("A non-empty A2A message identity is required.", nameof(userEventId));
                 await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
-                var binding = Registration.Binding;
-                if (await material.ReadOptionalTurnAsync(
-                    new(binding.ProjectId, binding.RunId, binding.SessionId), recordedId, cancellationToken)
-                    .ConfigureAwait(false) is not null)
-                    throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
+                var previousRequest = await material.ReadOptionalTurnAsync(
+                    Registration, Facts, recordedId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (previousRequest is not null)
+                {
+                    var previousResponse = await material.ReadOptionalTurnAsync(
+                        Registration, Facts, assistantEventId, cancellationToken).ConfigureAwait(false);
+                    await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+                    if (previousResponse is null)
+                        throw new RuntimeAuthorizationException("runtime_turn_indeterminate");
+                    if (!previousRequest.Bytes.AsSpan().SequenceEqual(promptBytes))
+                        throw new RuntimeAuthorizationException("runtime_turn_conflict");
+                    try
+                    {
+                        return new System.Text.UTF8Encoding(false, true).GetString(previousResponse.Bytes);
+                    }
+                    catch (System.Text.DecoderFallbackException)
+                    {
+                        throw new RuntimeAuthorizationException("runtime_turn_result_invalid");
+                    }
+                }
             }
-            await CommitTurnContentAsync(material, userEventId ?? Guid.NewGuid(), "user", prompt, cancellationToken)
+            RequireSupportedCostTurnAffinity();
+            await CommitTurnContentAsync(material, turnEventId, "user", prompt, cancellationToken)
                 .ConfigureAwait(false);
-            await _actions.RequireAsync(Registration, "model.turn", System.Text.Encoding.UTF8.GetBytes(prompt),
-                RequireCurrentAsync, cancellationToken).ConfigureAwait(false);
+            var costTurnId = Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+                Registration.Binding.CopilotHardCreditLimit is > 0
+                    ? userEventId
+                    : null;
+            await _actions.RequireAsync(Registration, "model.turn", turnEventId, promptBytes,
+                RequireCurrentAsync, cancellationToken, costTurnId).ConfigureAwait(false);
             var answer = await _session.SendTurnAsync(prompt, cancellationToken).ConfigureAwait(false);
-            await CommitTurnContentAsync(material, Guid.NewGuid(), "assistant", answer, cancellationToken).ConfigureAwait(false);
+            await CommitTurnContentAsync(material, assistantEventId, "assistant", answer, cancellationToken)
+                .ConfigureAwait(false);
             await CommitNativeCacheAsync(material, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
             return answer;
         }
@@ -91,6 +126,19 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         {
             _executionGate.Release();
         }
+    }
+
+    internal void RequireSupportedCostTurnAffinity()
+    {
+        if (Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+            Registration.Binding.CopilotHardCreditLimit is > 0)
+            throw new RuntimeAuthorizationException("runtime_usage_affinity_unavailable");
+    }
+
+    private static Guid CreateAssistantResponseEventId(Guid userEventId)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes($"agentweaver:a2a-response:{userEventId:N}");
+        return new Guid(System.Security.Cryptography.SHA256.HashData(bytes).AsSpan(0, 16));
     }
 
     internal async Task RequireCurrentAsync(CancellationToken cancellationToken)

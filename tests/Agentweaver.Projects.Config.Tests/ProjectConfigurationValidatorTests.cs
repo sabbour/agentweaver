@@ -21,6 +21,9 @@ public sealed class ProjectConfigurationValidatorTests
             MaxConcurrentChildren = 2,
             MaxWallTimeSeconds = 3600,
             MaxPromptTokens = 20000,
+            MaxRevisionAttempts = 8,
+            CopilotSoftCreditLimit = 10m,
+            CopilotHardCreditLimit = 20m,
         },
     };
 
@@ -155,6 +158,68 @@ public sealed class ProjectConfigurationValidatorTests
                 MaxModelTurns = 13,
             }));
         Assert.Equal(StatusCodes.Status400BadRequest, widening.StatusCode);
+    }
+
+    [Fact]
+    public void OptionalRevisionAndCopilotCreditLimitsInheritNarrowAndKeepLegacyJsonStable()
+    {
+        var platform = ProjectConfigurationValidator.Validate(PlatformDefaults());
+        var inherited = ProjectConfigurationValidator.ResolveLimits(platform, new());
+        Assert.Equal(8, inherited.MaxRevisionAttempts);
+        Assert.Equal(10m, inherited.CopilotSoftCreditLimit);
+        Assert.Equal(20m, inherited.CopilotHardCreditLimit);
+
+        var narrowed = ProjectConfigurationValidator.ResolveLimits(platform, new CopilotRunLimitOverrides
+        {
+            MaxRevisionAttempts = 0,
+            CopilotSoftCreditLimit = 4.25m,
+            CopilotHardCreditLimit = 5m,
+        });
+        Assert.Equal(0, narrowed.MaxRevisionAttempts);
+        Assert.Equal(4.25m, narrowed.CopilotSoftCreditLimit);
+        Assert.Equal(5m, narrowed.CopilotHardCreditLimit);
+
+        Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.ResolveLimits(platform, new CopilotRunLimitOverrides
+            {
+                MaxRevisionAttempts = 9,
+            }));
+        Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.ResolveLimits(platform, new CopilotRunLimitOverrides
+            {
+                CopilotSoftCreditLimit = 11m,
+            }));
+        Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.ResolveLimits(platform, new CopilotRunLimitOverrides
+            {
+                CopilotSoftCreditLimit = 6m,
+                CopilotHardCreditLimit = 5m,
+            }));
+
+        Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.Validate(platform with
+            {
+                RunLimits = platform.RunLimits with { MaxRevisionAttempts = -1 }
+            }));
+        Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.Validate(platform with
+            {
+                RunLimits = platform.RunLimits with { CopilotHardCreditLimit = -0.01m }
+            }));
+
+        var legacyLimits = new CopilotRunLimits
+        {
+            MaxModelTurns = 1,
+            MaxToolCalls = 1,
+            MaxChildren = 0,
+            MaxConcurrentChildren = 1,
+            MaxWallTimeSeconds = 60,
+            MaxPromptTokens = 1024,
+        };
+        var legacyJson = JsonSerializer.Serialize(legacyLimits, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.DoesNotContain("maxRevisionAttempts", legacyJson);
+        Assert.DoesNotContain("copilotSoftCreditLimit", legacyJson);
+        Assert.DoesNotContain("copilotHardCreditLimit", legacyJson);
     }
 
     [Fact]

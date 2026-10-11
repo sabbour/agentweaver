@@ -55,3 +55,38 @@ public sealed class RuntimeUsageSourceHttpClient(
         new(proof.GrantId, proof.RuntimeInstanceId, proof.Revision, proof.Purpose, proof.Audience,
             proof.ConfigurationHash, proof.Credential.GetValue(), proof.Credential.ExpiresAt, Guid.Empty);
 }
+
+internal sealed class RuntimeUsageCostPreflightHttpClient(
+    HttpClient client, Uri eventsAddress, RuntimeActorAuthorization actor)
+{
+    private readonly Uri _address = RuntimeOwnerHttpTransport.RequireOwnerAddress(eventsAddress);
+
+    internal async Task EnsurePricedAsync(
+        AuthorizedRuntimeSession session, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        var registration = session.Registration;
+        var facts = session.Facts;
+        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeUsageCostPreflightReceipt>(
+            client,
+            _address,
+            $"/internal/runtime/sources/{registration.RuntimeInstanceId:D}/cost-preflight",
+            actor,
+            new RuntimeUsageCostPreflightRequest(),
+            cancellationToken).ConfigureAwait(false);
+        RuntimeUsageCostPreflightContract.Validate(receipt);
+        if (receipt.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            receipt.RegistrationRevision != registration.Revision ||
+            receipt.ExecutionFence != registration.Binding.ExecutionFence ||
+            receipt.ModelSelectionReference != registration.Binding.ModelSelectionReference ||
+            receipt.ModelSelectionReference != facts.ModelSelectionReference ||
+            receipt.ModelId != facts.ModelId ||
+            receipt.MeterSource != facts.MeterSource ||
+            receipt.AcceptedSelectionHash != registration.Binding.AcceptedSelectionHash ||
+            receipt.AcceptedSelectionHash != facts.AcceptedSelectionHash ||
+            receipt.SourceReceiptHash != RuntimeUsageSourceReceiptContract.HashSource(registration, facts))
+            throw new RuntimeAuthorizationException("runtime_cost_preflight_source_mismatch");
+        if (!receipt.IsPriced)
+            throw new RuntimeAuthorizationException("runtime_cost_preflight_unpriced");
+    }
+}

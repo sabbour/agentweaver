@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Collections.Frozen;
 using Agentweaver.Abstractions;
 
@@ -11,7 +12,11 @@ public sealed record RuntimeActionRequest(
     long ExecutionFence,
     Guid EventId,
     string ActionId,
-    string InputHash);
+    string InputHash)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CostTurnId { get; init; }
+}
 
 public sealed record RuntimeActionAdmission(
     int ContractVersion,
@@ -37,6 +42,9 @@ public static class RuntimeActionContract
         if (request.ContractVersion != 1 || request.RuntimeInstanceId == Guid.Empty ||
             request.RegistrationRevision <= 0 || request.ExecutionFence <= 0 ||
             request.EventId == Guid.Empty || !ActionIds.Contains(request.ActionId))
+            throw new RuntimeAuthorizationException("runtime_action_invalid");
+        if (request.CostTurnId is { } costTurnId &&
+            (costTurnId == Guid.Empty || request.ActionId != "model.turn"))
             throw new RuntimeAuthorizationException("runtime_action_invalid");
         RuntimeContractValidation.ValidateHash(request.InputHash);
     }

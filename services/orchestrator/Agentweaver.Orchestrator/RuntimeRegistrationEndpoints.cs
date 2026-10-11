@@ -33,6 +33,14 @@ public static class RuntimeRegistrationEndpoints
                 await ExecuteAsync(context, () => owner.RegisterAsync(
                     context, projectId, runId, sessionId, request, cancellationToken)).ConfigureAwait(false))
             .RequireAuthorization();
+        endpoints.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-registrations",
+            async (string projectId, string runId, string sessionId, HttpContext context,
+                [Microsoft.AspNetCore.Mvc.FromServices] RuntimeRegistrationOwner owner,
+                CancellationToken cancellationToken) =>
+                await ExecuteAsync(context, () => owner.ReadCurrentForSessionAsync(
+                    context, projectId, runId, sessionId, cancellationToken)).ConfigureAwait(false))
+            .RequireAuthorization();
         endpoints.MapGet("/internal/runtime/registrations/{runtimeInstanceId:guid}",
             async (Guid runtimeInstanceId, HttpContext context,
                 [Microsoft.AspNetCore.Mvc.FromServices] RuntimeRegistrationOwner owner,

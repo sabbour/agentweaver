@@ -48,13 +48,17 @@ catalog/resolver, conformance-focused tests, and build/release validation. The v
 also includes unpublished Events & Sessions and Orchestrator service candidates. The
 Orchestrator source now covers typed coordinator decisions and gates, durable MAF
 checkpoints, immutable accepted-run Sandbox binding metadata, and owner-issued
-grant/receipt records. Non-empty or fixed-work plans require a server-registered
-Sandbox resource adapter; without one, the host fails closed with `503`. This source
-does not include a production Sandbox provisioner or the full dispatch engine, and
-the positive Events receipt consumer remains separate work. These services can be
-built and tested, but are not deployed or published; the source does not provision
-Azure resources. The unpublished [AgentHost candidate](docs/architecture/agenthost.md)
-adds authenticated runtime execution, not automatic scheduling or a deployed platform.
+grant/receipt records. It also includes an explicit bounded MAF dispatch path that
+checkpoints ready child intents, joins authenticated child results, and appends a
+typed output witness when the complete plan frontier succeeds. Non-empty or fixed-work
+plans require a server-registered Sandbox resource adapter; without one, the host
+fails closed with `503`. There is no production Sandbox provisioner, registered
+platform-step executor, background scheduler, complete Host send-membership proof,
+or source-complete priced cap-retirement evidence; the positive Events receipt
+consumer remains separate work. These services can be built and tested, but are not
+deployed or published; the source does not provision Azure resources. The unpublished
+[AgentHost candidate](docs/architecture/agenthost.md) adds authenticated runtime
+execution, not automatic scheduling or a deployed platform.
 
 See the [Events & Sessions journal](docs/architecture/events-sessions.md) for its
 implemented contract, PostgreSQL ownership, provider pin, and current limits.

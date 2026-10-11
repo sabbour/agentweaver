@@ -56,6 +56,18 @@ public static class RuntimeContractValidation
                     Agentweaver.Abstractions.ProjectAuthorityResourceType.Platform)) ||
             binding.ModelConnectionId is null && binding.ModelConnectionScope is not null)
             throw new RuntimeAuthorizationException("runtime_binding_invalid");
+        if (binding.MaxModelTurns is { } maxModelTurns &&
+                (maxModelTurns < 1 || maxModelTurns > 1000) ||
+            binding.MaxToolCalls is { } maxToolCalls &&
+                (maxToolCalls < 1 || maxToolCalls > 10000) ||
+            binding.MaxPromptTokens is { } maxPromptTokens &&
+                (maxPromptTokens < 1024 || maxPromptTokens > 200000) ||
+            binding.MaxRevisionAttempts is < 0 ||
+            binding.CopilotSoftCreditLimit is < 0 ||
+            binding.CopilotHardCreditLimit is < 0 ||
+            binding.CopilotSoftCreditLimit is { } softLimit &&
+                binding.CopilotHardCreditLimit is { } hardLimit && softLimit > hardLimit)
+            throw new RuntimeAuthorizationException("runtime_binding_invalid");
         if (binding.PlacementProviderId is { } placementProviderId)
         {
             ValidateIdentifier(placementProviderId);
@@ -76,6 +88,15 @@ public static class RuntimeContractValidation
             }
         }
         ValidateHash(binding.AcceptedSelectionHash);
+    }
+
+    public static void RequireSupportedNumericRunLimits(RuntimeBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        if (binding.MaxModelTurns is not null ||
+            binding.MaxToolCalls is not null ||
+            binding.MaxPromptTokens is not null)
+            throw new RuntimeAuthorizationException("runtime_numeric_limits_unsupported");
     }
 
     public static void ValidateHash(string value)

@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Data;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
@@ -8,6 +10,18 @@ using Npgsql;
 using NpgsqlTypes;
 
 namespace Agentweaver.EventsAndSessions;
+
+internal sealed class NativeUsageReconciliationException(
+    string code, ImmutableArray<Guid> sourceReceiptIds = default) : InvalidOperationException(code)
+{
+    internal string Code { get; } = code;
+    internal ImmutableArray<Guid> SourceReceiptIds { get; } = sourceReceiptIds;
+}
+
+internal sealed record NativeUsageCostPreflightResult(
+    CostBinding? Binding,
+    bool IsPriced,
+    string? UnpricedReason);
 
 internal sealed class NativeUsageReceiptConsumer(
     NpgsqlDataSource dataSource, PostgresSessionsProviderOptions options, PostgresUsageLedger ledger,
@@ -20,8 +34,100 @@ internal sealed class NativeUsageReceiptConsumer(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
     private readonly PostgresOutbox _inbox = new(dataSource, options.Schema);
+    private readonly string _usageLedger = $"\"{options.Schema}\".usage_ledger";
     private readonly string _receipts = $"\"{options.Schema}\".usage_source_receipts";
     private readonly string _bindings = $"\"{options.Schema}\".usage_run_cost_bindings";
+
+    internal async Task<RuntimeUsageCostReconciliationReceipt> ReconcileAsync(
+        string tenantId,
+        string projectId,
+        string runId,
+        RuntimeUsageCostReconciliationRequest request,
+        Func<CancellationToken, Task> revalidateCurrentAuthority,
+        CancellationToken cancellationToken)
+    {
+        RuntimeUsageCostReconciliationContract.ValidateRequest(request);
+        UsageLedgerValidation.ValidateRunScope(tenantId, projectId, runId);
+        ArgumentNullException.ThrowIfNull(revalidateCurrentAuthority);
+
+        var scope = new CostRunScope(tenantId, projectId, runId, request.MeterSource);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+
+        var pinned = await ReadPinnedBindingAsync(connection, transaction, scope, cancellationToken)
+            .ConfigureAwait(false);
+        if (pinned.Binding is not { } costBinding || pinned.UnpricedReason is not null ||
+            costBinding.MeterSource != request.MeterSource ||
+            costBinding.RateCard.Id != request.RateCardId ||
+            costBinding.RateCard.Version != request.RateCardVersion ||
+            costBinding.RateCard.Unit != request.RateCardUnit)
+            throw new NativeUsageReconciliationException("runtime_usage_reconciliation_binding_mismatch");
+
+        var references = await ReadCostReceiptReferencesAsync(
+            connection, transaction, tenantId, projectId, runId, request, costBinding, cancellationToken)
+            .ConfigureAwait(false);
+        var totals = await ledger.GetRunTotalsWithinSnapshotAsync(
+            connection, transaction, tenantId, projectId, runId, request.MeterSource, cancellationToken)
+            .ConfigureAwait(false);
+        if (totals.Events < request.MinimumAccountingRevision)
+            throw new NativeUsageReconciliationException("runtime_usage_reconciliation_stale");
+        if (!totals.IsFullyPriced)
+            throw new NativeUsageReconciliationException("runtime_usage_reconciliation_unpriced");
+
+        var receipt = new RuntimeUsageCostReconciliationReceipt(
+            1,
+            request.CostTurnId,
+            request.RuntimeInstanceId,
+            request.RegistrationRevision,
+            request.ExecutionFence,
+            tenantId,
+            projectId,
+            runId,
+            request.SessionId,
+            request.RuntimeTurnId,
+            request.AcceptedSelectionHash,
+            request.ModelSelectionReference,
+            request.ModelId,
+            request.MeterSource,
+            request.RateCardId,
+            request.RateCardVersion,
+            request.RateCardUnit,
+            totals.Events,
+            references,
+            totals);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        return receipt;
+    }
+
+    internal async Task<NativeUsageCostPreflightResult> PreflightAsync(
+        string tenantId,
+        string projectId,
+        string runId,
+        string meterSource,
+        string verifiedModelId,
+        Func<CancellationToken, Task> revalidateCurrentAuthority,
+        CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.ValidateIdentifier(tenantId);
+        RuntimeContractValidation.ValidateIdentifier(projectId);
+        RuntimeContractValidation.ValidateIdentifier(runId);
+        RuntimeContractValidation.ValidateIdentifier(meterSource);
+        RuntimeContractValidation.ValidateIdentifier(verifiedModelId);
+        ArgumentNullException.ThrowIfNull(revalidateCurrentAuthority);
+
+        var scope = new CostRunScope(tenantId, projectId, runId, meterSource);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await AcquireRunCostLockAsync(connection, transaction, scope, cancellationToken).ConfigureAwait(false);
+        var pinned = await ReadOrPinBindingAsync(
+            connection, transaction, scope, cancellationToken).ConfigureAwait(false);
+        var result = QuotePreflight(meterSource, verifiedModelId, runId, pinned);
+        await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
+    }
 
     internal async Task<RuntimeUsageAccountingAcknowledgment> AppendAsync(
         RuntimeUsageSourceReceipt receipt, Func<CancellationToken, Task> revalidateCurrentAuthority,
@@ -32,17 +138,8 @@ internal sealed class NativeUsageReceiptConsumer(
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var usage = receipt.Usage;
-        await using (var acquire = new NpgsqlCommand(
-            "SELECT pg_advisory_xact_lock(hashtext('agentweaver.usage.cost'), hashtext(@run))",
-            connection, transaction))
-        {
-            acquire.Parameters.AddWithValue("run", NpgsqlDbType.Text, JsonSerializer.Serialize(new[]
-            {
-                usage.Attribution.TenantId, usage.Attribution.ProjectId,
-                usage.Attribution.RunId, usage.ModelBinding.MeterSource
-            }));
-            await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
+        var scope = CostRunScope.From(usage);
+        await AcquireRunCostLockAsync(connection, transaction, scope, cancellationToken).ConfigureAwait(false);
         var admission = await _inbox.AdmitAsync(
             connection, transaction, InboxConsumer, receipt.ReceiptId.ToString("D"), cancellationToken)
             .ConfigureAwait(false);
@@ -88,8 +185,181 @@ internal sealed class NativeUsageReceiptConsumer(
         return acknowledgment;
     }
 
+    private async Task<ImmutableArray<RuntimeUsageCostReceiptReference>> ReadCostReceiptReferencesAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string tenantId,
+        string projectId,
+        string runId,
+        RuntimeUsageCostReconciliationRequest request,
+        CostBinding pinnedBinding,
+        CancellationToken cancellationToken)
+    {
+        var required = request.RequiredReceipts.ToDictionary(reference => reference.SourceReceiptId);
+        var represented = ImmutableArray.CreateBuilder<RuntimeUsageCostReceiptReference>(required.Count);
+        var found = new HashSet<Guid>();
+        var mismatched = ImmutableArray.CreateBuilder<Guid>();
+        var unpriced = ImmutableArray.CreateBuilder<Guid>();
+        await using var read = new NpgsqlCommand($"""
+            SELECT r.source_receipt_id, r.event_id, r.source_payload_hash,
+                   r.source_receipt_json, r.accounting_receipt_json,
+                   l.canonical_input_hash, l.price_disposition, l.price_amount, l.price_unit,
+                   l.rate_card_id, l.rate_card_version, l.rate_card_unit, l.cost_binding
+            FROM {_receipts} r
+            JOIN {_usageLedger} l ON l.event_id = r.event_id
+            WHERE r.source_receipt_id = ANY(@receipts)
+              AND l.tenant_id = @tenant AND l.project_id = @project AND l.run_id = @run
+              AND l.session_id = @session AND l.meter_source = @meter
+            ORDER BY r.source_receipt_id
+            """, connection, transaction);
+        read.Parameters.AddWithValue("receipts", NpgsqlDbType.Array | NpgsqlDbType.Uuid,
+            request.RequiredReceipts.Select(reference => reference.SourceReceiptId).ToArray());
+        read.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, tenantId);
+        read.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
+        read.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
+        read.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, request.SessionId);
+        read.Parameters.AddWithValue("meter", NpgsqlDbType.Varchar, request.MeterSource);
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var sourceReceiptId = reader.GetGuid(0);
+            found.Add(sourceReceiptId);
+            var source = Deserialize<RuntimeUsageSourceReceipt>(reader.GetString(3));
+            var accounting = Deserialize<UsageAccountingReceipt>(reader.GetString(4));
+            var expected = required[sourceReceiptId];
+            var ledgerBinding = reader.IsDBNull(12)
+                ? null
+                : Deserialize<CostBinding>(reader.GetString(12));
+            if (!MatchesReceipt(
+                    sourceReceiptId, reader.GetGuid(1), reader.GetString(2), source, accounting,
+                    expected, reader.GetString(5), reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetDecimal(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    reader.IsDBNull(9) ? null : reader.GetString(9),
+                    reader.IsDBNull(10) ? null : reader.GetString(10),
+                    reader.IsDBNull(11) ? null : reader.GetString(11),
+                    ledgerBinding, pinnedBinding, tenantId, projectId, runId, request))
+            {
+                mismatched.Add(sourceReceiptId);
+                continue;
+            }
+            if (accounting.Disposition == CostDisposition.Unpriced)
+                unpriced.Add(sourceReceiptId);
+            else
+                represented.Add(new(sourceReceiptId, accounting));
+        }
+        await reader.CloseAsync().ConfigureAwait(false);
+
+        var missing = required.Keys.Where(receiptId => !found.Contains(receiptId)).ToImmutableArray();
+        if (!missing.IsEmpty)
+            throw new NativeUsageReconciliationException(
+                "runtime_usage_reconciliation_incomplete", missing);
+        if (mismatched.Count > 0)
+            throw new NativeUsageReconciliationException(
+                "runtime_usage_reconciliation_mismatch", mismatched.ToImmutable());
+        if (unpriced.Count > 0)
+            throw new NativeUsageReconciliationException(
+                "runtime_usage_reconciliation_unpriced", unpriced.ToImmutable());
+        return represented.ToImmutable();
+    }
+
+    private static bool MatchesReceipt(
+        Guid sourceReceiptId,
+        Guid eventId,
+        string sourcePayloadHash,
+        RuntimeUsageSourceReceipt source,
+        UsageAccountingReceipt accounting,
+        RuntimeUsageCostReceiptReference expected,
+        string accountingPayloadHash,
+        string priceDisposition,
+        decimal? priceAmount,
+        string? priceUnit,
+        string? rateCardId,
+        string? rateCardVersion,
+        string? rateCardUnit,
+        CostBinding? ledgerBinding,
+        CostBinding pinnedBinding,
+        string tenantId,
+        string projectId,
+        string runId,
+        RuntimeUsageCostReconciliationRequest request)
+    {
+        RuntimeUsageSourceReceiptContract.Validate(source);
+        var binding = source.Registration.Binding;
+        var usage = source.Usage;
+        var sourceFacts = usage.SdkSource;
+        return source.ReceiptId == sourceReceiptId &&
+            source.CanonicalPayloadHash == sourcePayloadHash &&
+            source.CanonicalPayloadHash == RuntimeUsageSourceReceiptContract.Hash(
+                source.Registration, source.Usage) &&
+            usage.EventId == eventId && accounting.EventId == eventId &&
+            accounting == expected.Accounting &&
+            accounting.CanonicalPayloadHash == accountingPayloadHash &&
+            accounting.Disposition.ToString() == priceDisposition &&
+            accounting.Amount == priceAmount && accounting.Unit == priceUnit &&
+            accounting.RateCardId == rateCardId && accounting.RateCardVersion == rateCardVersion &&
+            binding.TenantId == tenantId && binding.ProjectId == projectId && binding.RunId == runId &&
+            binding.SessionId == request.SessionId && binding.TurnId == request.RuntimeTurnId &&
+            binding.ExecutionFence == request.ExecutionFence &&
+            binding.AcceptedSelectionHash == request.AcceptedSelectionHash &&
+            binding.ModelSelectionReference == request.ModelSelectionReference &&
+            binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+            source.Registration.RuntimeInstanceId == request.RuntimeInstanceId &&
+            source.Registration.Revision == request.RegistrationRevision &&
+            sourceFacts is not null && sourceFacts.AcceptedSelectionHash == request.AcceptedSelectionHash &&
+            sourceFacts.ModelSelectionReference == request.ModelSelectionReference &&
+            sourceFacts.ModelId == request.ModelId && sourceFacts.MeterSource == request.MeterSource &&
+            usage.A2AMessageId == request.CostTurnId &&
+            usage.Attribution.TenantId == tenantId && usage.Attribution.ProjectId == projectId &&
+            usage.Attribution.RunId == runId && usage.Attribution.SessionId == request.SessionId &&
+            usage.Attribution.TurnId == request.RuntimeTurnId &&
+            usage.ModelBinding.ModelReference == request.ModelSelectionReference &&
+            usage.ModelBinding.ModelId == request.ModelId && usage.ModelBinding.MeterSource == request.MeterSource &&
+            rateCardId == request.RateCardId && rateCardVersion == request.RateCardVersion &&
+            rateCardUnit == request.RateCardUnit &&
+            ledgerBinding is not null && CostBindingsEqual(ledgerBinding, pinnedBinding);
+    }
+
+    private async Task<RunCostBinding> ReadPinnedBindingAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CostRunScope scope,
+        CancellationToken cancellationToken)
+    {
+        await using var read = new NpgsqlCommand($"""
+            SELECT binding_json, unpriced_reason FROM {_bindings}
+            WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run AND meter_source = @meter
+            """, connection, transaction);
+        AddScope(read, scope);
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return new(null, "cost-binding-not-pinned");
+        return new(reader.IsDBNull(0) ? null : Deserialize<CostBinding>(reader.GetString(0)),
+            reader.IsDBNull(1) ? null : reader.GetString(1));
+    }
+
+    private static bool CostBindingsEqual(CostBinding left, CostBinding right) =>
+        left.MeterSource == right.MeterSource &&
+        left.ProviderId == right.ProviderId &&
+        left.AdapterVersion == right.AdapterVersion &&
+        left.OptionsSchemaVersion == right.OptionsSchemaVersion &&
+        left.OptionsRevision == right.OptionsRevision &&
+        left.ResourceId == right.ResourceId &&
+        left.ResourceGeneration == right.ResourceGeneration &&
+        left.NegotiatedCapabilities is not null &&
+        left.NegotiatedCapabilities.SetEquals(right.NegotiatedCapabilities) &&
+        CopilotCostProvider.RateCardsEqual(left.RateCard, right.RateCard);
+
     private async Task<RunCostBinding> ReadOrPinBindingAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, UsageSubmission usage,
+        CancellationToken cancellationToken) =>
+        await ReadOrPinBindingAsync(
+            connection, transaction, CostRunScope.From(usage), cancellationToken).ConfigureAwait(false);
+
+    private async Task<RunCostBinding> ReadOrPinBindingAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CostRunScope scope,
         CancellationToken cancellationToken)
     {
         await using (var read = new NpgsqlCommand($"""
@@ -97,13 +367,13 @@ internal sealed class NativeUsageReceiptConsumer(
             WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run AND meter_source = @meter
             """, connection, transaction))
         {
-            AddScope(read, usage);
+            AddScope(read, scope);
             await using var reader = await read.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 return new(reader.IsDBNull(0) ? null : Deserialize<CostBinding>(reader.GetString(0)),
                     reader.IsDBNull(1) ? null : reader.GetString(1));
         }
-        var resolution = bindings?.ResolveAndPin(usage.ModelBinding.MeterSource, usage.Attribution.RunId);
+        var resolution = bindings?.ResolveAndPin(scope.MeterSource, scope.RunId);
         var pinned = resolution?.IsSuccess == true && resolution.Value is not null
             ? new RunCostBinding(resolution.Value, null)
             : new RunCostBinding(null, resolution?.Error?.Code.ToString() ?? "cost-provider-unavailable");
@@ -111,7 +381,7 @@ internal sealed class NativeUsageReceiptConsumer(
             INSERT INTO {_bindings}(tenant_id, project_id, run_id, meter_source, binding_json, unpriced_reason)
             VALUES (@tenant, @project, @run, @meter, @binding, @reason)
             """, connection, transaction);
-        AddScope(insert, usage);
+        AddScope(insert, scope);
         insert.Parameters.AddWithValue("binding", NpgsqlDbType.Varchar,
             pinned.Binding is null ? DBNull.Value : JsonSerializer.Serialize(pinned.Binding, JsonOptions));
         insert.Parameters.AddWithValue("reason", NpgsqlDbType.Varchar, (object?)pinned.UnpricedReason ?? DBNull.Value);
@@ -131,17 +401,65 @@ internal sealed class NativeUsageReceiptConsumer(
         return provider.Price(usage.Measurement, usage.ModelBinding, pinned.Binding);
     }
 
-    private static void AddScope(NpgsqlCommand command, UsageSubmission usage)
+    private NativeUsageCostPreflightResult QuotePreflight(
+        string meterSource,
+        string modelId,
+        string runId,
+        RunCostBinding pinned)
     {
-        command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, usage.Attribution.TenantId);
-        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, usage.Attribution.ProjectId);
-        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, usage.Attribution.RunId);
-        command.Parameters.AddWithValue("meter", NpgsqlDbType.Varchar, usage.ModelBinding.MeterSource);
+        if (pinned.Binding is null)
+            return new(null, false, pinned.UnpricedReason ?? "cost-provider-unavailable");
+
+        var verified = bindings?.VerifyPinned(meterSource, runId, pinned.Binding);
+        if (provider is null || verified?.IsSuccess != true)
+            return new(pinned.Binding, false, "pinned-cost-binding-unavailable");
+
+        var quote = provider.Quote(
+            new CostQuoteRequest(modelId, 1m, CostQuoteBasis.UnweightedAiCredits),
+            pinned.Binding);
+        return quote.Disposition == CostDisposition.Estimate &&
+               quote.Amount is not null &&
+               quote.Unit == pinned.Binding.RateCard.Unit &&
+               CopilotCostProvider.RateCardsEqual(quote.RateCard, pinned.Binding.RateCard)
+            ? new(pinned.Binding, true, null)
+            : new(pinned.Binding, false, quote.UnpricedReason ?? "cost-quote-invalid");
+    }
+
+    private static async Task AcquireRunCostLockAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CostRunScope scope,
+        CancellationToken cancellationToken)
+    {
+        await using var acquire = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtext('agentweaver.usage.cost'), hashtext(@run))",
+            connection, transaction);
+        acquire.Parameters.AddWithValue("run", NpgsqlDbType.Text, JsonSerializer.Serialize(new[]
+        {
+            scope.TenantId, scope.ProjectId, scope.RunId, scope.MeterSource
+        }));
+        await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void AddScope(NpgsqlCommand command, CostRunScope scope)
+    {
+        command.Parameters.AddWithValue("tenant", NpgsqlDbType.Varchar, scope.TenantId);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, scope.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, scope.RunId);
+        command.Parameters.AddWithValue("meter", NpgsqlDbType.Varchar, scope.MeterSource);
     }
 
     private static T Deserialize<T>(string json) =>
         JsonSerializer.Deserialize<T>(json, JsonOptions)
         ?? throw new InvalidOperationException("A stored native usage accounting receipt is invalid.");
+
+    private sealed record CostRunScope(
+        string TenantId, string ProjectId, string RunId, string MeterSource)
+    {
+        internal static CostRunScope From(UsageSubmission usage) =>
+            new(usage.Attribution.TenantId, usage.Attribution.ProjectId,
+                usage.Attribution.RunId, usage.ModelBinding.MeterSource);
+    }
 
     private sealed record RunCostBinding(CostBinding? Binding, string? UnpricedReason);
 }

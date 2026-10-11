@@ -8,7 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.11" PrivateAssets="build;buildTransitive" />
+    <PackageReference Include="GitHub.Copilot.SDK" Version="1.0.18" PrivateAssets="build;buildTransitive" />
     <ProjectReference Include="..\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
     <ProjectReference Include="..\Agentweaver.Identity\Agentweaver.Identity.csproj" />
   </ItemGroup>

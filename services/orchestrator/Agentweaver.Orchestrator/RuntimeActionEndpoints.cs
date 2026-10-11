@@ -26,6 +26,7 @@ internal sealed class RuntimeActionOwner(
             context, request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
         RequireRequest(registration, request);
         var binding = registration.Binding;
+        RequireCostTurnEnabled(binding, request.ActionId);
         var accepted = await projects.ReadAcceptedSelectionWithAuthorityAsync(
             context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
         var policyOptions = services.GetService<AgtPolicyProviderOptions>()
@@ -61,6 +62,7 @@ internal sealed class RuntimeActionOwner(
         var registration = await registrations.ReadCurrentAsync(
             context, admission.Request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
         RequireRequest(registration, admission.Request);
+        RequireCostTurnEnabled(registration.Binding, admission.Request.ActionId);
         var reference = await grants.IssueRuntimeActionGrantAsync(
             context, registration, admission.Request, cancellationToken).ConfigureAwait(false);
         if (reference.GrantId != admission.GrantId || reference.Revision != admission.GrantRevision)
@@ -116,6 +118,14 @@ internal sealed class RuntimeActionOwner(
         if (registration.Revision != request.RegistrationRevision ||
             registration.Binding.ExecutionFence != request.ExecutionFence)
             throw new RuntimeAuthorizationException("runtime_action_binding_invalid");
+    }
+
+    private static void RequireCostTurnEnabled(RuntimeBinding binding, string actionId)
+    {
+        RuntimeContractValidation.RequireSupportedNumericRunLimits(binding);
+        if (actionId == "model.turn" && binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+            binding.CopilotHardCreditLimit is 0)
+            throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
     }
 }
 

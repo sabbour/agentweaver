@@ -94,7 +94,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
                     using var drain = new CancellationTokenSource(_abortDrainTimeout);
                     try
                     {
-#pragma warning disable GHCP001 // Native abort acknowledgment is pinned to SDK 1.0.11.
+#pragma warning disable GHCP001 // Native abort acknowledgment is pinned to SDK 1.0.18.
                         var result = await _session.Rpc.AbortAsync(AbortReason.UserInitiated, drain.Token)
                             .ConfigureAwait(false);
 #pragma warning restore GHCP001

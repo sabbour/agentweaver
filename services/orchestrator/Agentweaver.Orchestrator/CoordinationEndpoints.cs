@@ -33,6 +33,9 @@ public static partial class CoordinationEndpoints
             "/sessions/{sessionId}/actions/revise_work_plan",
             ReviseCoordinatorWorkPlanAsync);
         coordination.MapPost(
+            "/sessions/{sessionId}/actions/dispatch",
+            DispatchCoordinatorWorkPlanAsync);
+        coordination.MapPost(
             "/sessions/{sessionId}/actions/request_assembly",
             RequestCoordinatorAssemblyAsync);
         coordination.MapGet(
@@ -813,6 +816,8 @@ public static partial class CoordinationEndpoints
                 actor, identity, selection, cancellationToken).ConfigureAwait(false);
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            var maxRevisionAttempts = CoordinatorWorkflowCatalog
+                .ReadRuntimeBudgetLimits(selection.Selection.Snapshot).MaxRevisionAttempts;
 
             var selectionContextResolution = RequiresProviderBinding(current.State, request.RevisedPlan)
                 ? await runSelectionContexts.ResolveForPlanAsync(
@@ -823,12 +828,22 @@ public static partial class CoordinationEndpoints
             var selectionContext = selectionContextResolution.Context;
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
-            var transition = CoordinatorDecisionFlow.ReviseWorkPlan(
-                current.State,
-                request.RevisedPlan,
-                selectionContext,
-                request.RequestId,
-                selection.Authorization.ActorId);
+            var transition = current.State is { } currentState &&
+                maxRevisionAttempts is { } maximumAttempts &&
+                currentState.WorkPlanRevisionAttempts >= maximumAttempts
+                ? new CoordinatorDecisionTransition<CoordinatorWorkPlanRevision>(
+                    currentState,
+                    null,
+                    [new WorkflowValidationIssue(
+                        WorkflowValidationCode.WorkPlanLimitExceeded,
+                        "runLimits.maxRevisionAttempts",
+                        "The accepted work-plan revision attempt limit has been reached.")])
+                : CoordinatorDecisionFlow.ReviseWorkPlan(
+                    current.State,
+                    request.RevisedPlan,
+                    selectionContext,
+                    request.RequestId,
+                    selection.Authorization.ActorId);
             transition = await EnforceRunChildLimitAsync(
                 transition,
                 current.State,

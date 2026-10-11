@@ -51,6 +51,54 @@ public sealed class RuntimeContractTests
     }
 
     [Fact]
+    public void NumericRunPoliciesAreBoundValidatedAndFailClosedWhenUnsupported()
+    {
+        var registration = CreateRegistration();
+        RuntimeContractValidation.Validate(registration);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+            {
+                MaxModelTurns = 1
+            }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+            {
+                MaxToolCalls = 1
+            }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+            {
+                MaxPromptTokens = 1024
+            }));
+
+        var policy = registration with
+        {
+            Binding = registration.Binding with
+            {
+                MaxModelTurns = 1000,
+                MaxToolCalls = 10000,
+                MaxPromptTokens = 200000
+            }
+        };
+        RuntimeContractValidation.Validate(policy);
+        Assert.NotEqual(
+            RuntimeContractValidation.RegistrationHash(registration),
+            RuntimeContractValidation.RegistrationHash(policy));
+
+        foreach (var invalid in new[]
+        {
+            policy with { Binding = policy.Binding with { MaxModelTurns = 0 } },
+            policy with { Binding = policy.Binding with { MaxModelTurns = 1001 } },
+            policy with { Binding = policy.Binding with { MaxToolCalls = 0 } },
+            policy with { Binding = policy.Binding with { MaxToolCalls = 10001 } },
+            policy with { Binding = policy.Binding with { MaxPromptTokens = 1023 } },
+            policy with { Binding = policy.Binding with { MaxPromptTokens = 200001 } }
+        })
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeContractValidation.Validate(invalid));
+    }
+
+    [Fact]
     public void MissingLegacyModelReferenceDoesNotChangeTheStoredBindingJson()
     {
         var binding = CreateRegistration().Binding;

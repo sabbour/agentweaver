@@ -38,6 +38,8 @@ public sealed record UsageSubmission(
     public SdkSessionFacts? SdkSource { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SdkEventId { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? A2AMessageId { get; init; }
 }
 
 public sealed record UsageLedgerEntry(

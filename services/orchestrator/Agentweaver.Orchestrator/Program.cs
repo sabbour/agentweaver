@@ -3,6 +3,7 @@ extern alias AzureIdentity;
 using System.Collections.Immutable;
 using Agentweaver.Orchestrator;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
 using Agentweaver.SourceControl;
@@ -117,6 +118,8 @@ builder.Services.AddHttpClient<ProjectsRunSelectionClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient<EventsAddressedMessageClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+builder.Services.AddHttpClient("maf-execution-host")
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
 builder.Services.AddSingleton(secretRedemptionOptions);
 builder.Services.AddHttpClient<SourceControlSecretRedemptionClient>()
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
