@@ -26,12 +26,14 @@ administrator authority. Responses use
 sequenceDiagram
     autonumber
     participant C as Authorized project caller
+    participant G as Gateway
     participant P as Projects & Config
     participant DB as projects_config
     participant GH as Public GitHub
     participant S as Skills content service
     participant O as Immutable content store
-    C->>P: Browse source ID + expected source revision + query/page
+    C->>G: Browse source ID + expected source revision + query/page
+    G->>P: Forward bearer, tenant selector, and request
     P->>DB: Recheck current read role; read active source revision
     DB-->>P: Repository, requested ref, source revision
     P->>GH: Resolve requested ref to commit SHA
@@ -42,8 +44,10 @@ sequenceDiagram
     P->>GH: Fetch SKILL.md only for current-page candidates
     GH-->>P: Page manifest bytes
     P->>DB: Recheck current caller authority and source revision
-    P-->>C: Page, requested ref, source revision, resolved commit SHA
-    C->>P: Preview/import source revision + resolved commit SHA + selected path
+    P-->>G: Page, requested ref, source revision, resolved commit SHA
+    G-->>C: Owner response unchanged
+    C->>G: Preview/import source revision + resolved commit SHA + selected path
+    G->>P: Forward bearer, tenant selector, and request
     P->>DB: Recheck current read/write role and read active source revision
     DB-->>P: Current source configuration
     P->>GH: Read selected manifest and bounded resources at the same commit
@@ -52,13 +56,15 @@ sequenceDiagram
     alt Preview
         P->>S: Validate selected bytes and calculate content digest
         S-->>P: Preview metadata and digest
-        P-->>C: Preview
+        P-->>G: Preview
+        G-->>C: Owner response unchanged
     else Import
         P->>S: Import bytes with expected digest, idempotency key, and source provenance
         S->>O: Store immutable content revision
         O-->>S: Stored digest
         S-->>P: Import receipt
-        P-->>C: Receipt
+        P-->>G: Receipt
+        G-->>C: Owner response unchanged
     end
     Note over P,GH: Browse fetches only current-page manifests. Preview/import reads stay pinned to the selected commit.
     Note over S,O: Skills owns content validation, immutable revisions, idempotency, and assignment.
@@ -86,6 +92,13 @@ returns `403`. During the inventory recheck, the owner returns `404` for a
 foreign project or membership found inactive or stale.
 
 Gateway responses use `Cache-Control: no-store`.
+
+The Gateway exposes versioned aliases for the source preview and import routes:
+`POST /api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview`
+and `/api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import`.
+It forwards the validated bearer and optional tenant selector, and preserves the
+owner's status and response body. The owner remains responsible for current
+project authority, source revision checks, and reading the selected files.
 
 The default page size is 25. The cursor is opaque and uses unpadded Base64URL.
 It binds the project and page size. The cursor sorts skill IDs in C collation,
@@ -180,22 +193,22 @@ Errors use Problem Details with a stable `code`:
 | `504` | Request timed out. |
 
 The checked-in v1 Gateway catalog maps source list/create/update/tombstone,
-pinned browse, Skills preview/import, project assignment, and metadata-only
-inventory reads to these Projects owner paths. Its OpenAPI contract includes the
-owner DTOs, exact required source revision query values, optional inventory
-cursor/page-size parameters with their bounds, and 3 MiB limits for
-preview/import. The first-party MCP catalog is built from that same OpenAPI
-document. The Gateway remains a forwarder; these contracts do not prove a joined
-or deployed owner implementation.
+pinned browse, selected-content preview/import, inline Skills preview/import,
+project assignment, and metadata-only inventory reads to these Projects owner
+paths. Its OpenAPI contract includes the owner DTOs, exact required source
+revision query values, optional inventory cursor/page-size parameters with their
+bounds, and 3 MiB limits for inline preview/import only. The first-party MCP
+catalog is built from that same OpenAPI document. The Gateway remains a forwarder;
+these contracts do not prove a joined or deployed owner implementation.
 
 The retained Web project settings page uses those routes for source management
 and pinned browse. It supports local file preview/import and assignment to agents
-in the current project cast. Marketplace source import remains disabled because
-the public browse response does not include the selected manifest and resources.
-The API also has no actor-safe runtime-loaded status producer. The page reports
-that gap instead of inferring runtime use from an assignment or accepted run
-configuration. These checked-in sources do not establish that the services or
-the complete journey have been published or deployed.
+in the current project cast. The page does not yet use the selected-content
+preview/import routes, so Marketplace source import remains disabled. The API also
+has no actor-safe runtime-loaded status producer. The page reports that gap
+instead of inferring runtime use from an assignment or accepted run configuration.
+These checked-in sources do not establish that the services or the complete
+journey have been published or deployed.
 
 ## Validation
 

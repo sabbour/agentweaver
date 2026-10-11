@@ -106,6 +106,14 @@ public static class GatewayRouteCatalog
             "/api" + marketplaceSources + "/{sourceId}/browse",
             "browseMarketplaceSource", "Browse one revision of a project marketplace source",
             ["expectedSourceRevision", "query", "page", "pageSize"], forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, marketplaceSources + "/{sourceId}/preview",
+            "/api" + marketplaceSources + "/{sourceId}/preview",
+            "previewMarketplaceSkill", "Preview selected skill content from a marketplace source",
+            body: true, forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, marketplaceSources + "/{sourceId}/import",
+            "/api" + marketplaceSources + "/{sourceId}/import",
+            "importMarketplaceSkill", "Import selected skill content from a marketplace source",
+            body: true, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, "/skills/preview", "/api/skills/preview",
             "previewSkillContent", "Validate skill content without importing it",
             body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
