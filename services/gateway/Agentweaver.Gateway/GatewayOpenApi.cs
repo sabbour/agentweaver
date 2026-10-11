@@ -248,7 +248,8 @@ internal static partial class GatewayOpenApi
             responses["400"] = ProblemResponse(
                 "The owner rejected an unknown or repeated query key, invalid cursor, or page size outside 1 through 50.");
             responses["404"] = ProblemResponse(
-                "The owner hides foreign projects and projects with inactive or stale membership.");
+                "The owner hides foreign projects and memberships found inactive or stale during the inventory recheck. " +
+                "Inactive membership rejected during initial caller resolution returns 403.");
         }
 
         var description =
