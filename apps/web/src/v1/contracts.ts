@@ -465,6 +465,48 @@ export interface SkillContentImportReceipt {
   totalBytes: number;
 }
 
+export interface SkillContentInventoryQuery {
+  cursor?: string;
+  pageSize?: number;
+}
+
+export interface SkillContentRevisionSummary {
+  skillId: string;
+  revision: number;
+  name: string;
+  description: string;
+  contentDigest: string;
+  resourceCount: number;
+  totalBytes: number;
+  createdByActorId: string;
+  createdAt: string;
+  sourceId: string | null;
+  sourceRevision: string | null;
+  requestedRef: string | null;
+  resolvedCommitSha: string | null;
+  selectedPath: string | null;
+  isRevoked: boolean;
+  revokedByActorId: string | null;
+  revokedAt: string | null;
+}
+
+export interface SkillContentAssignmentSummary {
+  skillId: string;
+  enabled: boolean;
+  order: number;
+  revision: number | null;
+  contentDigest: string | null;
+  agentIds: string[] | null;
+}
+
+export interface SkillContentInventoryPage {
+  configurationRevision: number;
+  assignments: SkillContentAssignmentSummary[];
+  revisions: SkillContentRevisionSummary[];
+  pageSize: number;
+  nextCursor: string | null;
+}
+
 export interface SkillAssignmentRequest {
   expectedProjectConfigurationRevision: number;
   revision: number;

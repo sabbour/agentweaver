@@ -28,6 +28,8 @@ import type {
   ProjectConfiguration,
   SkillAssignmentRequest,
   SkillContentCandidateRequest,
+  SkillContentInventoryPage,
+  SkillContentInventoryQuery,
   SkillContentImportReceipt,
   SkillContentImportRequest,
   SkillContentPreview,
@@ -347,6 +349,25 @@ export class AgentweaverGatewayClient {
       token,
       `/projects/${encodeSegments(projectId, 'skills', 'import')}`,
       { method: 'POST', body: JSON.stringify(request) },
+      this.baseUrl,
+      tenantSelector,
+    );
+  }
+
+  listProjectSkillInventory(
+    token: string,
+    projectId: string,
+    options: SkillContentInventoryQuery = {},
+    tenantSelector?: string | null,
+  ): Promise<SkillContentInventoryPage> {
+    const query = new URLSearchParams();
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    if (options.pageSize !== undefined) query.set('pageSize', String(options.pageSize));
+    const suffix = query.toString();
+    return this.request(
+      token,
+      `/projects/${encodeSegments(projectId, 'skills')}${suffix ? `?${suffix}` : ''}`,
+      {},
       this.baseUrl,
       tenantSelector,
     );
