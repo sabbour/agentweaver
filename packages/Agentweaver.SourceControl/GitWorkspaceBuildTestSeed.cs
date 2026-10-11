@@ -95,6 +95,24 @@ public static class GitWorkspaceBuildTestSeedPackage
             bytes.ToArray().ToImmutableArray());
     }
 
+    internal static ImmutableArray<GitWorkspaceCapturedFile> ReadBaselineFiles(GitWorkspaceBuildTestSeed seed)
+    {
+        var package = seed.BaselinePackageBytes.ToArray();
+        GitWorkspaceCapturePackage.VerifyPackage(package, seed.Baseline, GitWorkspaceCapturePackage.Hash(package));
+        var files = ImmutableArray.CreateBuilder<GitWorkspaceCapturedFile>(seed.Baseline.Files.Length);
+        var offset = ProducedRunCaptureLimits.PackageHeaderBytes;
+        foreach (var file in seed.Baseline.Files)
+        {
+            var length = checked((int)BinaryPrimitives.ReadUInt64BigEndian(
+                package.AsSpan(offset, ProducedRunCaptureLimits.PackageFileLengthBytes)));
+            offset += ProducedRunCaptureLimits.PackageFileLengthBytes;
+            files.Add(new(file.Path, file.Mode, file.Sha256, file.ByteLength,
+                ImmutableArray.Create(package, offset, length)));
+            offset += length;
+        }
+        return files.MoveToImmutable();
+    }
+
     public static void ValidateCapture(
         GitWorkspaceCapturedOutputManifest capture,
         GitWorkspaceBuildTestSeed seed,

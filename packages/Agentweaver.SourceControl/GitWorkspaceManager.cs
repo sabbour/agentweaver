@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 
 namespace Agentweaver.SourceControl;
@@ -426,6 +427,204 @@ public sealed class GitWorkspaceManager
         var bytes = GitWorkspaceBuildTestSeedPackage.Create(baseline, bundle);
         return new(baseline, bundle, bytes, GitWorkspaceCapturePackage.Hash(bytes));
     }
+
+    public async Task<GitWorkspace> PrepareBuildTestSeedAsync(
+        SandboxBuildTestWorkspaceSource source,
+        ReadOnlyMemory<byte> bytes,
+        CancellationToken cancellationToken)
+    {
+        var seed = GitWorkspaceBuildTestSeedPackage.Parse(bytes.Span, source);
+        if (!IsValidBranchName(source.BranchName))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.InvalidRequest, "The BuildTest repository branch is invalid.");
+        var files = GitWorkspaceBuildTestSeedPackage.ReadBaselineFiles(seed);
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        if (files.Select(file => file.Path).Distinct(comparer).Count() != files.Length)
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.PathConflict, "The BuildTest input paths collide on this filesystem.");
+        cancellationToken.ThrowIfCancellationRequested();
+        var key = "buildtest-" + Hash(
+            source.TenantId + "\0" + source.Identity.ProjectId + "\0" + source.Identity.RunId + "\0" + source.WorkspaceId);
+        var workspaceRoot = Path.Combine(_rootPath, key);
+        var repositoryPath = Path.Combine(workspaceRoot, "repository");
+        var manifestPath = Path.Combine(workspaceRoot, "workspace.json");
+        var bindingHash = GitWorkspaceCapturePackage.Hash(JsonSerializer.SerializeToUtf8Bytes(source, JsonOptions));
+        var expected = new WorkspaceManifest(
+            ManifestVersion, source.Identity.RunId, source.WorkspaceId,
+            source.SourceControlResource.ProviderId, source.SourceControlResource.ResourceId,
+            source.SourceControlResource.Generation, string.Empty, string.Empty, source.BaseSha,
+            source.BranchName, "preparing", source.WorkspaceIncarnationId.ToString("N"), bindingHash);
+        Directory.CreateDirectory(_rootPath);
+        EnsureNotReparsePoint(_rootPath);
+        var lockPath = Path.Combine(_rootPath, key + ".lock");
+        if (File.Exists(lockPath))
+            EnsureNotReparsePoint(lockPath);
+        using var lease = AcquireBuildTestSeedLock(lockPath);
+        Directory.CreateDirectory(workspaceRoot);
+        EnsureNotReparsePoint(workspaceRoot);
+        var manifest = expected;
+        if (File.Exists(manifestPath))
+        {
+            EnsureNotReparsePoint(manifestPath);
+            manifest = await ReadManifestAsync(manifestPath, cancellationToken).ConfigureAwait(false);
+            if (manifest != (expected with { State = manifest.State }) ||
+                manifest.State is not ("preparing" or "ready"))
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.PathConflict, "The BuildTest preparation belongs to another source.");
+        }
+        else
+        {
+            if (Directory.EnumerateFileSystemEntries(workspaceRoot).Any())
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.PathConflict, "The BuildTest preparation has no ownership manifest.");
+            await WriteManifestAsync(manifestPath, expected, cancellationToken).ConfigureAwait(false);
+        }
+        if (manifest.State == "ready")
+        {
+            RequireBuildTestSeedRepository(repositoryPath);
+            return BuildTestSeedWorkspace(source, repositoryPath);
+        }
+        var emptyGitConfig = Path.Combine(workspaceRoot, "git-empty-config");
+        EnsureEmptyGitConfig(emptyGitConfig);
+        var hooks = Path.Combine(workspaceRoot, "git-no-hooks");
+        Directory.CreateDirectory(hooks);
+        EnsureNotReparsePoint(hooks);
+        if (Directory.EnumerateFileSystemEntries(hooks).Any())
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace, "The isolated Git hook directory is not empty.");
+        Task<byte[]> GitAsync(string directory, string[] arguments, byte[]? input = null) =>
+            RunGitAsync(directory,
+                ["-c", "core.hooksPath=" + hooks, "-c", "core.fsmonitor=false",
+                    "-c", "protocol.allow=never", "-c", "protocol.file.allow=always",
+                    "-c", "maintenance.auto=false", "-c", "gc.auto=0", .. arguments],
+                MaximumCommandOutputBytes, emptyGitConfig, null, null, cancellationToken,
+                standardInput: input);
+        if (Directory.Exists(repositoryPath))
+        {
+            EnsureNotReparsePoint(repositoryPath);
+            if (!Directory.Exists(Path.Combine(repositoryPath, ".git")) &&
+                Directory.EnumerateFileSystemEntries(repositoryPath).Any())
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.PathConflict, "The BuildTest repository contains unowned data.");
+        }
+        if (!Directory.Exists(Path.Combine(repositoryPath, ".git")))
+            await GitAsync(workspaceRoot,
+                ["-c", "init.templateDir=", "init", "--initial-branch=" + source.BranchName, repositoryPath])
+                .ConfigureAwait(false);
+        RequireBuildTestSeedRepository(repositoryPath);
+        var expectedPaths = files.Select(file => file.Path).ToHashSet(comparer);
+        RequireBuildTestSeedFiles(repositoryPath, expectedPaths, allowMissing: true);
+        if (DecodeGitOutput(await GitAsync(repositoryPath, ["remote"]).ConfigureAwait(false)).Length != 0)
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace, "The BuildTest input repository has a remote.");
+        var bundlePath = Path.Combine(workspaceRoot, "seed.bundle");
+        if (File.Exists(bundlePath))
+            EnsureNotReparsePoint(bundlePath);
+        await File.WriteAllBytesAsync(bundlePath, seed.BundleBytes.ToArray(), cancellationToken).ConfigureAwait(false);
+        var heads = DecodeGitOutput(await GitAsync(
+            repositoryPath, ["bundle", "list-heads", bundlePath]).ConfigureAwait(false)).Trim();
+        if (heads != source.BaseSha + " refs/heads/buildtest-base")
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace, "The BuildTest bundle has a different base reference.");
+        await GitAsync(repositoryPath, ["bundle", "verify", bundlePath]).ConfigureAwait(false);
+        await GitAsync(repositoryPath,
+            ["fetch", "--no-tags", "--no-recurse-submodules", "--", bundlePath, "refs/heads/buildtest-base"])
+            .ConfigureAwait(false);
+        await GitAsync(repositoryPath, ["update-ref", "refs/heads/" + source.BranchName, source.BaseSha])
+            .ConfigureAwait(false);
+        foreach (var file in files)
+        {
+            var path = Path.Combine(repositoryPath, file.Path.Replace('/', Path.DirectorySeparatorChar));
+            var directory = repositoryPath;
+            foreach (var segment in file.Path.Split('/').SkipLast(1))
+            {
+                directory = Path.Combine(directory, segment);
+                Directory.CreateDirectory(directory);
+                EnsureNotReparsePoint(directory);
+            }
+            if (File.Exists(path))
+                EnsureNotReparsePoint(path);
+            await File.WriteAllBytesAsync(path, file.Content.ToArray(), cancellationToken).ConfigureAwait(false);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(path, file.Mode == "100755"
+                    ? UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                        UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute
+                    : UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+        }
+        RequireBuildTestSeedFiles(repositoryPath, expectedPaths);
+        await GitAsync(repositoryPath, ["read-tree", "--empty"]).ConfigureAwait(false);
+        if (files.Length > 0)
+        {
+            var paths = string.Concat(files.Select(file =>
+                "\"" + Path.Combine(repositoryPath, file.Path.Replace('/', Path.DirectorySeparatorChar))
+                    .Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"\n"));
+            var hashes = DecodeGitOutput(await GitAsync(repositoryPath,
+                ["hash-object", "--no-filters", "-w", "--stdin-paths"], Encoding.UTF8.GetBytes(paths))
+                .ConfigureAwait(false)).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            if (hashes.Length != files.Length || hashes.Any(hash => !IsGitObjectId(hash)))
+                throw new GitWorkspaceException(
+                    GitWorkspaceFailureCode.CorruptWorkspace, "The BuildTest repository object list is invalid.");
+            var index = string.Concat(files.Select((file, position) =>
+                file.Mode + " " + hashes[position] + "\t" + file.Path + "\0"));
+            await GitAsync(repositoryPath, ["update-index", "-z", "--index-info"], Encoding.UTF8.GetBytes(index))
+                .ConfigureAwait(false);
+        }
+        var tree = DecodeGitOutput(await GitAsync(repositoryPath, ["write-tree"]).ConfigureAwait(false)).Trim();
+        if (tree != source.BaselineTreeSha)
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace, "The prepared BuildTest tree differs from its accepted input.");
+        await WriteManifestAsync(manifestPath, expected with { State = "ready" }, cancellationToken).ConfigureAwait(false);
+        return BuildTestSeedWorkspace(source, repositoryPath);
+    }
+
+    private static FileStream AcquireBuildTestSeedLock(string path)
+    {
+        try
+        {
+            return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException exception)
+        {
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.PathConflict, "The BuildTest preparation workspace is unavailable.",
+                innerException: exception);
+        }
+    }
+
+    private static void RequireBuildTestSeedRepository(string path)
+    {
+        if (!Directory.Exists(path) || !Directory.Exists(Path.Combine(path, ".git")))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace, "The prepared BuildTest repository is missing.");
+        EnsureNotReparsePoint(path);
+        EnsureNotReparsePoint(Path.Combine(path, ".git"));
+    }
+
+    private static void RequireBuildTestSeedFiles(string root, HashSet<string> expected, bool allowMissing = false)
+    {
+        var directories = new Stack<string>();
+        directories.Push(root);
+        var found = new HashSet<string>(expected.Comparer);
+        while (directories.TryPop(out var directory))
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                if (Path.GetRelativePath(root, entry) == ".git")
+                    continue;
+                EnsureNotReparsePoint(entry);
+                if (Directory.Exists(entry))
+                    directories.Push(entry);
+                else
+                    found.Add(Path.GetRelativePath(root, entry).Replace(Path.DirectorySeparatorChar, '/'));
+            }
+        if (allowMissing ? !found.IsSubsetOf(expected) : !found.SetEquals(expected))
+            throw new GitWorkspaceException(
+                GitWorkspaceFailureCode.CorruptWorkspace, "The BuildTest repository contains undeclared input files.");
+    }
+
+    private static GitWorkspace BuildTestSeedWorkspace(SandboxBuildTestWorkspaceSource source, string path) =>
+        new(source.WorkspaceId, source.Identity.RunId, source.SourceControlResource.ResourceId,
+            source.SourceControlResource.Generation, source.BaseSha, source.BranchName,
+            path, source.WorkspaceIncarnationId);
 
     private async Task<ImmutableArray<GitWorkspaceCapturedFile>> ReadCapturedFilesAsync(
         string repositoryPath,
@@ -1106,7 +1305,9 @@ public sealed class GitWorkspaceManager
         string BaseSha,
         string BranchName,
         string State,
-        string WorkspaceIncarnationId);
+        string WorkspaceIncarnationId,
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? BuildTestSeedBindingSha256 = null);
 
     private sealed record GitTreeEntry(string Mode, string ObjectId, string Path);
 
