@@ -108,6 +108,13 @@ owner persists accepted definitions and decisions, exact-request gate state, wor
 position, and MAF checkpoints in its own PostgreSQL schema. The full dispatch engine
 remains a separate slice.
 
+Migration `021_row_lock_record_updates.sql` rejects every row update to
+`coordinator_decisions` and `maf_workflow_checkpoints`.
+New decisions and checkpoints use new rows; inserts and row locks remain available.
+Startup requires the migration and each enabled, unconditional update trigger.
+It rejects missing, disabled, conditional, column-limited, or wrong-function triggers.
+The migration does not change foreign-key deletion rules or rewrite earlier migration records.
+
 Accepted WorkPlan revisions increment a persisted attempt count.
 The owner enforces the accepted `maxRevisionAttempts` limit before accepting another revision.
 A zero limit permits no revisions.

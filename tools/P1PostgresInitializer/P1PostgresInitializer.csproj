@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <Version>0.0.0</Version>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.17.1" Aliases="AzureIdentity" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
+    <ProjectReference Include="..\..\services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" />
+    <ProjectReference Include="..\..\services\environment\Agentweaver.Environment\Agentweaver.Environment.csproj" />
+    <ProjectReference Include="..\..\services\knowledge\Agentweaver.Knowledge\Agentweaver.Knowledge.csproj" />
+    <ProjectReference Include="..\..\services\events-and-sessions\Agentweaver.EventsAndSessions\Agentweaver.EventsAndSessions.csproj" />
+    <ProjectReference Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Agentweaver.Orchestrator.csproj" />
+  </ItemGroup>
+</Project>

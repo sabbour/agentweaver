@@ -219,18 +219,32 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     {
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand($"""
-            UPDATE "{_schema}".coordinator_decisions
-            SET decision = jsonb_set(decision, ARRAY['envelope', 'workPlanRevisionAttempts'], '1'::jsonb)
+            INSERT INTO "{_schema}".coordinator_decisions
+                (project_id, run_id, session_id, request_id, decision_id,
+                 actor_issuer, actor_subject, execution_fence, state_version,
+                 action_kind, idempotency_key, command_hash, decision_state, decision)
+            SELECT project_id, run_id, session_id, 'numeric-revision-fixture', @decision,
+                   actor_issuer, actor_subject, execution_fence, state_version + 1,
+                   action_kind, 'numeric-revision-fixture', command_hash, decision_state,
+                   jsonb_set(decision, ARRAY['envelope', 'workPlanRevisionAttempts'], '1'::jsonb)
+            FROM "{_schema}".coordinator_decisions
             WHERE project_id = @project AND run_id = @run AND session_id = @session
+            ORDER BY state_version DESC LIMIT 1
             """, connection))
         {
             command.Parameters.AddWithValue("project", _root.ProjectId);
             command.Parameters.AddWithValue("run", _root.RunId);
             command.Parameters.AddWithValue("session", _root.SessionId);
+            command.Parameters.AddWithValue("decision", Guid.NewGuid());
             Assert.Equal(1, await command.ExecuteNonQueryAsync());
         }
-        Assert.Equal(1, (await _decisions.InitializeRootAsync(_actor, _root, _selection, default))
-            .State.WorkPlanRevisionAttempts);
+        var revisionState = await _decisions.InitializeRootAsync(_actor, _root, _selection, default);
+        Assert.Equal(1, revisionState.State.WorkPlanRevisionAttempts);
+        await AdvanceNativeCheckpointAsync("numeric-revision-fixture-checkpoint", _checkpoint.State with
+        {
+            Revision = _checkpoint.State.Revision + 1,
+            DecisionStateVersion = revisionState.StateVersion
+        });
         if (kind == "model")
             Assert.True(await PrepareAsync(0));
         else

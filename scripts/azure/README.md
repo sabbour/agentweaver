@@ -39,6 +39,53 @@ It does not alter Broker, Probe, or migration identities.
 Applying it requires approval for these five identities and workload links.
 A created identity does not prove database access or a ready service.
 
+### P1 PostgreSQL initializer source proposal
+
+`tools/P1PostgresInitializer` remains a blocked source proposal.
+Source review does not authorize role creation, migrations, grants, or deployment.
+The existing credential check blocks initialization before any credential request
+or database connection. The later row-lock column check also remains blocked.
+The source catalog requires Core versions 1 through 16 and 18 through 21.
+These are 20 registered versions; version 17 remains excluded.
+Events requires versions 1 through 8 and preserves the earlier version-2 layout.
+The plan retains 93 tables and eight exact row-lock columns.
+It includes 28 exact function signatures, with runtime EXECUTE only for casting authority.
+Installed guards and restricted-role behavior still require separate database proof.
+The five new update guards reject changes with SQLSTATE `55000`.
+The three older history guards retain `P0001` and their update, delete, and truncate protections.
+
+The source preflight rejects incompatible PUBLIC privileges before the first write.
+It also rejects default grants to unrelated principals and an inherited-only
+database CONNECT grant option. It does not revoke existing privileges to proceed.
+Database access lists use effective grants, including PostgreSQL defaults when
+the catalog access list is NULL. Only the exact new-role CONNECT additions are
+permitted. Existing owners, grantors, grant options, schemas, Broker, Probe,
+functions, and default privileges must remain unchanged.
+
+Before role creation commits, the source checks all five object-ID mappings,
+service principal types, role flags, and exact operator memberships.
+All five mappings must use the reviewed tenant.
+The administrator and MFA-required integer flags must each equal zero.
+Missing flags and any nonzero integer fail the source checks.
+The operator membership has ADMIN but neither INHERIT nor SET permission.
+Function checks require the operator owner and the exact effective EXECUTE grants.
+Only the existing casting authority function can receive runtime EXECUTE.
+
+Local controlled tests exercise the same predicates and role-stage ordering.
+Pure catalog tests compare the registered resources, function signatures, and guard definitions.
+They also check partial-stage reporting and failure-receipt errors.
+An unreadable failure receipt must not hide the original failure.
+These tests do not execute the initializer or prove database catalog behavior.
+Do not retry or reset partially committed database state.
+Any database execution and reconciliation require separate approval.
+
+Run the source-only checks without starting database tests:
+
+```powershell
+dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresInitializerTests
+node --test scripts\azure\tests\p1-postgres-plan.test.mjs
+```
+
 ## System pool autoscaling
 
 Both templates enable autoscaling on the existing `system` pool with explicit

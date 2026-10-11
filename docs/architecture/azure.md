@@ -100,6 +100,19 @@ Identity creation and federation do not prove database access or service readine
 The [operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities)
 describes the separate approval boundary.
 
+The P1 PostgreSQL initializer remains a blocked source proposal.
+Its pre-write checks reject incompatible existing privileges without changing them.
+Its role stage checks all five mappings before commit.
+Its grant checks preserve existing ownership and permit only exact runtime grants.
+The source checks functions by owner and effective EXECUTE privileges, not counts alone.
+Its source catalog includes 20 Core migration versions, with version 17 excluded, and eight Events versions.
+It retains 93 tables, eight row-lock columns, and 28 exact function signatures.
+Only casting authority can receive direct runtime EXECUTE.
+Both execution blocks remain active; installed guards and restricted-role behavior still require separate database proof.
+These source changes do not change the Azure topology shown above.
+See the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
+and the [source-test boundary](../guide/testing).
+
 ## Network and acceptance checks
 
 The canonical Identity PostgreSQL grant definition includes the four runtime

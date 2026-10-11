@@ -48,7 +48,7 @@ public static class CoordinationOwnerMigrator
             while (await reader.ReadAsync(cancellationToken))
                 applied.Add(reader.GetInt32(0));
 
-        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20)) ||
+        if (applied.Any(version => version is not (>= 1 and <= 16) and not (18 or 19 or 20 or 21)) ||
             (applied.Contains(2) && !applied.Contains(1)) ||
             (applied.Contains(3) && !applied.Contains(2)) ||
             (applied.Contains(4) && !applied.Contains(3)) ||
@@ -66,9 +66,10 @@ public static class CoordinationOwnerMigrator
             (applied.Contains(16) && !applied.Contains(15)) ||
             (applied.Contains(18) && !applied.Contains(15)) ||
             (applied.Contains(19) && !applied.Contains(15)) ||
-            (applied.Contains(20) && !applied.Contains(19)))
+            (applied.Contains(20) && !applied.Contains(19)) ||
+            (applied.Contains(21) && !applied.Contains(20)))
             throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.");
-        foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20])
+        foreach (var version in Enumerable.Range(1, 16).Concat([18, 19, 20, 21])
             .Where(version => !applied.Contains(version)))
         {
             var migrationName = version switch
@@ -92,6 +93,7 @@ public static class CoordinationOwnerMigrator
                 18 => "reviewed_remote_tool_snapshots",
                 19 => "session_suspend_resume",
                 20 => "maf_buildtest_workspace_seed",
+                21 => "row_lock_record_updates",
                 _ => throw new InvalidOperationException("Unsupported Orchestrator coordination schema version.")
             };
             var filename = version == 10 ? $"{migrationName}.sql" : $"{version:000}_{migrationName}.sql";
@@ -139,7 +141,7 @@ public static class CoordinationOwnerMigrator
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 14),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 15),
                 (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 19),
-                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20)),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version NOT IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21)),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 1),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version = 2),
                 (SELECT count(*) FROM {quotedSchema}.outbox_schema_migrations WHERE version NOT IN (1, 2)),
@@ -201,7 +203,18 @@ public static class CoordinationOwnerMigrator
                     WHERE tgrelid = to_regclass(@reviewedRemoteToolSnapshots)
                         AND tgname = 'reviewed_remote_tool_snapshots_immutable'
                         AND tgfoid = to_regprocedure(@snapshotMutationFunction)
-                        AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal)
+                        AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal),
+                (SELECT count(*) FROM {quotedSchema}.coordination_schema_migrations WHERE version = 21) = 1,
+                EXISTS (SELECT 1 FROM pg_catalog.pg_trigger
+                    WHERE tgrelid = to_regclass(@decisions) AND tgname = 'coordinator_decisions_no_update'
+                      AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 19
+                      AND tgenabled = 'O' AND NOT tgisinternal
+                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0),
+                EXISTS (SELECT 1 FROM pg_catalog.pg_trigger
+                    WHERE tgrelid = to_regclass(@checkpoints) AND tgname = 'maf_workflow_checkpoints_no_update'
+                      AND tgfoid = to_regprocedure(@updateGuard) AND tgtype = 19
+                      AND tgenabled = 'O' AND NOT tgisinternal
+                      AND tgattr = ''::int2vector AND tgqual IS NULL AND tgnargs = 0)
             """, connection);
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
@@ -231,6 +244,7 @@ public static class CoordinationOwnerMigrator
             "mafExecutionOutputWitnesses", NpgsqlDbType.Text, $"{schema}.maf_execution_output_witnesses");
         command.Parameters.AddWithValue(
             "sessionConsistencyManifests", NpgsqlDbType.Text, $"{schema}.session_consistency_manifests");
+        command.Parameters.AddWithValue("updateGuard", NpgsqlDbType.Text, $"{schema}.reject_row_lock_record_update()");
         command.Parameters.AddWithValue(
             "treeCommands", NpgsqlDbType.Text, $"{schema}.coordination_tree_commands");
         command.Parameters.AddWithValue(
@@ -274,7 +288,7 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
-            Enumerable.Range(57, 7).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(57, 10).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }
