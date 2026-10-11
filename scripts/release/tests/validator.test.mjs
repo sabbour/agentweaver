@@ -4,6 +4,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { createPlan } from '../plan.mjs';
+import { preparationFiles } from '../preparation.mjs';
 import { validateFile, validateManifest } from '../validate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -150,12 +152,12 @@ test('the Orchestrator host is registered as a baseline service with all project
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
     .map(({ dependency, versions }) => [dependency, versions]), [
-    ['Agentweaver.Identity', ['0.0.0']],
-    ['Agentweaver.Orchestrator.Core', ['0.0.0']],
-    ['Agentweaver.Abstractions', ['0.0.0']],
-    ['Agentweaver.Persistence.Postgres', ['0.0.0']],
-    ['Agentweaver.Providers', ['0.0.0']],
-    ['Agentweaver.SourceControl', ['0.0.0']],
+    ['Agentweaver.Identity', ['0.0.0', '0.1.0']],
+    ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0']],
+    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0']],
+    ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0']],
+    ['Agentweaver.Providers', ['0.0.0', '0.1.0']],
+    ['Agentweaver.SourceControl', ['0.0.0', '0.1.0']],
   ]);
   assert.equal(check(fixture).stage, 'draft');
 });
@@ -184,13 +186,52 @@ test('the initial P0 NuGet baseline contains exactly the eight packages at 0.0.0
   const packages = fixture.components.filter(({ id }) => packageIds.includes(id));
   assert.deepEqual(packages.map(({ id }) => id).sort(), packageIds);
   assert.ok(packages.every(({ version }) => version === '0.0.0'));
-  assert.ok(fixture.compatibility.every(({ versions }) => versions.length === 1 && versions[0] === '0.0.0'));
+  assert.ok(fixture.compatibility.every(({ versions }) => versions[0] === '0.0.0'));
 
   const baseline = JSON.parse(readFileSync(path.join(root, 'releases', 'initial-baseline.json'), 'utf8'));
   assert.equal(baseline.baselineVersion, '0.0.0');
   assert.deepEqual([...baseline.components].sort(), packageIds);
   assert.ok(!baseline.components.includes('Agentweaver.Orchestrator.Core'));
   assert.equal(baseline.changeset, '.changeset/initial-p0-baseline-1825.md');
+});
+
+test('draft dependency declarations allow pure version preparation without changing source code or pins', () => {
+  const manifestText = readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8');
+  const readSource = file => readFileSync(path.join(root, file), 'utf8');
+  const plan = createPlan(fixture, { root });
+  const plannedVersions = new Map(plan.components.map(({ id, toVersion }) => [id, toVersion]));
+  for (const { dependency, versions } of fixture.compatibility) {
+    const planned = plannedVersions.get(dependency);
+    assert.deepEqual(versions, planned === '0.1.0' ? ['0.0.0', planned] : ['0.0.0']);
+  }
+  assert.equal(validateManifest(fixture, { root }).stage, 'draft');
+  const prepared = preparationFiles(manifestText, plan, '2026-10-11T00:00:00.000Z', readSource);
+  const expectedPaths = plan.components.map(({ id }) =>
+    fixture.components.find(component => component.id === id).project);
+  if (expectedPaths.includes('apps/web/package.json')) expectedPaths.push('apps/web/package-lock.json');
+  assert.deepEqual([...prepared.files.keys()].sort(), [...expectedPaths, 'releases/CHANGELOG.md'].sort());
+  for (const { id, fromVersion, toVersion } of plan.components) {
+    const { project } = fixture.components.find(component => component.id === id);
+    const original = readSource(project);
+    if (project.endsWith('.csproj')) {
+      assert.equal(prepared.files.get(project),
+        original.replace(`<Version>${fromVersion}</Version>`, `<Version>${toVersion}</Version>`));
+    } else {
+      const originalPackage = JSON.parse(original);
+      assert.deepEqual(JSON.parse(prepared.files.get(project)), { ...originalPackage, version: toVersion });
+      const originalLock = JSON.parse(readSource('apps/web/package-lock.json'));
+      originalLock.version = toVersion;
+      originalLock.packages[''].version = toVersion;
+      assert.deepEqual(JSON.parse(prepared.files.get('apps/web/package-lock.json')), originalLock);
+    }
+  }
+  const preparedManifest = JSON.parse(prepared.manifestText);
+  assert.equal(preparedManifest.stage, 'draft');
+  assert.deepEqual(preparedManifest.compatibility, fixture.compatibility);
+  assert.deepEqual(preparedManifest.components, fixture.components.map(component => ({
+    ...component, version: plannedVersions.get(component.id) ?? component.version,
+  })));
+  assert.equal(readSource('releases/foundation.json'), manifestText);
 });
 
 test('the CLI accepts the checked-in composition and JSON schema is parseable', () => {
