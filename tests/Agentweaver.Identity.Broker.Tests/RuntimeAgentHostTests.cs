@@ -162,31 +162,8 @@ public sealed class RuntimeAgentHostTests
         await using var source = new HostFixture(workflowBound: true);
         await using var target = new HostFixture(workflowBound: true);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        source.PositionIncrement = 2;
-
-        var request = await CreateResumeBootstrapRequestAsync(source, target, timeout.Token);
-        source.PrepareResumeJournal(request.Resume.SourceRelease.HostReceipt, includeVisibleAncestor: true);
+        var request = await PrepareResumeTargetAsync(source, target, timeout.Token);
         var sourceCache = request.Resume.SourceManifest.CacheAcknowledgment!;
-        target.UseResumeBootstrap(request);
-        var resumedPlacement = request.Resume.RestoredWorkspace!.Placement;
-        target.Readiness = source.Readiness with
-        {
-            Placement = resumedPlacement with
-            {
-                RuntimeOwnerContext = resumedPlacement.RuntimeOwnerContext! with
-                {
-                    ExecutionFence = request.Registration.Binding.ExecutionFence
-                }
-            },
-            Observation = source.Readiness.Observation with
-            {
-                Resource = resumedPlacement.Resource,
-                FencingGeneration = resumedPlacement.ProviderFencingGeneration
-            },
-            WorkspaceMountPath = target.WorkingDirectory
-        };
-        target.ImportResumeSourceFrom(source, sourceCache.EventId);
-        target.SessionEventPageSize = 2;
 
         var readiness = await target.ConfigureAsync(timeout.Token);
         var receipt = readiness.ResumeCache
@@ -218,6 +195,75 @@ public sealed class RuntimeAgentHostTests
         var writtenCache = Assert.Single(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
         Assert.NotEqual(sourceCache.EventId, writtenCache.EventId);
         Assert.NotEmpty(writtenCache.Bytes);
+    }
+
+    [Theory]
+    [InlineData("events-unauthorized", "runtime_owner_denied")]
+    [InlineData("events-forbidden", "runtime_owner_denied")]
+    [InlineData("events-transport", "transport")]
+    [InlineData("cursor-repeated", "runtime_journal_cursor_invalid")]
+    [InlineData("cursor-no-progress", "runtime_journal_cursor_invalid")]
+    [InlineData("material-bytes", "runtime_material_read_invalid")]
+    [InlineData("material-reference", "runtime_journal_turn_invalid")]
+    [InlineData("material-hash", "runtime_material_read_invalid")]
+    [InlineData("material-provenance", "runtime_journal_turn_invalid")]
+    public async Task ResumeJournalProducerFailuresPreventReadinessAndNativeSessionCreation(
+        string fault, string expectedFailure)
+    {
+        await using var source = new HostFixture(workflowBound: true);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var request = await PrepareResumeTargetAsync(source, target, timeout.Token);
+        target.ResumeFault = fault;
+        if (fault == "material-provenance")
+            target.ResumeProvenanceRuntimeInstanceId = Guid.NewGuid();
+
+        var failure = await Record.ExceptionAsync(() => target.ConfigureAsync(timeout.Token));
+
+        if (expectedFailure == "transport")
+            Assert.IsType<HttpRequestException>(failure);
+        else
+            Assert.Equal(expectedFailure, Assert.IsType<RuntimeAuthorizationException>(failure).Code);
+
+        var cache = request.Resume.SourceManifest.CacheAcknowledgment!;
+        Assert.Equal(cache.EventId, Assert.Single(target.ResumeCacheReads));
+        Assert.NotEmpty(target.ResumeEventRequests);
+        Assert.DoesNotContain(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
+        Assert.DoesNotContain(target.Sdk.Requests,
+            item => item.Method is "session.create" or "session.resume" or "session.send");
+        var readinessFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(
+            () => target.Host.ReadinessAsync(timeout.Token));
+        Assert.Equal("runtime_host_not_ready", readinessFailure.Code);
+    }
+
+    private static async Task<RuntimeResumeBootstrapRequest> PrepareResumeTargetAsync(
+        HostFixture source, HostFixture target, CancellationToken token)
+    {
+        source.PositionIncrement = 2;
+        var request = await CreateResumeBootstrapRequestAsync(source, target, token);
+        source.PrepareResumeJournal(request.Resume.SourceRelease.HostReceipt, includeVisibleAncestor: true);
+        var cache = request.Resume.SourceManifest.CacheAcknowledgment!;
+        target.UseResumeBootstrap(request);
+        var resumedPlacement = request.Resume.RestoredWorkspace!.Placement;
+        target.Readiness = source.Readiness with
+        {
+            Placement = resumedPlacement with
+            {
+                RuntimeOwnerContext = resumedPlacement.RuntimeOwnerContext! with
+                {
+                    ExecutionFence = request.Registration.Binding.ExecutionFence
+                }
+            },
+            Observation = source.Readiness.Observation with
+            {
+                Resource = resumedPlacement.Resource,
+                FencingGeneration = resumedPlacement.ProviderFencingGeneration
+            },
+            WorkspaceMountPath = target.WorkingDirectory
+        };
+        target.ImportResumeSourceFrom(source, cache.EventId);
+        target.SessionEventPageSize = 2;
+        return request;
     }
 
     [Fact]
@@ -1587,6 +1633,8 @@ public sealed class RuntimeAgentHostTests
         public int PositionIncrement { get; set; } = 1;
         public int SessionEventPageSize { get; set; } = 100;
         public ConcurrentQueue<string> MaterialWriteRoutes { get; } = new();
+        public ConcurrentQueue<Guid> ResumeCacheReads { get; } = new();
+        public ConcurrentQueue<string> ResumeEventRequests { get; } = new();
         public ConcurrentQueue<RuntimeUsageSourceReceipt> Usage { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnBeginRequest> NativeAdmissions { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnObservationRequest> NativeObservations { get; } = new();
@@ -1606,6 +1654,8 @@ public sealed class RuntimeAgentHostTests
         public Func<CancellationToken, Task>? BeforeAccounting { get; set; }
         public bool FailAccounting { get; set; }
         public bool MaterialPromptCapacityChanged { get; set; }
+        public string? ResumeFault { get; set; }
+        public Guid? ResumeProvenanceRuntimeInstanceId { get; set; }
         public Action<SessionMaterialWriteRequest>? AfterMaterialWrite { get; set; }
         public Action<SessionMaterialReadResult>? AfterMaterialRead { get; set; }
         public Guid? MissingMaterialId { get; set; }
@@ -2013,6 +2063,15 @@ public sealed class RuntimeAgentHostTests
             }
             if (path.EndsWith("/events", StringComparison.Ordinal))
             {
+                ResumeEventRequests.Enqueue(path);
+                if (ResumeFault == "events-unauthorized")
+                    return Response(request, new { }, HttpStatusCode.Unauthorized);
+                if (ResumeFault == "events-forbidden")
+                    return Response(request, new { }, HttpStatusCode.Forbidden);
+                if (ResumeFault == "events-transport")
+                    throw new HttpRequestException("Controlled Events transport failure.");
+                if (ResumeFault == "cursor-no-progress")
+                    return Response(request, new SessionEventPage([], "1", true));
                 var after = 0L;
                 foreach (var part in request.RequestUri.Query.TrimStart('?')
                              .Split('&', StringSplitOptions.RemoveEmptyEntries))
@@ -2024,12 +2083,33 @@ public sealed class RuntimeAgentHostTests
                 }
                 var page = SessionEvents.Where(item => item.Position > after)
                     .Take(SessionEventPageSize + 1).ToArray();
+                if (ResumeFault == "material-provenance")
+                {
+                    var runtimeInstanceId = ResumeProvenanceRuntimeInstanceId
+                        ?? throw new InvalidOperationException("A forged resume material binding is required.");
+                    page = page.Select(item => item.Payload is TurnSessionPayload turn
+                        ? CreateEnvelope(item.Identity, item.Position, item.EventId,
+                            turn with
+                            {
+                                Content = turn.Content with
+                                {
+                                    Material = turn.Content.Material! with
+                                    {
+                                        RuntimeInstanceId = runtimeInstanceId
+                                    }
+                                }
+                            })
+                        : item).ToArray();
+                }
                 var hasMore = page.Length > SessionEventPageSize;
                 if (hasMore)
                     page = page[..SessionEventPageSize];
                 var cursor = page.Length == 0
                     ? null
                     : page[^1].Position.ToString(CultureInfo.InvariantCulture);
+                if (ResumeFault == "cursor-repeated" && after > 0 && SessionEvents.Length > SessionEventPageSize)
+                    cursor = SessionEvents.Take(SessionEventPageSize).Last().Position
+                        .ToString(CultureInfo.InvariantCulture);
                 return Response(request, new SessionEventPage(page.ToImmutableArray(), cursor, hasMore));
             }
             if (path == "/internal/runtime/resume/configuration")
@@ -2083,10 +2163,67 @@ public sealed class RuntimeAgentHostTests
             if (path.Contains("/material/", StringComparison.Ordinal))
             {
                 var id = Guid.Parse(path.Split('/')[5]);
+                if (path.EndsWith("/SdkCache", StringComparison.Ordinal))
+                    ResumeCacheReads.Enqueue(id);
                 if (id == MissingMaterialId || !_material.TryGetValue(id, out var recorded))
                     return Response(request, new { }, HttpStatusCode.NotFound);
                 AfterMaterialRead?.Invoke(recorded);
-                return Response(request, recorded);
+                var result = recorded;
+                if (path.EndsWith("/TurnContent", StringComparison.Ordinal))
+                {
+                    var material = recorded.Material;
+                    var reference = material.Reference;
+                    var binding = reference.Material!;
+                    result = ResumeFault switch
+                    {
+                        "material-bytes" => recorded with
+                        {
+                            Bytes = CorruptFirstByte(recorded.Bytes)
+                        },
+                        "material-reference" => recorded with
+                        {
+                            Material = material with
+                            {
+                                Reference = reference with
+                                {
+                                    Key = new ObjectKey(Guid.NewGuid().ToString("N"))
+                                }
+                            }
+                        },
+                        "material-hash" => recorded with
+                        {
+                            Material = material with
+                            {
+                                Reference = reference with
+                                {
+                                    Material = binding with
+                                    {
+                                        Sha256 = binding.Sha256[0] == 'a'
+                                            ? 'b' + binding.Sha256[1..]
+                                            : 'a' + binding.Sha256[1..]
+                                    }
+                                }
+                            }
+                        },
+                        "material-provenance" => recorded with
+                        {
+                            Material = material with
+                            {
+                                Reference = reference with
+                                {
+                                    Material = binding with
+                                    {
+                                        RuntimeInstanceId = ResumeProvenanceRuntimeInstanceId
+                                            ?? throw new InvalidOperationException(
+                                                "A forged resume material binding is required.")
+                                    }
+                                }
+                            }
+                        },
+                        _ => recorded
+                    };
+                }
+                return Response(request, result);
             }
             throw new InvalidOperationException("Unexpected fixture owner route: " + path);
         }
@@ -2100,6 +2237,12 @@ public sealed class RuntimeAgentHostTests
                 RequestMessage = request, Content = JsonContent.Create(body, options: Json),
                 Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
             };
+        private static byte[] CorruptFirstByte(byte[] bytes)
+        {
+            var corrupted = bytes.ToArray();
+            corrupted[0] ^= 1;
+            return corrupted;
+        }
         private static SessionEventEnvelope CreateEnvelope(
             SessionIdentity identity,
             long position,

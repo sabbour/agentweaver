@@ -235,6 +235,7 @@ At a confirmed idle boundary, the runtime captures opaque SDK cache bytes throug
 Recovery compares session scope, accepted selection, model reference, model ID, prompt-capacity pin, SDK version, and runtime version.
 A compatible cache uses the actual SDK resume call.
 A missing, incompatible, or corrupt cache rebuilds conversation context from authenticated journal content.
+Each recovered TURN read must match its journal reference and the runtime, revision, fence, selection, SDK/runtime, model, and prompt-capacity binding in the source cache acknowledgment.
 Recovery does not replay model turns, tools, or external effects.
 Cancellation waits for the native abort idle event; a failed abort prevents another turn or cache capture.
 
