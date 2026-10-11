@@ -7,12 +7,14 @@ import test from 'node:test';
 import { packComponentsFromFile } from '../pack.mjs';
 import { publishArtifacts } from '../publish.mjs';
 import { resolveProbeImageSource } from '../../azure/build-foundation-probe-image.mjs';
+import { addAgentHostSource, agentHostComponent, agentHostDockerFixture } from './agenthost-fixture.mjs';
+import { measureAgentHostArchiveSync } from '../measure-agenthost-image.mjs';
 
 const webBaseImage = `mcr.microsoft.com/dotnet/aspnet@sha256:${'a'.repeat(64)}`;
 const webImageId = `sha256:${'c'.repeat(64)}`;
 
 function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageXml,
-  foundationProbe = false, probeVersion = '0.0.1', web = false } = {}) {
+  foundationProbe = false, probeVersion = '0.0.1', web = false, agenthost = false } = {}) {
   const parent = path.resolve('artifacts', 'release-tests');
   mkdirSync(parent, { recursive: true });
   const root = mkdtempSync(path.join(parent, 'publication-'));
@@ -27,11 +29,12 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   if (web) components.push({
     id: 'Agentweaver.Web', kind: 'service', version: '0.1.0', project: 'apps/web/package.json',
   });
+  if (agenthost) components.push(agentHostComponent);
   const manifest = { schemaVersion: 1, stage: 'draft', components, compatibility: [] };
   mkdirSync(path.join(root, 'releases'));
   writeFileSync(path.join(root, 'releases', 'foundation.json'), JSON.stringify(manifest));
   for (const component of components) {
-    if (component.id === 'Agentweaver.Web') continue;
+    if (component.id === 'Agentweaver.Web' || component.id === 'Agentweaver.AgentHost') continue;
     const directory = path.dirname(path.join(root, component.project));
     mkdirSync(directory, { recursive: true });
     writeFileSync(path.join(root, component.project), `<Project><PropertyGroup><Version>${component.version}</Version>${
@@ -74,6 +77,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
     mkdirSync(path.join(root, 'infra', 'bicep'), { recursive: true });
     writeFileSync(path.join(root, 'infra', 'bicep', 'main.bicep'), "targetScope = 'resourceGroup'\n");
   }
+  if (agenthost) addAgentHostSource(root);
   writeFileSync(path.join(root, '.gitignore'), 'artifacts/\napps/web/node_modules/\napps/web/dist/\n.env.*.local\n');
   git('init', '-q');
   git('config', 'core.autocrlf', 'false');
@@ -81,6 +85,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'source');
   const calls = [];
   const outDir = path.join(root, 'artifacts', 'release', 'pack');
+  const agentHostDocker = agenthost ? agentHostDockerFixture(root) : undefined;
   const prepare = (override = {}) => packComponentsFromFile(path.join(root, 'releases', 'foundation.json'), {
     root, outDir,
     dotnet: (args) => {
@@ -130,6 +135,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
         return '';
       },
     } : {}),
+    ...(agenthost ? { docker: agentHostDocker } : {}),
     ...override,
   });
   const env = {
@@ -168,6 +174,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   };
   const publish = (options = {}) => {
     const external = options.run ?? ((bin, args) => {
+      if (agenthost && bin === 'docker' && ['image', 'run'].includes(args[0])) return agentHostDocker(args);
       if (bin === 'docker' && args[0] === 'image' && args[1] === 'inspect') {
         return JSON.stringify({
           Id: webImageId,
@@ -194,7 +201,153 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
       },
     });
   };
-  return { root, outDir, prepare, publish, calls, sourceSha, github, tags, refs, remoteCalls, externalCalls, env };
+  return { root, outDir, prepare, publish, calls, sourceSha, github, tags, refs, remoteCalls, externalCalls, env, agentHostDocker };
+}
+
+test('AgentHost publication remeasures both archives and checks loaded pinned runtime before registry login', t => {
+  const f = fixture(t, { service: false, agenthost: true });
+  const provenance = f.prepare();
+  const artifact = provenance.artifacts.find(item => item.componentId === 'Agentweaver.AgentHost');
+  const receipt = f.publish();
+  const load = f.externalCalls.findIndex(({ bin, args }) => bin === 'docker' && args[0] === 'load');
+  const runtime = f.externalCalls.findIndex(({ bin, args }) => bin === 'docker' && args[0] === 'run');
+  const login = f.externalCalls.findIndex(({ bin, args }) => bin === 'docker' && args[0] === 'login');
+  const tag = f.externalCalls.find(({ bin, args }) => bin === 'docker' && args[0] === 'tag');
+  assert.ok(load >= 0 && runtime > load && login > runtime);
+  assert.equal(tag.args[1], artifact.imageId);
+  assert.equal(tag.args[2], 'registry.example.invalid/agentweaver-agenthost:0.1.0');
+  const published = receipt.published.find(item => item.id === 'Agentweaver.AgentHost');
+  assert.equal(published.archiveSha256, artifact.sha256);
+  assert.equal(published.ociArchiveSha256, artifact.ociArchive.sha256);
+  assert.equal(published.imageConfigDigest, artifact.imageId);
+  assert.deepEqual(published.preparedOciMeasurement, provenance.components.find(item =>
+    item.id === 'Agentweaver.AgentHost').build.measurement);
+  assert.equal(receipt.status, 'published');
+});
+
+for (const [name, change] of [
+  ['missing Docker archive record', (record) => { delete record.build.archives.docker; }],
+  ['missing OCI archive record', (record) => { delete record.build.archives.oci; }],
+  ['Docker archive hash', (record) => { record.build.archives.docker.sha256 = 'e'.repeat(64); }],
+  ['OCI archive hash', (record) => { record.build.archives.oci.sha256 = 'e'.repeat(64); }],
+  ['Docker archive size', (record) => { record.build.archives.docker.size++; }],
+  ['OCI archive size', (record) => { record.build.archives.oci.size++; }],
+  ['Docker image-config identity', (record) => { record.build.archives.docker.configDigest = `sha256:${'e'.repeat(64)}`; }],
+  ['OCI image-config identity', (record) => { record.build.archives.oci.configDigest = `sha256:${'e'.repeat(64)}`; }],
+  ['measured pull bytes', (record) => { record.build.measurement.image.compressedPullBytes++; }],
+  ['source tree', (record) => { record.source.sourceTree = 'e'.repeat(40); }],
+  ['source file bytes', (record) => { record.source.files[0].sha256 = 'e'.repeat(64); }],
+  ['pinned runtime', (record) => { record.build.runtime.runtimeVersion = 'unverified'; }],
+]) {
+  test(`AgentHost publication rejects altered ${name} before remote operations`, t => {
+    const f = fixture(t, { service: false, agenthost: true });
+    f.prepare();
+    const file = path.join(f.outDir, 'provenance.json');
+    const provenance = JSON.parse(readFileSync(file));
+    change(provenance.components.find(item => item.id === 'Agentweaver.AgentHost'));
+    writeFileSync(file, JSON.stringify(provenance));
+    assert.throws(() => f.publish(), /AgentHost image:/);
+    assert.equal(f.externalCalls.length, 0);
+    assert.equal(f.remoteCalls.length, 0);
+  });
+}
+
+for (const suffix of ['tar', 'oci.tar']) {
+  for (const change of ['missing', 'changed']) {
+    test(`AgentHost publication rejects ${change} ${suffix} archive before remote operations`, t => {
+      const f = fixture(t, { service: false, agenthost: true });
+      f.prepare();
+      const file = path.join(f.outDir, `Agentweaver.AgentHost.0.1.0.${suffix}`);
+      if (change === 'missing') rmSync(file);
+      else writeFileSync(file, 'changed archive bytes');
+      assert.throws(() => f.publish());
+      assert.equal(f.externalCalls.length, 0);
+      assert.equal(f.remoteCalls.length, 0);
+    });
+  }
+}
+
+for (const change of ['size', 'source', 'tree', 'version']) {
+  test(`AgentHost publication independently rejects OCI ${change} evidence before registry login`, t => {
+    const f = fixture(t, { service: false, agenthost: true });
+    f.prepare();
+    const docker = agentHostDockerFixture(f.root, { change });
+    docker(['buildx', 'build', '--output', `type=oci,dest=${path.join(f.outDir, 'Agentweaver.AgentHost.0.1.0.oci.tar')}`]);
+    const file = path.join(f.outDir, 'provenance.json');
+    const provenance = JSON.parse(readFileSync(file));
+    const archiveBytes = readFileSync(path.join(f.outDir, 'Agentweaver.AgentHost.0.1.0.oci.tar'));
+    const archiveHash = createHash('sha256').update(archiveBytes).digest('hex');
+    const record = provenance.components.find(item => item.id === 'Agentweaver.AgentHost');
+    const artifact = provenance.artifacts.find(item => item.componentId === 'Agentweaver.AgentHost');
+    record.build.archives.oci.sha256 = artifact.ociArchive.sha256 = archiveHash;
+    record.build.archives.oci.size = artifact.ociArchive.size = archiveBytes.length;
+    writeFileSync(file, JSON.stringify(provenance));
+    assert.throws(() => f.publish());
+    assert.equal(f.externalCalls.length, 0);
+    assert.equal(f.remoteCalls.length, 0);
+  });
+}
+
+test('AgentHost publication rejects archives that change after byte measurement', t => {
+  const f = fixture(t, { service: false, agenthost: true });
+  f.prepare();
+  assert.throws(() => f.publish({
+    measureAgentHostArchive(archive, root) {
+      const measured = measureAgentHostArchiveSync(archive, root);
+      writeFileSync(archive, 'changed after actual measurement');
+      return measured;
+    },
+  }), /archive changed during measurement/);
+  assert.equal(f.externalCalls.length, 0);
+  assert.equal(f.remoteCalls.length, 0);
+});
+
+test('AgentHost publication rejects archives changed during loaded runtime verification before login', t => {
+  const f = fixture(t, { service: false, agenthost: true });
+  f.prepare();
+  assert.throws(() => f.publish({
+    run(bin, args) {
+      assert.equal(bin, 'docker');
+      const result = f.agentHostDocker(args);
+      if (args[0] === 'run')
+        writeFileSync(path.join(f.outDir, 'Agentweaver.AgentHost.0.1.0.tar'), 'changed during loaded runtime check');
+      return result;
+    },
+  }), /archive changed during measurement/);
+  assert.equal(f.externalCalls.some(({ args }) => ['login', 'push'].includes(args[0])), false);
+});
+
+for (const [name, changeImage, changeRuntime] of [
+  ['image identity', image => ({ ...image, Id: `sha256:${'e'.repeat(64)}` })],
+  ['source label', image => {
+    image.Config.Labels['org.opencontainers.image.revision'] = 'e'.repeat(40);
+    return image;
+  }],
+  ['tree label', image => {
+    image.Config.Labels['io.agentweaver.source-tree'] = 'e'.repeat(40);
+    return image;
+  }],
+  ['runtime version', undefined, status => ({ ...status, runtimeVersion: 'unverified' })],
+  ['SDK version', undefined, status => ({ ...status, sdkVersion: 'unverified' })],
+  ['native protocol', undefined, status => ({ ...status, ProtocolVersion: 2 })],
+  ['native distribution', undefined, status => ({ ...status, nativeDistribution: '/state/native' })],
+  ['private package cache', undefined, status => ({ ...status, privatePackageCacheAbsent: false })],
+]) {
+  test(`AgentHost publication rejects loaded ${name} before registry login or push`, t => {
+    const f = fixture(t, { service: false, agenthost: true });
+    f.prepare();
+    assert.throws(() => f.publish({
+      run(bin, args) {
+        assert.equal(bin, 'docker');
+        const result = f.agentHostDocker(args);
+        if (args[0] === 'image' && changeImage) return JSON.stringify(changeImage(JSON.parse(result)));
+        if (args[0] === 'run' && changeRuntime) return JSON.stringify(changeRuntime(JSON.parse(result)));
+        return result;
+      },
+    }), /AgentHost image:/);
+    assert.equal(f.externalCalls.some(({ bin, args }) => bin === 'docker' && ['login', 'push'].includes(args[0])), false);
+    assert.equal(JSON.parse(readFileSync(path.join(f.outDir, 'publication.json'))).status, 'partial');
+  });
 }
 
 test('prepares locked packages and unpublished service images without a registry push or fake digest', (t) => {

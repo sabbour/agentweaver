@@ -16,6 +16,11 @@ import {
   WEB_PROJECT_PATH,
 } from './validate.mjs';
 import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
+import {
+  AGENTHOST_ID, AGENTHOST_PROJECT, AGENTHOST_DOCKERFILE,
+  readAgentHostSource, agentHostArchiveMetadata, verifyAgentHostArchives, verifyAgentHostMeasurement, verifyLoadedAgentHostImage,
+} from './agenthost-image.mjs';
+import { measureAgentHostArchiveSync } from './measure-agenthost-image.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sha = /^[a-f0-9]{40}$/;
@@ -23,6 +28,7 @@ const sha = /^[a-f0-9]{40}$/;
 export function componentImageRepository(componentId) {
   if (componentId === 'Agentweaver.FoundationProbe') return 'agentweaver-foundation-probe';
   if (componentId === 'Agentweaver.Web') return 'agentweaver-web';
+  if (componentId === AGENTHOST_ID) return 'agentweaver-agenthost';
   return componentId.toLowerCase();
 }
 
@@ -62,6 +68,7 @@ function defaultDocker(root) {
   return (args, cwd = root) => {
     const result = spawnSync(process.env.DOCKER_HOST_PATH || 'docker', args, {
       cwd, stdio: ['ignore', 'pipe', 'inherit'],
+      ...(args[0] === 'run' ? { timeout: 60_000 } : {}),
     });
     if (result.error) fail('docker', `failed to launch "docker ${args.join(' ')}": ${result.error.message}`);
     if (result.status !== 0) fail('docker', `"docker ${args.join(' ')}" exited with code ${result.status}`);
@@ -247,6 +254,7 @@ export function packComponents(manifest, {
   dotnet = defaultDotnet(root),
   npm,
   docker,
+  measureAgentHostArchive = measureAgentHostArchiveSync,
   environment = process.env,
   readdirSync: readdir = readdirSync,
   readFileSync: readFile = readFileSync,
@@ -291,6 +299,9 @@ export function packComponents(manifest, {
   const locks = new Map();
   const webSources = new Map();
   const webBuilds = new Map();
+  const agentHostSources = new Map();
+  const agentHostBuilds = new Map();
+  const auxiliaryArchives = new Set();
   for (const component of components) {
     if (component.project === WEB_PROJECT_PATH) {
       if (component.id !== 'Agentweaver.Web' || component.kind !== 'service') {
@@ -361,6 +372,20 @@ export function packComponents(manifest, {
     git('cat-file', '-e', `${sourceSha}:${component.project}`);
     git('cat-file', '-e', `${sourceSha}:${lockPath}`);
     locks.set(component.id, { path: lockPath, sha256: hashFile(lock, readFile) });
+    if (component.id === AGENTHOST_ID || component.project === AGENTHOST_PROJECT) {
+      if (component.id !== AGENTHOST_ID || component.project !== AGENTHOST_PROJECT || component.kind !== 'service')
+        fail(component.project, 'only the AgentHost service may use its native Dockerfile preparation');
+      const source = readAgentHostSource(root, sourceSha, git);
+      const tag = `${component.version.replaceAll('+', '_')}-${sourceSha}`;
+      if (tag.length > 128) fail(component.id, 'version-derived Docker tag exceeds the 128-character limit');
+      agentHostSources.set(component.id, source);
+      auxiliaryArchives.add(`${component.id}.${component.version}.oci.tar`);
+      expectedArtifacts.set(`${component.id}.${component.version}.tar`, {
+        componentId: component.id, kind: 'image', repository: componentImageRepository(component.id),
+        tag, imageReference: `${componentImageRepository(component.id)}:${tag}`, platform: 'linux/amd64',
+      });
+      continue;
+    }
     if (component.kind === 'service') {
       const xml = readFile(project, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
       const baseImages = [...xml.matchAll(/<ContainerBaseImage\b[^>]*>([^<]*)<\/ContainerBaseImage\s*>/g)];
@@ -383,6 +408,53 @@ export function packComponents(manifest, {
   mkdirImpl(resolvedOutDir, { recursive: true });
 
   for (const component of components) {
+    if (component.id === AGENTHOST_ID) {
+      const source = agentHostSources.get(component.id);
+      const contextDir = path.join(resolvedOutDir, '.agenthost-context');
+      const dockerPath = `${component.id}.${component.version}.tar`;
+      const ociPath = `${component.id}.${component.version}.oci.tar`;
+      const artifact = expectedArtifacts.get(dockerPath);
+      if (status().trim() !== '' || git('rev-parse', 'HEAD') !== sourceSha ||
+          JSON.stringify(readAgentHostSource(root, sourceSha, git)) !== JSON.stringify(source))
+        fail('git', 'AgentHost inputs changed before image preparation');
+      try {
+        verifyPinnedBaseImages(source.baseImages, runDocker, root);
+        for (const file of source.files) {
+          const destination = path.join(contextDir, file.path);
+          mkdirImpl(path.dirname(destination), { recursive: true });
+          writeFileImpl(destination, readFile(path.resolve(root, file.path)));
+        }
+        runDocker([
+          'buildx', 'build', '--pull=false', '--no-cache', '--platform', 'linux/amd64',
+          '--file', AGENTHOST_DOCKERFILE, '--tag', artifact.imageReference, '--load',
+          '--output', `type=oci,dest=${path.join(resolvedOutDir, ociPath)}`,
+          '--provenance=false', '--sbom=false',
+          '--label', `org.opencontainers.image.revision=${sourceSha}`,
+          '--label', `io.agentweaver.source-tree=${source.sourceTree}`,
+          '--label', `org.opencontainers.image.version=${component.version}`, '.',
+        ], contextDir);
+        const ociArchive = agentHostArchiveMetadata(path.join(resolvedOutDir, ociPath), ociPath);
+        const measured = measureAgentHostArchive(path.join(resolvedOutDir, ociPath), root);
+        verifyAgentHostMeasurement(measured, source, component.version);
+        runDocker(['save', '--output', path.join(resolvedOutDir, dockerPath), artifact.imageReference]);
+        const archives = {
+          docker: agentHostArchiveMetadata(path.join(resolvedOutDir, dockerPath), dockerPath, measured.image.configDigest),
+          oci: { ...ociArchive, configDigest: measured.image.configDigest },
+        };
+        runDocker(['load', '--input', path.join(resolvedOutDir, dockerPath)]);
+        const runtime = verifyLoadedAgentHostImage(artifact.imageReference, measured, source, component.version, runDocker);
+        verifyAgentHostArchives(archives, resolvedOutDir);
+        artifact.imageId = measured.image.configDigest;
+        artifact.ociArchive = archives.oci;
+        agentHostBuilds.set(component.id, {
+          tool: 'docker-buildx', dockerfile: AGENTHOST_DOCKERFILE, imageReference: artifact.imageReference,
+          imageId: measured.image.configDigest, archives, measurement: measured, runtime,
+        });
+      } finally {
+        rmSync(contextDir, { recursive: true, force: true });
+      }
+      continue;
+    }
     if (component.project === WEB_PROJECT_PATH) {
       const webDir = path.resolve(root, 'apps', 'web');
       const distDir = path.join(webDir, 'dist');
@@ -538,13 +610,18 @@ export function packComponents(manifest, {
 
   const producedFiles = listFilesRecursive(resolvedOutDir, readdir, stat).sort();
   if (producedFiles.length === 0) fail('pack', 'dotnet pack produced no artifacts');
+  if (agentHostBuilds.has(AGENTHOST_ID)) verifyAgentHostArchives(agentHostBuilds.get(AGENTHOST_ID).archives, resolvedOutDir);
 
-  const artifacts = producedFiles.map((file) => ({
-    path: path.relative(resolvedOutDir, file).replaceAll('\\', '/'),
-    sha256: hashFile(file, readFile),
-    size: stat(file).size,
-    ...expectedArtifacts.get(path.relative(resolvedOutDir, file).replaceAll('\\', '/')),
-  }));
+  const artifacts = producedFiles.filter(file =>
+    !auxiliaryArchives.has(path.relative(resolvedOutDir, file).replaceAll('\\', '/'))).map(file => {
+    const relativePath = path.relative(resolvedOutDir, file).replaceAll('\\', '/');
+    const expected = expectedArtifacts.get(relativePath);
+    const dockerArchive = expected?.componentId === AGENTHOST_ID ? agentHostBuilds.get(AGENTHOST_ID).archives.docker : undefined;
+    return {
+      path: relativePath, sha256: dockerArchive?.sha256 ?? hashFile(file, readFile),
+      size: dockerArchive?.size ?? stat(file).size, ...expected,
+    };
+  });
 
   const provenance = {
     schemaVersion: 1,
@@ -555,6 +632,7 @@ export function packComponents(manifest, {
     components: components.map(({ id, kind, version, project }) => ({
       id, kind, version, project, lock: locks.get(id),
       ...(webSources.has(id) ? { source: webSources.get(id), build: webBuilds.get(id) } : {}),
+      ...(agentHostSources.has(id) ? { source: agentHostSources.get(id), build: agentHostBuilds.get(id) } : {}),
     })),
     artifacts,
   };
