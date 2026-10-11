@@ -12,6 +12,12 @@ if (args.Length > 0 && args[0] == Agentweaver.Abstractions.SandboxBuildTestLimit
     return;
 }
 
+if (args.Length > 0 && args[0] == Agentweaver.Abstractions.SandboxBuildTestLimits.WorkspaceCollectorMode)
+{
+    Environment.ExitCode = await BuildTestOutputCollectorProgram.RunWorkspaceAsync(args[1..]);
+    return;
+}
+
 if (args.SequenceEqual(["--verify-native-runtime"]))
 {
     var verified = NativeRuntimeManifest.ReadAndVerify(AppContext.BaseDirectory);

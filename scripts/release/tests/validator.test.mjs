@@ -26,6 +26,7 @@ const projectReferences = new Map([
   ]],
   ['Agentweaver.AgentHost', [
     '..\\..\\..\\packages\\Agentweaver.AgentRuntime\\Agentweaver.AgentRuntime.csproj',
+    '..\\..\\..\\packages\\Agentweaver.SourceControl\\Agentweaver.SourceControl.csproj',
     '..\\..\\..\\packages\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj',
   ]],
   ['Agentweaver.Telemetry.AzureMonitor', ['..\\Agentweaver.Telemetry\\Agentweaver.Telemetry.csproj']],
@@ -126,6 +127,19 @@ test('a library component may be checked in under services', () => {
   assert.equal(orchestrator.kind, 'library');
   assert.ok(orchestrator.project.startsWith('services/'));
   assert.equal(check(fixture).stage, 'draft');
+});
+
+test('the AgentHost collector dependency is present in the fixture and still required by validation', () => {
+  const host = fixture.components.find(component => component.id === 'Agentweaver.AgentHost');
+  const project = projects.get(host.project);
+  const withoutSourceControl = project.replace(
+    /<ProjectReference Include="[^"]*Agentweaver\.SourceControl\.csproj" \/>/, '');
+  assert.notEqual(withoutSourceControl, project);
+  assert.equal(check(fixture).stage, 'draft');
+  assert.throws(() => check(fixture, {
+    readProject: file => path.relative(root, file).replaceAll('\\', '/') === host.project
+      ? withoutSourceControl : readProject(file),
+  }), /Agentweaver\.AgentHost.*Agentweaver\.SourceControl.*has no ProjectReference/);
 });
 
 test('the Orchestrator host is registered as a baseline service with all project dependencies pinned', () => {

@@ -239,6 +239,106 @@ public sealed class SandboxBuildTestCommandContractTests
         Assert.NotEqual(original, changedBinding.ComputeRequestFingerprint(fixture.Command));
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void CollectorRequestPermitsEmptyOutputsOnlyForExplicitVersionTwo(int? commandVersion)
+    {
+        var request = CreateCollectorRequest(CreateFixture()) with
+        {
+            AcceptedCommandContractVersion = commandVersion,
+            Outputs = []
+        };
+        if (commandVersion == 2)
+            Assert.Empty(request.Validate().Outputs);
+        else
+            Assert.Throws<ArgumentException>(() => request.Validate());
+        Assert.Throws<ArgumentException>(() => (request with { Outputs = default }).Validate());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    public void CollectorRequestRejectsUnknownAcceptedCommandVersions(int commandVersion)
+    {
+        var request = CreateCollectorRequest(CreateFixture()) with
+        {
+            AcceptedCommandContractVersion = commandVersion
+        };
+        Assert.Throws<ArgumentException>(() => request.Validate());
+    }
+
+    [Fact]
+    public void VersionOneCollectorRequestRetainsItsHistoricalSerializedShape()
+    {
+        var request = CreateCollectorRequest(CreateFixture());
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var actual = JsonSerializer.SerializeToElement(request.Validate(), options);
+        var historical = JsonSerializer.SerializeToElement(new
+        {
+            request.OperationId,
+            request.ImmutableHash,
+            request.RequestFingerprint,
+            request.Checkpoint,
+            request.WorkspaceMountPath,
+            request.MaximumTotalBytes,
+            request.Outputs
+        }, options);
+
+        Assert.True(JsonElement.DeepEquals(historical, actual));
+        Assert.Null(JsonSerializer.Deserialize<SandboxBuildTestOutputCollectorRequest>(
+            actual.GetRawText(), options)!.AcceptedCommandContractVersion);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void VersionTwoWorkspaceRequestPermitsEmptyOutputsForPreparationAndCapture(bool preparing)
+    {
+        var command = SeedCommand() with { Outputs = [] };
+        command = command with { ImmutableHash = command.ComputeImmutableHash() };
+        var request = new SandboxBuildTestBindingPreparation.SandboxBuildTestWorkspaceRequest(
+            command.OperationId, command.ImmutableHash,
+            CreateFixture().Request.ComputeRequestFingerprint(command),
+            command.Checkpoint, command.WorkspaceSource!, "/workspace", preparing, []);
+
+        Assert.Empty(request.Validate().Outputs);
+        Assert.Throws<ArgumentException>(() => (request with { Outputs = default }).Validate());
+        Assert.Throws<ArgumentException>(() =>
+            (request with { Source = request.Source with { ContractVersion = 1 } }).Validate());
+        Assert.Throws<ArgumentException>(() =>
+            (request with { Checkpoint = request.Checkpoint with { ProjectId = "other" } }).Validate());
+    }
+
+    [Fact]
+    public void EmptyVersionTwoCollectorRequestKeepsReceiptVersionAndExactBindingChecks()
+    {
+        var request = CreateCollectorRequest(CreateFixture()) with
+        {
+            AcceptedCommandContractVersion = 2,
+            Outputs = []
+        };
+        var pod = new SandboxBuildTestPodReference("sandbox", "collector-pod", "collector-uid", "17");
+        var receipt = new SandboxBuildTestOutputCollectorReceipt(
+            1, request.OperationId, request.ImmutableHash, request.RequestFingerprint, request.Checkpoint,
+            pod.Uid, SandboxBuildTestLimits.OutputCollectorContainerName, [], string.Empty);
+        receipt = receipt with
+        {
+            ManifestSha256 = SandboxBuildTestOutputCollectorCanonicalization.ComputeManifestSha256(receipt)
+        };
+
+        Assert.Equal(1, receipt.Validate(request, pod).ContractVersion);
+        Assert.Throws<ArgumentException>(() =>
+            receipt.Validate(request with { AcceptedCommandContractVersion = null }, pod));
+        Assert.Throws<ArgumentException>(() =>
+            receipt.Validate(request with { AcceptedCommandContractVersion = 1 }, pod));
+        Assert.Throws<ArgumentException>(() =>
+            receipt.Validate(request, pod with { Uid = "other" }));
+        Assert.Throws<ArgumentException>(() =>
+            (receipt with { RequestFingerprint = new string('f', 64) }).Validate(request, pod));
+    }
+
     [Fact]
     public void CollectorReceiptCanReportMissingRequiredOutputForServerClassification()
     {
@@ -656,7 +756,7 @@ public sealed class SandboxBuildTestCommandContractTests
             output,
             null,
             null,
-            fixture.Command.Outputs.IsEmpty ? null : collectorPolicy,
+            fixture.Command.Outputs.IsEmpty && fixture.Command.WorkspaceSource is null ? null : collectorPolicy,
             null,
             [],
             null,

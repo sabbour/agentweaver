@@ -11,7 +11,7 @@ using Agentweaver.Providers.Storage.AzureFiles;
 
 namespace Agentweaver.Environment;
 
-public sealed class EnvironmentSandboxBuildTestCommandManager(
+public sealed partial class EnvironmentSandboxBuildTestCommandManager(
     EnvironmentEgressManager egressManager,
     IEnvironmentLifecycleStore lifecycleStore,
     ISandboxLeaseStore leaseStore,
@@ -286,7 +286,7 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
             ?? throw new EnvironmentLifecycleException(
                 "buildtest_policy_invalid",
                 "The expected command-network-policy binding could not be created.");
-        var collectorPolicy = acceptedCommand.Outputs.IsEmpty
+        var collectorPolicy = acceptedCommand.Outputs.IsEmpty && acceptedCommand.WorkspaceSource is null
             ? null
             : CreatePolicyDefinition(
                 acceptedCommand.OperationId,
@@ -490,6 +490,14 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
             return state;
 
         providerRequest = CreateProviderRequest(state);
+        if (acceptedCommand.WorkspaceSource is not null)
+        {
+            state = await PrepareNativeWorkspaceAsync(caller, projectId, runId, environmentId,
+                request, acceptedCommand, state, cancellationToken).ConfigureAwait(false);
+            if (state.Operation.WorkspacePreparation is null || IsTerminal(state.Operation.Status) ||
+                state.Operation.Status == SandboxBuildTestOperationStatus.ReconciliationRequired)
+                return state;
+        }
         var commandPod = state.Operation.Pod
             ?? throw new EnvironmentLifecycleException(
                 "buildtest_record_invalid",
@@ -508,7 +516,7 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
             commandObservation,
             cancellationToken).ConfigureAwait(false);
         if (state.Operation.Status != SandboxBuildTestOperationStatus.Running ||
-            acceptedCommand.Outputs.IsEmpty ||
+            acceptedCommand.Outputs.IsEmpty && acceptedCommand.WorkspaceSource is null ||
             commandObservation.State != SandboxBuildTestPodState.Succeeded ||
             commandObservation.Terminal is not { Kind: SandboxBuildTestTerminationKind.Exited, ExitCode: 0 })
             return state;
@@ -565,6 +573,9 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
             return state;
 
         providerRequest = CreateProviderRequest(state);
+        if (acceptedCommand.WorkspaceSource is not null)
+            return await CaptureNativeWorkspaceAsync(caller, projectId, runId, environmentId,
+                request, acceptedCommand, state, commandObservation, cancellationToken).ConfigureAwait(false);
         var collectorPod = state.Operation.CollectorPod
             ?? throw new EnvironmentLifecycleException(
                 "buildtest_record_invalid",
@@ -957,7 +968,7 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
                 },
                 cancellationToken).ConfigureAwait(false);
 
-        if (acceptedCommand.Outputs.IsEmpty)
+        if (acceptedCommand.Outputs.IsEmpty && acceptedCommand.WorkspaceSource is null)
             return await SaveOperationAsync(
                 state,
                 operation with
@@ -1121,7 +1132,10 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
             acceptedCommand.Checkpoint,
             workspaceMountPath,
             acceptedCommand.ExecutionOptions.MaximumFileOutputBytes,
-            acceptedCommand.Outputs).Validate();
+            acceptedCommand.Outputs)
+        {
+            AcceptedCommandContractVersion = acceptedCommand.ContractVersion == 2 ? 2 : null
+        }.Validate();
 
     private static string GetPolicyUid(
         SandboxBuildTestOperationSnapshot operation,

@@ -10,7 +10,7 @@ using Xunit;
 
 namespace Agentweaver.SourceControl.Tests;
 
-public sealed class GitWorkspaceManagerTests
+public sealed partial class GitWorkspaceManagerTests
 {
     [Theory]
     [InlineData(false)]

@@ -160,6 +160,11 @@
       "versions": ["0.0.0"]
     },
     {
+      "consumer": "Agentweaver.AgentHost",
+      "dependency": "Agentweaver.SourceControl",
+      "versions": ["0.0.0"]
+    },
+    {
       "consumer": "Agentweaver.AgentRuntime",
       "dependency": "Agentweaver.Abstractions",
       "versions": ["0.0.0"]

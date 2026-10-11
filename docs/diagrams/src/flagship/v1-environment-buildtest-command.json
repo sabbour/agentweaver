@@ -1,54 +1,57 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Environment BuildTest accepted command and output collection",
-  "alt": "Authenticated dispatch locates an existing Source Control workspace. The Source Control owner creates verified repository input from the current run pin. Core keeps the confirmed command unchanged and saves the separate source input and exact seed in the original checkpoint before reservation. Retry reuses saved input. Environment resolves immutable command metadata, reads bounded raw input from the fixed Core owner, verifies length and digest, and rechecks the owner before reservation. Environment saves the stable operation before provider effects. A gated command Pod runs under an offline policy; verified exit zero starts a separate read-only collector. The collector returns a bounded file receipt tied to its Pod UID and request fingerprint. Core retains checkpoint and run-state ownership. Provider preparation and complete output export remain unconnected.",
+  "title": "BuildTest repository preparation and output admission",
+  "alt": "Core saves the accepted seed before Environment reserves one operation. The trusted native init container prepares the exact repository before the command runs. A separate read-only collector seals the full baseline and declared output bytes from the prepared native path. Environment stores exact preparation and capture references, not file bytes. Core uses retained Source Control bytes and the existing Events journal acknowledgment. Environment verifies that canonical acknowledgment through Core before deleting the exact native Pods. Core then commits the terminal receipt under current owner checks. Retries do not restart the command or replace sealed bytes. This figure describes source behavior, not native Kubernetes acceptance.",
   "autonumber": true,
   "participants": [
     {
       "id": "environment",
-      "label": "Environment owner",
-      "subLabel": "Authorization, durable intent, and reconciliation",
+      "label": "Environment / Workspace",
+      "subLabel": "Saved intent, exact volume, and Cilium policy",
       "icon": "server",
       "fluentIcon": "api",
       "badge": { "text": "Owner", "tone": "neutral" }
     },
     {
       "id": "admission-core",
-      "label": "Projects / Orchestrator Core",
-      "subLabel": "Fresh authority and immutable MAF acceptance",
+      "label": "Projects / Core",
+      "subLabel": "Current authority and accepted input",
       "icon": "key",
       "fluentIcon": "identity",
       "badge": { "text": "Authority / state", "tone": "lavender" }
     },
     {
-      "id": "workspace-egress",
-      "label": "Workspace / Cilium",
-      "subLabel": "Exact PVC and role-scoped policy generations",
-      "icon": "route",
-      "fluentIcon": "network",
-      "badge": { "text": "Inputs", "tone": "teal" }
-    },
-    {
       "id": "execution",
       "label": "Agent Sandbox / Kubernetes",
-      "subLabel": "Gated Pods and pinned AgentHost collector",
+      "subLabel": "Command and read-only collector Pods",
       "icon": "bot",
       "fluentIcon": "window",
       "badge": { "text": "Provider", "tone": "teal" }
+    },
+    {
+      "id": "output-owner",
+      "label": "Source Control / Events",
+      "subLabel": "Saved bytes and journal acknowledgment",
+      "icon": "server",
+      "fluentIcon": "api",
+      "badge": { "text": "Output owners", "tone": "neutral" }
     }
   ],
   "steps": [
     {
-      "type": "note",
-      "over": ["environment", "admission-core"],
-      "label": "Completed input allows later decisions; running input does not. Saved input, current owner checks, and workspace errors remain."
+      "type": "message",
+      "from": "admission-core",
+      "to": "output-owner",
+      "label": "Save the accepted repository seed",
+      "line": "solid",
+      "arrow": "filled"
     },
     {
       "type": "message",
       "from": "environment",
       "to": "admission-core",
-      "label": "Verify fresh WriteProjects/ReadRunSelection authority and resolve the complete checkpoint",
+      "label": "Check current authority and accepted input",
       "line": "solid",
       "arrow": "filled"
     },
@@ -56,49 +59,47 @@
       "type": "message",
       "from": "admission-core",
       "to": "environment",
-      "label": "Check the current Source Control pin. Return immutable execution metadata; no seed bytes in JSON",
+      "label": "Return verified metadata and bounded raw seed",
       "line": "dashed",
       "arrow": "open"
-    },
-    {
-      "type": "note",
-      "over": ["environment", "admission-core"],
-      "label": "Version 2: read bounded raw seed from the fixed Core owner. Verify length and digest, then recheck current metadata before reservation."
     },
     {
       "type": "message",
       "from": "environment",
       "to": "environment",
-      "label": "Persist accepted intent and fingerprint with PostgreSQL-precision UTC timestamps in owner_effects",
+      "label": "Recheck metadata; save one immutable operation",
       "line": "solid",
       "arrow": "filled"
-    },
-    {
-      "type": "note",
-      "over": ["environment", "workspace-egress"],
-      "label": "Before each effect, recheck authority, command metadata, lease, PVC, and network binding. Reuse the verified seed; do not fetch it again."
     },
     {
       "type": "message",
       "from": "environment",
-      "to": "workspace-egress",
-      "label": "Create and verify command-role, operation-scoped offline deny-all policy",
+      "to": "environment",
+      "label": "Verify exact volume and command-role offline policy",
       "line": "solid",
       "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "workspace-egress",
-      "to": "environment",
-      "label": "Bind the exact policy UID, spec hash, and generation",
-      "line": "dashed",
-      "arrow": "open"
     },
     {
       "type": "message",
       "from": "environment",
       "to": "execution",
-      "label": "Persist attempt, then create the accepted command Pod behind a scheduling gate",
+      "label": "Save attempt; create exact gated command Pod",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "execution",
+      "label": "Recheck bindings; release gate and send exact seed",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "execution",
+      "to": "execution",
+      "label": "Trusted init prepares repository, then command runs",
       "line": "solid",
       "arrow": "filled"
     },
@@ -106,15 +107,31 @@
       "type": "message",
       "from": "execution",
       "to": "environment",
-      "label": "Return exact Pod UID/resourceVersion and validated command container",
+      "label": "Return exact preparation receipt and terminal evidence",
       "line": "dashed",
       "arrow": "open"
     },
     {
       "type": "message",
       "from": "environment",
+      "to": "environment",
+      "label": "Verify separate collector-role offline policy",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
       "to": "execution",
-      "label": "Recheck bindings, then release the gate on the exact Pod",
+      "label": "Create separate gated collector; mount volume read-only",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "execution",
+      "to": "execution",
+      "label": "Read full baseline and declared output; seal bytes",
       "line": "solid",
       "arrow": "filled"
     },
@@ -122,66 +139,102 @@
       "type": "message",
       "from": "execution",
       "to": "environment",
-      "label": "Observe exact terminal evidence and bounded command output",
+      "label": "Return exact sealed document reference",
       "line": "dashed",
       "arrow": "open"
-    },
-    {
-      "type": "fragment",
-      "operator": "alt",
-      "label": "Required file outputs after verified command exit zero",
-      "sections": [
-        {
-          "label": "Collect trusted output evidence",
-          "steps": [
-            {
-              "type": "message",
-              "from": "environment",
-              "to": "workspace-egress",
-              "label": "Create a separate collector-role offline deny-all policy",
-              "line": "solid",
-              "arrow": "filled"
-            },
-            {
-              "type": "message",
-              "from": "environment",
-              "to": "execution",
-              "label": "Create a separate gated collector Pod with the exact Workspace PVC read-only",
-              "line": "solid",
-              "arrow": "filled"
-            },
-            {
-              "type": "message",
-              "from": "execution",
-              "to": "execution",
-              "label": "Read accepted paths with native no-follow flags and bounded reads on the read-only Workspace",
-              "line": "solid",
-              "arrow": "filled"
-            },
-            {
-              "type": "message",
-              "from": "execution",
-              "to": "environment",
-              "label": "Return bounded regular-file hashes and sizes with Pod UID, container, and request fingerprint",
-              "line": "dashed",
-              "arrow": "open"
-            }
-          ]
-        }
-      ]
     },
     {
       "type": "message",
       "from": "environment",
       "to": "environment",
-      "label": "Persist terminal metadata without seed bytes. Replay preserves evidence; reconciliation restores the exact verified seed after matching stored metadata.",
+      "label": "Save preparation and capture references, not bytes",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "admission-core",
+      "to": "environment",
+      "label": "Read document only if Source Control has no saved bytes",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "execution",
+      "label": "Export sealed bytes from exact Pod and prepared path",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "admission-core",
+      "label": "Return bounded binary; check digest, length, and owner",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "admission-core",
+      "to": "output-owner",
+      "label": "Validate full output; save pending bytes; admit to journal",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "output-owner",
+      "to": "admission-core",
+      "label": "Return admitted capture and saved journal position",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "admission-core",
+      "to": "environment",
+      "label": "Send exact acknowledgment for original operation",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "admission-core",
+      "label": "Verify admitted bytes, journal position, and current input",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "Save exact acknowledgment before cleanup",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "execution",
+      "label": "Delete exact collector and command Pod UIDs",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "admission-core",
+      "to": "admission-core",
+      "label": "Recheck proof in owner transaction; save terminal receipt",
       "line": "solid",
       "arrow": "filled"
     },
     {
       "type": "note",
       "over": ["environment", "admission-core"],
-      "label": "Logs are not file evidence. Missing required output is Failed; cancellation, timeout, and limits are Interrupted. Core acknowledges MAF interruption."
+      "label": "Version 2: retries keep sealed bytes and acknowledgment. Logs are not file evidence. Source behavior is not live acceptance."
     }
   ]
 }

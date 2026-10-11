@@ -48,6 +48,8 @@ public sealed class MafBuildTestExecutionTests
             {
                 Terminal = operation.Terminal! with { ExitCode = 1 }, FailureCode = "command_failed"
             };
+        if (status != SandboxBuildTestOperationStatus.Completed)
+            operation = operation with { WorkspaceCaptureAcknowledgment = null };
 
         Assert.Equal(taskStatus, MafBuildTestCommandContract.Classify(restored, operation));
         var completed = CoordinationEndpoints.PrepareBuildTestCompletionCheckpoint(
@@ -295,6 +297,106 @@ public sealed class MafBuildTestExecutionTests
         }
     }
 
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("short")]
+    [InlineData("long")]
+    [InlineData("digest")]
+    [InlineData("media-type")]
+    [InlineData("cache")]
+    [InlineData("length")]
+    public async Task NativeCaptureTransportRequiresExactBinaryBytesDigestLengthAndNoStore(string fault)
+    {
+        var intent = MafBuildTestCheckpointTests.SeedIntent();
+        var reference = Operation(intent).WorkspaceCapture!;
+        var bytes = new byte[checked((int)reference.DocumentByteLength)];
+        reference = reference with { DocumentSha256 = Convert.ToHexStringLower(SHA256.HashData(bytes)) };
+        var handler = new Handler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.EndsWith("/workspace-capture", request.RequestUri!.AbsolutePath);
+            Assert.Contains(intent.OperationId.ToString("D"), request.RequestUri.AbsolutePath);
+            Assert.True(request.Headers.CacheControl?.NoStore);
+            var response = new HttpResponseMessage(HttpStatusCode.OK);
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = fault != "cache" };
+            var changed = fault switch
+            {
+                "short" => bytes[..^1],
+                "long" => new byte[bytes.Length + 1],
+                "digest" => Enumerable.Repeat((byte)1, bytes.Length).ToArray(),
+                _ => bytes
+            };
+            response.Content = new ByteArrayContent(changed);
+            response.Content.Headers.ContentType = new(fault == "media-type" ? "text/plain" : "application/octet-stream");
+            if (fault == "length")
+                response.Content.Headers.ContentLength = bytes.Length + 1;
+            if (fault is "short" or "long")
+                response.Content.Headers.ContentLength = null;
+            return Task.FromResult(response);
+        });
+        using var http = new HttpClient(handler);
+        var client = new MafBuildTestEnvironmentClient(http, new(new("https://environment.test/")));
+        var credential = new SecretCredential("fixture-token", DateTimeOffset.UtcNow.AddMinutes(2), TimeProvider.System);
+        try
+        {
+            if (fault == "valid")
+                Assert.Equal(bytes, await client.ReadWorkspaceCaptureAsync(
+                    new(credential, "tenant-1"), intent, reference, CancellationToken.None));
+            else
+            {
+                var failure = await Assert.ThrowsAsync<CoordinationException>(() => client.ReadWorkspaceCaptureAsync(
+                    new(credential, "tenant-1"), intent, reference, CancellationToken.None));
+                Assert.Equal("maf_execution_build_test_owner_unavailable", failure.Code);
+            }
+        }
+        finally
+        {
+            credential.Invalidate();
+        }
+    }
+
+    [Fact]
+    public async Task LostOutputAcknowledgmentResponseRetriesTheSameOperationWithoutNativeExportOrCommandRestart()
+    {
+        var intent = MafBuildTestCheckpointTests.SeedIntent();
+        var operation = Operation(intent);
+        var acknowledgment = operation.WorkspaceCaptureAcknowledgment!;
+        var acknowledgments = 0;
+        var handler = new Handler(async request =>
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                Assert.EndsWith(intent.OperationId.ToString("D"), request.RequestUri!.AbsolutePath);
+                return Response(HttpStatusCode.OK, new SandboxBuildTestOperationResult(operation, true));
+            }
+            Assert.EndsWith("/workspace-capture/acknowledge", request.RequestUri!.AbsolutePath);
+            var body = await request.Content!.ReadFromJsonAsync<SandboxBuildTestWorkspaceCaptureAcknowledgmentRequest>(JsonOptions);
+            Assert.Equal(acknowledgment, body!.Capture);
+            Assert.Equal(intent.CheckpointReference(), body.Request.Checkpoint);
+            if (++acknowledgments == 1)
+                throw new HttpRequestException("The acknowledgment was saved, but its response was lost.");
+            return Response(HttpStatusCode.OK, new SandboxBuildTestOperationResult(operation, true));
+        });
+        using var http = new HttpClient(handler);
+        var client = new MafBuildTestEnvironmentClient(http, new(new("https://environment.test/")));
+        var credential = new SecretCredential("fixture-token", DateTimeOffset.UtcNow.AddMinutes(2), TimeProvider.System);
+        var actor = new RuntimeActorAuthorization(credential, "tenant-1");
+        try
+        {
+            await Assert.ThrowsAsync<CoordinationException>(() =>
+                client.AcknowledgeWorkspaceCaptureAsync(actor, intent, acknowledgment, CancellationToken.None));
+            var recovered = await client.ExecuteOrReconcileAsync(actor, intent, CancellationToken.None);
+            Assert.Equal(acknowledgment, recovered.WorkspaceCaptureAcknowledgment);
+            var replayed = await client.AcknowledgeWorkspaceCaptureAsync(actor, intent, acknowledgment, CancellationToken.None);
+            Assert.Equal(acknowledgment, replayed.WorkspaceCaptureAcknowledgment);
+            Assert.Equal(2, acknowledgments);
+        }
+        finally
+        {
+            credential.Invalidate();
+        }
+    }
+
     internal static SandboxBuildTestOperationSnapshot Operation(
         MafExecutionBuildTestIntent intent,
         byte[]? logBytes = null)
@@ -326,13 +428,36 @@ public sealed class MafBuildTestExecutionTests
             1, intent.OperationId, accepted.ImmutableHash, fingerprint, accepted.Checkpoint,
             collector.Uid, SandboxBuildTestLimits.OutputCollectorContainerName, [evidence], "");
         var manifest = SandboxBuildTestOutputCollectorCanonicalization.ComputeManifestSha256(receipt);
-        return new(intent.OperationId, accepted.ImmutableHash, fingerprint, SandboxBuildTestOperationStatus.Completed,
+        var operation = new SandboxBuildTestOperationSnapshot(intent.OperationId, accepted.ImmutableHash, fingerprint,
+            SandboxBuildTestOperationStatus.Completed,
             expected, commandPolicy,
             new(expected.Fence, expected.SandboxLeaseOperationId, expected.SandboxResource,
                 expected.ProviderFencingGeneration, expected.WorkspaceVolume, expected.DataGeneration,
                 expected.NetworkPolicyGeneration, commandPolicy),
             pod, terminal, output, collector, collectorTerminal, collectorPolicy, manifest, [evidence],
             null, start, start.AddSeconds(3));
+        if (accepted.WorkspaceSource is { } source)
+        {
+            evidence = evidence with { CollectorContainerName = SandboxBuildTestLimits.WorkspaceCaptureContainerName };
+            var reference = new SandboxBuildTestWorkspaceCaptureReference(
+                intent.OperationId, accepted.ImmutableHash, fingerprint, accepted.Checkpoint,
+                collector.Uid, source.PreparedRepositoryRelativePath, source.SeedSha256,
+                new string('a', 64), ProducedRunCaptureLimits.DocumentHeaderBytes + 128 + 23,
+                new string('b', 40), new string('c', 64), 128, new string('d', 64), 0, new string('e', 64), 23,
+                [evidence]);
+            operation = operation with
+            {
+                CollectorTerminal = null,
+                CollectorManifestSha256 = reference.ManifestSha256,
+                OutputEvidence = reference.Outputs,
+                WorkspacePreparation = new(intent.OperationId, accepted.ImmutableHash, fingerprint,
+                    accepted.Checkpoint, pod.Uid, source.PreparedRepositoryRelativePath,
+                    source.SeedSha256, source.BaselineTreeSha),
+                WorkspaceCapture = reference,
+                WorkspaceCaptureAcknowledgment = MafBuildTestSourceOutputTests.Acknowledgment(source, reference)
+            };
+        }
+        return operation;
 
         ImmutableDictionary<string, string> Labels(string role) =>
             ImmutableDictionary<string, string>.Empty.WithComparers(StringComparer.Ordinal)
@@ -345,8 +470,59 @@ public sealed class MafBuildTestExecutionTests
         {
             Status = SandboxBuildTestOperationStatus.Running,
             Terminal = null, CollectorPod = null, CollectorTerminal = null,
-            CollectorManifestSha256 = null, OutputEvidence = []
+            CollectorManifestSha256 = null, OutputEvidence = [],
+            WorkspaceCapture = null, WorkspaceCaptureAcknowledgment = null
         };
+
+    [Fact]
+    public void VersionTwoSuccessCannotAdvanceTheCheckpointBeforeTheDurableOutputAcknowledgment()
+    {
+        var intent = MafBuildTestCheckpointTests.SeedIntent();
+        var initial = new MafExecutionCheckpointSnapshot(new("root", "initial"),
+            new(1, "plan-1", 3, MafExecutionProgress.Empty));
+        var running = CoordinationEndpoints.PrepareBuildTestCheckpoint(initial, intent)!;
+        var operation = Operation(intent) with { WorkspaceCaptureAcknowledgment = null };
+
+        Assert.Equal(MafExecutionTaskStatus.Succeeded, MafBuildTestCommandContract.Classify(intent, operation));
+        Assert.Throws<ArgumentException>(() => CoordinationEndpoints.PrepareBuildTestCompletionCheckpoint(
+            new(new("root", intent.CheckpointId), running), intent, operation));
+        Assert.Equal(MafExecutionTaskStatus.Running, running.Progress.NonModelSteps[intent.StepId]);
+    }
+
+    [Theory]
+    [InlineData("preparation")]
+    [InlineData("capture")]
+    [InlineData("native-path")]
+    [InlineData("pod")]
+    [InlineData("position")]
+    [InlineData("actor")]
+    [InlineData("bytes")]
+    public void VersionTwoReceiptRejectsMissingOrChangedNativeSourceAndAcknowledgment(string fault)
+    {
+        var intent = MafBuildTestCheckpointTests.SeedIntent();
+        var receipt = MafBuildTestTerminalReceipt.Create(intent, Operation(intent));
+        var reference = receipt.WorkspaceCapture!;
+        var entry = receipt.WorkspaceCaptureAcknowledgment!;
+        receipt = fault switch
+        {
+            "preparation" => receipt with { WorkspacePreparation = null },
+            "capture" => receipt with { WorkspaceCapture = null },
+            "native-path" => receipt with
+            {
+                WorkspaceCapture = reference with { RepositoryRelativePath = "different-repository" }
+            },
+            "pod" => receipt with { WorkspaceCapture = reference with { PodUid = "different-pod" } },
+            "position" => receipt with { WorkspaceCaptureAcknowledgment = entry with { Position = 0 } },
+            "actor" => receipt with
+            {
+                WorkspaceCaptureAcknowledgment = entry with { Capture = entry.Capture with { ActorSubject = "other" } }
+            },
+            "bytes" => receipt with { WorkspaceCapture = reference with { PackageByteLength = reference.PackageByteLength + 1 } },
+            _ => throw new ArgumentOutOfRangeException(nameof(fault))
+        };
+
+        Assert.Throws<ArgumentException>(() => receipt.ValidateFor(intent));
+    }
 
     private static HttpResponseMessage Response(HttpStatusCode status, object? payload)
     {
