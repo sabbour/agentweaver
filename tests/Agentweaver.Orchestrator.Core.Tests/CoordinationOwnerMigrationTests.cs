@@ -29,54 +29,17 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
     [InlineData(13)]
     [InlineData(14)]
     [InlineData(15)]
+    [InlineData(16)]
+    [InlineData(18)]
+    [InlineData(19)]
+    [InlineData(20)]
     public async Task AdmittedSchemaAndNativeIntermediateVersionsUpgradeWithoutRewritingHistory(int version)
     {
-        string[] migrations =
-        [
-            "001_coordination_owner.sql",
-            "002_typed_decisions_and_checkpoints.sql",
-            "003_accepted_run_selection_context.sql",
-            "004_session_tree.sql",
-            "005_explicit_session_forks.sql",
-            "006_session_fork_admission.sql",
-            "007_execution_outcomes_and_recovery.sql",
-            "008_run_selection_context_versions.sql",
-            "009_runtime_owner_context.sql",
-            "runtime_registration.sql",
-            "011_runtime_usage_source.sql",
-            "012_source_control_owner.sql",
-            "013_source_control_github_app_pins.sql",
-            "014_source_control_output_captures.sql",
-            "015_maf_execution_evidence.sql"
-        ];
-        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
-        {
-            await using (var setup = new NpgsqlCommand($"""
-                CREATE TABLE "{_schema}".coordination_schema_migrations (
-                    version integer PRIMARY KEY,
-                    applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
-                )
-                """, connection))
-                await setup.ExecuteNonQueryAsync();
-            for (var index = 0; index < version; index++)
-            {
-                var resourceName = $"Agentweaver.Orchestrator.Migrations.{migrations[index]}";
-                await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(resourceName)
-                    ?? throw new InvalidOperationException($"Missing migration resource '{resourceName}'.");
-                using var reader = new StreamReader(resource);
-                var sql = (await reader.ReadToEndAsync()).Replace("{schema}", $"\"{_schema}\"", StringComparison.Ordinal);
-                await using var migration = new NpgsqlCommand(sql, connection);
-                await migration.ExecuteNonQueryAsync();
-                await using var record = new NpgsqlCommand($"""
-                    INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (@version)
-                    """, connection);
-                record.Parameters.AddWithValue("version", index + 1);
-                await record.ExecuteNonQueryAsync();
-            }
-        }
+        await ApplyMigrationsThroughAsync(version);
         var historyBefore = await ReadMigrationHistoryAsync(version);
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        if (version < 20)
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await AssertCurrentSchemaAsync();
@@ -84,27 +47,180 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
         await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
         await AssertCurrentSchemaAsync();
         Assert.Equal(historyBefore, await ReadMigrationHistoryAsync(version));
-        await using var verifyConnection = await fixture.DataSource.OpenConnectionAsync();
-        await using var verify = new NpgsqlCommand($"""
-            SELECT count(*) FROM "{_schema}".coordination_schema_migrations
-            """, verifyConnection);
-        Assert.Equal(17L, await verify.ExecuteScalarAsync());
     }
 
     [Fact]
-    public async Task RejectsUnregisteredSchemaVersion()
+    public async Task FreshInitializationAndExactReplayInstallAllRegisteredResources()
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await AssertCurrentSchemaAsync();
+        var history = await ReadMigrationHistoryAsync(int.MaxValue);
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await AssertCurrentSchemaAsync();
+        Assert.Equal(history, await ReadMigrationHistoryAsync(int.MaxValue));
+    }
+
+    [Theory]
+    [InlineData(19)]
+    [InlineData(20)]
+    public async Task ExistingSuspensionAndSeedSchemasInstallPreviouslyUnregisteredResources(int version)
+    {
+        await ApplyMigrationsThroughAsync(version, includePreviouslyUnregistered: false);
+        var history = await ReadMigrationHistoryAsync(version, includePreviouslyUnregistered: false);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        await AssertCurrentSchemaAsync();
+        Assert.Equal(history, await ReadMigrationHistoryAsync(version, includePreviouslyUnregistered: false));
+        var completeHistory = await ReadMigrationHistoryAsync(int.MaxValue);
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema);
+        Assert.Equal(completeHistory, await ReadMigrationHistoryAsync(int.MaxValue));
+    }
+
+    [Theory]
+    [InlineData(17)]
+    [InlineData(999)]
+    public async Task RejectsUnregisteredSchemaVersion(int version)
     {
         await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
         await using (var connection = await fixture.DataSource.OpenConnectionAsync())
         await using (var command = new NpgsqlCommand($"""
-            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (999)
+            INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (@version)
             """, connection))
+        {
+            command.Parameters.AddWithValue("version", version);
             await command.ExecuteNonQueryAsync();
+        }
 
+        var history = await ReadMigrationHistoryAsync(int.MaxValue);
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        Assert.Equal(history, await ReadMigrationHistoryAsync(int.MaxValue));
+    }
+
+    [Theory]
+    [InlineData(14)]
+    [InlineData(15)]
+    [InlineData(19)]
+    public async Task RejectsMissingPrerequisitesWithoutRewritingHistory(int missingVersion)
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"""
+            DELETE FROM "{_schema}".coordination_schema_migrations WHERE version = @version
+            """, connection))
+        {
+            command.Parameters.AddWithValue("version", missingVersion);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        }
+        var history = await ReadMigrationHistoryAsync(int.MaxValue);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+        Assert.Equal(history, await ReadMigrationHistoryAsync(int.MaxValue));
+    }
+
+    [Theory]
+    [InlineData("backlog_projects")]
+    [InlineData("backlog_tasks")]
+    [InlineData("backlog_dependencies")]
+    [InlineData("reviewed_remote_tool_snapshots")]
+    public async Task VerificationRequiresRegisteredTables(string table)
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand($"DROP TABLE \"{_schema}\".{table} CASCADE", connection))
+            await command.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
+    [Theory]
+    [InlineData("executable_action_grants", "source_control_intent_id")]
+    [InlineData("maf_workflow_checkpoints", "workspace_seed")]
+    public async Task VerificationRequiresColumnsWithoutDependingOnRuntimeTablePermissions(
+        string table, string column)
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(
+            $"ALTER TABLE \"{_schema}\".{table} DROP COLUMN {column} CASCADE", connection))
+            await command.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task VerificationRequiresTheEnabledSnapshotImmutabilityTrigger(bool drop)
+    {
+        await CoordinationOwnerMigrator.MigrateAsync(fixture.DataSource, _schema);
+        var sql = drop
+            ? $"DROP TRIGGER reviewed_remote_tool_snapshots_immutable ON \"{_schema}\".reviewed_remote_tool_snapshots"
+            : $"ALTER TABLE \"{_schema}\".reviewed_remote_tool_snapshots DISABLE TRIGGER reviewed_remote_tool_snapshots_immutable";
+        await using (var connection = await fixture.DataSource.OpenConnectionAsync())
+        await using (var command = new NpgsqlCommand(sql, connection))
+            await command.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CoordinationOwnerMigrator.VerifyAsync(fixture.DataSource, _schema));
+    }
+
+    private async Task ApplyMigrationsThroughAsync(int version, bool includePreviouslyUnregistered = true)
+    {
+        (int Version, string Filename)[] migrations =
+        [
+            (1, "001_coordination_owner.sql"),
+            (2, "002_typed_decisions_and_checkpoints.sql"),
+            (3, "003_accepted_run_selection_context.sql"),
+            (4, "004_session_tree.sql"),
+            (5, "005_explicit_session_forks.sql"),
+            (6, "006_session_fork_admission.sql"),
+            (7, "007_execution_outcomes_and_recovery.sql"),
+            (8, "008_run_selection_context_versions.sql"),
+            (9, "009_runtime_owner_context.sql"),
+            (10, "runtime_registration.sql"),
+            (11, "011_runtime_usage_source.sql"),
+            (12, "012_source_control_owner.sql"),
+            (13, "013_source_control_github_app_pins.sql"),
+            (14, "014_source_control_output_captures.sql"),
+            (15, "015_maf_execution_evidence.sql"),
+            (16, "016_project_backlog.sql"),
+            (18, "018_reviewed_remote_tool_snapshots.sql"),
+            (19, "019_session_suspend_resume.sql"),
+            (20, "020_maf_buildtest_workspace_seed.sql")
+        ];
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using (var setup = new NpgsqlCommand($"""
+            CREATE TABLE "{_schema}".coordination_schema_migrations (
+                version integer PRIMARY KEY,
+                applied_at timestamptz NOT NULL DEFAULT clock_timestamp()
+            )
+            """, connection))
+            await setup.ExecuteNonQueryAsync();
+        foreach (var migration in migrations.Where(item => item.Version <= version &&
+            (includePreviouslyUnregistered || item.Version is not (16 or 18))))
+        {
+            var resourceName = $"Agentweaver.Orchestrator.Migrations.{migration.Filename}";
+            await using var resource = typeof(CoordinationOwnerMigrator).Assembly.GetManifestResourceStream(resourceName)
+                ?? throw new InvalidOperationException($"Missing migration resource '{resourceName}'.");
+            using var reader = new StreamReader(resource);
+            var sql = (await reader.ReadToEndAsync()).Replace("{schema}", $"\"{_schema}\"", StringComparison.Ordinal);
+            await using var apply = new NpgsqlCommand(sql, connection);
+            await apply.ExecuteNonQueryAsync();
+            await using var record = new NpgsqlCommand($"""
+                INSERT INTO "{_schema}".coordination_schema_migrations (version) VALUES (@version)
+                """, connection);
+            record.Parameters.AddWithValue("version", migration.Version);
+            await record.ExecuteNonQueryAsync();
+        }
     }
 
     private async Task AssertCurrentSchemaAsync()
@@ -136,12 +252,26 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
                 (SELECT pg_get_constraintdef(oid) FROM pg_constraint
                  WHERE conrelid = to_regclass(@checkpoints) AND conname = 'fk_maf_checkpoint_parent'
                    AND contype = 'f' AND convalidated AND confrelid = to_regclass(@checkpoints)
-                   AND confdeltype = 'r')
+                   AND confdeltype = 'r'),
+                (SELECT array_agg(version ORDER BY version)
+                 FROM "{_schema}".coordination_schema_migrations),
+                to_regclass(@backlogProjects) IS NOT NULL,
+                to_regclass(@backlogTasks) IS NOT NULL,
+                to_regclass(@backlogDependencies) IS NOT NULL,
+                to_regclass(@snapshots) IS NOT NULL,
+                (SELECT count(*) FROM pg_trigger
+                 WHERE tgrelid = to_regclass(@snapshots)
+                   AND tgname = 'reviewed_remote_tool_snapshots_immutable'
+                   AND tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal)
             """, connection);
         command.Parameters.AddWithValue("schema", _schema);
         command.Parameters.AddWithValue("manifests", $"{_schema}.session_consistency_manifests");
         command.Parameters.AddWithValue("operations", $"{_schema}.coordination_execution_operations");
         command.Parameters.AddWithValue("checkpoints", $"{_schema}.maf_workflow_checkpoints");
+        command.Parameters.AddWithValue("backlogProjects", $"{_schema}.backlog_projects");
+        command.Parameters.AddWithValue("backlogTasks", $"{_schema}.backlog_tasks");
+        command.Parameters.AddWithValue("backlogDependencies", $"{_schema}.backlog_dependencies");
+        command.Parameters.AddWithValue("snapshots", $"{_schema}.reviewed_remote_tool_snapshots");
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(1L, reader.GetInt64(0));
@@ -163,16 +293,24 @@ public sealed class CoordinationOwnerMigrationTests(CoordinationPostgresFixture 
             "maf_workflow_checkpoints(project_id, run_id, session_id, store_name, checkpoint_id)",
             parentConstraint);
         Assert.EndsWith("ON DELETE RESTRICT", parentConstraint);
+        Assert.Equal(Enumerable.Range(1, 16).Concat([18, 19, 20]), reader.GetFieldValue<int[]>(9));
+        Assert.True(reader.GetBoolean(10));
+        Assert.True(reader.GetBoolean(11));
+        Assert.True(reader.GetBoolean(12));
+        Assert.True(reader.GetBoolean(13));
+        Assert.Equal(1L, reader.GetInt64(14));
     }
 
-    private async Task<string> ReadMigrationHistoryAsync(int version)
+    private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
             SELECT jsonb_agg(to_jsonb(m) ORDER BY version)::text
             FROM "{_schema}".coordination_schema_migrations m WHERE version <= @version
+                AND (@includePreviouslyUnregistered OR version NOT IN (16, 18))
             """, connection);
         command.Parameters.AddWithValue("version", version);
+        command.Parameters.AddWithValue("includePreviouslyUnregistered", includePreviouslyUnregistered);
         return (string)(await command.ExecuteScalarAsync())!;
     }
 }

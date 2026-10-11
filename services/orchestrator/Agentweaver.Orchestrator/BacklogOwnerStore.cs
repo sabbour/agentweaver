@@ -89,7 +89,8 @@ internal sealed class BacklogOwnerStore
         {
             await UpdateGraphRevisionAsync(connection, transaction, edit.Value.Graph, cancellationToken)
                 .ConfigureAwait(false);
-            await InsertTaskAsync(connection, transaction, edit.Value.Graph.Tasks[^1], cancellationToken)
+            await InsertTaskAsync(connection, transaction,
+                edit.Value.Graph.Tasks.Single(item => item.Reference.TaskId == task.TaskId), cancellationToken)
                 .ConfigureAwait(false);
         }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
