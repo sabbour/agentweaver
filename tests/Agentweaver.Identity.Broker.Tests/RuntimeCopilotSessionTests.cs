@@ -634,7 +634,7 @@ internal static class RuntimeCopilotSessionFactoryTestExtensions
         Func<CancellationToken, Task> requireCreationAuthority,
         CancellationToken cancellationToken,
         RuntimeSessionRecovery? recovery = null,
-        Func<string, ReadOnlyMemory<byte>, bool, CancellationToken, Task>? requireActionAuthority = null,
+        Func<RuntimeActionRequest, CancellationToken, Task>? requireActionAuthority = null,
         RuntimeMcpServerEndpoint? mcpServer = null)
     {
         var binding = registration.Binding;

@@ -221,13 +221,27 @@ The Orchestrator source writer requires that bearer and an independent observe c
 It checks the current registration, Core permission, accepted selection, active
 session and turn, Environment lease, and Identity grant after database waits.
 The actual SDK session supplies the effective model, catalog hash, SDK versions,
-event identity, and nullable measurements.
-The owner commits these values before it returns `RuntimeUsageSourceReceipt`.
-The receipt validator rejects changed owner, SDK, model, catalog, event, and selection pins.
+event identity, and nullable measurements. The pinned SDK does not provide a proven
+binding from usage events to an A2A send, so the runtime leaves `A2AMessageId` null
+rather than infer ownership from the active turn or event timestamps. Events accepts
+cost-turn evidence only when a source receipt's A2A ID exactly matches `CostTurnId`;
+unbound callbacks therefore cannot release the cost turn, including a callback from an
+earlier send that arrives during a later send. Null correlation is omitted from legacy
+source payloads, preserving their canonical hashes. The receipt validator rejects
+changed owner, SDK, model, catalog, event, and selection pins.
 
 Events requires current `ReadRunSelection` for the exact signed project/run.
 It resolves the meter source through the existing Cost catalog/resolver and pins
 the run's first Cost binding or explicit unavailable reason.
+Before runtime readiness, Events can preflight that immutable binding against the
+effective model from the current Orchestrator-owned SDK source snapshot. It uses
+the existing Cost provider quote path without recording usage or exposing the
+quote amount. An unavailable binding or quote remains `Unpriced` and prevents
+the runtime from becoming ready.
+The current SDK source also lacks proven usage-to-A2A affinity, so positive-hard-capped
+Hosted Copilot activation fails with `runtime_usage_affinity_unavailable` before readiness
+or cost-turn acquisition. Any already-started turn with unknown ownership remains held;
+its native receipt is retained and cannot release a cost turn without the exact message ID.
 The transaction commits the price, rate card, ledger, source hash, receipt, and
 consumer inbox before it returns a no-store accounting acknowledgment.
 It repeats current Core authority after transaction waits, including duplicate requests.
@@ -248,6 +262,12 @@ The snapshot endpoint rechecks current signed run authority before it commits.
 An optional dispatch ID and at most 512 required references request an observed accounting join.
 Events reads each immutable source receipt, accounting receipt, and ledger row in the same transaction.
 Each registration, SDK source, platform message, event, accounting hash, and stored price must match.
+An optional `NativeTurn` reference requires an authenticated read of Core's persisted native turn.
+Events reads that proof before taking the Cost lock and again after releasing it.
+The proof must retain the current registration, execution fence, checkpoint, report hash, revision, and exact event set.
+Only this verified association permits a raw usage receipt without a platform message ID.
+A wrong non-null message ID or an event after native completion fails.
+Without native proof, the existing exact raw-message check remains unchanged.
 The response returns only those verified references as `RepresentedReceipts`.
 Missing rows reject the join; altered references cannot substitute another receipt.
 Observed validation permits an explicit `Unpriced` receipt.

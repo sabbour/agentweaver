@@ -6,6 +6,35 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 
 public sealed class CoordinatorWorkflowCatalogTests
 {
+    [Fact]
+    public void DefaultWorkflowHasBoundedImplementationBeforeBuildTestGate()
+    {
+        using var snapshot = JsonDocument.Parse(
+            """{"projectConfiguration":{"blueprintWorkflowReferences":[]}}""");
+        var selection = new EffectiveRunSelection(
+            "project-1", "run-1", 1, 1, 1, "context-v1", snapshot.RootElement.Clone());
+
+        var catalog = CoordinatorWorkflowCatalog.ForSelection(selection);
+        var definition = WorkflowDefinitionValidator.ValidateAndSnapshot(catalog.DefaultWorkflow);
+
+        Assert.True(definition.IsValid, string.Join("; ", definition.Issues.Select(issue => issue.Message)));
+        Assert.Collection(
+            catalog.DefaultWorkflow.Steps,
+            implementation =>
+            {
+                Assert.Equal("implementation", implementation.Id);
+                Assert.Equal(WorkflowStepMode.Open, implementation.Mode);
+                Assert.Equal(new WorkflowCardinality(0, 8), implementation.Cardinality);
+            },
+            buildTest =>
+            {
+                Assert.Equal("build-test", buildTest.Id);
+                Assert.Equal(WorkflowStepMode.Platform, buildTest.Mode);
+                Assert.Equal(WorkflowPlatformGate.BuildTest, buildTest.PlatformGate);
+                Assert.Equal(new[] { "implementation" }, buildTest.DependsOn.ToArray());
+            });
+    }
+
     [Theory]
     [InlineData(60)]
     [InlineData(86400)]
@@ -75,11 +104,16 @@ public sealed class CoordinatorWorkflowCatalogTests
     [InlineData("maxPromptTokens", 1023)]
     [InlineData("maxPromptTokens", 200001)]
     [InlineData("maxRevisionAttempts", -1)]
-    public void RuntimeNumericRunPoliciesRejectValuesOutsideProjectsBounds(string propertyName, int value)
+    public void RuntimeNumericRunPoliciesRejectValuesOutsideProjectsBounds(
+        string propertyName,
+        int value)
     {
         using var selection = JsonDocument.Parse(JsonSerializer.Serialize(new
         {
-            runLimits = new Dictionary<string, int>(StringComparer.Ordinal) { [propertyName] = value }
+            runLimits = new Dictionary<string, int>(StringComparer.Ordinal)
+            {
+                [propertyName] = value
+            }
         }));
 
         var failure = Assert.Throws<CoordinationException>(() =>

@@ -25,6 +25,8 @@ public sealed record RuntimeUsageCostSnapshotRequest(
 {
     public Guid? DispatchId { get; init; }
     public ImmutableArray<RuntimeUsageCostReceiptReference> RequiredReceipts { get; init; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeNativeTurnRecordedReceipt? NativeTurn { get; init; }
 }
 
 public sealed record RuntimeUsageCostSnapshotReceipt(
@@ -73,6 +75,8 @@ public static class RuntimeUsageCostSnapshotContract
                 throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
             RuntimeContractValidation.ValidateHash(accounting.CanonicalPayloadHash);
         }
+        if (request.NativeTurn is { } recorded)
+            RuntimeNativeTurnContract.ValidateAccountingSnapshot(request, recorded);
     }
 
     public static void ValidateObservedReceipt(

@@ -28,6 +28,50 @@ public sealed record RuntimeSdkSourceReceipt(
     DateTimeOffset RecordedAt);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeUsageCostPreflightRequest(int ContractVersion = 1);
+
+public sealed record RuntimeUsageCostPreflightReceipt(
+    int ContractVersion,
+    Guid RuntimeInstanceId,
+    long RegistrationRevision,
+    long ExecutionFence,
+    string ModelSelectionReference,
+    string ModelId,
+    string MeterSource,
+    string AcceptedSelectionHash,
+    string SourceReceiptHash,
+    CostBinding? Binding,
+    bool IsPriced,
+    string? UnpricedReason);
+
+public static class RuntimeUsageCostPreflightContract
+{
+    public static void Validate(RuntimeUsageCostPreflightReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        if (receipt.ContractVersion != 1 || receipt.RuntimeInstanceId == Guid.Empty ||
+            receipt.RegistrationRevision < 1 || receipt.ExecutionFence < 1 ||
+            receipt.SourceReceiptHash is null ||
+            receipt.SourceReceiptHash.Length != 64 ||
+            !receipt.SourceReceiptHash.All(Uri.IsHexDigit) ||
+            receipt.AcceptedSelectionHash is null ||
+            receipt.AcceptedSelectionHash.Length != 64 ||
+            !receipt.AcceptedSelectionHash.All(Uri.IsHexDigit))
+            throw new RuntimeAuthorizationException("runtime_cost_preflight_invalid");
+        RuntimeContractValidation.ValidateIdentifier(receipt.ModelSelectionReference);
+        RuntimeContractValidation.ValidateIdentifier(receipt.MeterSource);
+        if (string.IsNullOrWhiteSpace(receipt.ModelId) || receipt.ModelId.Length > 512 ||
+            receipt.ModelId.Any(character => char.IsControl(character) || char.IsWhiteSpace(character)) ||
+            receipt.IsPriced != (receipt.Binding is not null && receipt.UnpricedReason is null) ||
+            !receipt.IsPriced && string.IsNullOrWhiteSpace(receipt.UnpricedReason) ||
+            receipt.Binding is { } binding &&
+                (binding.MeterSource != receipt.MeterSource || binding.RateCard is null ||
+                 binding.RateCard.MeterSource != receipt.MeterSource))
+            throw new RuntimeAuthorizationException("runtime_cost_preflight_invalid");
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeTurnBeginRequest(
     RuntimeCredentialHttpRequest Authorization, RuntimeA2ASendRequest Message, SdkSessionFacts Source)
 {
@@ -101,16 +145,30 @@ public static class RuntimeNativeTurnContract
         var admission = recorded.Admission;
         var request = new RuntimeUsageCostSnapshotRequest(1, admission.Registration, admission.Source)
         {
-            DispatchId = admission.MessageId, RequiredReceipts = references
+            DispatchId = admission.MessageId, RequiredReceipts = references, NativeTurn = recorded
         };
         RuntimeUsageCostSnapshotContract.ValidateRequest(request);
+        return request;
+    }
+
+    public static void ValidateAccountingSnapshot(
+        RuntimeUsageCostSnapshotRequest request, RuntimeNativeTurnRecordedReceipt recorded)
+    {
+        ValidateRecorded(recorded);
+        var admission = recorded.Admission;
+        if (request.Registration != admission.Registration || request.Source != admission.Source ||
+            request.DispatchId != admission.MessageId || request.RequiredReceipts.IsDefault ||
+            request.NativeTurn is not { } expected || expected.Admission != admission ||
+            expected.OwnerRevision != recorded.OwnerRevision ||
+            expected.CanonicalPayloadHash != recorded.CanonicalPayloadHash)
+            throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
         var observed = recorded.Observation.UsageEventIds.Select(id =>
             SdkUsageIdentity.Create(admission.Source.RuntimeInstanceId, admission.Source.SdkSessionId, id.ToString("D")))
             .ToHashSet();
-        if (references.Length != observed.Count ||
-            references.Any(reference => !observed.Remove(reference.Accounting.EventId)) || observed.Count != 0)
+        if (request.RequiredReceipts.Length != observed.Count ||
+            request.RequiredReceipts.Any(reference => reference?.Accounting is not { } accounting ||
+                !observed.Remove(accounting.EventId)) || observed.Count != 0)
             throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
-        return request;
     }
 
     public static void ValidateAccounted(

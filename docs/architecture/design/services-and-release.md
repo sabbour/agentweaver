@@ -201,7 +201,10 @@ before owner commit; Allow additionally rechecks its exact current grant, expiry
 fence. The Core guard waits for the durable Events acknowledgment and rechecks authority
 before its protected callback. The services connect through protected HTTP contracts,
 not a shared transaction. AgentHost wires guarded model turns and registered tools to this record-before-effect boundary.
-There is no background message relay, automatic AgentHost scheduler, or full dispatch engine.
+Request-lived dispatch now delivers the bounded ready child frontier to authenticated
+AgentHost instances. Native platform-gate execution and complete budget/recovery
+enforcement remain separate work; there is no background message relay or automatic
+AgentHost scheduler.
 The runtime library commits authorized SDK observations to immutable Orchestrator receipts.
 Events fetches those receipts through a reference-only route and uses the existing keyed Cost resolver.
 Its append-only ledger preserves exact totals and immutable rate-card history.

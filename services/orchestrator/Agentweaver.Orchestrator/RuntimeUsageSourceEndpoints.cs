@@ -55,6 +55,11 @@ public static class RuntimeUsageSourceEndpoints
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
                 ExecuteAsync(context, () => owner.CompleteNativeTurnAsync(context, request, cancellationToken)))
             .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/recorded",
+            (RuntimeNativeTurnRecordedReceipt request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.ReadNativeTurnAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
         endpoints.MapGet(
             "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/usage-receipts/{receiptId:guid}",
             (string projectId, string runId, string sessionId, Guid receiptId, HttpContext context,

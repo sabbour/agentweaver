@@ -489,6 +489,26 @@ public static class ProjectConfigurationValidator
         return value.Value;
     }
 
+    private static int? ResolveOptionalLimit(int? value, int? platformValue, string name)
+    {
+        if (value is null)
+            return platformValue;
+        ValidateOptionalRange(value, 0, int.MaxValue, name);
+        if (platformValue is { } platformLimit && value > platformLimit)
+            throw Invalid($"Project run limit '{name}' cannot exceed the platform limit.");
+        return value;
+    }
+
+    private static decimal? ResolveOptionalCreditLimit(decimal? value, decimal? platformValue, string name)
+    {
+        if (value is null)
+            return platformValue;
+        ValidateCreditLimit(value, name);
+        if (platformValue is { } platformLimit && value > platformLimit)
+            throw Invalid($"Project run limit '{name}' cannot exceed the platform limit.");
+        return value;
+    }
+
     private static void ValidateLimits(CopilotRunLimits limits)
     {
         ValidateRange(limits.MaxModelTurns, 1, 1000, "runLimits.maxModelTurns");
@@ -515,26 +535,6 @@ public static class ProjectConfigurationValidator
         ValidateCreditLimit(limits.CopilotSoftCreditLimit, "runLimits.copilotSoftCreditLimit");
         ValidateCreditLimit(limits.CopilotHardCreditLimit, "runLimits.copilotHardCreditLimit");
         ValidateCreditLimitOrder(limits.CopilotSoftCreditLimit, limits.CopilotHardCreditLimit);
-    }
-
-    private static int? ResolveOptionalLimit(int? value, int? platformValue, string name)
-    {
-        if (value is null)
-            return platformValue;
-        ValidateOptionalRange(value, 0, int.MaxValue, name);
-        if (platformValue is { } platformLimit && value > platformLimit)
-            throw Invalid($"Project run limit '{name}' cannot exceed the platform limit.");
-        return value;
-    }
-
-    private static decimal? ResolveOptionalCreditLimit(decimal? value, decimal? platformValue, string name)
-    {
-        if (value is null)
-            return platformValue;
-        ValidateCreditLimit(value, name);
-        if (platformValue is { } platformLimit && value > platformLimit)
-            throw Invalid($"Project run limit '{name}' cannot exceed the platform limit.");
-        return value;
     }
 
     private static void ValidateCreditLimit(decimal? value, string name)
