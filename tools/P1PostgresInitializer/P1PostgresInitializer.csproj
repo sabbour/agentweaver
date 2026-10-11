@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.17.1" Aliases="AzureIdentity" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
     <ProjectReference Include="..\..\services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" />
     <ProjectReference Include="..\..\services\environment\Agentweaver.Environment\Agentweaver.Environment.csproj" />
     <ProjectReference Include="..\..\services\knowledge\Agentweaver.Knowledge\Agentweaver.Knowledge.csproj" />
