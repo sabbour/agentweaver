@@ -77,8 +77,9 @@ public sealed partial class CoordinationOwnerMigrationTests
                  accepted_by_issuer, accepted_by_subject)
             VALUES ('p', 'r', jsonb_build_object(), repeat('a', 64), 'issuer', 'actor');
             INSERT INTO "{_schema}".coordination_sessions
-                (project_id, run_id, session_id, writer_issuer, writer_subject, execution_fence)
-            VALUES ('p', 'r', 'root', 'issuer', 'actor', 1);
+                (project_id, run_id, session_id, parent_session_id, root_session_id, node_kind,
+                 writer_issuer, writer_subject, execution_fence)
+            VALUES ('p', 'r', 'root', NULL, 'root', 'coordinator', 'issuer', 'actor', 1);
             SET LOCAL ROLE "{role}";
             """);
         var insertSql = table == "coordinator_decisions"
