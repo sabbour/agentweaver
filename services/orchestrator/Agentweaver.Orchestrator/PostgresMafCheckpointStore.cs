@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Agentweaver.Abstractions;
+using Agentweaver.SourceControl;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Npgsql;
@@ -87,7 +88,8 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         string checkpointId,
         JsonElement value,
         CheckpointInfo? parent,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        byte[]? workspaceSeed = null)
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(transaction);
@@ -103,6 +105,8 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
 
         var selection = await ReadCurrentBindingAsync(
             connection, transaction, validatedBinding, lockRows: true, cancellationToken).ConfigureAwait(false);
+        ValidateOriginWorkspaceSeed(
+            value, validatedBinding, checkpointId, selection.SelectionHash, workspaceSeed);
         if (parent is not null && !await CheckpointExistsAsync(
                 connection, transaction, validatedBinding, parent.CheckpointId, cancellationToken)
                 .ConfigureAwait(false))
@@ -111,17 +115,17 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         var payload = value.GetRawText();
         if (await FindExistingCheckpointAsync(
                 connection, transaction, validatedBinding, selection.SelectionHash, checkpointId,
-                parent?.CheckpointId, payload, cancellationToken).ConfigureAwait(false) is { } existing)
+                parent?.CheckpointId, payload, workspaceSeed, cancellationToken).ConfigureAwait(false) is { } existing)
             return existing;
 
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.maf_workflow_checkpoints
                 (project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
                  payload, cache_object_key, cache_sdk_version, pinned_model_reference,
-                 accepted_selection_hash, execution_fence, created_at)
+                 accepted_selection_hash, execution_fence, created_at, workspace_seed)
             VALUES
                 (@project, @run, @session, @store, @checkpoint, @parent, @payload, @cache,
-                 @sdk, @model, @selectionHash, @fence, @createdAt)
+                 @sdk, @model, @selectionHash, @fence, @createdAt, @workspaceSeed)
             """, connection, transaction);
         AddBinding(insert, validatedBinding);
         insert.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, validatedBinding.StoreName);
@@ -136,6 +140,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         insert.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, selection.SelectionHash);
         insert.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, validatedBinding.ExecutionFence);
         insert.Parameters.AddWithValue("createdAt", NpgsqlDbType.TimestampTz, _timeProvider.GetUtcNow());
+        insert.Parameters.AddWithValue("workspaceSeed", NpgsqlDbType.Bytea, (object?)workspaceSeed ?? DBNull.Value);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         return new CheckpointInfo(sessionId, checkpointId);
     }
@@ -490,11 +495,13 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         string checkpointId,
         string? parentCheckpointId,
         string payload,
+        byte[]? workspaceSeed,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
             SELECT payload = @payload, parent_checkpoint_id, cache_object_key,
-                   cache_sdk_version, pinned_model_reference, accepted_selection_hash, execution_fence
+                   cache_sdk_version, pinned_model_reference, accepted_selection_hash, execution_fence,
+                   workspace_seed IS NOT DISTINCT FROM @workspaceSeed
             FROM {_schema}.maf_workflow_checkpoints
             WHERE project_id = @project AND run_id = @run AND session_id = @session
                 AND store_name = @store AND checkpoint_id = @checkpoint
@@ -504,6 +511,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, binding.StoreName);
         command.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, checkpointId);
         command.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, payload);
+        command.Parameters.AddWithValue("workspaceSeed", NpgsqlDbType.Bytea, (object?)workspaceSeed ?? DBNull.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             return null;
@@ -518,10 +526,104 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             !string.Equals(reader.GetString(3), binding.SdkVersion, StringComparison.Ordinal) ||
             !string.Equals(reader.GetString(4), binding.PinnedModelReference, StringComparison.Ordinal) ||
             !string.Equals(storedSelectionHash, selectionHash, StringComparison.Ordinal) ||
-            reader.GetInt64(6) != binding.ExecutionFence)
+            reader.GetInt64(6) != binding.ExecutionFence || !reader.GetBoolean(7))
             throw new CoordinationException("checkpoint_idempotency_conflict", StatusCodes.Status409Conflict);
 
         return new CheckpointInfo(binding.Identity.SessionId, checkpointId);
+    }
+
+    private static void ValidateOriginWorkspaceSeed(
+        JsonElement payload,
+        MafCheckpointBinding binding,
+        string checkpointId,
+        string selectionHash,
+        byte[]? bytes)
+    {
+        if (binding.StoreName != MafExecutionCheckpointContract.StoreName)
+        {
+            if (bytes is not null)
+                throw new ArgumentException("Only an execution checkpoint can store a BuildTest seed.");
+            return;
+        }
+        var state = MafExecutionCheckpointContract.Deserialize(payload);
+        var origins = state.BuildTestIntents.Values.Where(intent =>
+            intent.WorkspaceSeedReference?.Origin.CheckpointId == checkpointId).ToArray();
+        if (origins.Length > 1 || origins.Length == 0 && bytes is not null ||
+            origins.Length == 1 && bytes is null)
+            throw new ArgumentException("The originating BuildTest checkpoint requires exactly one bound seed.");
+        if (origins.Length == 0)
+            return;
+        var intent = origins[0];
+        var source = intent.EffectiveWorkspaceSource!;
+        if (intent.Identity != binding.Identity || intent.ExecutionFence != binding.ExecutionFence ||
+            intent.AcceptedSelectionHash != selectionHash ||
+            source.ActorIssuer != binding.Actor.Issuer || source.ActorSubject != binding.Actor.Subject ||
+            source.TenantId != intent.ExpectedBinding.Fence.Owner.TenantId)
+            throw new CoordinationException("checkpoint_workspace_seed_binding_invalid", StatusCodes.Status403Forbidden);
+        _ = GitWorkspaceBuildTestSeedPackage.Parse(bytes!, source);
+    }
+
+    internal async Task<byte[]> ReadBuildTestWorkspaceSeedInTransactionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        MafCheckpointBinding binding,
+        MafExecutionBuildTestIntent intent,
+        CancellationToken cancellationToken)
+    {
+        var validatedBinding = ValidateBinding(binding);
+        if (RequireBinding() != validatedBinding ||
+            validatedBinding.StoreName != MafExecutionCheckpointContract.StoreName ||
+            intent.Identity != validatedBinding.Identity ||
+            intent.ExecutionFence != validatedBinding.ExecutionFence ||
+            intent.EffectiveWorkspaceSource is null || intent.WorkspaceSeedReference is null)
+            throw new CoordinationException("checkpoint_workspace_seed_binding_invalid", StatusCodes.Status403Forbidden);
+        _ = intent.ToAcceptedCommand(requireSeed: false);
+        var current = await ReadCurrentBindingAsync(
+            connection, transaction, validatedBinding, lockRows: true, cancellationToken).ConfigureAwait(false);
+        if (current.SelectionHash != intent.AcceptedSelectionHash)
+            throw new CoordinationException("checkpoint_run_selection_changed", StatusCodes.Status409Conflict);
+
+        await using var command = new NpgsqlCommand($"""
+            SELECT accepted_selection_hash, payload, octet_length(workspace_seed), workspace_seed
+            FROM {_schema}.maf_workflow_checkpoints
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND store_name = @store AND checkpoint_id = @checkpoint AND execution_fence = @fence
+            FOR SHARE
+            """, connection, transaction);
+        AddBinding(command, validatedBinding);
+        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, validatedBinding.StoreName);
+        command.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, intent.CheckpointId);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, validatedBinding.ExecutionFence);
+        await using var reader = await command.ExecuteReaderAsync(
+            System.Data.CommandBehavior.SequentialAccess, cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new CoordinationException("checkpoint_workspace_seed_missing", StatusCodes.Status409Conflict);
+        if (reader.GetString(0).TrimEnd() != current.SelectionHash)
+            throw new CoordinationException("checkpoint_run_selection_changed", StatusCodes.Status409Conflict);
+        using var document = JsonDocument.Parse(reader.GetString(1));
+        var origin = MafExecutionCheckpointContract.Deserialize(document.RootElement);
+        if (!origin.BuildTestIntents.TryGetValue(intent.StepId, out var storedIntent) ||
+            !MafExecutionCheckpointContract.BuildTestIntentsMatch(storedIntent, intent) ||
+            storedIntent.CheckpointRevision != origin.Revision ||
+            reader.IsDBNull(2))
+            throw new CoordinationException("checkpoint_workspace_seed_missing", StatusCodes.Status409Conflict);
+        var length = reader.GetInt32(2);
+        if (length < 1 || length > ProducedRunCaptureLimits.MaximumPackageBytes ||
+            length != intent.WorkspaceSeedReference.SeedByteLength)
+            throw new CoordinationException("checkpoint_workspace_seed_integrity_invalid", StatusCodes.Status409Conflict);
+        var bytes = new byte[length];
+        await using (var stream = reader.GetStream(3))
+            await stream.ReadExactlyAsync(bytes, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ValidateOriginWorkspaceSeed(
+                document.RootElement, validatedBinding, intent.CheckpointId, current.SelectionHash, bytes);
+        }
+        catch (ArgumentException)
+        {
+            throw new CoordinationException("checkpoint_workspace_seed_integrity_invalid", StatusCodes.Status409Conflict);
+        }
+        return bytes;
     }
 
     private static void ValidateCheckpoint(

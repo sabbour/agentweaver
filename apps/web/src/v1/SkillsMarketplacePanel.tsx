@@ -301,6 +301,7 @@ export function SkillsMarketplacePanel({
   const refreshSources = useCallback(async () => {
     if (!actions) return;
 
+    clearMarketplaceBrowse();
     const scope = projectId;
     const requestId = ++sourceRequest.current;
     try {
@@ -315,13 +316,12 @@ export function SkillsMarketplacePanel({
       setSourcesProjectId(scope);
       setSourceError(messageForError(reason));
     }
-  }, [actions, projectId]);
+  }, [actions, clearMarketplaceBrowse, projectId]);
 
   useLayoutEffect(() => {
     if (activeProjectId.current === projectId) return;
     activeProjectId.current = projectId;
     sourceRequest.current += 1;
-    browseRequest.current += 1;
     skillRequest.current += 1;
     setSources(null);
     setSourcesProjectId(null);
@@ -330,10 +330,7 @@ export function SkillsMarketplacePanel({
     setSourceDrafts({});
     setNewSource(sourceDraft());
     setSelectedSourceId('');
-    setBrowsePage(null);
-    setBrowseResultQuery(null);
-    setBrowsing(false);
-    clearMarketplaceSelection();
+    clearMarketplaceBrowse();
     setSkillError(null);
     setSkillNotice(null);
     setMarketplaceError(null);
@@ -345,10 +342,11 @@ export function SkillsMarketplacePanel({
     setImportReceipt(null);
     setPendingImportKey(null);
     setSelectedAgentIds([]);
-  }, [actions, assignments, clearMarketplaceSelection, configurationRevision, projectId]);
+  }, [actions, assignments, clearMarketplaceBrowse, configurationRevision, projectId]);
 
   useEffect(() => {
     if (!actions) return;
+    clearMarketplaceBrowse();
     const scope = projectId;
     const requestId = ++sourceRequest.current;
     void listMarketplaceSources(actions, scope).then((result) => {
@@ -362,7 +360,7 @@ export function SkillsMarketplacePanel({
       setSourcesProjectId(scope);
       setSourceError(messageForError(reason));
     });
-  }, [actions, projectId]);
+  }, [actions, clearMarketplaceBrowse, projectId]);
 
   if (assignmentSnapshot.projectId !== projectId ||
       (configurationRevision !== null &&

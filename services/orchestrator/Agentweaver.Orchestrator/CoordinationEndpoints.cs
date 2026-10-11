@@ -44,6 +44,9 @@ public static partial class CoordinationEndpoints
         coordination.MapGet(
             "/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}",
             ReadCoordinatorBuildTestCommandAsync);
+        coordination.MapGet(
+            "/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}/workspace-seed",
+            ReadCoordinatorBuildTestSeedAsync);
         coordination.MapGet("/sessions/{sessionId}/tree", ReadSessionTreeAsync);
         coordination.MapGet("/sessions/{sessionId}/status", ReadSessionStatusAsync);
         coordination.MapPost("/sessions/{sessionId}/turn-failure", ReportRunFailureAsync);
@@ -1719,7 +1722,7 @@ public static partial class CoordinationEndpoints
         return actor;
     }
 
-    private static async Task<IResult> ExecuteAsync(
+    internal static async Task<IResult> ExecuteAsync(
         Func<Task<IResult>> action,
         CancellationToken cancellationToken)
     {
@@ -1734,6 +1737,11 @@ public static partial class CoordinationEndpoints
         catch (CoordinationException exception)
         {
             return Results.Json(new { error = exception.Code }, statusCode: exception.StatusCode);
+        }
+        catch (Agentweaver.SourceControl.GitWorkspaceException exception)
+        {
+            var failure = SourceControlEndpoints.MapGitWorkspaceFailure(exception);
+            return Results.Json(new { error = failure.Code }, statusCode: failure.StatusCode);
         }
         catch (ArgumentException)
         {

@@ -27,9 +27,12 @@ internal static partial class GatewayOpenApi
             ["updateMarketplaceSource"] = C("UpdateMarketplaceSourceRequest", "MarketplaceSource", "200"),
             ["removeMarketplaceSource"] = C(null, "MarketplaceSource", "200"),
             ["browseMarketplaceSource"] = C(null, "MarketplaceBrowsePage", "200"),
+            ["previewMarketplaceSkill"] = C("MarketplaceSkillPreviewRequest", "SkillContentPreview", "200"),
+            ["importMarketplaceSkill"] = C("MarketplaceSkillImportRequest", "SkillContentImportReceipt", "200"),
             ["previewSkillContent"] = C("PreviewSkillContentRequest", "SkillContentPreview", "200"),
             ["importProjectSkill"] = C("ImportSkillContentRequest", "SkillContentImportReceipt", "200"),
             ["updateProjectSkillAssignment"] = C("UpdateSkillAssignmentRequest", "VersionedProjectConfiguration", "200"),
+            ["listProjectSkillInventory"] = C(null, "ProjectSkillInventoryPage", "200"),
             ["getAuthorizationContext"] = C(null, "ProjectAuthorizationContext", "200"),
             ["acceptRunSelection"] = C("AcceptRunSelectionRequest", "EffectiveRunSelection", "200"),
             ["getRunSelection"] = C(null, "EffectiveRunSelection", "200"),
@@ -242,15 +245,56 @@ internal static partial class GatewayOpenApi
         {
             responses["400"] = ProblemResponse("The event cursor is invalid or ambiguous.");
         }
+        else if (route.OperationId == "listProjectSkillInventory")
+        {
+            responses["400"] = ProblemResponse(
+                "The owner rejected an unknown or repeated query key, invalid cursor, or page size outside 1 through 50.");
+            responses["404"] = ProblemResponse(
+                "The owner hides foreign projects and memberships found inactive or stale during the inventory recheck. " +
+                "Inactive membership rejected during initial caller resolution returns 403.");
+        }
+        else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
+        {
+            responses["400"] = ProblemResponse(
+                "The owner rejected the request or found invalid selected skill content.");
+            responses["404"] = ProblemResponse("The owner did not find the project or marketplace source.");
+            responses["409"] = ProblemResponse(
+                route.OperationId == "importMarketplaceSkill"
+                    ? "The source or skill revision, content digest, or import idempotency key conflicts."
+                    : "The marketplace source revision changed.");
+            responses["422"] = ProblemResponse("The selected marketplace source exceeds the owner's size limits.");
+            responses["503"] = ProblemResponse("The marketplace source or skill content store is unavailable.");
+            if (route.OperationId == "importMarketplaceSkill")
+                responses["500"] = ProblemResponse("The owner reported a skill content store integrity error.");
+        }
+
+        var description =
+            $"Owner: {route.Owner}. The Gateway forwards the validated bearer and does not infer identity " +
+            "from request bodies or caller-controlled identity headers. Owner authorization and JSON " +
+            "contracts remain authoritative.";
+        if (route.OperationId == "listProjectSkillInventory")
+        {
+            description +=
+                " This metadata-only read requires api.read, projects.admin, active membership in the current " +
+                "tenant, and current TenantAdmin or project Owner authority. The owner rechecks authority " +
+                "after the read and permits archived projects. The opaque cursor uses stable SkillId-ascending " +
+                "order in C collation, then revision-descending order. It does not make multiple pages a " +
+                "snapshot. Query rejection and authorization statuses remain owner-defined and pass through unchanged.";
+        }
+        else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
+        {
+            description +=
+                " The owner reads selected source bytes at the supplied resolved commit and path, then rechecks " +
+                "the source revision and current actor/project authority. Preview returns validation metadata " +
+                "and a content digest, not the source bytes. Import also requires the expected digest and " +
+                "idempotency key and returns the owner's immutable revision receipt with source provenance.";
+        }
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["operationId"] = route.OperationId,
             ["summary"] = route.Summary,
-            ["description"] =
-                $"Owner: {route.Owner}. The Gateway forwards the validated bearer and does not infer identity " +
-                "from request bodies or caller-controlled identity headers. Owner authorization and JSON " +
-                "contracts remain authoritative.",
+            ["description"] = description,
             ["security"] = new[] { new Dictionary<string, string[]> { ["Bearer"] = [] } },
             ["parameters"] = parameters,
             ["requestBody"] = route.HasJsonBody
@@ -331,6 +375,9 @@ internal static partial class GatewayOpenApi
 
     private static object QuerySchema(string operationId, string name)
     {
+        if (operationId == "listProjectSkillInventory" && name == "pageSize")
+            return new { type = "integer", minimum = 1, maximum = 50, @default = 25 };
+
         if ((operationId == "removeMarketplaceSource" && name == "expectedRevision") ||
             (operationId == "browseMarketplaceSource" && name == "expectedSourceRevision"))
             return Int();
@@ -438,6 +485,35 @@ internal static partial class GatewayOpenApi
             ("sourceId", Uuid()), ("sourceRevision", Int()), ("requestedRef", Str()),
             ("resolvedCommitSha", Str()), ("candidates", Arr(Ref("MarketplaceBrowseCandidate"))),
             ("total", Int()), ("page", Int()), ("pageSize", Int()), ("hasMore", Bool())),
+        ["MarketplaceSkillPreviewRequest"] = StrictObj(
+            ["expectedSourceRevision", "resolvedCommitSha", "selectedPath"],
+            ("expectedSourceRevision", Int()), ("resolvedCommitSha", Str()), ("selectedPath", Str())),
+        ["MarketplaceSkillImportRequest"] = StrictObj(
+            ["expectedSourceRevision", "resolvedCommitSha", "selectedPath", "idempotencyKey",
+                "expectedContentDigest"],
+            ("expectedSourceRevision", Int()), ("resolvedCommitSha", Str()), ("selectedPath", Str()),
+            ("idempotencyKey", Str()), ("expectedContentDigest", Str()),
+            ("skillId", NullableStr()), ("expectedRevision", NullableInt())),
+        ["ProjectSkillInventoryAssignment"] = StrictObj(
+            ["skillId", "enabled", "order", "revision", "contentDigest", "agentIds"],
+            ("skillId", Str()), ("enabled", Bool()), ("order", Int()), ("revision", NullableInt()),
+            ("contentDigest", NullableStr()), ("agentIds", Nullable(Arr(Str())))),
+        ["ProjectSkillInventoryRevision"] = StrictObj(
+            ["skillId", "revision", "name", "description", "contentDigest", "resourceCount",
+                "totalBytes", "createdByActorId", "createdAt", "sourceId", "sourceRevision",
+                "requestedRef", "resolvedCommitSha", "selectedPath", "isRevoked", "revokedByActorId",
+                "revokedAt"],
+            ("skillId", Str()), ("revision", Int()), ("name", Str()), ("description", Str()),
+            ("contentDigest", Str()), ("resourceCount", Int()), ("totalBytes", Int()),
+            ("createdByActorId", Str()), ("createdAt", Date()), ("sourceId", NullableStr()),
+            ("sourceRevision", NullableStr()), ("requestedRef", NullableStr()),
+            ("resolvedCommitSha", NullableStr()), ("selectedPath", NullableStr()),
+            ("isRevoked", Bool()), ("revokedByActorId", NullableStr()), ("revokedAt", NullableDate())),
+        ["ProjectSkillInventoryPage"] = StrictObj(
+            ["configurationRevision", "assignments", "revisions", "pageSize", "nextCursor"],
+            ("configurationRevision", Int()), ("assignments", Arr(Ref("ProjectSkillInventoryAssignment"))),
+            ("revisions", Arr(Ref("ProjectSkillInventoryRevision"))), ("pageSize", Int()),
+            ("nextCursor", NullableStr())),
         ["SkillContentResourceRequest"] = StrictObj(["relativePath", "content"],
             ("relativePath", Str()), ("content", Base64Bytes())),
         ["SkillContentCandidateRequest"] = StrictObj(["skillMarkdown", "resources"],

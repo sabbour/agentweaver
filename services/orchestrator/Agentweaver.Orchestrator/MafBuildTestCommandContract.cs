@@ -54,7 +54,7 @@ internal static class MafBuildTestCommandContract
         MafExecutionBuildTestIntent intent,
         SandboxBuildTestOperationSnapshot operation)
     {
-        var accepted = intent.ToAcceptedCommand();
+        var accepted = intent.ToAcceptedCommand(requireSeed: false);
         _ = operation.Validate(accepted, intent.ExecutionOptions.MaximumOutputBytes);
         if (operation.RequestFingerprint != intent.ToApiRequest().ComputeRequestFingerprint(accepted) ||
             !JsonElement.DeepEquals(
@@ -98,7 +98,7 @@ internal sealed record MafBuildTestTerminalReceipt(
 {
     internal MafExecutionTaskStatus ValidateFor(MafExecutionBuildTestIntent intent)
     {
-        var accepted = intent.ToAcceptedCommand();
+        var accepted = intent.ToAcceptedCommand(requireSeed: false);
         if (OperationId != intent.OperationId || ImmutableHash != accepted.ImmutableHash ||
             RequestFingerprint != intent.ToApiRequest().ComputeRequestFingerprint(accepted) ||
             OperationEvidenceSha256 is not { Length: 64 } || !OperationEvidenceSha256.All(Uri.IsHexDigit) ||

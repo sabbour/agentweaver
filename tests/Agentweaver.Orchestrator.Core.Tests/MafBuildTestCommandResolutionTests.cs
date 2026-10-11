@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator;
 using Agentweaver.Orchestrator.Core;
@@ -7,6 +10,107 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 
 public sealed class MafBuildTestCommandResolutionTests
 {
+    [Fact]
+    public void ServerSourceInputResolvesWithoutChangingTheConfirmedCommand()
+    {
+        var (checkpoint, _, original) = SeedFixture();
+        var intent = original with
+        {
+            Command = original.Command with { WorkspaceSource = null },
+            WorkspaceInput = original.Command.WorkspaceSource
+        };
+        checkpoint = checkpoint with
+        {
+            State = checkpoint.State with
+            {
+                BuildTestIntents = checkpoint.State.BuildTestIntents.SetItem(intent.StepId, intent)
+            }
+        };
+        var accepted = CoordinationEndpoints.ResolveBuildTestCommand(
+            checkpoint, Current(intent.Command), intent.CheckpointReference(), "tenant-1");
+
+        Assert.Null(intent.Command.WorkspaceSource);
+        Assert.Equal(original.ToAcceptedCommand().ImmutableHash, accepted.ImmutableHash);
+        Assert.Equal(intent.WorkspaceInput, accepted.WorkspaceSource);
+        Assert.Null(accepted.WorkspaceSeed);
+    }
+
+    [Fact]
+    public void ServerSourceInputDoesNotBypassTheExactConfirmedCommandGuard()
+    {
+        var (checkpoint, _, original) = SeedFixture();
+        var intent = original with
+        {
+            Command = original.Command with { WorkspaceSource = null },
+            WorkspaceInput = original.Command.WorkspaceSource
+        };
+        checkpoint = checkpoint with
+        {
+            State = checkpoint.State with
+            {
+                BuildTestIntents = checkpoint.State.BuildTestIntents.SetItem(intent.StepId, intent)
+            }
+        };
+        var failure = Assert.Throws<CoordinationException>(() => CoordinationEndpoints.ResolveBuildTestCommand(
+            checkpoint, Current(intent.Command with { Arguments = ["different"] }),
+            intent.CheckpointReference(), "tenant-1"));
+
+        Assert.Equal("maf_execution_build_test_binding_stale", failure.Code);
+    }
+
+    [Fact]
+    public void RecoveredVersionTwoCommandResolvesMetadataWithoutPuttingSeedBytesInJson()
+    {
+        var (checkpoint, current, intent) = SeedFixture();
+        checkpoint = checkpoint with
+        {
+            State = MafExecutionCheckpointContract.Deserialize(
+                MafExecutionCheckpointContract.Serialize(checkpoint.State))
+        };
+
+        var accepted = CoordinationEndpoints.ResolveBuildTestCommand(
+            checkpoint, current, intent.CheckpointReference(), "tenant-1");
+
+        Assert.Equal(2, accepted.ContractVersion);
+        Assert.Equal(intent.Command.WorkspaceSource, accepted.WorkspaceSource);
+        Assert.Equal(intent.ToAcceptedCommand().ImmutableHash, accepted.ImmutableHash);
+        Assert.Null(accepted.WorkspaceSeed);
+        Assert.Equal(accepted.ImmutableHash, accepted.ValidateMetadata().ImmutableHash);
+        Assert.Throws<ArgumentException>(() => accepted.Validate());
+        var json = JsonSerializer.Serialize(accepted, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Contains("\"workspaceSource\":", json);
+        Assert.DoesNotContain("\"workspaceSeed\":", json);
+    }
+
+    [Theory]
+    [InlineData("decision")]
+    [InlineData("fence")]
+    [InlineData("selection")]
+    public void VersionTwoMetadataIsDeniedWhenAuthorityChangesAfterSeedRecovery(string change)
+    {
+        var (checkpoint, current, intent) = SeedFixture();
+        _ = CoordinationEndpoints.ResolveBuildTestCommand(
+            checkpoint, current, intent.CheckpointReference(), "tenant-1");
+        current = change switch
+        {
+            "decision" => current with { StateVersion = current.StateVersion + 1 },
+            "selection" => current with { SelectionHash = new string('B', 64) },
+            "fence" => current with
+            {
+                State = CoordinatorDecisionState.Restore(
+                    8, current.State.OutcomeSpec, true, 0, current.State.SelectedWorkflow, true,
+                    current.State.ConfirmedWorkPlan, null, null, null, []).Value!
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(change))
+        };
+
+        var failure = Assert.Throws<CoordinationException>(() =>
+            CoordinationEndpoints.ResolveBuildTestCommand(
+                checkpoint, current, intent.CheckpointReference(), "tenant-1"));
+
+        Assert.Equal("maf_execution_build_test_checkpoint_stale", failure.Code);
+    }
+
     [Fact]
     public void ResolvesOnlyThePersistedCommandAndExactProfileAfterCheckpointRecovery()
     {
@@ -118,6 +222,38 @@ public sealed class MafBuildTestCommandResolutionTests
                 mismatch == "identity" ? new("project-1", "other-run", "root") : intent.Identity,
                 mismatch == "fence" ? 8 : 7,
                 mismatch == "checkpoint" ? "other-checkpoint" : intent.CheckpointId));
+    }
+
+    private static (
+        MafExecutionCheckpointSnapshot Checkpoint,
+        CoordinatorDecisionCurrentState Current,
+        MafExecutionBuildTestIntent Intent) SeedFixture()
+    {
+        var intent = MafBuildTestCheckpointTests.Intent();
+        var seed = new byte[1024];
+        var source = new SandboxBuildTestWorkspaceSource(
+            2, intent.Identity, "tenant-1", "issuer", "actor",
+            "source-pin", intent.AcceptedSelectionHash,
+            new(ProviderSeam.SourceControl, "github", "repository", 1),
+            "workspace", Guid.Parse("5956a121-5556-4c16-848c-0d4a2937966d"),
+            "branch", new string('a', 40), new string('c', 40),
+            "seed", Convert.ToHexStringLower(SHA256.HashData(seed)), seed.Length,
+            new string('c', 64), 512, new string('d', 64), 128);
+        intent = intent with
+        {
+            Command = intent.Command with { WorkspaceSource = source },
+            WorkspaceSeed = seed.ToImmutableArray(),
+            WorkspaceSeedReference = new(
+                intent.CheckpointReference(), intent.OperationId, source.SeedSha256, source.SeedByteLength),
+            ExecutionOptions = intent.ExecutionOptions with
+            {
+                CollectorMode = SandboxBuildTestLimits.WorkspaceCollectorMode
+            }
+        };
+        var initial = new MafExecutionCheckpointSnapshot(
+            new("root", "initial"), new(1, "plan-1", 3, MafExecutionProgress.Empty));
+        var state = CoordinationEndpoints.PrepareBuildTestCheckpoint(initial, intent)!;
+        return (new(new("root", intent.CheckpointId), state), Current(intent.Command), intent);
     }
 
     private static (

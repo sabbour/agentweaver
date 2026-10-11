@@ -26,10 +26,14 @@ administrator authority. Responses use
 sequenceDiagram
     autonumber
     participant C as Authorized project caller
+    participant G as Gateway
     participant P as Projects & Config
     participant DB as projects_config
     participant GH as Public GitHub
-    C->>P: Browse source ID + expected source revision + query/page
+    participant S as Skills content service
+    participant O as Immutable content store
+    C->>G: Browse source ID + expected source revision + query/page
+    G->>P: Forward bearer, tenant selector, and request
     P->>DB: Recheck current read role; read active source revision
     DB-->>P: Repository, requested ref, source revision
     P->>GH: Resolve requested ref to commit SHA
@@ -39,10 +43,31 @@ sequenceDiagram
     P->>P: Discover paths, sort, filter, then paginate
     P->>GH: Fetch SKILL.md only for current-page candidates
     GH-->>P: Page manifest bytes
-    P->>DB: Recheck source revision
-    P->>P: Recheck current caller authority
-    P-->>C: Page, requested ref, source revision, resolved commit SHA
-    Note over P,GH: Browse does not fetch candidate resource files or assign/run a skill.
+    P->>DB: Recheck current caller authority and source revision
+    P-->>G: Page, requested ref, source revision, resolved commit SHA
+    G-->>C: Owner response unchanged
+    C->>G: Preview/import source revision + resolved commit SHA + selected path
+    G->>P: Forward bearer, tenant selector, and request
+    P->>DB: Recheck current read/write role and read active source revision
+    DB-->>P: Current source configuration
+    P->>GH: Read selected manifest and bounded resources at the same commit
+    GH-->>P: Exact selected bytes
+    P->>DB: Recheck actor, project authority, and source revision
+    alt Preview
+        P->>S: Validate selected bytes and calculate content digest
+        S-->>P: Preview metadata and digest
+        P-->>G: Preview
+        G-->>C: Owner response unchanged
+    else Import
+        P->>S: Import bytes with expected digest, idempotency key, and source provenance
+        S->>O: Store immutable content revision
+        O-->>S: Stored digest
+        S-->>P: Import receipt
+        P-->>G: Receipt
+        G-->>C: Owner response unchanged
+    end
+    Note over P,GH: Browse fetches only current-page manifests. Preview/import reads stay pinned to the selected commit.
+    Note over S,O: Skills owns content validation, immutable revisions, idempotency, and assignment.
 ```
 
 | Route | Operation |
@@ -52,6 +77,36 @@ sequenceDiagram
 | `PUT /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}` | Replace source settings using `expectedRevision`. |
 | `DELETE /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}?expectedRevision={n}` | Tombstone a source using `expectedRevision`; returns the removed source at its incremented revision. |
 | `GET /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/browse?expectedSourceRevision={n}&query={text}&page={n}&pageSize={n}` | Browse a pinned source revision. `query`, `page`, and `pageSize` are optional. |
+| `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview` | Preview selected bytes from `expectedSourceRevision`, `resolvedCommitSha`, and `selectedPath`. |
+| `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import` | Import selected bytes with the previewed `expectedContentDigest`, an `idempotencyKey`, and optional `skillId` plus `expectedRevision`. |
+| `GET /api/projects/{projectId}/skills?cursor={cursor}&pageSize={n}` | Read the current project skill inventory and retained revision metadata. Both query values are optional. |
+
+The skill inventory is a separate current-admin read. It requires `api.read`,
+`projects.admin`, active membership in the current tenant, and current
+TenantAdmin or project Owner authority. The owner rechecks authority after the
+read and permits archived projects. Invalid cursors, page sizes outside 1–50,
+repeated keys, and unknown query keys return `400`. Invalid authentication
+returns `401`. A viewer or an administrator with lost or revoked access receives
+`403`. Inactive membership rejected during initial caller resolution also
+returns `403`. During the inventory recheck, the owner returns `404` for a
+foreign project or membership found inactive or stale.
+
+Gateway responses use `Cache-Control: no-store`.
+
+The Gateway exposes versioned aliases for the source preview and import routes:
+`POST /api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview`
+and `/api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import`.
+It forwards the validated bearer and optional tenant selector, and preserves the
+owner's status and response body. The owner remains responsible for current
+project authority, source revision checks, and reading the selected files.
+
+The default page size is 25. The cursor is opaque and uses unpadded Base64URL.
+It binds the project and page size. The cursor sorts skill IDs in C collation,
+ascending. It sorts revisions in descending order within each skill. This order
+does not create a snapshot across pages. The page contains the current
+configuration revision, assignments, retained revision metadata, page size, and
+next cursor. It does not contain skill bytes, object keys, or a revocation
+reason. It does not prove that a runtime loaded an assigned skill.
 
 Create accepts `{ "name": "Team skills", "repository": "owner/repository",
 "requestedRef": "main", "subpath": "skills" }`; `name`, `requestedRef`, and
@@ -108,24 +163,44 @@ validator remains responsible for the 256 KiB instruction-body limit and
 deterministic content digest.
 
 The source-backed preview/import adapter passes only server-fetched candidate
-bytes to the sole Skills content service. Import must preserve that exact commit,
+bytes to the sole Skills content service. Import must preserve the exact commit,
 path, source revision, content identity, operation ID, and expected skill
-revision; accepted content receipts and runtime assignment remain owned by the
-Skills service. A moving branch/tag or later source removal must not replace
-already accepted bytes. The Projects source reader is implemented, while its
-selected-source preview/import contract is admitted. The client preview returns
-metadata and a content digest, not file bytes. Import passes the source revision,
-resolved commit, selected path, digest, and idempotency key to the owner, which
-reads the pinned content. Route publication and deployment remain separate and
-are not implied by this client integration.
+revision. The Skills service owns accepted content receipts and runtime
+assignment. The source-selected preview/import adapter is implemented in this
+Projects owner candidate. It uses the existing content services and does not add
+a second loader or catalog. A moving branch/tag or later source removal must
+not replace already accepted bytes. Assignment still uses the existing Skills
+assignment service.
+
+Preview requires current project read authority. Import also requires
+`projects.admin` and current project write authority. Both routes re-resolve the
+caller after upstream I/O. They require the same actor and membership revision.
+They also recheck the active source revision before they return or import
+content.
+Requests reject query parameters and responses use `Cache-Control: no-store`.
+Errors use Problem Details with a stable `code`:
+
+| Status | Error |
+| --- | --- |
+| `400` | Invalid request or skill content. |
+| `403` | Authority failure. |
+| `404` | Source not found. |
+| `409` | Stale source or skill revision, digest mismatch, or conflicting idempotency key. |
+| `422` | Source data exceeds the size limit. |
+| `500` | Content-store integrity error. |
+| `502` | Upstream data is malformed. |
+| `503` | Upstream service or content storage is unavailable. |
+| `504` | Request timed out. |
 
 The checked-in v1 Gateway catalog maps source list/create/update/tombstone,
-pinned browse, local-file Skills preview/import, and project assignment to these
-Projects owner paths. The separate selected-source preview/import contract is
-admitted, but its publication and deployment remain pending. The current
-OpenAPI contract includes the owner DTOs, exact required browse revision query,
-and 3 MiB Skills request limits. The first-party MCP catalog is built from that
-current OpenAPI document.
+pinned browse, selected-content preview/import, inline Skills preview/import,
+project assignment, and metadata-only inventory reads to these Projects owner
+paths. Its OpenAPI contract includes the owner DTOs, exact required source
+revision query values, optional inventory cursor/page-size parameters with their
+bounds, and 3 MiB request-body limits for both inline and selected-source
+preview/import. The first-party MCP catalog is built from that same OpenAPI
+document. The Gateway remains a forwarder; these contracts do not prove a joined
+or deployed owner implementation.
 
 The retained Web project settings page uses the source management and pinned
 browse routes, then offers explicit selected-source preview and import. The
@@ -133,9 +208,9 @@ source request contains no file bytes; the owner receipt must match the preview
 digest before the imported skill can be assigned to agents in the current
 project cast. Local file preview/import remains a separate path. The API has no
 actor-safe runtime-loaded status producer; the page reports that gap instead of
-inferring runtime use from an assignment or accepted run configuration.
-Publication or deployment of the selected-source routes is not established by
-this client integration.
+inferring runtime use from an assignment or accepted run configuration. The
+source and Gateway routes are present in v1; deployment and live availability
+are not established by this client integration.
 
 ## Validation
 

@@ -64,6 +64,9 @@ The separate [Environment BuildTest path](docs/architecture/environment-sandbox.
 resolves Core's immutable accepted checkpoint and persists its stable operation in existing owner-effects state.
 It uses gated offline command Pods and a separate pinned, read-only collector for required files.
 Core retains MAF checkpoint and run-state ownership.
+Authenticated dispatch can now prepare version 2 repository input through the existing Source Control owner.
+It keeps the confirmed command unchanged and saves verified source metadata and seed bytes in the original checkpoint.
+Provider preparation helpers and complete output export remain separate work.
 Configuration, contract, and collector-entry checks are not live provider or complete native accounting evidence.
 
 See the [Events & Sessions journal](docs/architecture/events-sessions.md) for its

@@ -154,8 +154,8 @@ configuration revision is checked before it replaces the editor's current
 revision; assignment is disabled while the editor has unsaved changes. The UI
 reports the saved assignment but does not claim that a runtime loaded it.
 Runtime-loaded status is unavailable from the current public API. The
-selected-source route contract is admitted, but its publication and deployment
-are separate; this client does not claim live availability.
+selected-source and Gateway routes are present in v1. Their deployment and
+live availability are not established by this client.
 
 When the accepted run configuration selects GitHub App mode, and its owner
 routes have been admitted and configured, the run Selection view reads safe
@@ -230,6 +230,6 @@ those runtime identities as unavailable rather than inferring them from
 configuration or usage. Usage totals distinguish priced and unpriced events
 and do not replace missing measurements with zero.
 
-This documentation describes the v1 source client only. It does not establish
-that the web image, Gateway, Broker, or owner services have been published or
-deployed.
+This documentation describes the v1 source client only. The source and Gateway
+routes are present in v1; this does not establish that the web image, Gateway,
+Broker, or owner services are deployed or live.

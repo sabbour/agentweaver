@@ -5,6 +5,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
+using Agentweaver.SourceControl;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Agents.AI.Workflows;
 
 namespace Agentweaver.Orchestrator;
@@ -71,22 +73,80 @@ internal sealed record MafExecutionBuildTestIntent(
     SandboxBuildTestAcceptedExecutionOptions ExecutionOptions,
     SandboxBuildTestExpectedBinding ExpectedBinding)
 {
+    [JsonIgnore]
+    public ImmutableArray<byte>? WorkspaceSeed { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxBuildTestWorkspaceSeedReference? WorkspaceSeedReference { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxBuildTestWorkspaceSource? WorkspaceInput { get; init; }
+
+    [JsonIgnore]
+    internal SandboxBuildTestWorkspaceSource? EffectiveWorkspaceSource
+    {
+        get
+        {
+            if (WorkspaceInput is not null && Command.WorkspaceSource is not null &&
+                WorkspaceInput != Command.WorkspaceSource)
+                throw new ArgumentException("The execution input cannot replace a confirmed workspace source.");
+            return WorkspaceInput ?? Command.WorkspaceSource;
+        }
+    }
+
     internal SandboxBuildTestCheckpointReference CheckpointReference() =>
         new(Identity.ProjectId, Identity.RunId, Identity.SessionId, CheckpointId, WorkPlanId,
             StepId, CheckpointRevision, DecisionStateVersion, ExecutionFence, AcceptedSelectionHash);
 
-    internal SandboxBuildTestAcceptedCommand ToAcceptedCommand()
+    internal MafExecutionBuildTestIntent AttachWorkspaceInput(
+        SandboxBuildTestWorkspaceSource source,
+        ImmutableArray<byte> seed)
+    {
+        if (WorkspaceSeedReference is not null || WorkspaceInput is not null ||
+            Command.WorkspaceSource is not null && Command.WorkspaceSource != source)
+            throw new CoordinationException(
+                "maf_execution_build_test_intent_conflict", StatusCodes.Status409Conflict);
+        _ = GitWorkspaceBuildTestSeedPackage.Parse(seed.AsSpan(), source);
+        var intent = this with
+        {
+            WorkspaceInput = Command.WorkspaceSource is null ? source : null,
+            WorkspaceSeed = seed,
+            WorkspaceSeedReference = new(
+                CheckpointReference(), OperationId, source.SeedSha256, source.SeedByteLength)
+        };
+        _ = intent.ToAcceptedCommand();
+        return intent;
+    }
+
+    internal SandboxBuildTestAcceptedCommand ToAcceptedCommand(bool requireSeed = true)
     {
         if (Command is null || ExecutionOptions is null ||
             ExecutionOptions.ProfileId != Command.ExecutionProfileReference)
             throw new ArgumentException("The BuildTest command must use its pinned execution profile.");
+        var workspaceSource = EffectiveWorkspaceSource;
+        if (workspaceSource is { } source)
+        {
+            _ = (WorkspaceSeedReference ?? throw new ArgumentException(
+                "The BuildTest workspace seed requires its persisted origin reference."))
+                .Validate(CheckpointReference(), OperationId, source);
+        }
+        else if (WorkspaceSeedReference is not null)
+        {
+            throw new ArgumentException("A legacy BuildTest intent cannot reference a workspace seed.");
+        }
         var accepted = new SandboxBuildTestAcceptedCommand(
-            1, OperationId, CheckpointReference(), Command.ExecutableReference, Command.Arguments,
+            workspaceSource is null ? 1 : 2,
+            OperationId, CheckpointReference(), Command.ExecutableReference, Command.Arguments,
             Command.WorkingDirectory,
             Command.Outputs.Select(output => new SandboxBuildTestOutputObligation(
                 output.Name, output.RelativePath, output.Required, output.MaximumBytes)).ToImmutableArray(),
-            ExecutionOptions, string.Empty);
-        return (accepted with { ImmutableHash = accepted.ComputeImmutableHash() }).Validate();
+            ExecutionOptions, string.Empty)
+        {
+            WorkspaceSource = workspaceSource,
+            WorkspaceSeed = WorkspaceSeed
+        };
+        accepted = accepted with { ImmutableHash = accepted.ComputeImmutableHash() };
+        return requireSeed ? accepted.Validate() : accepted.ValidateMetadata();
     }
 
     internal SandboxBuildTestApiRequest ToApiRequest() =>
@@ -307,7 +367,7 @@ internal static class MafExecutionCheckpointContract
                 !state.Progress.NonModelSteps.TryGetValue(stepId, out var status) ||
                 status == MafExecutionTaskStatus.Pending)
                 throw new ArgumentException("MAF BuildTest checkpoint intents are invalid.", nameof(state));
-            _ = intent.ToAcceptedCommand();
+            _ = intent.ToAcceptedCommand(requireSeed: false);
             _ = intent.ToApiRequest();
             if (status != MafExecutionTaskStatus.Running &&
                 !state.BuildTestReceipts.ContainsKey(stepId))

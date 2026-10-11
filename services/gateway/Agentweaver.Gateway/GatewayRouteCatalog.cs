@@ -106,6 +106,16 @@ public static class GatewayRouteCatalog
             "/api" + marketplaceSources + "/{sourceId}/browse",
             "browseMarketplaceSource", "Browse one revision of a project marketplace source",
             ["expectedSourceRevision", "query", "page", "pageSize"], forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, marketplaceSources + "/{sourceId}/preview",
+            "/api" + marketplaceSources + "/{sourceId}/preview",
+            "previewMarketplaceSkill", "Preview selected skill content from a marketplace source",
+            body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
+            forwardTenantSelector: true);
+        Add("POST", GatewayOwner.Projects, marketplaceSources + "/{sourceId}/import",
+            "/api" + marketplaceSources + "/{sourceId}/import",
+            "importMarketplaceSkill", "Import selected skill content from a marketplace source",
+            body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
+            forwardTenantSelector: true);
         Add("POST", GatewayOwner.Projects, "/skills/preview", "/api/skills/preview",
             "previewSkillContent", "Validate skill content without importing it",
             body: true, maximumRequestBodyBytes: skillContentMaximumRequestBytes,
@@ -119,6 +129,10 @@ public static class GatewayRouteCatalog
             "/api/projects/{projectId}/skills/{skillId}/assignment",
             "updateProjectSkillAssignment", "Update a project skill assignment",
             body: true, forwardTenantSelector: true);
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/skills",
+            "/api/projects/{projectId}/skills",
+            "listProjectSkillInventory", "Read current project skill inventory",
+            ["cursor", "pageSize"], forwardTenantSelector: true);
         Add("PUT", GatewayOwner.Projects, "/projects/{projectId}/runs/{runId}/selection",
             "/api/projects/{projectId}/runs/{runId}/selection",
             "acceptRunSelection", "Accept a run selection", body: true, forwardTenantSelector: true);

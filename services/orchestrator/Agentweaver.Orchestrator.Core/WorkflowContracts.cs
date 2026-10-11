@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
@@ -50,7 +51,11 @@ public sealed record WorkflowBuildTestCommand(
     string ExecutableReference,
     ImmutableArray<string> Arguments,
     string WorkingDirectory,
-    ImmutableArray<WorkflowBuildTestOutput> Outputs);
+    ImmutableArray<WorkflowBuildTestOutput> Outputs)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxBuildTestWorkspaceSource? WorkspaceSource { get; init; }
+}
 
 public sealed record WorkflowStepDefinition(
     string Id,

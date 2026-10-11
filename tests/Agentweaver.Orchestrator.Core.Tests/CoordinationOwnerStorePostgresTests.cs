@@ -185,9 +185,11 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
             _fixture.DataSource, _schema, objectStore: null).ForRun(binding);
 
         var first = await checkpointStore.CreateCheckpointAsync(
-            identity.SessionId, Payload("""{"revision":1}"""));
+            identity.SessionId, MafExecutionCheckpointContract.Serialize(
+                new MafExecutionCheckpoint(1, "plan-1", 1, MafExecutionProgress.Empty)));
         var second = await checkpointStore.CreateCheckpointAsync(
-            identity.SessionId, Payload("""{"revision":2}"""), first);
+            identity.SessionId, MafExecutionCheckpointContract.Serialize(
+                new MafExecutionCheckpoint(2, "plan-1", 1, MafExecutionProgress.Empty)), first);
 
         var index = await checkpointStore.RetrieveIndexAsync(identity.SessionId);
         Assert.Equal(2, index.Count());

@@ -164,12 +164,174 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
                 item => item.GetProperty("name").GetString() == optionalName);
             Assert.False(parameter.GetProperty("required").GetBoolean());
         }
+
+        var preview = FindOperation(paths, "previewMarketplaceSkill");
+        var import = FindOperation(paths, "importMarketplaceSkill");
+        foreach (var operation in new[] { preview, import })
+        {
+            Assert.DoesNotContain(
+                operation.GetProperty("parameters").EnumerateArray(),
+                parameter => parameter.GetProperty("in").GetString() == "query");
+            Assert.True(operation.GetProperty("requestBody").GetProperty("required").GetBoolean());
+            Assert.True(operation.GetProperty("responses").TryGetProperty("200", out _));
+        }
+        Assert.Equal(
+            "#/components/schemas/MarketplaceSkillPreviewRequest",
+            preview.GetProperty("requestBody").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Equal(
+            "#/components/schemas/MarketplaceSkillImportRequest",
+            import.GetProperty("requestBody").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Equal(
+            "#/components/schemas/SkillContentPreview",
+            preview.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        Assert.Equal(
+            "#/components/schemas/SkillContentImportReceipt",
+            import.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        foreach (var status in new[] { "400", "404", "409", "422", "503" })
+        {
+            Assert.True(preview.GetProperty("responses").TryGetProperty(status, out _));
+            Assert.True(import.GetProperty("responses").TryGetProperty(status, out _));
+        }
+        Assert.True(import.GetProperty("responses").TryGetProperty("500", out _));
+        Assert.Contains("not the source bytes", preview.GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        var schemasForMarketplaceContent = document.RootElement.GetProperty("components").GetProperty("schemas");
+        var previewRequest = schemasForMarketplaceContent.GetProperty("MarketplaceSkillPreviewRequest");
+        Assert.False(previewRequest.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[] { "expectedSourceRevision", "resolvedCommitSha", "selectedPath" },
+            previewRequest.GetProperty("required").EnumerateArray()
+                .Select(property => property.GetString()).ToArray());
+        var previewProperties = previewRequest.GetProperty("properties");
+        AssertPropertyType(previewProperties, "expectedSourceRevision", "integer");
+        AssertPropertyType(previewProperties, "resolvedCommitSha", "string");
+        AssertPropertyType(previewProperties, "selectedPath", "string");
+
+        var importRequest = schemasForMarketplaceContent.GetProperty("MarketplaceSkillImportRequest");
+        Assert.False(importRequest.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[]
+            {
+                "expectedSourceRevision", "resolvedCommitSha", "selectedPath", "idempotencyKey",
+                "expectedContentDigest",
+            },
+            importRequest.GetProperty("required").EnumerateArray()
+                .Select(property => property.GetString()).ToArray());
+        var importProperties = importRequest.GetProperty("properties");
+        AssertPropertyType(importProperties, "expectedSourceRevision", "integer");
+        AssertPropertyType(importProperties, "resolvedCommitSha", "string");
+        AssertPropertyType(importProperties, "selectedPath", "string");
+        AssertPropertyType(importProperties, "idempotencyKey", "string");
+        AssertPropertyType(importProperties, "expectedContentDigest", "string");
+        AssertNullablePropertyType(importProperties, "skillId", "string");
+        AssertNullablePropertyType(importProperties, "expectedRevision", "integer");
+
+        var inventory = FindOperation(paths, "listProjectSkillInventory");
+        var inventoryQuery = inventory.GetProperty("parameters").EnumerateArray()
+            .Where(parameter => parameter.GetProperty("in").GetString() == "query")
+            .ToArray();
+        Assert.Equal(
+            new[] { "cursor", "pageSize" },
+            inventoryQuery.Select(parameter => parameter.GetProperty("name").GetString()).ToArray());
+        Assert.All(inventoryQuery, parameter => Assert.False(parameter.GetProperty("required").GetBoolean()));
+        var pageSizeSchema = Assert.Single(
+            inventoryQuery,
+            parameter => parameter.GetProperty("name").GetString() == "pageSize")
+            .GetProperty("schema");
+        Assert.Equal("integer", pageSizeSchema.GetProperty("type").GetString());
+        Assert.Equal(1, pageSizeSchema.GetProperty("minimum").GetInt32());
+        Assert.Equal(50, pageSizeSchema.GetProperty("maximum").GetInt32());
+        Assert.Equal(25, pageSizeSchema.GetProperty("default").GetInt32());
+        Assert.True(inventory.GetProperty("responses").TryGetProperty("400", out _));
+        Assert.True(inventory.GetProperty("responses").TryGetProperty("404", out _));
+        Assert.Contains("does not make multiple pages a snapshot",
+            inventory.GetProperty("description").GetString(), StringComparison.Ordinal);
+
         var existingProjectQuery = Assert.Single(
             FindOperation(paths, "getProject").GetProperty("parameters").EnumerateArray(),
             item => item.GetProperty("name").GetString() == "runId");
         Assert.False(existingProjectQuery.GetProperty("required").GetBoolean());
 
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
+        var inventoryPage = schemas.GetProperty("ProjectSkillInventoryPage");
+        Assert.False(inventoryPage.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[] { "configurationRevision", "assignments", "revisions", "pageSize", "nextCursor" },
+            inventoryPage.GetProperty("required").EnumerateArray()
+                .Select(property => property.GetString()).ToArray());
+        var pageProperties = inventoryPage.GetProperty("properties");
+        AssertPropertyType(pageProperties, "configurationRevision", "integer");
+        AssertPropertyType(pageProperties, "assignments", "array");
+        AssertPropertyType(pageProperties, "revisions", "array");
+        AssertPropertyType(pageProperties, "pageSize", "integer");
+        AssertNullablePropertyType(pageProperties, "nextCursor", "string");
+        Assert.Equal(
+            "#/components/schemas/ProjectSkillInventoryAssignment",
+            pageProperties.GetProperty("assignments").GetProperty("items").GetProperty("$ref").GetString());
+        Assert.Equal(
+            "#/components/schemas/ProjectSkillInventoryRevision",
+            pageProperties.GetProperty("revisions").GetProperty("items").GetProperty("$ref").GetString());
+
+        var assignmentSchema = schemas.GetProperty("ProjectSkillInventoryAssignment");
+        Assert.False(assignmentSchema.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[] { "skillId", "enabled", "order", "revision", "contentDigest", "agentIds" },
+            assignmentSchema.GetProperty("required").EnumerateArray()
+                .Select(property => property.GetString()).ToArray());
+        var assignmentProperties = assignmentSchema.GetProperty("properties");
+        foreach (var (name, type) in new[]
+        {
+            ("skillId", "string"), ("enabled", "boolean"), ("order", "integer"),
+        })
+            AssertPropertyType(assignmentProperties, name, type);
+        AssertNullablePropertyType(assignmentProperties, "revision", "integer");
+        AssertNullablePropertyType(assignmentProperties, "contentDigest", "string");
+        AssertNullablePropertyType(assignmentProperties, "agentIds", "array");
+        Assert.Equal(
+            "string",
+            assignmentProperties.GetProperty("agentIds").GetProperty("anyOf")[0]
+                .GetProperty("items").GetProperty("type").GetString());
+
+        var revisionSchema = schemas.GetProperty("ProjectSkillInventoryRevision");
+        Assert.False(revisionSchema.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[]
+            {
+                "skillId", "revision", "name", "description", "contentDigest", "resourceCount",
+                "totalBytes", "createdByActorId", "createdAt", "sourceId", "sourceRevision",
+                "requestedRef", "resolvedCommitSha", "selectedPath", "isRevoked", "revokedByActorId",
+                "revokedAt",
+            },
+            revisionSchema.GetProperty("required").EnumerateArray()
+                .Select(property => property.GetString()).ToArray());
+        var revisionProperties = revisionSchema.GetProperty("properties");
+        foreach (var (name, type) in new[]
+        {
+            ("skillId", "string"), ("revision", "integer"), ("name", "string"),
+            ("description", "string"), ("contentDigest", "string"), ("resourceCount", "integer"),
+            ("totalBytes", "integer"), ("createdByActorId", "string"), ("createdAt", "string"),
+            ("isRevoked", "boolean"),
+        })
+            AssertPropertyType(revisionProperties, name, type);
+        Assert.Equal(
+            "date-time",
+            revisionProperties.GetProperty("createdAt").GetProperty("format").GetString());
+        foreach (var (name, type) in new[]
+        {
+            ("sourceId", "string"), ("sourceRevision", "string"), ("requestedRef", "string"),
+            ("resolvedCommitSha", "string"), ("selectedPath", "string"),
+            ("revokedByActorId", "string"), ("revokedAt", "string"),
+        })
+            AssertNullablePropertyType(revisionProperties, name, type);
+        Assert.Equal(
+            "date-time",
+            revisionProperties.GetProperty("revokedAt").GetProperty("anyOf")[0]
+                .GetProperty("format").GetString());
+
         foreach (var schemaName in new[]
         {
             "CreateMarketplaceSourceRequest",
@@ -186,7 +348,18 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
         Assert.Equal(
             3L * 1024 * 1024,
             gateway.GetRequestSizeLimit("/api/v1/projects/{projectId}/skills/import")?.MaxRequestBodySize);
-        foreach (var operationId in new[] { "previewSkillContent", "importProjectSkill" })
+        Assert.Equal(
+            3L * 1024 * 1024,
+            gateway.GetRequestSizeLimit(
+                "/api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview")?.MaxRequestBodySize);
+        Assert.Equal(
+            3L * 1024 * 1024,
+            gateway.GetRequestSizeLimit(
+                "/api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import")?.MaxRequestBodySize);
+        foreach (var operationId in new[]
+        {
+            "previewSkillContent", "importProjectSkill", "previewMarketplaceSkill", "importMarketplaceSkill",
+        })
         {
             Assert.Equal(
                 3 * 1024 * 1024,
@@ -257,6 +430,14 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
                 "/api/projects/project-1/skill-marketplaces/sources/source-1/browse?expectedSourceRevision=4&query=alpha&page=2&pageSize=5",
                 string.Empty),
             (HttpMethod.Post,
+                "/api/v1/projects/project-1/skill-marketplaces/sources/source-1/preview",
+                "/api/projects/project-1/skill-marketplaces/sources/source-1/preview",
+                "{\"expectedSourceRevision\":4,\"resolvedCommitSha\":\"0123456789abcdef0123456789abcdef01234567\",\"selectedPath\":\"skills/example\"}"),
+            (HttpMethod.Post,
+                "/api/v1/projects/project-1/skill-marketplaces/sources/source-1/import",
+                "/api/projects/project-1/skill-marketplaces/sources/source-1/import",
+                "{\"expectedSourceRevision\":4,\"resolvedCommitSha\":\"0123456789abcdef0123456789abcdef01234567\",\"selectedPath\":\"skills/example\",\"idempotencyKey\":\"intent-2\",\"expectedContentDigest\":\"sha256:expected\",\"skillId\":\"skill-1\",\"expectedRevision\":3}"),
+            (HttpMethod.Post,
                 "/api/v1/skills/preview",
                 "/api/skills/preview",
                 "{\"candidate\":{\"skillMarkdown\":\"IyBUZXN0\",\"resources\":[]}}"),
@@ -268,6 +449,10 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
                 "/api/v1/projects/project-1/skills/skill-1/assignment",
                 "/api/projects/project-1/skills/skill-1/assignment",
                 "{\"expectedProjectConfigurationRevision\":4,\"revision\":1,\"contentDigest\":\"sha256:test\",\"enabled\":true,\"order\":0,\"agentIds\":[\"agent-1\"]}"),
+            (HttpMethod.Get,
+                "/api/v1/projects/project-1/skills?cursor=opaque_cursor&pageSize=50",
+                "/api/projects/project-1/skills?cursor=opaque_cursor&pageSize=50",
+                string.Empty),
         };
 
         foreach (var ownerRequest in ownerRequests)
@@ -293,6 +478,138 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             Assert.Equal("tenant-1", forwarded[index].Tenant);
             Assert.Equal(ownerRequests[index].Body, forwarded[index].Body);
         }
+    }
+
+    [Fact]
+    public async Task MarketplaceSelectedSourceOwnerProblemsPassThrough()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var now = DateTime.UtcNow;
+        var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+            "https://api.test",
+            [new Claim("sub", "marketplace-skill-test-actor"), new Claim("scope", "api.read")],
+            now.AddMinutes(-1),
+            now.AddMinutes(5),
+            new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
+        token.Header["typ"] = "at+jwt";
+        var bearer = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().WriteToken(token);
+        const string ownerBody =
+            "{\"title\":\"skill conflict\",\"status\":409,\"code\":\"skill_content_conflict\"}";
+        string? ownerPath = null;
+        string? ownerAuthorization = null;
+        string? ownerTenant = null;
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey,
+            () => new RecordingOwnerHandler((request, _) =>
+            {
+                ownerPath = request.RequestUri!.PathAndQuery;
+                ownerAuthorization = request.Headers.Authorization?.ToString();
+                request.Headers.TryGetValues("X-Agentweaver-Tenant", out var tenantValues);
+                ownerTenant = tenantValues?.SingleOrDefault();
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
+                {
+                    Content = new StringContent(ownerBody, Encoding.UTF8, "application/problem+json"),
+                });
+            }),
+            (_, _, _) => throw new InvalidOperationException(
+                "Selected marketplace skill requests must use the Projects owner."));
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/api/v1/projects/project-1/skill-marketplaces/sources/source-1/import")
+        {
+            Content = new StringContent(
+                "{\"expectedSourceRevision\":4,\"resolvedCommitSha\":\"0123456789abcdef0123456789abcdef01234567\",\"selectedPath\":\"skills/example\",\"idempotencyKey\":\"intent-2\",\"expectedContentDigest\":\"sha256:expected\"}",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", "tenant-1");
+        using var response = await gateway.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(ownerBody, await response.Content.ReadAsStringAsync());
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal(
+            "/api/projects/project-1/skill-marketplaces/sources/source-1/import",
+            ownerPath);
+        Assert.Equal("Bearer " + bearer, ownerAuthorization);
+        Assert.Equal("tenant-1", ownerTenant);
+    }
+
+    [Fact]
+    public async Task ProjectSkillInventoryPassesMalformedQueryToOwnerAndPreservesItsError()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var now = DateTime.UtcNow;
+        var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+            "https://api.test",
+            [new Claim("sub", "skills-inventory-test-actor"), new Claim("scope", "api.read")],
+            now.AddMinutes(-1),
+            now.AddMinutes(5),
+            new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
+        token.Header["typ"] = "at+jwt";
+        var bearer = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().WriteToken(token);
+        const string query = "?cursor=first&cursor=second&pageSize=0&unexpected=value";
+        const string ownerBody =
+            "{\"title\":\"invalid inventory query\",\"status\":400,\"code\":\"skill_inventory_query_invalid\"}";
+        string? ownerPathAndQuery = null;
+        string? ownerAuthorization = null;
+        string? ownerTenant = null;
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey,
+            () => new RecordingOwnerHandler((request, _) =>
+            {
+                ownerPathAndQuery = request.RequestUri!.PathAndQuery;
+                ownerAuthorization = request.Headers.Authorization?.ToString();
+                request.Headers.TryGetValues("X-Agentweaver-Tenant", out var tenantValues);
+                ownerTenant = tenantValues?.SingleOrDefault();
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent(ownerBody, Encoding.UTF8, "application/problem+json"),
+                });
+            }),
+            (_, _, _) => throw new InvalidOperationException(
+                "Skill inventory requests must use the Projects owner."));
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/v1/projects/project-1/skills" + query);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearer);
+        request.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", "tenant-1");
+        using var response = await gateway.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(ownerBody, await response.Content.ReadAsStringAsync());
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal("/api/projects/project-1/skills" + query, ownerPathAndQuery);
+        Assert.Equal("Bearer " + bearer, ownerAuthorization);
+        Assert.Equal("tenant-1", ownerTenant);
+    }
+
+    private static void AssertPropertyType(JsonElement properties, string name, string expectedType)
+    {
+        Assert.Equal(expectedType, properties.GetProperty(name).GetProperty("type").GetString());
+    }
+
+    private static void AssertNullablePropertyType(
+        JsonElement properties,
+        string name,
+        string expectedType)
+    {
+        var alternatives = properties.GetProperty(name).GetProperty("anyOf").EnumerateArray().ToArray();
+        Assert.Contains(
+            alternatives,
+            alternative => alternative.TryGetProperty("type", out var type) &&
+                type.GetString() == expectedType);
+        Assert.Contains(
+            alternatives,
+            alternative => alternative.TryGetProperty("type", out var type) &&
+                type.GetString() == "null");
     }
 
     private static void AssertRevisionQuery(JsonElement operation, string name, bool required)

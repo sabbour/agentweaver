@@ -13,7 +13,7 @@ using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace Agentweaver.Orchestrator;
 
-internal static class SourceControlEndpoints
+internal static partial class SourceControlEndpoints
 {
     private static readonly TimeSpan MergeSettlementTimeout = TimeSpan.FromSeconds(30);
     private static readonly JsonSerializerOptions ProviderSelectionJsonOptions = new(JsonSerializerDefaults.Web)
@@ -2369,21 +2369,9 @@ internal static class SourceControlEndpoints
         }
         catch (GitWorkspaceException exception)
         {
-            var status = exception.Code switch
-            {
-                GitWorkspaceFailureCode.InvalidRequest => StatusCodes.Status400BadRequest,
-                GitWorkspaceFailureCode.PathConflict or GitWorkspaceFailureCode.CorruptWorkspace =>
-                    StatusCodes.Status409Conflict,
-                GitWorkspaceFailureCode.WorkspaceUnavailable => StatusCodes.Status404NotFound,
-                GitWorkspaceFailureCode.DiffTooLarge => StatusCodes.Status413PayloadTooLarge,
-                GitWorkspaceFailureCode.CapabilityUnavailable or GitWorkspaceFailureCode.GitUnavailable =>
-                    StatusCodes.Status503ServiceUnavailable,
-                GitWorkspaceFailureCode.GitFailed => StatusCodes.Status502BadGateway,
-                _ => StatusCodes.Status502BadGateway
-            };
+            var failure = MapGitWorkspaceFailure(exception);
             return Results.Json(
-                new { error = "source_control_workspace_" + exception.Code.ToString().ToLowerInvariant() },
-                statusCode: status);
+                new { error = failure.Code }, statusCode: failure.StatusCode);
         }
         catch (ArgumentException)
         {
@@ -2394,6 +2382,20 @@ internal static class SourceControlEndpoints
             return Results.Json(new { error = "invalid_json" }, statusCode: StatusCodes.Status400BadRequest);
         }
     }
+
+    internal static CoordinationException MapGitWorkspaceFailure(GitWorkspaceException exception) =>
+        new("source_control_workspace_" + exception.Code.ToString().ToLowerInvariant(),
+            exception.Code switch
+            {
+                GitWorkspaceFailureCode.InvalidRequest => StatusCodes.Status400BadRequest,
+                GitWorkspaceFailureCode.PathConflict or GitWorkspaceFailureCode.CorruptWorkspace =>
+                    StatusCodes.Status409Conflict,
+                GitWorkspaceFailureCode.WorkspaceUnavailable => StatusCodes.Status404NotFound,
+                GitWorkspaceFailureCode.DiffTooLarge => StatusCodes.Status413PayloadTooLarge,
+                GitWorkspaceFailureCode.CapabilityUnavailable or GitWorkspaceFailureCode.GitUnavailable =>
+                    StatusCodes.Status503ServiceUnavailable,
+                _ => StatusCodes.Status502BadGateway
+            });
 
     private static string ToErrorSuffix(SourceControlFailureCode code) =>
         code switch

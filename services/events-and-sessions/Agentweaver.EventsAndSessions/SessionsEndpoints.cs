@@ -76,6 +76,7 @@ public static class SessionsEndpoints
             var binding = await journal.GetProviderBindingAsync(context.User, sessionId, cancellationToken);
             await bindings.VerifyPinnedAsync(context.User, binding, cancellationToken);
             var result = await journal.AppendAsync(context.User, sessionId, input, cancellationToken);
+            result = PublicSessionEventProjection.Project(result);
             return Results.Json(result, JsonOptions, statusCode: result.IsDuplicate
                 ? StatusCodes.Status200OK : StatusCodes.Status201Created);
         }, cancellationToken);
@@ -166,7 +167,7 @@ public static class SessionsEndpoints
             await bindings.VerifyPinnedAsync(context.User, binding, cancellationToken);
             var page = await journal.ReplayAsync(
                 context.User, new SessionEventPageRequest(sessionId, cursor, limit ?? 100), cancellationToken);
-            return Results.Json(page, JsonOptions);
+            return Results.Json(PublicSessionEventProjection.Project(page), JsonOptions);
         }, cancellationToken);
 
     private static async Task<IResult> ReplayRunAsync(
@@ -185,7 +186,7 @@ public static class SessionsEndpoints
             await bindings.VerifyPinnedAsync(context.User, binding, cancellationToken);
             var page = await journal.ReplayRunAsync(context.User,
                 new SessionRunEventPageRequest(projectId, runId, cursor, limit ?? 100), cancellationToken);
-            return Results.Json(page, JsonOptions);
+            return Results.Json(PublicSessionEventProjection.Project(page), JsonOptions);
         }, cancellationToken);
 
     private static async Task SubscribeAsync(
@@ -208,7 +209,8 @@ public static class SessionsEndpoints
                     sessionId, cursor, maximumEvents ?? 1000, maximumDurationSeconds ?? 300),
                 cancellationToken))
             {
-                await JsonSerializer.SerializeAsync(context.Response.Body, item, JsonOptions, cancellationToken);
+                await JsonSerializer.SerializeAsync(
+                    context.Response.Body, PublicSessionEventProjection.Project(item), JsonOptions, cancellationToken);
                 await context.Response.WriteAsync("\n", cancellationToken);
                 await context.Response.Body.FlushAsync(cancellationToken);
             }
@@ -249,7 +251,8 @@ public static class SessionsEndpoints
                     projectId, runId, cursor, maximumEvents ?? 1000, maximumDurationSeconds ?? 300),
                 cancellationToken))
             {
-                await JsonSerializer.SerializeAsync(context.Response.Body, item, JsonOptions, cancellationToken);
+                await JsonSerializer.SerializeAsync(
+                    context.Response.Body, PublicSessionEventProjection.Project(item), JsonOptions, cancellationToken);
                 await context.Response.WriteAsync("\n", cancellationToken);
                 await context.Response.Body.FlushAsync(cancellationToken);
             }

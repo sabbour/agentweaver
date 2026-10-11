@@ -136,6 +136,144 @@ public sealed class RuntimeOwnerHttpTransportTests
         Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
     };
 
+    [Fact]
+    public async Task BoundedGetUsesFixedOwnerAndProtectedActorWithoutABody()
+    {
+        var expected = new RuntimeBootstrapRequest(Guid.NewGuid(), Guid.NewGuid(), new string('a', 64));
+        var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Null(request.Content);
+            Assert.Equal(new Uri("https://owner.test/internal/current"), request.RequestUri);
+            Assert.Equal("actor", request.Headers.Authorization?.Parameter);
+            Assert.Equal("tenant", Assert.Single(request.Headers.GetValues("X-Agentweaver-Tenant")));
+            Assert.True(request.Headers.CacheControl?.NoStore);
+            return Task.FromResult(Response(request, expected));
+        });
+        using var client = new HttpClient(handler);
+
+        var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeBootstrapRequest>(
+            client, new Uri("https://owner.test/"), "/internal/current",
+            new(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), "tenant"),
+            null, 1024, false, default);
+
+        Assert.Equal(expected, result);
+        Assert.Single(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("conflict", "runtime_owner_binding_changed")]
+    [InlineData("redirect", "runtime_owner_redirect_rejected")]
+    [InlineData("cacheable", "runtime_owner_cache_contract_invalid")]
+    [InlineData("oversize", "runtime_owner_response_size_invalid")]
+    [InlineData("unknown-field", "runtime_owner_contract_invalid")]
+    [InlineData("media-type", "runtime_owner_response_size_invalid")]
+    public async Task BoundedTransportRejectsChangedBindingAndInvalidResponse(string changed, string expectedCode)
+    {
+        var handler = new RecordingHandler(request =>
+        {
+            var response = Response(request, new RuntimeBootstrapRequest(Guid.NewGuid(), Guid.NewGuid(), new string('a', 64)));
+            if (changed == "conflict")
+                response.StatusCode = HttpStatusCode.Conflict;
+            if (changed == "redirect")
+                response.StatusCode = HttpStatusCode.TemporaryRedirect;
+            if (changed == "cacheable")
+                response.Headers.CacheControl = null;
+            if (changed == "oversize")
+            {
+                response.Content = new ByteArrayContent(new byte[1025]);
+                response.Content.Headers.ContentType = new("application/json");
+            }
+            if (changed == "unknown-field")
+                response.Content = new StringContent("""{"callerTrusted":true}""", System.Text.Encoding.UTF8, "application/json");
+            if (changed == "media-type")
+                response.Content.Headers.ContentType = new("text/plain");
+            return Task.FromResult(response);
+        });
+        using var client = new HttpClient(handler);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeBootstrapRequest>(
+                client, new Uri("https://owner.test/"), "/internal/current",
+                new(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), null),
+                null, 1024, false, default));
+
+        Assert.Equal(expectedCode, failure.Code);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task BoundedOptionalReadReturnsMissingOnlyWhenExplicitAndNotCacheable()
+    {
+        var handler = new RecordingHandler(request =>
+        {
+            var response = Response(request, new { error = "not_found" });
+            response.StatusCode = HttpStatusCode.NotFound;
+            return Task.FromResult(response);
+        });
+        using var client = new HttpClient(handler);
+        var actor = new RuntimeActorAuthorization(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), null);
+
+        Assert.Null(await RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeBootstrapRequest>(
+            client, new Uri("https://owner.test/"), "/internal/current", actor, null, 1024, true, default));
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeBootstrapRequest>(
+                client, new Uri("https://owner.test/"), "/internal/current", actor, null, 1024, false, default));
+        Assert.Equal("runtime_owner_unavailable", failure.Code);
+    }
+
+    [Fact]
+    public async Task BoundedResponseBodyRetainsTheDeadlineAfterHeadersArrive()
+    {
+        using var body = new WaitingBodyStream();
+        var handler = new RecordingHandler(request =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StreamContent(body),
+                Headers = { CacheControl = new() { NoStore = true } }
+            };
+            response.Content.Headers.ContentType = new("application/json");
+            return Task.FromResult(response);
+        });
+        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMilliseconds(100) };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeBootstrapRequest>(
+                client, new Uri("https://owner.test/"), "/internal/current",
+                new(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), null),
+                null, 1024, false, default).WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.True(body.ReadStarted);
+    }
+
+    private sealed class WaitingBodyStream : Stream
+    {
+        public bool ReadStarted { get; private set; }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            ReadStarted = true;
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("The stalled body must be canceled.");
+        }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     private sealed class RecordingHandler(
         Func<HttpRequestMessage, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {

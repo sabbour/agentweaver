@@ -760,6 +760,16 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
             Assert.Equal(Command.Checkpoint, checkpoint);
             return Task.FromResult(Command);
         }
+
+        public Task VerifyCurrentAsync(
+            SandboxBuildTestAcceptedCommand acceptedCommand, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Command.Checkpoint != acceptedCommand.Checkpoint ||
+                Command.ImmutableHash != acceptedCommand.ImmutableHash)
+                throw new Agentweaver.Identity.RuntimeAuthorizationException("buildtest_command_checkpoint_changed");
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class ManagerPolicyStore : ICiliumPolicyResourceStore

@@ -271,6 +271,73 @@ Core retains that state and its interruption acknowledgement.
 Disposable PostgreSQL tests verify owner-store reservation, restart replay, and terminal-evidence preservation.
 They do not prove command-Pod execution, Kubernetes isolation, Cilium datapath enforcement, or complete native accounting.
 
+### Version 2 repository input candidate
+
+Version 2 binds a credential-free Git bundle and the full baseline inventory to the accepted command.
+The source binding includes the current actor, selection, repository pin, workspace incarnation, branch, and content digests.
+Authenticated MAF dispatch can provide `buildTestWorkspaces`, keyed by the confirmed BuildTest step ID.
+Each value contains only `workspaceId`, `workspaceIncarnationId`, `baseSha`, and `branchName`.
+These values locate an existing ready workspace; they do not grant access or select a repository.
+The existing Source Control owner resolves the current accepted run and repository pin.
+It opens that owned workspace and creates the bounded seed without cloning or redeeming repository credentials.
+The owner derives source metadata from the verified seed, current pin, actor, and accepted selection.
+
+The confirmed workflow command remains unchanged.
+The MAF intent stores server-produced source metadata in a separate optional `workspaceInput` field.
+The effective version 2 execution command binds this input in its immutable hash.
+The exact confirmed-command comparison still applies.
+An explicit source in an already-confirmed command must match the verified input exactly.
+Version 1 requests and intents without input retain their existing JSON and hash behavior.
+The selected execution profile must already support the version 2 collector mode; dispatch does not upgrade it.
+
+The original execution checkpoint stores the bounded seed in a separate PostgreSQL `bytea` field.
+Dispatch holds the existing execution lock and checks the current Source Control owner within the checkpoint transaction.
+It stores the command, input metadata, origin reference, and seed before returning or reserving an Environment operation.
+The owner rechecks the accepted selection, decision, and fence after preparation awaits.
+Retry reads the saved intent before seed creation and does not recapture a changed checkout.
+A conflicting workspace locator or changed owner is an error; it cannot replace saved input.
+Completed input can remain in a later accepted decision without changing its saved origin.
+Dispatch still checks the current source owner, selection, and fence.
+Running input cannot continue under a different decision version.
+Workspace preparation errors use the existing Source Control response and stop checkpoint creation.
+Later checkpoints retain only the typed origin reference.
+The JSON checkpoint limit remains 4 MiB.
+The seed limit remains 67,188,876 bytes.
+
+Explicit seed reads require the current owner and fence.
+They validate the original intent, declared length, digests, and package before they return bytes.
+Ordinary checkpoint reads do not load the binary field.
+An identical append must match both the JSON metadata and the stored bytes.
+The parent foreign key prevents deletion of an origin that has later checkpoints.
+The seed is source input, not SDK cache data or a produced-output record.
+
+Core's accepted-command route returns metadata only, including the bound seed digest and length.
+The separate `/workspace-seed` route reads the original binary field through the existing checkpoint store.
+It uses the same full checkpoint reference and current actor authorization.
+Core rechecks the accepted selection, owner decision, execution fence, and command after the read.
+Both routes also check the independently pinned Source Control owner for version 2 input.
+Both routes return `Cache-Control: no-store`.
+Version 1 commands have no seed route result.
+
+Environment fetches the raw seed only from its fixed Core owner, not a caller-supplied address.
+The response must be `application/octet-stream`, use `no-store`, and match the accepted length and SHA-256 digest.
+Redirects, short or extra bytes, denied reads, and changed command metadata are errors.
+The client deadline covers both response headers and the complete bounded body.
+Environment rechecks Core metadata after the transfer and before reserving the command.
+Later current-command checks do not fetch the seed again.
+Stored operation updates, request fingerprints, and Core terminal receipts validate the bound metadata without seed bytes.
+Reconciliation restores the freshly verified seed only after it matches the stored command metadata.
+Version 2 still requires the actual validated bytes before execution; metadata alone is not executable input.
+
+The Kubernetes client adds a bounded native WebSocket exchange for fixed preparation and collector containers.
+It retains the existing service-account handler and trusted server certificate.
+The helper must identify the exact Pod UID and request fingerprint before the client sends seed bytes.
+Local TLS tests cover binary transfers at the exact admitted limit and reject invalid identity, protocol, output, or terminal evidence.
+This candidate does not yet connect the image helper, preparation record, writer exclusion, and complete capture through the provider.
+Managed source-input checks cover binding, checkpoint recovery, conflicts, missing bytes, and unchanged legacy commands.
+They do not prove the authenticated PostgreSQL preparation transaction or live provider execution.
+These checks do not prove live Kubernetes execution or complete BuildTest acceptance.
+
 ## Retirement and storage retention
 
 An exact Agent Sandbox `Finished=True` condition with a supported `PodSucceeded`

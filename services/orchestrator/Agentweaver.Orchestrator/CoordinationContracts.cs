@@ -77,7 +77,17 @@ public sealed record ReviseCoordinatorWorkPlanRequest(
 public sealed record MafExecutionDispatchRequest(long ExpectedStateVersion, string WorkPlanId)
 {
     public string? BuildTestEnvironmentId { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableDictionary<string, SourceControlBuildTestWorkspaceLocator>? BuildTestWorkspaces { get; init; }
 }
+
+public sealed record SourceControlBuildTestWorkspaceLocator(
+    string WorkspaceId,
+    Guid WorkspaceIncarnationId,
+    string BaseSha,
+    string BranchName);
 
 public sealed record MafExecutionDispatchResponse(
     string WorkPlanId,

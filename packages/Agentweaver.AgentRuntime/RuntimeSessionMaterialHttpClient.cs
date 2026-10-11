@@ -24,10 +24,22 @@ public sealed class RuntimeSessionMaterialHttpClient(
         AuthorizedRuntimeSession session, Guid eventId, byte[] nativeFiles, CancellationToken cancellationToken) =>
         WriteAsync(session, eventId, SessionMaterialKind.SdkCache, nativeFiles, null, cancellationToken);
 
+    internal Task<SessionMaterialAcknowledgment> WriteRemoteToolResultAsync(
+        RemoteToolResultProof proof, ReadOnlyMemory<byte> resultBytes, CancellationToken cancellationToken) =>
+        Task.FromException<SessionMaterialAcknowledgment>(
+            new RuntimeAuthorizationException("runtime_remote_tool_result_route_unavailable"));
+
+    internal Task<SessionMaterialReadResult> ReadRemoteToolResultAsync(
+        RemoteToolResultProof proof, CancellationToken cancellationToken) =>
+        Task.FromException<SessionMaterialReadResult>(
+            new RuntimeAuthorizationException("runtime_remote_tool_result_route_unavailable"));
+
     private async Task<SessionMaterialAcknowledgment> WriteAsync(
         AuthorizedRuntimeSession session, Guid eventId, SessionMaterialKind kind, byte[] bytes,
         string? role, CancellationToken cancellationToken)
     {
+        if (kind == SessionMaterialKind.RemoteToolResult)
+            throw new RuntimeAuthorizationException("runtime_remote_tool_result_route_unavailable");
         var registration = session.Registration;
         var request = new SessionMaterialWriteRequest(1, eventId, registration.RuntimeInstanceId,
             registration.Revision, registration.Binding.ExecutionFence, kind,
@@ -54,7 +66,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
             material.RuntimeVersion != session.Facts.RuntimeVersion ||
             material.ModelId != session.Facts.ModelId ||
             material.ModelSelectionReference != session.Facts.ModelSelectionReference ||
-            material.MaxPromptTokens != session.Facts.MaxPromptTokens)
+            material.MaxPromptTokens != session.Facts.MaxPromptTokens ||
+            material.RemoteToolResultProof is not null)
             throw new RuntimeAuthorizationException("runtime_material_receipt_invalid");
         return receipt;
     }
@@ -144,6 +157,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
     {
         if (eventId == Guid.Empty || !Enum.IsDefined(kind))
             throw new ArgumentException("A recorded session event and material kind are required.");
+        if (kind == SessionMaterialKind.RemoteToolResult)
+            throw new RuntimeAuthorizationException("runtime_remote_tool_result_route_unavailable");
         var result = await RuntimeOwnerHttpTransport.SendAsync<SessionMaterialReadResult>(
             client, _address,
             $"/internal/sessions/{Uri.EscapeDataString(identity.SessionId)}/material/{eventId:D}/{kind}",

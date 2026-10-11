@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator;
@@ -10,6 +11,104 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 
 public sealed class MafBuildTestCheckpointTests
 {
+    [Fact]
+    public void VersionTwoCheckpointRetainsOnlyTheExactSeedOriginAndItsAcceptedBinding()
+    {
+        var intent = SeedIntent();
+        var running = CoordinationEndpoints.PrepareBuildTestCheckpoint(Initial(), intent)!;
+
+        var recovered = MafExecutionCheckpointContract.Deserialize(
+            MafExecutionCheckpointContract.Serialize(running));
+        var json = MafExecutionCheckpointContract.Serialize(running).GetRawText();
+        Assert.DoesNotContain("\"workspaceSeed\":", json);
+        Assert.Contains("\"workspaceSeedReference\":", json);
+        var restored = recovered.BuildTestIntents["build-test"];
+        var accepted = restored.ToAcceptedCommand(requireSeed: false);
+
+        Assert.Equal(2, accepted.ContractVersion);
+        Assert.Equal(intent.Command.WorkspaceSource, accepted.WorkspaceSource);
+        Assert.Null(restored.WorkspaceSeed);
+        Assert.Equal(intent.WorkspaceSeedReference, restored.WorkspaceSeedReference);
+        Assert.Throws<ArgumentException>(() => restored.ToAcceptedCommand());
+        Assert.Equal(intent.WorkspaceSeed!.Value.ToArray(),
+            (restored with { WorkspaceSeed = intent.WorkspaceSeed }).ToAcceptedCommand().WorkspaceSeed!.Value.ToArray());
+        Assert.True(MafExecutionCheckpointContract.BuildTestIntentsMatch(intent, restored));
+    }
+
+    [Fact]
+    public void SavedSeedCannotBeReplacedAfterTheIntentIsAccepted()
+    {
+        var intent = SeedIntent();
+        var running = CoordinationEndpoints.PrepareBuildTestCheckpoint(Initial(), intent)!;
+        var changed = intent with { WorkspaceSeed = Enumerable.Repeat((byte)1, 1024).ToImmutableArray() };
+        var next = running with
+        {
+            Revision = 3,
+            BuildTestIntents = running.BuildTestIntents.SetItem("build-test", changed)
+        };
+
+        Assert.Throws<ArgumentException>(() =>
+            MafExecutionCheckpointContract.ValidateTransition(running, next));
+        Assert.Throws<ArgumentException>(() => changed.ToAcceptedCommand());
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("checkpoint")]
+    [InlineData("operation")]
+    [InlineData("length")]
+    [InlineData("digest")]
+    public void VersionTwoIntentRejectsAnUnboundSeedOrigin(string fault)
+    {
+        var intent = SeedIntent();
+        var reference = intent.WorkspaceSeedReference!;
+        reference = fault switch
+        {
+            "checkpoint" => reference with { Origin = reference.Origin with { CheckpointId = "other" } },
+            "operation" => reference with { OperationId = Guid.NewGuid() },
+            "length" => reference with { SeedByteLength = reference.SeedByteLength + 1 },
+            "digest" => reference with { SeedSha256 = new string('b', 64) },
+            _ => reference
+        };
+        intent = intent with { WorkspaceSeedReference = fault == "missing" ? null : reference };
+
+        Assert.Throws<ArgumentException>(() => intent.ToAcceptedCommand(requireSeed: false));
+    }
+
+    [Fact]
+    public void LegacyIntentSerializationDoesNotGainSeedFields()
+    {
+        var json = JsonSerializer.Serialize(Intent(), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+
+        Assert.DoesNotContain("workspaceSeed", json);
+        Assert.DoesNotContain("workspaceSource", json);
+    }
+
+    internal static MafExecutionBuildTestIntent SeedIntent()
+    {
+        var intent = Intent();
+        var seed = new byte[1024];
+        var source = new SandboxBuildTestWorkspaceSource(
+            2, intent.Identity, "tenant-1", "issuer", "actor",
+            "source-pin", intent.AcceptedSelectionHash,
+            new(ProviderSeam.SourceControl, "github", "repository", 1),
+            "workspace", Guid.Parse("5956a121-5556-4c16-848c-0d4a2937966d"),
+            "branch", new string('a', 40), new string('c', 40),
+            "seed", Convert.ToHexStringLower(SHA256.HashData(seed)), seed.Length,
+            new string('c', 64), 512, new string('d', 64), 128);
+        return intent with
+        {
+            Command = intent.Command with { WorkspaceSource = source },
+            WorkspaceSeed = seed.ToImmutableArray(),
+            WorkspaceSeedReference = new(
+                intent.CheckpointReference(), intent.OperationId, source.SeedSha256, source.SeedByteLength),
+            ExecutionOptions = intent.ExecutionOptions with
+            {
+                CollectorMode = SandboxBuildTestLimits.WorkspaceCollectorMode
+            }
+        };
+    }
+
     [Fact]
     public void LegacyCheckpointWithoutBuildTestIntentsStillRecovers()
     {

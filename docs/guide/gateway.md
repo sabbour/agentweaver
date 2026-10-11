@@ -19,15 +19,42 @@ configured audience before forwarding the original bearer token to the owning AP
 validation; it is not an identity or role claim. The owner remains authoritative for
 current project membership, role, binding, and operation-specific checks.
 
-The Skills and marketplace routes use that same Projects & Config forwarder:
-source list/create/update/tombstone, pinned source browse, Skills preview and
-project import, and project skill assignment. The Gateway preserves the owner's
-status and JSON body and forwards the bearer and optional tenant selector. Preview
-and import bodies are each limited to 3 MiB. Marketplace browse requires the
-`expectedSourceRevision` query value; source tombstone requires `expectedRevision`.
-These are the only required query values added by these routes. The current public
-contract does not provide runtime-loaded status or a Marketplace selected-content
-preview that returns the pinned manifest and resources.
+The Skills and marketplace routes use the Projects & Config forwarder. They
+manage sources, browse pinned sources, preview and import Skills, and update
+project assignments. They also read project skill inventory as metadata. The
+Gateway preserves the owner's status and JSON body. It forwards the bearer and
+optional tenant selector. Inline skill preview and import bodies are each limited
+to 3 MiB. Marketplace-selected preview and import have the same 3 MiB request-body
+limit. They send the source revision, resolved commit, selected path, and (for
+import) the previewed digest and idempotency key. The owner reads the selected
+files at that commit; these requests do not upload file bytes through the Gateway.
+
+Marketplace browse requires `expectedSourceRevision`. The selected-content
+preview and import routes reject query parameters. Source tombstone requires
+`expectedRevision`; inventory accepts only optional `cursor` and `pageSize`.
+Selected-content preview returns validation metadata and a digest, not the pinned
+manifest or resources. The API does not provide actor-safe runtime-loaded status.
+
+`GET /api/v1/projects/{projectId}/skills` forwards optional `cursor` and
+`pageSize` values to the Projects owner. The owner defaults page size to 25 and
+accepts values from 1 through 50. Its opaque cursor uses stable keyset order by
+skill ID in C collation, ascending, then revision descending. This order does not
+create a snapshot across pages. Repeated or unknown query keys, invalid cursors,
+and page sizes outside 1 through 50 return the owner's `400` response. The owner
+requires current `api.read`, `projects.admin`, active tenant membership, and
+TenantAdmin or project Owner authority. The owner rechecks authority after the
+read and permits archived projects. Gateway responses use `Cache-Control: no-store`.
+The Gateway does not infer this access.
+The returned metadata does not prove that a runtime loaded a skill.
+
+`POST /api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview`
+accepts `expectedSourceRevision`, `resolvedCommitSha`, and `selectedPath`. It
+returns the skill name, description, content digest, resource count, and total
+bytes. `POST /api/v1/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import`
+accepts those fields plus `idempotencyKey` and `expectedContentDigest`; optional
+`skillId` and `expectedRevision` select an existing skill revision to replace.
+Both operations leave source reading, permission checks, validation, persisted
+provenance, and error statuses to Projects & Config.
 
 ### Browser CORS
 

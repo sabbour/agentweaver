@@ -212,6 +212,91 @@ describe('Skills and marketplace panel', () => {
     expect(screen.queryByRole('button', { name: 'Import selected source skill' })).toBeNull();
   });
 
+  it('ignores a pending source preview when refreshing to a new source revision', async () => {
+    let resolvePreview!: (value: SkillContentPreview) => void;
+    const pendingPreview = new Promise<SkillContentPreview>((resolve) => {
+      resolvePreview = resolve;
+    });
+    const refreshedSource = { ...source, revision: 8 };
+    const actions = createActions({
+      listSources: vi.fn()
+        .mockResolvedValueOnce([source])
+        .mockResolvedValueOnce([refreshedSource]),
+      browseSource: vi.fn().mockResolvedValue(browsePage),
+      previewMarketplaceSkill: vi.fn().mockReturnValue(pendingPreview),
+    });
+    renderPanel(actions);
+
+    await screen.findByText('example/skills · main · revision 7 · active');
+    fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
+    await screen.findByText('0123456789abcdef');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
+    await waitFor(() => expect(actions.previewMarketplaceSkill).toHaveBeenCalledTimes(1));
+
+    const refreshButton = screen.getByRole('button', { name: 'Refresh sources' }) as HTMLButtonElement;
+    expect(refreshButton.disabled).toBe(false);
+    fireEvent.click(refreshButton);
+    await screen.findByText('example/skills · main · revision 8 · active');
+    await act(async () => {
+      resolvePreview(preview);
+      await pendingPreview;
+    });
+
+    expect(screen.queryByLabelText('Marketplace skill preview')).toBeNull();
+    expect(screen.queryByText(/The Skills owner validated this source skill/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Import selected source skill' })).toBeNull();
+  });
+
+  it('resets the source import retry key when actions reload the source binding', async () => {
+    const actions = createActions({
+      listSources: vi.fn().mockResolvedValue([source]),
+      browseSource: vi.fn().mockResolvedValue(browsePage),
+      importMarketplaceSkill: vi.fn().mockRejectedValueOnce(new Error('temporary import failure')),
+    });
+    const rendered = renderPanel(actions);
+
+    await screen.findByText('example/skills · main · revision 7 · active');
+    fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
+    await screen.findByText('0123456789abcdef');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
+    await screen.findByLabelText('Marketplace skill preview');
+    fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill' }));
+    await screen.findByText('temporary import failure');
+    const firstKey = vi.mocked(actions.importMarketplaceSkill).mock.calls[0][2].idempotencyKey;
+
+    const refreshedSource = { ...source, revision: 8 };
+    const refreshedPage = {
+      ...browsePage,
+      sourceRevision: refreshedSource.revision,
+      resolvedCommitSha: 'fedcba9876543210',
+    };
+    const refreshedActions = createActions({
+      listSources: vi.fn().mockResolvedValue([refreshedSource]),
+      browseSource: vi.fn().mockResolvedValue(refreshedPage),
+    });
+    rendered.rerender(
+      <SkillsMarketplacePanel
+        projectId="project-1"
+        configurationRevision={4}
+        assignments={[]}
+        agents={[{ agentId: 'agent-1', displayName: 'Agent One' }]}
+        actions={refreshedActions}
+      />,
+    );
+
+    await screen.findByText('example/skills · main · revision 8 · active');
+    expect(screen.queryByLabelText('Marketplace skill preview')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
+    await screen.findByText('fedcba9876543210');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
+    await screen.findByLabelText('Marketplace skill preview');
+    fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill' }));
+    await screen.findByText(/The Skills owner imported Sample skill at revision 3/);
+
+    const nextKey = vi.mocked(refreshedActions.importMarketplaceSkill).mock.calls[0][2].idempotencyKey;
+    expect(nextKey).not.toBe(firstKey);
+  });
+
   it('does not accept a source import receipt that differs from its preview', async () => {
     const actions = createActions({
       listSources: vi.fn().mockResolvedValue([source]),

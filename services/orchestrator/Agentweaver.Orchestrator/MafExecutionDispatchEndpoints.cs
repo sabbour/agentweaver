@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
+using Agentweaver.SourceControl;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Npgsql;
@@ -92,6 +93,16 @@ public static partial class CoordinationEndpoints
                     "maf_execution_work_plan_unavailable", StatusCodes.Status409Conflict);
 
             var plan = validated.Value;
+            if (request.BuildTestWorkspaces is { } workspaces)
+            {
+                if (workspaces.Count > plan.Workflow.Definition.Steps.Length ||
+                    workspaces.Keys.Any(stepId => !plan.Workflow.Definition.Steps.Any(
+                        step => step.Id == stepId && MafBuildTestCommandContract.IsExecutable(step))))
+                    throw new CoordinationException(
+                        "maf_execution_dispatch_invalid", StatusCodes.Status400BadRequest);
+                foreach (var locator in workspaces.Values)
+                    SourceControlEndpoints.ValidateBuildTestWorkspaceLocator(locator);
+            }
             var checkpointBinding = CreateExecutionCheckpointBinding(
                 identity,
                 actor,
@@ -113,14 +124,19 @@ public static partial class CoordinationEndpoints
                     association.DecisionStateVersion != decision.StateVersion))
                 throw new CoordinationException(
                     "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
-            if (checkpoint is not null &&
-                checkpoint.State.BuildTestIntents.Values.Any(intent =>
-                    intent.Identity != identity || intent.ExecutionFence != decision.State.Fence ||
-                    intent.AcceptedSelectionHash != decision.SelectionHash ||
-                    checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(intent.StepId) ==
-                        MafExecutionTaskStatus.Running && intent.DecisionStateVersion != decision.StateVersion))
-                throw new CoordinationException(
-                    "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+            if (checkpoint is not null)
+                foreach (var intent in checkpoint.State.BuildTestIntents.Values)
+                {
+                    var authorizationReference = CreateBuildTestDispatchAuthorizationReference(
+                        intent, checkpoint.State.Progress, identity, decision);
+                    if (request.BuildTestWorkspaces?.TryGetValue(intent.StepId, out var locator) == true)
+                        SourceControlEndpoints.RequireSameBuildTestWorkspace(intent.EffectiveWorkspaceSource, locator);
+                    if (intent.EffectiveWorkspaceSource is { } source)
+                        await SourceControlEndpoints.RequireCurrentBuildTestInputAsync(
+                            context, source, authorizationReference, options, projects, decisions,
+                            context.RequestServices.GetRequiredService<SourceControlOwnerStore>(), cancellationToken)
+                            .ConfigureAwait(false);
+                }
 
             var progress = checkpoint?.State.Progress ?? MafExecutionProgress.Empty;
             var fixedAssociations = checkpoint?.State.FixedWorkAssociations ??
@@ -636,7 +652,8 @@ public static partial class CoordinationEndpoints
                     connection, transaction, token).ConfigureAwait(false)
                     ?? throw new CoordinationException(
                         "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
-                if (latest.Info != expectedCheckpoint.Info ||
+                if (latest.Info.SessionId != expectedCheckpoint.Info.SessionId ||
+                    latest.Info.CheckpointId != expectedCheckpoint.Info.CheckpointId ||
                     latest.State.Revision != expectedCheckpoint.State.Revision ||
                     latest.State.WorkPlanId != plan.Plan.Id ||
                     latest.State.DecisionStateVersion != decision.StateVersion)
@@ -784,6 +801,10 @@ public static partial class CoordinationEndpoints
                 MafBuildTestCommandContract.ValidatePreparation(
                     preparation, identity, selection.Authorization.TenantId, environmentId, step,
                     plan.IsolationProviderBinding);
+                if (request.BuildTestWorkspaces?.ContainsKey(step.Id) == true &&
+                    preparation.ExecutionOptions.CollectorMode != SandboxBuildTestLimits.WorkspaceCollectorMode)
+                    throw new CoordinationException(
+                        "maf_execution_build_test_workspace_profile_unavailable", StatusCodes.Status409Conflict);
                 await RevalidateDispatchAsync(token).ConfigureAwait(false);
                 var dataSource = context.RequestServices.GetRequiredService<NpgsqlDataSource>();
                 await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
@@ -799,6 +820,14 @@ public static partial class CoordinationEndpoints
                         "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
                 if (latest.State.BuildTestIntents.TryGetValue(step.Id, out var retained))
                 {
+                    if (request.BuildTestWorkspaces?.TryGetValue(step.Id, out var retainedLocator) == true)
+                        SourceControlEndpoints.RequireSameBuildTestWorkspace(
+                            retained.EffectiveWorkspaceSource, retainedLocator);
+                    if (retained.EffectiveWorkspaceSource is { } retainedSource)
+                        await context.RequestServices.GetRequiredService<SourceControlOwnerStore>()
+                            .RequireBuildTestInputInTransactionAsync(
+                                connection, transaction, actor, identity, selection, decision.StateVersion,
+                                decision.State.Fence, retainedSource, token).ConfigureAwait(false);
                     checkpoint = latest;
                     await transaction.CommitAsync(token).ConfigureAwait(false);
                     return retained;
@@ -808,6 +837,23 @@ public static partial class CoordinationEndpoints
                     Guid.NewGuid(), identity, checkpointId, checked(latest.State.Revision + 1),
                     plan.Plan.Id, step.Id, decision.StateVersion, decision.State.Fence, decision.SelectionHash,
                     step.BuildTestCommand, preparation.ExecutionOptions, preparation.ExpectedBinding);
+                if (request.BuildTestWorkspaces?.TryGetValue(step.Id, out var locator) == true)
+                {
+                    var sourceOwner = context.RequestServices.GetRequiredService<SourceControlOwnerStore>();
+                    var workspaceManager = context.RequestServices.GetService<GitWorkspaceManager>()
+                        ?? throw new CoordinationException(
+                            "source_control_workspace_unconfigured", StatusCodes.Status503ServiceUnavailable);
+                    var input = await SourceControlEndpoints.PrepareBuildTestInputAsync(
+                        context, actor, intent.CheckpointReference(), intent.OperationId, locator,
+                        step.BuildTestCommand.WorkspaceSource, options, projects, decisions, sourceOwner,
+                        context.RequestServices.GetRequiredService<ISourceControlAdapter>(),
+                        workspaceManager, token).ConfigureAwait(false);
+                    intent = intent.AttachWorkspaceInput(input.Source, input.Seed);
+                    await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                    await sourceOwner.RequireBuildTestInputInTransactionAsync(
+                        connection, transaction, actor, identity, selection, decision.StateVersion,
+                        decision.State.Fence, input.Source, token).ConfigureAwait(false);
+                }
                 var next = PrepareBuildTestCheckpoint(latest, intent)
                     ?? throw new CoordinationException(
                         "maf_execution_build_test_intent_conflict", StatusCodes.Status409Conflict);
@@ -1057,6 +1103,22 @@ public static partial class CoordinationEndpoints
                 WallTimeLimitReached = wallTimeLimitReached || IsWallTimeLimitReached()
             });
         }, cancellationToken);
+
+    internal static SandboxBuildTestCheckpointReference CreateBuildTestDispatchAuthorizationReference(
+        MafExecutionBuildTestIntent intent,
+        MafExecutionProgress progress,
+        SessionIdentity identity,
+        CoordinatorDecisionCurrentState decision)
+    {
+        if (intent.Identity != identity || intent.ExecutionFence != decision.State.Fence ||
+            intent.AcceptedSelectionHash != decision.SelectionHash ||
+            progress.NonModelSteps.GetValueOrDefault(intent.StepId) == MafExecutionTaskStatus.Running &&
+                intent.DecisionStateVersion != decision.StateVersion)
+            throw new CoordinationException(
+                "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
+
+        return intent.CheckpointReference() with { DecisionStateVersion = decision.StateVersion };
+    }
 
     internal static MafExecutionCheckpoint? PrepareRunningCheckpoint(
         MafExecutionCheckpointSnapshot? latest,

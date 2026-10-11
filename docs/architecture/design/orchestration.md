@@ -375,6 +375,18 @@ The getter does not reserve or execute a command.
 
 The optional dispatch field `buildTestEnvironmentId` selects the Environment
 owner scope, not a different provider or execution profile.
+The optional `buildTestWorkspaces` map supplies an existing owned workspace locator for each BuildTest step.
+Each locator contains `workspaceId`, `workspaceIncarnationId`, `baseSha`, and `branchName`; it grants no repository access.
+The existing authenticated Source Control owner creates and verifies the bounded repository seed.
+MAF keeps the confirmed command unchanged and stores verified source metadata as a separate execution input.
+The original checkpoint transaction stores that input and exact seed bytes before Environment reservation.
+The effective version 2 command hash binds the source input.
+Retry reuses the saved input without recapturing the checkout; conflicting locators and changed source owners are errors.
+Completed BuildTest input retains its original decision version while dispatch checks the current source owner and decision.
+Running input still requires its original decision version.
+Unavailable or changed workspaces return the existing Source Control error, not an unhandled server error.
+An explicit source in a confirmed command remains exact.
+This handoff does not connect provider preparation helpers or complete output export.
 Preparation must match the WorkPlan's existing Sandbox pin.
 The Environment owner address uses the existing
 `Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress` configuration.
@@ -396,13 +408,15 @@ Required command outputs cannot use a no-output seal.
 flowchart LR
     P["Confirmed typed command and provider pin"] --> E["Owner-authorized Environment preparation"]
     E --> C["Immutable MAF checkpoint intent"]
+    E --> S["Optional owned workspace: Source Control verifies repository input"]
+    S --> C
     C --> G["Owner-authorized Core getter"]
-    G --> V["Recheck current decision, selection, fence, and pin"]
+    G --> V["Recheck decision, selection, fence, command, and source pin"]
     V --> A["Return exact accepted command"]
     A --> O["Environment rechecks binding and executes the same operation"]
     O --> T["Terminal and required output join"]
     T --> D["Checkpoint receipt and dependent model frontier"]
-    C --> R["Recover original operation and checkpoint reference"]
+    C --> R["Reuse original operation, reference, and saved input"]
     R --> G
 ```
 
@@ -512,12 +526,17 @@ and deletes. The normal owner migration path does not yet apply that resource.
 PostgreSQL tests apply it directly and check persistence, conflicts, corruption,
 and rejected row changes.
 
-The result envelope retains opaque content and matching execution metadata.
-Its constructor does not verify a current grant or a durable Events acknowledgment.
-This source does not add Projects configuration references, selection resolution,
-a current connection read, credential use, or native remote dispatch.
-Those checks must be integrated before any protected remote request can be sent.
-A matching data object is not permission to send a request.
+`ReviewedRemoteToolResultVerifier` rebuilds the call from the current runtime
+registration, accepted Projects selection, selected immutable snapshot, and exact
+arguments. It verifies the reserved native action grant and receipt before it
+returns proof verification. The HTTP verifier route currently fails closed before
+reading a proof body: authenticated HTTP requests receive
+`runtime_remote_tool_result_https_required`, and authenticated HTTPS requests
+receive `runtime_remote_tool_result_route_unavailable`. An approved direct
+mutual-TLS profile and certificate pins are not configured. Events result-byte write/read routes and the dedicated
+runtime client also return unavailable; no result bytes are durably acknowledged
+or read. Native remote-tool dispatch remains disabled. A matching proof object is
+not permission to send a request or disclose a result.
 
 ```mermaid
 classDiagram

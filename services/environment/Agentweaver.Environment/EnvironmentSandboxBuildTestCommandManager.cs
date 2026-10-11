@@ -64,6 +64,7 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
             acceptedCommand,
             cancellationToken).ConfigureAwait(false);
         var initialOperation = CreateInitialOperation(request, acceptedCommand, timeProvider.GetUtcNow());
+        await commandVerifier.VerifyCurrentAsync(acceptedCommand, cancellationToken).ConfigureAwait(false);
         var reservation = await commandStore.ReserveAsync(
             request,
             acceptedCommand,
@@ -141,12 +142,13 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
             ?? throw new EnvironmentLifecycleException(
                 "buildtest_operation_unknown",
                 "The exact BuildTest operation is not reserved.");
-        if (!SameJson(state.AcceptedCommand, acceptedCommand) ||
-            !SameJson(state.Operation.ExpectedBinding, request.ExpectedBinding) ||
+        state = RestoreAcceptedCommand(state, acceptedCommand);
+        if (!SameJson(state.Operation.ExpectedBinding, request.ExpectedBinding) ||
             state.Operation.RequestFingerprint != request.ComputeRequestFingerprint(acceptedCommand))
             throw new EnvironmentLifecycleException(
                 "buildtest_request_conflict",
                 "The reconciliation request differs from its persisted immutable BuildTest intent.");
+        await commandVerifier.VerifyCurrentAsync(acceptedCommand, cancellationToken).ConfigureAwait(false);
         if (IsTerminal(state.Operation.Status))
             return new(state.Operation, true);
 
@@ -1167,10 +1169,7 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
         EnvironmentSandboxBuildTestCommandState state,
         CancellationToken cancellationToken)
     {
-        var currentCommand = await ResolveAcceptedCommandAsync(request.Checkpoint, cancellationToken)
-            .ConfigureAwait(false);
-        if (!SameJson(currentCommand, acceptedCommand) ||
-            !SameJson(currentCommand, state.AcceptedCommand))
+        if (!SameJson(acceptedCommand, state.AcceptedCommand))
             return await MarkStaleAsync(state, "buildtest_checkpoint_stale", cancellationToken)
                 .ConfigureAwait(false);
 
@@ -1184,6 +1183,8 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
                 request,
                 acceptedCommand,
                 cancellationToken).ConfigureAwait(false);
+            await VerifyCurrentCommandAsync(acceptedCommand, state.AcceptedCommand, cancellationToken)
+                .ConfigureAwait(false);
             if (!SameJson(current.ExpectedBinding, state.Operation.ExpectedBinding))
                 return await MarkStaleAsync(state, "sandbox_binding_stale", cancellationToken)
                     .ConfigureAwait(false);
@@ -1193,6 +1194,37 @@ public sealed class EnvironmentSandboxBuildTestCommandManager(
         {
             return await MarkStaleAsync(state, exception.Code, cancellationToken).ConfigureAwait(false);
         }
+        catch (RuntimeAuthorizationException exception) when (
+            exception.Code == "buildtest_command_checkpoint_changed")
+        {
+            return await MarkStaleAsync(state, "buildtest_checkpoint_stale", cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    internal async Task VerifyCurrentCommandAsync(
+        SandboxBuildTestAcceptedCommand acceptedCommand,
+        SandboxBuildTestAcceptedCommand persistedCommand,
+        CancellationToken cancellationToken)
+    {
+        _ = acceptedCommand.ValidateMetadata();
+        _ = persistedCommand.ValidateMetadata();
+        if (!SameJson(acceptedCommand, persistedCommand))
+            throw new RuntimeAuthorizationException("buildtest_command_checkpoint_changed");
+        await commandVerifier.VerifyCurrentAsync(acceptedCommand, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static EnvironmentSandboxBuildTestCommandState RestoreAcceptedCommand(
+        EnvironmentSandboxBuildTestCommandState state,
+        SandboxBuildTestAcceptedCommand acceptedCommand)
+    {
+        acceptedCommand = acceptedCommand.Validate();
+        _ = state.AcceptedCommand.ValidateMetadata();
+        if (!SameJson(state.AcceptedCommand, acceptedCommand))
+            throw new EnvironmentLifecycleException(
+                "buildtest_request_conflict",
+                "The reconciliation request differs from its persisted immutable BuildTest intent.");
+        return state with { AcceptedCommand = acceptedCommand };
     }
 
     private static bool IsStaleBindingFailure(string code) =>

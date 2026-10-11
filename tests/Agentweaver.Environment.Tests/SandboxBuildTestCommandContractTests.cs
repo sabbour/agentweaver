@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 
@@ -8,6 +9,217 @@ namespace Agentweaver.Environment.Tests;
 
 public sealed class SandboxBuildTestCommandContractTests
 {
+    [Fact]
+    public void VersionOneCommandRetainsItsHistoricalHashAndSerializedShape()
+    {
+        var command = CreateFixture().Command;
+
+        Assert.Equal(
+            "sha256:50ccbec5ff8d980ee5e4e08e33fa655c38411b5975fc65dffcc5d33b3ccaa75b",
+            command.ComputeImmutableHash());
+        Assert.DoesNotContain("workspaceSource", JsonSerializer.Serialize(
+            command, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        Assert.Equal(command.ImmutableHash, command.Validate().ImmutableHash);
+    }
+
+    [Fact]
+    public void VersionTwoCommandBindsTheCompleteAcceptedRepositorySeed()
+    {
+        var command = SeedCommand();
+        command = command with { ImmutableHash = command.ComputeImmutableHash() };
+
+        var validated = command.Validate();
+
+        Assert.Equal(command.WorkspaceSource, validated.WorkspaceSource);
+        Assert.Contains("workspaceSource", JsonSerializer.Serialize(
+            validated, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        Assert.NotEqual(CreateFixture().Command.ImmutableHash, validated.ImmutableHash);
+    }
+
+    [Theory]
+    [InlineData("version")]
+    [InlineData("project")]
+    [InlineData("session")]
+    [InlineData("selection")]
+    [InlineData("incarnation")]
+    [InlineData("provider")]
+    [InlineData("bundle")]
+    [InlineData("length")]
+    public void VersionTwoRejectsMissingOrMismatchedRepositorySeed(string fault)
+    {
+        var source = WorkspaceSource();
+        source = fault switch
+        {
+            "version" => source with { ContractVersion = 1 },
+            "project" => source with { Identity = new("other", source.Identity.RunId, source.Identity.SessionId) },
+            "session" => source with { Identity = new(source.Identity.ProjectId, source.Identity.RunId, "other") },
+            "selection" => source with { AcceptedSelectionHash = new string('B', 64) },
+            "incarnation" => source with { WorkspaceIncarnationId = Guid.Empty },
+            "provider" => source with
+            {
+                SourceControlResource = source.SourceControlResource with { Seam = ProviderSeam.Sandbox }
+            },
+            "bundle" => source with { BundleSha256 = "not-a-digest" },
+            "length" => source with { BundleByteLength = source.SeedByteLength },
+            _ => throw new ArgumentOutOfRangeException(nameof(fault))
+        };
+        var command = SeedCommand() with
+        {
+            WorkspaceSource = source
+        };
+        command = command with { ImmutableHash = command.ComputeImmutableHash() };
+
+        Assert.Throws<ArgumentException>(() => command.Validate());
+        Assert.Throws<ArgumentException>(() =>
+            (CreateFixture().Command with { ContractVersion = 2 }).Validate());
+    }
+
+    [Fact]
+    public void VersionOneCannotHideAnUnhashedRepositorySeed()
+    {
+        var command = CreateFixture().Command with { WorkspaceSource = WorkspaceSource() };
+
+        Assert.Throws<ArgumentException>(() => command.Validate());
+    }
+
+    [Fact]
+    public void VersionTwoCannotExecuteWithoutItsSavedExactSeedBytes()
+    {
+        var command = SeedCommand() with { WorkspaceSeed = null };
+        command = command with { ImmutableHash = command.ComputeImmutableHash() };
+
+        Assert.Throws<ArgumentException>(() => command.Validate());
+        Assert.Throws<ArgumentException>(() =>
+            (command with { WorkspaceSeed = new byte[1023].ToImmutableArray() }).Validate());
+        Assert.Throws<ArgumentException>(() =>
+            (command with { WorkspaceSeed = Enumerable.Repeat((byte)1, 1024).ToImmutableArray() }).Validate());
+    }
+
+    [Fact]
+    public void VersionTwoStoredStateRecoversUpdatesAndReplaysWithMetadataOnly()
+    {
+        var command = SeedCommand();
+        command = command with { ImmutableHash = command.ComputeImmutableHash() };
+        var fixture = CreateFixture() with { Command = command };
+        var state = new EnvironmentSandboxBuildTestCommandState(
+            command, CreateSnapshot(fixture), ["command-pod:create"]);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        };
+        var commandJson = JsonSerializer.Serialize(command, options);
+        Assert.DoesNotContain("workspaceSeed", commandJson);
+        var row = new EnvironmentSandboxBuildTestCommandStore.StoredRow(
+            fixture.Request.ExpectedBinding.Fence.Owner, "BuildTestCommand",
+            fixture.Request.ComputeRequestFingerprint(command), commandJson,
+            JsonSerializer.Serialize(fixture.Request.ExpectedBinding, options),
+            EnvironmentSandboxBuildTestCommandStore.SerializeMutableState(state),
+            state.Operation.CreatedAt);
+
+        var restored = EnvironmentSandboxBuildTestCommandStore.DeserializeState(row);
+        Assert.Null(restored.AcceptedCommand.WorkspaceSeed);
+        Assert.Equal(command.ImmutableHash, restored.AcceptedCommand.ValidateMetadata().ImmutableHash);
+        Assert.Equal(row.Fingerprint, fixture.Request.ComputeRequestFingerprint(restored.AcceptedCommand));
+        Assert.Same(restored.Operation, restored.Operation.Validate(
+            restored.AcceptedCommand, command.ExecutionOptions.MaximumOutputBytes));
+        Assert.Throws<ArgumentException>(() => restored.AcceptedCommand.Validate());
+        var updated = restored with
+        {
+            Operation = restored.Operation with
+            {
+            Status = SandboxBuildTestOperationStatus.Stale,
+            FailureCode = "buildtest_checkpoint_stale",
+            UpdatedAt = restored.Operation.UpdatedAt.AddSeconds(1)
+            },
+            AttemptedEffects = restored.AttemptedEffects.Add("command-pod:observed")
+        };
+        var replay = EnvironmentSandboxBuildTestCommandStore.DeserializeState(row with
+        {
+            TargetBindingJson = EnvironmentSandboxBuildTestCommandStore.SerializeMutableState(updated)
+        });
+        Assert.Equal(SandboxBuildTestOperationStatus.Stale, replay.Operation.Status);
+        Assert.Equal(updated.AttemptedEffects.ToArray(), replay.AttemptedEffects.ToArray());
+        Assert.Equal(row.Fingerprint, fixture.Request.ComputeRequestFingerprint(replay.AcceptedCommand));
+
+        var executable = EnvironmentSandboxBuildTestCommandManager.RestoreAcceptedCommand(restored, command);
+        Assert.Equal(command.WorkspaceSeed!.Value.ToArray(),
+            executable.AcceptedCommand.Validate().WorkspaceSeed!.Value.ToArray());
+        Assert.Throws<ArgumentException>(() =>
+            EnvironmentSandboxBuildTestCommandManager.RestoreAcceptedCommand(restored, command with
+            {
+            WorkspaceSeed = null
+            }));
+        var changed = command with { Arguments = ["other"] };
+        changed = changed with { ImmutableHash = changed.ComputeImmutableHash() };
+        var conflict = Assert.Throws<EnvironmentLifecycleException>(() =>
+            EnvironmentSandboxBuildTestCommandManager.RestoreAcceptedCommand(restored, changed));
+        Assert.Equal("buildtest_request_conflict", conflict.Code);
+    }
+
+    [Fact]
+    public void VersionTwoCannotRunTheLegacyHashOnlyCollector()
+    {
+        var command = SeedCommand() with { ExecutionOptions = CreateFixture().Command.ExecutionOptions };
+        command = command with { ImmutableHash = command.ComputeImmutableHash() };
+
+        Assert.Throws<ArgumentException>(() => command.Validate());
+    }
+
+    [Theory]
+    [InlineData("reference")]
+    [InlineData("seed")]
+    [InlineData("bundle")]
+    [InlineData("inventory")]
+    [InlineData("workspace")]
+    [InlineData("actor")]
+    [InlineData("tree")]
+    [InlineData("branch")]
+    public void VersionTwoHashIncludesEveryRepositorySeedIdentityAndDigest(string change)
+    {
+        var original = SeedCommand();
+        var source = original.WorkspaceSource!;
+        var changed = change switch
+        {
+            "reference" => source with { SeedReference = "seed-2" },
+            "seed" => source with { SeedSha256 = new string('b', 64) },
+            "bundle" => source with { BundleSha256 = new string('b', 64) },
+            "inventory" => source with { BaselineManifestSha256 = new string('b', 64) },
+            "workspace" => source with { WorkspaceIncarnationId = Guid.NewGuid() },
+            "actor" => source with { ActorSubject = "other-actor" },
+            "tree" => source with { BaselineTreeSha = new string('b', 40) },
+            "branch" => source with { BranchName = "other-branch" },
+            _ => throw new ArgumentOutOfRangeException(nameof(change))
+        };
+
+        Assert.NotEqual(
+            original.ComputeImmutableHash(),
+            (original with { WorkspaceSource = changed }).ComputeImmutableHash());
+    }
+
+    internal static SandboxBuildTestWorkspaceSource WorkspaceSource() =>
+        new(2, new SessionIdentity("project", "run", "session"), "tenant", "issuer", "actor",
+            "source-pin", new string('A', 64),
+            new(ProviderSeam.SourceControl, "github", "repository-1", 1),
+            "workspace-1", Guid.Parse("5956a121-5556-4c16-848c-0d4a2937966d"),
+            "work-branch", new string('a', 40), new string('c', 40),
+            "seed-1", Convert.ToHexStringLower(SHA256.HashData(new byte[1024])), 1024,
+            new string('c', 64), 512, new string('d', 64), 128);
+
+    private static SandboxBuildTestAcceptedCommand SeedCommand()
+    {
+        var command = CreateFixture().Command;
+        return command with
+        {
+            ContractVersion = 2,
+            WorkspaceSource = WorkspaceSource(),
+            WorkspaceSeed = new byte[1024].ToImmutableArray(),
+            ExecutionOptions = command.ExecutionOptions with
+            {
+                CollectorMode = SandboxBuildTestLimits.WorkspaceCollectorMode
+            }
+        };
+    }
+
     [Fact]
     public void RequestFingerprintIncludesPinnedSandboxProviderBinding()
     {
