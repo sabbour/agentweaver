@@ -17,7 +17,7 @@ function run(command, args, { timeout = 60_000, allowFailure = false } = {}) {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', timeout, windowsHide: true });
   if (result.error) throw result.error;
   if (!allowFailure && result.status !== 0)
-    throw new Error(`${command} failed (${result.status}): ${result.stderr.trim()}`);
+    throw new Error(`${command} ${args.join(' ')} failed (${result.status}):\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   return result;
 }
 
