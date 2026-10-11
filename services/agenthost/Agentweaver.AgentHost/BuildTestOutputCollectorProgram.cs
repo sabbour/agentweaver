@@ -11,7 +11,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Agentweaver.AgentHost;
 
-internal static class BuildTestOutputCollectorProgram
+internal static partial class BuildTestOutputCollectorProgram
 {
     private const int AtFileDescriptorCwd = -100;
     private const int AtEmptyPath = 0x1000;
@@ -197,7 +197,8 @@ internal static class BuildTestOutputCollectorProgram
         PreparedOutput output,
         long maximumFileBytes,
         long remainingTotalBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MemoryStream? capturedContent = null)
     {
         var originalIdentity = output.FileIdentity;
         if (output.FileHandle is null || originalIdentity is null)
@@ -237,6 +238,7 @@ internal static class BuildTestOutputCollectorProgram
             if (readBytes > maximumFileBytes || readBytes > remainingTotalBytes)
                 throw new IOException("A BuildTest output exceeded its accepted read limit.");
             hash.AppendData(buffer.AsSpan(0, read));
+            capturedContent?.Write(buffer, 0, read);
         }
 
         var after = ReadIdentity(readHandle);

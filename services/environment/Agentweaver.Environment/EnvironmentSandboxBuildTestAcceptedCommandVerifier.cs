@@ -59,6 +59,34 @@ public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifier(
         }
     }
 
+    public async Task VerifyWorkspaceCaptureAcknowledgmentAsync(
+        SandboxBuildTestAcceptedCommand acceptedCommand,
+        SandboxBuildTestWorkspaceCaptureAcknowledgmentVerification verification,
+        CancellationToken cancellationToken)
+    {
+        _ = acceptedCommand.ValidateMetadata();
+        if (options is null)
+            throw new RuntimeAuthorizationException("runtime_owner_context_unavailable");
+        verification.Reference.ValidateAcknowledgment(acceptedCommand.WorkspaceSource ??
+            throw new RuntimeAuthorizationException("buildtest_capture_source_unavailable"), verification.Capture);
+        var actor = await GetActorAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await VerifyCurrentAsync(acceptedCommand, actor, cancellationToken).ConfigureAwait(false);
+            var (path, _) = CommandAddress(acceptedCommand.Checkpoint);
+            var acknowledgment = await RuntimeOwnerHttpTransport.SendAsync<ProducedRunCaptureJournalEntry>(
+                client, options.OrchestratorOwnerAddress, path + "/workspace-capture/verify",
+                actor, verification, cancellationToken).ConfigureAwait(false);
+            if (acknowledgment != verification.Capture)
+                throw new RuntimeAuthorizationException("buildtest_capture_acknowledgment_changed");
+            await VerifyCurrentAsync(acceptedCommand, actor, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            actor.Bearer.Invalidate();
+        }
+    }
+
     private async Task VerifyCurrentAsync(
         SandboxBuildTestAcceptedCommand acceptedCommand, RuntimeActorAuthorization actor,
         CancellationToken cancellationToken)

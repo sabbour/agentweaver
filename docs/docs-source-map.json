@@ -250,6 +250,24 @@
       ]
     },
     {
+      "name": "BuildTest native preparation and full output",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Abstractions/SandboxBuildTest",
+        "packages/Agentweaver.SourceControl/GitWorkspaceBuildTest",
+        "services/agenthost/Agentweaver.AgentHost/BuildTest",
+        "services/environment/Agentweaver.Environment/EnvironmentSandboxBuildTest",
+        "services/orchestrator/Agentweaver.Orchestrator/MafBuildTest",
+        "services/orchestrator/Agentweaver.Orchestrator/SourceControlBuildTest"
+      ],
+      "required": [
+        "docs/architecture/environment-sandbox.md",
+        "docs/architecture/agenthost.md",
+        "docs/reference/contracts.md",
+        "docs/guide/environment-sandbox-testing.md",
+        "docs/diagrams/src/flagship/v1-environment-buildtest-command.json"
+      ]
+    },
+    {
       "name": "Knowledge and Memory",
       "sourcePrefixes": [
         "services/knowledge/Agentweaver.Knowledge/"

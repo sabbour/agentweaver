@@ -655,32 +655,46 @@ internal static partial class SourceControlEndpoints
 
             async Task<IResult> WriteAndAdmitOutputCaptureAsync(SourceControlOutputCaptureRecord capture)
             {
-                await RequireCurrentSourceControlRunAsync(
-                    context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
-                await RequireCapturableOutputRunStateAsync(
-                    coordinationOwner, run.Identity, cancellationToken).ConfigureAwait(false);
-                var acknowledgment = await events.WriteProducedRunCaptureAsync(
-                    context, capture.Proof, capture.PackageBytes, cancellationToken).ConfigureAwait(false);
-                await RequireCurrentSourceControlRunAsync(
-                    context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
-                await RequireCapturableOutputRunStateAsync(
-                    coordinationOwner, run.Identity, cancellationToken).ConfigureAwait(false);
-                var admitted = await sourceControlOwner.AdmitOutputCaptureAsync(
-                    run.Actor,
-                    run.Identity,
-                    run.Selection,
-                    run.Pin,
-                    run.DecisionStateVersion,
-                    capture.Proof.CaptureId,
-                    acknowledgment.Entry,
-                    cancellationToken).ConfigureAwait(false);
+                var (admitted, duplicate) = await SourceControlEndpoints.WriteAndAdmitOutputCaptureAsync(
+                    context, run, capture, projects, decisions, coordinationOwner, sourceControlOwner,
+                    events, cancellationToken).ConfigureAwait(false);
                 return Results.Json(
                     ToOutputCaptureSummary(admitted),
-                    statusCode: acknowledgment.IsDuplicate
+                    statusCode: duplicate
                         ? StatusCodes.Status200OK
                         : StatusCodes.Status201Created);
             }
         }, cancellationToken);
+
+    internal static async Task<(SourceControlOutputCaptureRecord Capture, bool IsDuplicate)>
+        WriteAndAdmitOutputCaptureAsync(
+            HttpContext context,
+            SourceControlRunContext run,
+            SourceControlOutputCaptureRecord capture,
+            ProjectsRunSelectionClient projects,
+            CoordinatorDecisionOwnerStore decisions,
+            CoordinationOwnerStore coordinationOwner,
+            SourceControlOwnerStore sourceControlOwner,
+            EventsAddressedMessageClient events,
+            CancellationToken cancellationToken)
+    {
+        await RequireCurrentSourceControlRunAsync(
+            context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
+        await RequireCapturableOutputRunStateAsync(
+            coordinationOwner, run.Identity, cancellationToken).ConfigureAwait(false);
+        if (capture.State == "admitted")
+            return (capture, true);
+        var acknowledgment = await events.WriteProducedRunCaptureAsync(
+            context, capture.Proof, capture.PackageBytes, cancellationToken).ConfigureAwait(false);
+        await RequireCurrentSourceControlRunAsync(
+            context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
+        await RequireCapturableOutputRunStateAsync(
+            coordinationOwner, run.Identity, cancellationToken).ConfigureAwait(false);
+        var admitted = await sourceControlOwner.AdmitOutputCaptureAsync(
+            run.Actor, run.Identity, run.Selection, run.Pin, run.DecisionStateVersion,
+            capture.Proof.CaptureId, acknowledgment.Entry, cancellationToken).ConfigureAwait(false);
+        return (admitted, acknowledgment.IsDuplicate);
+    }
 
     private static Task<IResult> ReadOutputCapturePageAsync(
         string projectId,

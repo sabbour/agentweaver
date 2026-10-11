@@ -340,11 +340,11 @@ public sealed class MafBuildTestSourceInputTests
         Assert.Equal(legacy.ToAcceptedCommand().ComputeImmutableHash(), legacy.ToAcceptedCommand().ImmutableHash);
     }
 
-    private static SandboxBuildTestWorkspaceSource Produce(InputFixture fixture) =>
+    internal static SandboxBuildTestWorkspaceSource Produce(InputFixture fixture) =>
         SourceControlEndpoints.CreateBuildTestWorkspaceSource(
             fixture.Run, fixture.Locator, fixture.Seed, "buildtest-" + fixture.Intent.OperationId.ToString("N"));
 
-    private static InputFixture Fixture()
+    internal static InputFixture Fixture()
     {
         var intent = MafBuildTestCheckpointTests.Intent();
         var actor = new CoordinationActor("issuer", "actor");
@@ -393,7 +393,7 @@ public sealed class MafBuildTestSourceInputTests
         return new(intent, new(actor, intent.Identity, selection, pin, intent.DecisionStateVersion), locator, seed);
     }
 
-    private sealed record InputFixture(
+    internal sealed record InputFixture(
         MafExecutionBuildTestIntent Intent,
         SourceControlRunContext Run,
         SourceControlBuildTestWorkspaceLocator Locator,

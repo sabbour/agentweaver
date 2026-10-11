@@ -12,7 +12,7 @@ BuildTest contracts, checkpoint verification, configuration, and migration/model
 
 ```powershell
 dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
-  --filter "FullyQualifiedName~SandboxBuildTestCommandContractTests|FullyQualifiedName~EnvironmentSandboxBuildTestAcceptedCommandVerifierTests|FullyQualifiedName~SandboxBuildTestProductionWiringTests" `
+  --filter "FullyQualifiedName~SandboxBuildTestCommandContractTests|FullyQualifiedName~SandboxBuildTestWorkspaceCaptureTests|FullyQualifiedName~EnvironmentSandboxBuildTestAcceptedCommandVerifierTests|FullyQualifiedName~SandboxBuildTestProductionWiringTests" `
   --configuration Release --no-restore --verbosity quiet
 ```
 
@@ -31,17 +31,44 @@ The stored-state test reads and updates version-2 JSON without seed bytes.
 Reconciliation restores the exact verified seed only after the stored command metadata matches.
 These cases do not prove live TLS authority, native provider preparation, or a complete BuildTest run.
 
+Version 2 capture tests require the exact preparation and full output reference even without declared output files.
+They reject changed native paths, Pod UIDs, source bindings, document sections, and non-positive journal positions.
+Only the exact verified acknowledgment can extend a completed Environment operation.
+Operation JSON retains references, not seed or file bytes.
+Controlled HTTP checks require Core's canonical acknowledgment and current command metadata before and after verification.
+They reject a different journal position, denied authority, and owner changes.
+These tests do not execute native Pods or prove cleanup on Kubernetes.
+
 Core's matching non-container selection is:
 
 ```powershell
 dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj `
-  --filter "FullyQualifiedName~MafBuildTestCommandResolutionTests|FullyQualifiedName~MafBuildTestCheckpointTests|FullyQualifiedName~MafBuildTestExecutionTests" `
+  --filter "FullyQualifiedName~MafBuildTest" `
   --configuration Release --no-restore --verbosity quiet
 ```
 
 It checks recovered version-2 metadata without binary input in JSON, and current owner decision, fence, and selection rejection.
 Version-2 terminal checkpoints recover and replay success, failure, and stale results without seed bytes in JSON.
 Metadata validation does not replace the final execution check that requires the actual seed bytes.
+
+Full-output source checks preserve baseline files and binary output bytes in the canonical document.
+They reject baseline deletion, undeclared changes, additional files, altered bytes, and section or seed mismatches.
+Pending bytes reconstruct the same complete document; an unadmitted row cannot supply a journal acknowledgment.
+Core cannot persist a successful version 2 receipt before the exact acknowledgment is present.
+Controlled binary transfers check the fixed Environment route, exact length and digest, media type, and no-store.
+Lost acknowledgment responses retry the same operation without command execution or native export.
+
+Run the pure document and partial-write checks without a native Git process or container:
+
+```powershell
+dotnet test tests\Agentweaver.SourceControl.Tests\Agentweaver.SourceControl.Tests.csproj `
+  --filter "FullyQualifiedName~GitWorkspaceCaptureDocumentTests" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+These checks distinguish a truncated unsealed write from a complete document.
+Foreign headers, invalid lengths, corrupt complete packages, and extra bytes do not become recoverable partial state.
+The checks do not prove native private-volume persistence or a full provider run.
 
 Run the BuildTest owner-store tests with the existing disposable PostgreSQL fixture:
 
@@ -56,6 +83,56 @@ They cover concurrent reservation, replay from a new store and connection pool, 
 They also cover retirement, durable policy-attempt markers, PostgreSQL timestamp precision, and terminal-result preservation.
 Replay preserves the original result; a later save cannot replace terminal evidence or return a terminal operation to Running.
 These store tests do not execute command Pods, prove HTTP authorization, or verify live Kubernetes isolation and Cilium enforcement.
+
+The version 2 manager cases use the same PostgreSQL stores with controlled provider and Core acknowledgment responses.
+They require saved acknowledgment before either Pod delete.
+They repeat the exact cleanup after a failed delete and store restart.
+Denied acknowledgment or revoked authority prevents cleanup.
+Authority revoked after collector cleanup prevents command-Pod cleanup.
+Retry does not prepare, capture, export, or execute the command again.
+These added cases are source-only until their approved PostgreSQL run completes; they do not prove native Pod cleanup or Events admission.
+
+The provider cases compare version 1 and version 2 through the existing controlled Kubernetes HTTP handler.
+Version 2 requires the pinned preparation container, exact prepared command path, separate read-only collector, and private capture volume.
+The collector has no command deadline after capture, so its sealed bytes remain available before acknowledgment.
+Changed private mounts, command paths, Pod UIDs, or saved preparation receipts fail before native effects.
+The existing TLS exchange cases also check the exact helper command on the Kubernetes `exec` route.
+These added cases are source-only until their approved run completes.
+
+## Controlled actual Host image check
+
+This separate check requires approval for local image construction and execution.
+Run it from the clean, reviewed source checkout, with its exact commit:
+
+```powershell
+$env:AGENTWEAVER_CONTAINER_ENGINE = "podman"
+$env:AGENTWEAVER_BUILDTEST_NATIVE_IMAGE_CHECK = "1"
+$env:AGENTWEAVER_BUILDTEST_REPOSITORY_ROOT = (Get-Location).Path
+$env:AGENTWEAVER_BUILDTEST_SOURCE_SHA = "<reviewed-buildtest-sha>"
+dotnet test tests\Agentweaver.SourceControl.Tests\Agentweaver.SourceControl.Tests.csproj `
+  --filter "FullyQualifiedName=Agentweaver.SourceControl.Tests.GitWorkspaceManagerTests.ActualHostImageRetainsCompletePreparedRepositoryBytesAcrossCollectorProcesses" `
+  --configuration Release --no-restore --verbosity quiet
+```
+
+The check builds the actual Host Dockerfile as Linux amd64.
+It uses that production image and its Git package, not a second Git image or a host Git installation step.
+The existing Source Control fixture creates the accepted seed through `GitWorkspaceManager`.
+The actual Host collector prepares the seed in its exact native repository path.
+The command runs there as user 1000, matching the provider Pod security context.
+The separate collector reads the Workspace volume read-only and stores sealed bytes in its own private volume.
+The canonical parser checks the complete baseline and both declared output files, including binary bytes.
+New collector processes must return the same reference and document after the native output changes.
+The check also recovers an interrupted reference write and rejects foreign Pod and operation identities.
+Repeated native preparation must not reset command output.
+A new capture rejects a symlink in the actual prepared repository.
+
+The check owns one uniquely named image, three volumes, and its exact named containers.
+It removes only those resources and its test-created `Temp` directory.
+Docker ignores `Temp`, so local seed fixtures do not enter the image build context.
+Actual bytes, source and image identity, and the native path are retained under `artifacts/buildtest-native`.
+The check remains disabled unless explicitly selected.
+Unexecuted source cases are not native or restart evidence.
+This check does not prove Environment acknowledgment storage, Events admission, Kubernetes cleanup, Cilium enforcement, or deployment.
 
 The release tests also run the managed collector in a cached Linux ASP.NET runtime:
 

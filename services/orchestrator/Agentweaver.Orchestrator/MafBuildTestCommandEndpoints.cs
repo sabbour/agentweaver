@@ -7,6 +7,81 @@ namespace Agentweaver.Orchestrator;
 
 public static partial class CoordinationEndpoints
 {
+    private static Task<IResult> VerifyCoordinatorBuildTestCaptureAcknowledgmentAsync(
+        string projectId, string runId, string sessionId, string checkpointId, string stepId,
+        SandboxBuildTestWorkspaceCaptureAcknowledgmentVerification request,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinatorDecisionOwnerStore decisions,
+        PostgresMafCheckpointStore checkpoints,
+        SourceControlOwnerStore sourceControlOwner,
+        CancellationToken cancellationToken) =>
+        ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (request?.Reference is null || request.Pod is null || request.Capture is null)
+                throw new CoordinationException("maf_execution_workspace_capture_acknowledgment_invalid",
+                    StatusCodes.Status400BadRequest);
+            var reference = request.Reference.Checkpoint.Validate();
+            if (reference.ProjectId != projectId || reference.RunId != runId ||
+                reference.SessionId != sessionId || reference.CheckpointId != checkpointId ||
+                reference.StepId != stepId)
+                throw new CoordinationException("maf_execution_build_test_checkpoint_stale", StatusCodes.Status409Conflict);
+            var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
+            var identity = new SessionIdentity(projectId, runId, sessionId);
+            var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(
+                context, projectId, runId, cancellationToken).ConfigureAwait(false);
+            var current = await decisions.ReadCurrentAsync(
+                actor, identity, selection, cancellationToken).ConfigureAwait(false);
+            var store = new MafExecutionCheckpointStore(checkpoints, CreateExecutionCheckpointBinding(
+                identity, actor, current.State.Fence, MafExecutionCheckpointStore.CurrentSdkVersion,
+                PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot)));
+            var latest = await store.ReadLatestAsync(cancellationToken).ConfigureAwait(false) ??
+                throw new CoordinationException("maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+            var command = ResolveBuildTestCommand(latest, current, reference, selection.Authorization.TenantId);
+            var intent = await store.HydrateBuildTestIntentAsync(
+                latest.State.BuildTestIntents[stepId], cancellationToken).ConfigureAwait(false);
+            command = intent.ToAcceptedCommand();
+            var source = command.WorkspaceSource ??
+                throw new CoordinationException("maf_execution_workspace_seed_unavailable", StatusCodes.Status409Conflict);
+            try
+            {
+                request.Reference.Validate(command, intent.ToApiRequest().ComputeRequestFingerprint(command), request.Pod);
+                request.Reference.ValidateAcknowledgment(source, request.Capture);
+            }
+            catch (ArgumentException)
+            {
+                throw new CoordinationException("maf_execution_workspace_capture_acknowledgment_conflict",
+                    StatusCodes.Status409Conflict);
+            }
+            await SourceControlEndpoints.RequireCurrentBuildTestInputAsync(
+                context, source, reference, options, projects, decisions, sourceControlOwner,
+                cancellationToken).ConfigureAwait(false);
+            var capture = await sourceControlOwner.ReadOutputCaptureAsync(
+                identity, request.Capture.Capture.CaptureId, source.AcceptedSelectionHash, cancellationToken)
+                .ConfigureAwait(false) ??
+                throw new CoordinationException("maf_execution_workspace_capture_unadmitted", StatusCodes.Status409Conflict);
+            var acknowledgment = SourceControlEndpoints.ReadBuildTestAcknowledgment(capture, request.Reference, source);
+            if (acknowledgment != request.Capture)
+                throw new CoordinationException("maf_execution_workspace_capture_acknowledgment_conflict",
+                    StatusCodes.Status409Conflict);
+            _ = SourceControlEndpoints.ParseBuildTestOutput(
+                SourceControlEndpoints.SerializeBuildTestOutput(capture), request.Reference, command);
+            await RequireUnchangedAuthorizedSelectionAsync(
+                context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
+            current = await decisions.ReadCurrentAsync(actor, identity, selection, cancellationToken).ConfigureAwait(false);
+            latest = await store.ReadLatestAsync(cancellationToken).ConfigureAwait(false) ??
+                throw new CoordinationException("maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+            if (ResolveBuildTestCommand(latest, current, reference, selection.Authorization.TenantId).ImmutableHash !=
+                command.ImmutableHash)
+                throw new CoordinationException("maf_execution_build_test_checkpoint_stale", StatusCodes.Status409Conflict);
+            await SourceControlEndpoints.RequireCurrentBuildTestInputAsync(
+                context, source, reference, options, projects, decisions, sourceControlOwner,
+                cancellationToken).ConfigureAwait(false);
+            return Results.Ok(acknowledgment);
+        }, cancellationToken);
+
     private static Task<IResult> ReadCoordinatorBuildTestCommandAsync(
         string projectId,
         string runId,

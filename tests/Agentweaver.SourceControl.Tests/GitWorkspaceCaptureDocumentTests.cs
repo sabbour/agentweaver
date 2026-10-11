@@ -83,6 +83,45 @@ public sealed class GitWorkspaceCaptureDocumentTests
         Assert.Throws<ArgumentException>(() => GitWorkspaceCapturePackage.SerializeDocument(changed));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [InlineData(12)]
+    [InlineData(24)]
+    public void TruncatedUnsealedDocumentIsDistinguishedFromACompleteSealedDocument(int prefixLength)
+    {
+        var bytes = GitWorkspaceCapturePackage.SerializeDocument(Document());
+
+        Assert.True(GitWorkspaceCapturePackage.IsIncompleteDocument(bytes.AsSpan(0, prefixLength)));
+        Assert.True(GitWorkspaceCapturePackage.IsIncompleteDocument(bytes.AsSpan(0, bytes.Length - 1)));
+        Assert.False(GitWorkspaceCapturePackage.IsIncompleteDocument(bytes));
+        Assert.Equal(Document().PackageSha256, GitWorkspaceCapturePackage.ParseDocument(bytes).PackageSha256);
+    }
+
+    [Theory]
+    [InlineData("header")]
+    [InlineData("length")]
+    [InlineData("bytes")]
+    [InlineData("extra")]
+    public void ForeignOrCorruptFullDocumentCannotBeTreatedAsARecoverablePartialWrite(string fault)
+    {
+        var bytes = GitWorkspaceCapturePackage.SerializeDocument(Document());
+        switch (fault)
+        {
+            case "header": bytes[0] ^= 1; break;
+            case "length": BinaryPrimitives.WriteUInt64BigEndian(bytes.AsSpan(16, 8), ulong.MaxValue); break;
+            case "bytes": bytes[^1] ^= 1; break;
+            case "extra": bytes = [.. bytes, 0]; break;
+        }
+        if (fault is "header" or "length")
+            Assert.Throws<ArgumentException>(() => GitWorkspaceCapturePackage.IsIncompleteDocument(bytes));
+        else
+        {
+            Assert.False(GitWorkspaceCapturePackage.IsIncompleteDocument(bytes));
+            Assert.Throws<ArgumentException>(() => GitWorkspaceCapturePackage.ParseDocument(bytes));
+        }
+    }
+
     [Fact]
     public void TransferLimitIncludesAllExistingDocumentSections()
     {

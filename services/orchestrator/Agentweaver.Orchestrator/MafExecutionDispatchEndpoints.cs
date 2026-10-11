@@ -739,7 +739,7 @@ public static partial class CoordinationEndpoints
                     wallTimeLimitReached = true;
                     return false;
                 }
-                await RevalidateDispatchAsync(token).ConfigureAwait(false);
+                await RequireCurrentBuildTestAsync(token).ConfigureAwait(false);
                 var runtimeActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
                 SandboxBuildTestOperationSnapshot operation;
                 try
@@ -753,6 +753,44 @@ public static partial class CoordinationEndpoints
                 }
                 if (MafBuildTestCommandContract.Classify(intent, operation) == MafExecutionTaskStatus.Running)
                     return false;
+                if (operation.Status == SandboxBuildTestOperationStatus.Completed &&
+                    intent.EffectiveWorkspaceSource is not null)
+                {
+                    var hydrated = await execution.HydrateBuildTestIntentAsync(intent, token).ConfigureAwait(false);
+                    var sourceControl = context.RequestServices.GetRequiredService<SourceControlOwnerStore>();
+                    var acknowledgment = await SourceControlEndpoints.AdmitBuildTestOutputAsync(
+                        context, hydrated, operation, options, projects, decisions, store, sourceControl, events,
+                        async readToken =>
+                        {
+                            var captureActor = await CreateRuntimeActorAsync(readToken).ConfigureAwait(false);
+                            try
+                            {
+                                return await buildTestClient.ReadWorkspaceCaptureAsync(
+                                    captureActor, intent, operation.WorkspaceCapture!, readToken).ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                captureActor.Bearer.Invalidate();
+                            }
+                        },
+                        RequireCurrentBuildTestAsync, token).ConfigureAwait(false);
+                    await RequireCurrentBuildTestAsync(token).ConfigureAwait(false);
+                    var acknowledgmentActor = await CreateRuntimeActorAsync(token).ConfigureAwait(false);
+                    try
+                    {
+                        var acknowledged = await buildTestClient.AcknowledgeWorkspaceCaptureAsync(
+                            acknowledgmentActor, intent, acknowledgment, token).ConfigureAwait(false);
+                        if (!JsonElement.DeepEquals(JsonSerializer.SerializeToElement(operation.WorkspaceCapture),
+                                JsonSerializer.SerializeToElement(acknowledged.WorkspaceCapture)))
+                            throw new CoordinationException("maf_execution_workspace_capture_acknowledgment_conflict",
+                                StatusCodes.Status409Conflict);
+                        operation = acknowledged;
+                    }
+                    finally
+                    {
+                        acknowledgmentActor.Bearer.Invalidate();
+                    }
+                }
                 await RevalidateDispatchAsync(token).ConfigureAwait(false);
                 var dataSource = context.RequestServices.GetRequiredService<NpgsqlDataSource>();
                 await using var connection = await dataSource.OpenConnectionAsync(token).ConfigureAwait(false);
@@ -766,6 +804,21 @@ public static partial class CoordinationEndpoints
                     connection, transaction, token).ConfigureAwait(false)
                     ?? throw new CoordinationException(
                         "maf_execution_checkpoint_unavailable", StatusCodes.Status503ServiceUnavailable);
+                if (operation.WorkspaceCaptureAcknowledgment is { } admittedEntry &&
+                    intent.EffectiveWorkspaceSource is { } workspaceSource &&
+                    operation.WorkspaceCapture is { } captureReference)
+                {
+                    var sourceControl = context.RequestServices.GetRequiredService<SourceControlOwnerStore>();
+                    var (capture, _) = await sourceControl.ReadPrerequisiteOutputCaptureInTransactionAsync(
+                        connection, transaction, actor, identity, workspaceSource.TenantId,
+                        workspaceSource.AcceptedSelectionHash, intent.ExecutionFence,
+                        admittedEntry.Capture.CaptureId, token).ConfigureAwait(false);
+                    if (capture is null ||
+                        SourceControlEndpoints.ReadBuildTestAcknowledgment(capture, captureReference, workspaceSource) !=
+                            admittedEntry)
+                        throw new CoordinationException("maf_execution_workspace_capture_acknowledgment_conflict",
+                            StatusCodes.Status409Conflict);
+                }
                 var next = PrepareBuildTestCompletionCheckpoint(latest, intent, operation);
                 checkpoint = next is null
                     ? latest
@@ -774,6 +827,20 @@ public static partial class CoordinationEndpoints
                         .ConfigureAwait(false);
                 await transaction.CommitAsync(token).ConfigureAwait(false);
                 return true;
+
+                async Task RequireCurrentBuildTestAsync(CancellationToken currentToken)
+                {
+                    await RevalidateDispatchAsync(currentToken).ConfigureAwait(false);
+                    var current = await execution.ReadLatestAsync(currentToken).ConfigureAwait(false) ??
+                        throw new CoordinationException("maf_execution_checkpoint_unavailable",
+                            StatusCodes.Status503ServiceUnavailable);
+                    if (current.State.WorkPlanId != intent.WorkPlanId ||
+                        current.State.DecisionStateVersion != intent.DecisionStateVersion ||
+                        !current.State.BuildTestIntents.TryGetValue(intent.StepId, out var retained) ||
+                        !MafExecutionCheckpointContract.BuildTestIntentsMatch(intent, retained))
+                        throw new CoordinationException("maf_execution_build_test_intent_conflict",
+                            StatusCodes.Status409Conflict);
+                }
             }
 
             async Task<MafExecutionBuildTestIntent> PrepareBuildTestAsync(
@@ -1307,6 +1374,11 @@ public static partial class CoordinationEndpoints
             receipt.OutputSha256,
             receipt.OutputBytes,
             receipt.CollectorManifestSha256,
+            preparedRepositoryPath = receipt.WorkspacePreparation?.RepositoryRelativePath,
+            captureDocumentSha256 = receipt.WorkspaceCapture?.DocumentSha256,
+            captureDocumentBytes = receipt.WorkspaceCapture?.DocumentByteLength,
+            captureId = receipt.WorkspaceCaptureAcknowledgment?.Capture.CaptureId,
+            eventPosition = receipt.WorkspaceCaptureAcknowledgment?.Position,
             outputCount = receipt.Outputs.Length,
             receipt.FailureCode
         });

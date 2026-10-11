@@ -162,6 +162,24 @@ public static class GitWorkspaceCapturePackage
         return bytes;
     }
 
+    public static bool IsIncompleteDocument(ReadOnlySpan<byte> bytes)
+    {
+        var prefixLength = Math.Min(bytes.Length, DocumentMagic.Length);
+        if (!bytes[..prefixLength].SequenceEqual(DocumentMagic.AsSpan(0, prefixLength)))
+            throw new ArgumentException("The captured output document has a foreign header.", nameof(bytes));
+        if (bytes.Length < ProducedRunCaptureLimits.DocumentHeaderBytes)
+            return true;
+        var manifestLength = BinaryPrimitives.ReadUInt32BigEndian(bytes.Slice(8, 4));
+        var patchLength = BinaryPrimitives.ReadUInt32BigEndian(bytes.Slice(12, 4));
+        var packageLength = BinaryPrimitives.ReadUInt64BigEndian(bytes.Slice(16, 8));
+        if (manifestLength is 0 or > ProducedRunCaptureLimits.MaximumManifestBytes ||
+            patchLength > ProducedRunCaptureLimits.MaximumDiffBytes ||
+            packageLength is < ProducedRunCaptureLimits.PackageHeaderBytes or > ProducedRunCaptureLimits.MaximumPackageBytes)
+            throw new ArgumentException("The captured output document section lengths are invalid.", nameof(bytes));
+        return (ulong)bytes.Length < ProducedRunCaptureLimits.DocumentHeaderBytes +
+            (ulong)manifestLength + patchLength + packageLength;
+    }
+
     public static GitWorkspaceCaptureDocument ParseDocument(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length < ProducedRunCaptureLimits.DocumentHeaderBytes ||

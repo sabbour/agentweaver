@@ -209,6 +209,7 @@ public sealed record SandboxBuildTestAcceptedCommand(
             Outputs.Select(output => output.Name).Distinct(StringComparer.Ordinal).Count() != Outputs.Length ||
             Outputs.Select(output => output.RelativePath).Distinct(StringComparer.Ordinal).Count() != Outputs.Length ||
             Outputs.Any(output => output.MaximumBytes > ExecutionOptions.MaximumFileOutputBytes) ||
+            ContractVersion == 2 && Outputs.Any(output => output.MaximumBytes > ProducedRunCaptureLimits.MaximumFileBytes) ||
             ImmutableHash is null ||
             !SandboxBuildTestHashes.IsPrefixedSha256(ImmutableHash) ||
             !string.Equals(ImmutableHash, ComputeImmutableHash(), StringComparison.Ordinal))
@@ -760,6 +761,14 @@ public sealed record SandboxBuildTestOperationSnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxBuildTestBindingPreparation.SandboxBuildTestWorkspacePreparationReceipt? WorkspacePreparation
+        { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxBuildTestWorkspaceCaptureReference? WorkspaceCapture { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProducedRunCaptureJournalEntry? WorkspaceCaptureAcknowledgment { get; init; }
+
     public SandboxBuildTestOperationSnapshot Validate(
         SandboxBuildTestAcceptedCommand acceptedCommand,
         int maximumOutputBytes)
@@ -775,7 +784,7 @@ public sealed record SandboxBuildTestOperationSnapshot(
             !string.Equals(ImmutableHash, acceptedCommand.ImmutableHash, StringComparison.Ordinal) ||
             !SandboxBuildTestHashes.IsSha256(RequestFingerprint) ||
             ExpectedCommandPolicy.NetworkPolicyGeneration != ExpectedBinding.NetworkPolicyGeneration ||
-            (acceptedCommand.Outputs.IsEmpty
+            (acceptedCommand.Outputs.IsEmpty && acceptedCommand.WorkspaceSource is null
                 ? CollectorPolicy is not null
                 : CollectorPolicy is null ||
                     CollectorPolicy.NetworkPolicyGeneration != ExpectedBinding.NetworkPolicyGeneration) ||
@@ -785,6 +794,7 @@ public sealed record SandboxBuildTestOperationSnapshot(
             OutputEvidence.Any(evidence => evidence is null) ||
             FailureCode is { Length: > 128 } ||
             FailureCode?.Any(char.IsControl) == true ||
+            WorkspaceCaptureAcknowledgment is not null && Status != SandboxBuildTestOperationStatus.Completed ||
             Terminal is not null &&
                 Status is SandboxBuildTestOperationStatus.Reserved or SandboxBuildTestOperationStatus.Running ||
             Terminal is { Kind: SandboxBuildTestTerminationKind.Exited, ExitCode: not 0 } &&
@@ -808,6 +818,17 @@ public sealed record SandboxBuildTestOperationSnapshot(
             throw new ArgumentException("The BuildTest operation snapshot is invalid.");
         if (Pod is not null)
             _ = Pod.Validate();
+        if (WorkspacePreparation is not null)
+            _ = WorkspacePreparation.Validate(acceptedCommand, RequestFingerprint,
+                Pod ?? throw new ArgumentException("A native preparation requires its exact command Pod."));
+        if (WorkspaceCapture is not null)
+            _ = WorkspaceCapture.Validate(acceptedCommand, RequestFingerprint,
+                CollectorPod ?? throw new ArgumentException("A native capture requires its exact collector Pod."));
+        if (WorkspaceCaptureAcknowledgment is not null)
+            (WorkspaceCapture ?? throw new ArgumentException("A journal acknowledgment requires a native capture."))
+                .ValidateAcknowledgment(acceptedCommand.WorkspaceSource ??
+                    throw new ArgumentException("A journal acknowledgment requires version 2 input."),
+                    WorkspaceCaptureAcknowledgment);
         if (Terminal is not null)
             _ = Terminal.Validate();
         if (CurrentBinding is not null)
@@ -881,6 +902,11 @@ public sealed record SandboxBuildTestOperationSnapshot(
 
     private bool CollectorEvidenceMatches(SandboxBuildTestAcceptedCommand acceptedCommand)
     {
+        if (acceptedCommand.WorkspaceSource is not null)
+            return WorkspacePreparation is not null && WorkspaceCapture is not null &&
+                CollectorPod is not null && CollectorPolicy is not null && CollectorTerminal is null &&
+                CollectorManifestSha256 == WorkspaceCapture.ManifestSha256 &&
+                OutputEvidence.SequenceEqual(WorkspaceCapture.Outputs);
         if (acceptedCommand.Outputs.IsEmpty)
             return CollectorPod is null &&
                 CollectorTerminal is null &&
@@ -967,7 +993,7 @@ public sealed record SandboxBuildTestProviderRequest(
             AcceptedCommand.OperationId,
             SandboxBuildTestLimits.CommandPolicyRole);
         if (CommandPolicy.NetworkPolicyGeneration != ExpectedBinding.NetworkPolicyGeneration ||
-            (AcceptedCommand.Outputs.IsEmpty
+            (AcceptedCommand.Outputs.IsEmpty && AcceptedCommand.WorkspaceSource is null
                 ? CollectorPolicy is not null
                 : CollectorPolicy is null ||
                     CollectorPolicy.NetworkPolicyGeneration != ExpectedBinding.NetworkPolicyGeneration))
@@ -991,10 +1017,40 @@ public interface ISandboxBuildTestAcceptedCommandVerifier
     Task VerifyCurrentAsync(
         SandboxBuildTestAcceptedCommand acceptedCommand,
         CancellationToken cancellationToken);
+
+    Task VerifyWorkspaceCaptureAcknowledgmentAsync(
+        SandboxBuildTestAcceptedCommand acceptedCommand,
+        SandboxBuildTestWorkspaceCaptureAcknowledgmentVerification verification,
+        CancellationToken cancellationToken) =>
+        throw new InvalidOperationException("The BuildTest capture acknowledgment verifier is not configured.");
 }
 
 public interface ISandboxBuildTestCommandProvider
 {
+    Task<SandboxBuildTestBindingPreparation.SandboxBuildTestWorkspacePreparationReceipt?> PrepareWorkspaceAsync(
+        SandboxBuildTestProviderRequest request,
+        SandboxBuildTestPodReference pod,
+        CancellationToken cancellationToken) =>
+        throw new SandboxProviderException("buildtest_workspace_provider_unconfigured",
+            "The selected provider has no native workspace preparation path.", false);
+
+    Task<SandboxBuildTestWorkspaceCaptureReference?> CaptureWorkspaceAsync(
+        SandboxBuildTestProviderRequest request,
+        SandboxBuildTestPodReference pod,
+        SandboxBuildTestBindingPreparation.SandboxBuildTestWorkspacePreparationReceipt preparation,
+        CancellationToken cancellationToken) =>
+        throw new SandboxProviderException("buildtest_workspace_provider_unconfigured",
+            "The selected provider has no complete native workspace capture path.", false);
+
+    Task<ImmutableArray<byte>> ReadWorkspaceCaptureAsync(
+        SandboxBuildTestProviderRequest request,
+        SandboxBuildTestPodReference pod,
+        SandboxBuildTestBindingPreparation.SandboxBuildTestWorkspacePreparationReceipt preparation,
+        SandboxBuildTestWorkspaceCaptureReference capture,
+        CancellationToken cancellationToken) =>
+        throw new SandboxProviderException("buildtest_workspace_provider_unconfigured",
+            "The selected provider cannot export the complete native workspace bytes.", false);
+
     Task<SandboxBuildTestPodReference> CreateGatedAsync(
         SandboxBuildTestProviderRequest request,
         CancellationToken cancellationToken);
@@ -1045,6 +1101,8 @@ public static class SandboxBuildTestLimits
     public const string OutputCollectorAssembly = "Agentweaver.AgentHost.dll";
     public const string OutputCollectorMode = "--build-test-output-collector-v1";
     public const string WorkspaceCollectorMode = "--build-test-workspace-collector-v2";
+    public const string WorkspacePreparationContainerName = "buildtest-workspace-prepare";
+    public const string WorkspaceCaptureContainerName = "buildtest-workspace-collector";
     public const string OutputCollectorContainerName = "buildtest-collector";
     public const int MaximumCollectorRequestBytes = 65_536;
     public const long MaximumFileOutputBytes = 67_108_864;

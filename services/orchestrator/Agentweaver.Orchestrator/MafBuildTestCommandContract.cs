@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 using Microsoft.AspNetCore.Http;
@@ -96,6 +97,14 @@ internal sealed record MafBuildTestTerminalReceipt(
     string? FailureCode,
     DateTimeOffset UpdatedAt)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxBuildTestBindingPreparation.SandboxBuildTestWorkspacePreparationReceipt? WorkspacePreparation
+        { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxBuildTestWorkspaceCaptureReference? WorkspaceCapture { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProducedRunCaptureJournalEntry? WorkspaceCaptureAcknowledgment { get; init; }
+
     internal MafExecutionTaskStatus ValidateFor(MafExecutionBuildTestIntent intent)
     {
         var accepted = intent.ToAcceptedCommand(requireSeed: false);
@@ -103,6 +112,7 @@ internal sealed record MafBuildTestTerminalReceipt(
             RequestFingerprint != intent.ToApiRequest().ComputeRequestFingerprint(accepted) ||
             OperationEvidenceSha256 is not { Length: 64 } || !OperationEvidenceSha256.All(Uri.IsHexDigit) ||
             Outputs.IsDefault ||
+            WorkspaceCaptureAcknowledgment is not null && Status != SandboxBuildTestOperationStatus.Completed ||
             FailureCode is { Length: > 128 } || FailureCode?.Any(char.IsControl) == true ||
             OutputBytes < 0 || OutputBytes > intent.ExecutionOptions.MaximumOutputBytes ||
             OutputSha256 is not null && (OutputSha256.Length != 64 || !OutputSha256.All(Uri.IsHexDigit)))
@@ -128,11 +138,35 @@ internal sealed record MafBuildTestTerminalReceipt(
                 CollectorTerminal.ContainerName != SandboxBuildTestLimits.OutputCollectorContainerName)
                 throw new ArgumentException("The persisted BuildTest collector terminal binding is invalid.");
         }
+        if (WorkspacePreparation is not null)
+            WorkspacePreparation.Validate(accepted, RequestFingerprint, Pod ??
+                throw new ArgumentException("The preparation receipt requires the native command Pod."));
+        if (WorkspaceCapture is not null)
+            WorkspaceCapture.Validate(accepted, RequestFingerprint, CollectorPod ??
+                throw new ArgumentException("The capture reference requires the native collector Pod."));
+        if (WorkspaceCaptureAcknowledgment is not null)
+            (WorkspaceCapture ?? throw new ArgumentException("The acknowledgment requires its native capture."))
+                .ValidateAcknowledgment(accepted.WorkspaceSource ??
+                    throw new ArgumentException("The acknowledgment requires version 2 source input."),
+                    WorkspaceCaptureAcknowledgment);
         if (Status == SandboxBuildTestOperationStatus.Completed)
         {
             if (Pod is null || Terminal is not { Kind: SandboxBuildTestTerminationKind.Exited, ExitCode: 0 } ||
                 OutputSha256 is null || OutputBytes is null ||
-                Outputs.Length != accepted.Outputs.Length ||
+                Outputs.Length != accepted.Outputs.Length)
+                throw new ArgumentException("The persisted BuildTest success receipt lacks terminal and output evidence.");
+            if (accepted.WorkspaceSource is not null)
+            {
+                if (WorkspacePreparation is null || WorkspaceCapture is null ||
+                    WorkspaceCaptureAcknowledgment is null || CollectorPod is null || CollectorTerminal is not null ||
+                    CollectorManifestSha256 != WorkspaceCapture.ManifestSha256 ||
+                    !Outputs.SequenceEqual(WorkspaceCapture.Outputs))
+                    throw new ArgumentException(
+                        "A complete BuildTest receipt requires the admitted full output and durable Events acknowledgment.");
+                return MafExecutionTaskStatus.Succeeded;
+            }
+            if (WorkspacePreparation is not null || WorkspaceCapture is not null ||
+                WorkspaceCaptureAcknowledgment is not null ||
                 accepted.Outputs.IsEmpty &&
                     (CollectorPod is not null || CollectorTerminal is not null || CollectorManifestSha256 is not null) ||
                 !accepted.Outputs.IsEmpty &&
@@ -174,10 +208,15 @@ internal sealed record MafBuildTestTerminalReceipt(
     {
         if (MafBuildTestCommandContract.Classify(intent, operation) == MafExecutionTaskStatus.Running)
             throw new ArgumentException("A BuildTest terminal receipt requires a terminal owner operation.");
-        return new(operation.OperationId, operation.ImmutableHash, operation.RequestFingerprint, operation.Status,
+        return new MafBuildTestTerminalReceipt(operation.OperationId, operation.ImmutableHash, operation.RequestFingerprint, operation.Status,
             MafBuildTestCommandContract.HashOperation(operation), operation.Pod, operation.Terminal,
             operation.Output?.CapturedSha256, operation.Output?.CapturedByteCount,
             operation.CollectorPod, operation.CollectorTerminal, operation.CollectorManifestSha256,
-            operation.OutputEvidence, operation.FailureCode, operation.UpdatedAt);
+            operation.OutputEvidence, operation.FailureCode, operation.UpdatedAt)
+        {
+            WorkspacePreparation = operation.WorkspacePreparation,
+            WorkspaceCapture = operation.WorkspaceCapture,
+            WorkspaceCaptureAcknowledgment = operation.WorkspaceCaptureAcknowledgment
+        };
     }
 }

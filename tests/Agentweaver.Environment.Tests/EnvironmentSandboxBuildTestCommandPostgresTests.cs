@@ -7,6 +7,7 @@ using Agentweaver.Environment;
 using Agentweaver.Providers;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
 using Npgsql;
+using SandboxBuildTestWorkspacePreparationReceipt = Agentweaver.Abstractions.SandboxBuildTestBindingPreparation.SandboxBuildTestWorkspacePreparationReceipt;
 using static Agentweaver.Environment.Tests.SandboxBuildTestCommandContractTests;
 
 namespace Agentweaver.Environment.Tests;
@@ -14,6 +15,144 @@ namespace Agentweaver.Environment.Tests;
 public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentPostgresFixture database)
     : IClassFixture<EnvironmentPostgresFixture>
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task PublicManagerSavesExactAcknowledgmentBeforeCleanupAndRetriesAfterRestart(int failedDelete)
+    {
+        var fixture = await CreateManagerFixtureAsync(versionTwo: true);
+        fixture.Provider.Complete = true;
+        var completed = await fixture.ExecuteAsync();
+        Assert.Equal(SandboxBuildTestOperationStatus.Completed, completed.Operation.Status);
+        Assert.NotNull(completed.Operation.WorkspacePreparation);
+        Assert.NotNull(completed.Operation.WorkspaceCapture);
+        Assert.Null(completed.Operation.WorkspaceCaptureAcknowledgment);
+        Assert.Empty(fixture.Provider.DeletedPodUids);
+        Assert.Equal(1, fixture.Provider.Preparations);
+        Assert.Equal(1, fixture.Provider.Captures);
+        Assert.Equal(1, fixture.Provider.Creates);
+        Assert.Equal(1, fixture.Provider.CollectorCreates);
+
+        var verification = SandboxBuildTestWorkspaceCaptureTests.Verification(
+            fixture.Command, fixture.Request, completed.Operation.CollectorPod);
+        var acknowledgment = new SandboxBuildTestWorkspaceCaptureAcknowledgmentRequest(
+            fixture.Request, verification.Capture);
+        fixture.Provider.BeforeDelete = async pod =>
+        {
+            var saved = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+            Assert.NotNull(saved);
+            Assert.Equal(acknowledgment.Capture, saved.Operation.WorkspaceCaptureAcknowledgment);
+            Assert.Equal(completed.Operation.WorkspaceCapture, saved.Operation.WorkspaceCapture);
+            Assert.Contains(pod.Uid, new[] { completed.Operation.CollectorPod!.Uid, completed.Operation.Pod!.Uid });
+        };
+        fixture.Provider.FailDeleteNumber = failedDelete;
+        if (failedDelete != 0)
+        {
+            var failure = await Assert.ThrowsAsync<SandboxProviderException>(() => AcknowledgeAsync());
+            Assert.Equal("controlled_cleanup_failure", failure.Code);
+            var saved = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+            Assert.NotNull(saved);
+            Assert.Equal(acknowledgment.Capture, saved.Operation.WorkspaceCaptureAcknowledgment);
+            Assert.DoesNotContain("workspace:capture:released", saved.AttemptedEffects);
+        }
+        else
+        {
+            await AcknowledgeAsync();
+        }
+
+        await using var restartedDataSource = database.CreateDataSource("buildtest-ack-restarted");
+        var restarted = fixture.CreateManager(new EnvironmentSandboxBuildTestCommandStore(
+            restartedDataSource, TimeProvider.System));
+        var admitted = await AcknowledgeAsync(restarted);
+        Assert.Equal(acknowledgment.Capture, admitted.Operation.WorkspaceCaptureAcknowledgment);
+        Assert.Equal(completed.Operation.WorkspacePreparation, admitted.Operation.WorkspacePreparation);
+        Assert.Equal(completed.Operation.WorkspaceCapture, admitted.Operation.WorkspaceCapture);
+        Assert.Contains(completed.Operation.CollectorPod!.Uid, fixture.Provider.DeletedPodUids);
+        Assert.Contains(completed.Operation.Pod!.Uid, fixture.Provider.DeletedPodUids);
+        var deleteAttempts = fixture.Provider.DeleteAttempts;
+        await AcknowledgeAsync(restarted);
+        Assert.Equal(deleteAttempts, fixture.Provider.DeleteAttempts);
+        Assert.Equal(1, fixture.Provider.Creates);
+        Assert.Equal(1, fixture.Provider.CollectorCreates);
+        Assert.Equal(1, fixture.Provider.Preparations);
+        Assert.Equal(1, fixture.Provider.Captures);
+        Assert.Equal(0, fixture.Provider.Exports);
+        var persisted = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+        Assert.NotNull(persisted);
+        Assert.Contains("workspace:capture:released", persisted.AttemptedEffects);
+        Assert.True(fixture.Verifier.AcknowledgmentChecks >= 3);
+
+        Task<SandboxBuildTestOperationResult> AcknowledgeAsync(
+            EnvironmentSandboxBuildTestCommandManager? manager = null) =>
+            (manager ?? fixture.CreateManager(Store())).AcknowledgeWorkspaceCaptureAsync(
+                fixture.Caller, fixture.Owner.ProjectId, fixture.Owner.RunId, fixture.Owner.EnvironmentId,
+                fixture.Command.OperationId, acknowledgment, CancellationToken.None);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PublicManagerRejectsUnverifiedAcknowledgmentOrChangedAuthorityWithoutCleanup(bool revokeAuthority)
+    {
+        var fixture = await CreateManagerFixtureAsync(versionTwo: true);
+        fixture.Provider.Complete = true;
+        var completed = await fixture.ExecuteAsync();
+        var acknowledgment = SandboxBuildTestWorkspaceCaptureTests.Verification(
+            fixture.Command, fixture.Request, completed.Operation.CollectorPod).Capture;
+        if (revokeAuthority)
+            fixture.Verifier.AfterAcknowledgmentVerification = () => fixture.Projects.CanWrite = false;
+        else
+            fixture.Verifier.RejectAcknowledgment = true;
+
+        if (revokeAuthority)
+        {
+            var failure = await Assert.ThrowsAsync<ProjectsConfigApiException>(AcknowledgeAsync);
+            Assert.Equal("project_write_not_authorized", failure.Code);
+        }
+        else
+        {
+            var failure = await Assert.ThrowsAsync<Agentweaver.Identity.RuntimeAuthorizationException>(AcknowledgeAsync);
+            Assert.Equal("controlled_acknowledgment_denied", failure.Code);
+        }
+
+        Assert.Equal(1, fixture.Verifier.AcknowledgmentChecks);
+        Assert.Equal(0, fixture.Provider.DeleteAttempts);
+        var persisted = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+        Assert.NotNull(persisted);
+        Assert.Null(persisted.Operation.WorkspaceCaptureAcknowledgment);
+        Assert.Equal(completed.Operation.WorkspaceCapture, persisted.Operation.WorkspaceCapture);
+
+        Task<SandboxBuildTestOperationResult> AcknowledgeAsync() =>
+            fixture.CreateManager(Store()).AcknowledgeWorkspaceCaptureAsync(
+                fixture.Caller, fixture.Owner.ProjectId, fixture.Owner.RunId, fixture.Owner.EnvironmentId,
+                fixture.Command.OperationId, new(fixture.Request, acknowledgment), CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task PublicManagerRechecksAuthorityBetweenCollectorAndCommandCleanup()
+    {
+        var fixture = await CreateManagerFixtureAsync(versionTwo: true);
+        fixture.Provider.Complete = true;
+        var completed = await fixture.ExecuteAsync();
+        var acknowledgment = SandboxBuildTestWorkspaceCaptureTests.Verification(
+            fixture.Command, fixture.Request, completed.Operation.CollectorPod).Capture;
+        fixture.Provider.AfterDelete = () => fixture.Projects.CanWrite = false;
+
+        var failure = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+            fixture.CreateManager(Store()).AcknowledgeWorkspaceCaptureAsync(
+                fixture.Caller, fixture.Owner.ProjectId, fixture.Owner.RunId, fixture.Owner.EnvironmentId,
+                fixture.Command.OperationId, new(fixture.Request, acknowledgment), CancellationToken.None));
+
+        Assert.Equal("project_write_not_authorized", failure.Code);
+        Assert.Equal(new[] { completed.Operation.CollectorPod!.Uid }, fixture.Provider.DeletedPodUids);
+        Assert.Equal(1, fixture.Provider.DeleteAttempts);
+        var persisted = await Store().GetAsync(fixture.Owner, fixture.Command.OperationId, CancellationToken.None);
+        Assert.NotNull(persisted);
+        Assert.Equal(acknowledgment, persisted.Operation.WorkspaceCaptureAcknowledgment);
+        Assert.DoesNotContain("workspace:capture:released", persisted.AttemptedEffects);
+    }
+
     [Fact]
     public async Task PublicManagerExecutionAndRestartReconciliationPersistProgressWithoutRepeatingEffects()
     {
@@ -549,7 +688,7 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
     }
 
     // Projects responses and Kubernetes effects are controlled; owner bindings use real PostgreSQL.
-    private async Task<ManagerFixture> CreateManagerFixtureAsync()
+    private async Task<ManagerFixture> CreateManagerFixtureAsync(bool versionTwo = false)
     {
         var suffix = Guid.NewGuid().ToString("N");
         var owner = new EnvironmentOwnerIdentity(
@@ -621,6 +760,23 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
 
         var template = CreateFixture();
         var command = template.Command with { OperationId = Guid.NewGuid(), Outputs = [] };
+        if (versionTwo)
+            command = command with
+            {
+                ContractVersion = 2,
+                WorkspaceSource = WorkspaceSource() with
+                {
+                    Identity = new(owner.ProjectId, owner.RunId, command.Checkpoint.SessionId),
+                    TenantId = owner.TenantId,
+                    ActorIssuer = "https://controlled-identity.test",
+                    ActorSubject = "controlled-actor"
+                },
+                WorkspaceSeed = new byte[1024].ToImmutableArray(),
+                ExecutionOptions = command.ExecutionOptions with
+                {
+                    CollectorMode = SandboxBuildTestLimits.WorkspaceCollectorMode
+                }
+            };
         var options = new AgentSandboxOptions(
             AgentSandboxOptions.CurrentOptionsSchemaVersion, "sandbox-options", networkOptions.Namespace,
             storage.ProviderId, "runtime-test@sha256:" + new string('a', 64),
@@ -753,6 +909,9 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
         : ISandboxBuildTestAcceptedCommandVerifier
     {
         public SandboxBuildTestAcceptedCommand Command { get; set; } = command;
+        public bool RejectAcknowledgment { get; set; }
+        public Action? AfterAcknowledgmentVerification { get; set; }
+        public int AcknowledgmentChecks { get; private set; }
 
         public Task<SandboxBuildTestAcceptedCommand> ResolveAsync(
             SandboxBuildTestCheckpointReference checkpoint, CancellationToken cancellationToken)
@@ -769,6 +928,19 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
                 Command.ImmutableHash != acceptedCommand.ImmutableHash)
                 throw new Agentweaver.Identity.RuntimeAuthorizationException("buildtest_command_checkpoint_changed");
             return Task.CompletedTask;
+        }
+
+        public async Task VerifyWorkspaceCaptureAcknowledgmentAsync(
+            SandboxBuildTestAcceptedCommand acceptedCommand,
+            SandboxBuildTestWorkspaceCaptureAcknowledgmentVerification verification,
+            CancellationToken cancellationToken)
+        {
+            AcknowledgmentChecks++;
+            await VerifyCurrentAsync(acceptedCommand, cancellationToken);
+            verification.Reference.ValidateAcknowledgment(acceptedCommand.WorkspaceSource!, verification.Capture);
+            if (RejectAcknowledgment)
+                throw new Agentweaver.Identity.RuntimeAuthorizationException("controlled_acknowledgment_denied");
+            AfterAcknowledgmentVerification?.Invoke();
         }
     }
 
@@ -827,10 +999,20 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
     private sealed class ManagerCommandProvider : ISandboxBuildTestCommandProvider
     {
         private SandboxBuildTestPodReference? _pod;
+        private SandboxBuildTestPodReference? _collector;
         public bool Complete { get; set; }
         public int Creates { get; private set; }
+        public int CollectorCreates { get; private set; }
         public int GateReleases { get; private set; }
         public int Observations { get; private set; }
+        public int Preparations { get; private set; }
+        public int Captures { get; private set; }
+        public int Exports { get; private set; }
+        public int DeleteAttempts { get; private set; }
+        public int FailDeleteNumber { get; set; }
+        public Func<SandboxBuildTestPodReference, Task>? BeforeDelete { get; set; }
+        public Action? AfterDelete { get; set; }
+        public List<string> DeletedPodUids { get; } = [];
 
         public Task<SandboxBuildTestPodReference> CreateGatedAsync(
             SandboxBuildTestProviderRequest request, CancellationToken cancellationToken)
@@ -851,9 +1033,9 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
         public Task<SandboxBuildTestPodReference> ReleaseSchedulingGateAsync(
             SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod, CancellationToken cancellationToken)
         {
-            Assert.Equal(_pod!.Uid, pod.Uid);
+            Assert.True(pod.Uid == _pod?.Uid || pod.Uid == _collector?.Uid);
             GateReleases++;
-            return Task.FromResult(_pod);
+            return Task.FromResult(pod);
         }
 
         public Task<SandboxBuildTestPodObservation> ObserveAsync(
@@ -877,20 +1059,76 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
 
         public Task<SandboxBuildTestPodReference> CreateOutputCollectorGatedAsync(
             SandboxBuildTestProviderRequest request, SandboxBuildTestOutputCollectorRequest collectorRequest,
-            CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("This command has no collected file outputs.");
+            CancellationToken cancellationToken)
+        {
+            Assert.NotNull(request.AcceptedCommand.WorkspaceSource);
+            Assert.Null(_collector);
+            CollectorCreates++;
+            _collector = new("sandbox", "collector-" + request.AcceptedCommand.OperationId.ToString("N"),
+                Guid.NewGuid().ToString("N"), "1");
+            return Task.FromResult(_collector);
+        }
 
         public Task<SandboxBuildTestPodReference?> GetOutputCollectorAsync(
-            SandboxBuildTestProviderRequest request, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("This command has no collected file outputs.");
+            SandboxBuildTestProviderRequest request, CancellationToken cancellationToken)
+        {
+            Assert.NotNull(request.AcceptedCommand.WorkspaceSource);
+            return Task.FromResult(_collector);
+        }
+
+        public Task<SandboxBuildTestWorkspacePreparationReceipt?> PrepareWorkspaceAsync(
+            SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(_pod!.Uid, pod.Uid);
+            Preparations++;
+            var command = request.AcceptedCommand;
+            return Task.FromResult<SandboxBuildTestWorkspacePreparationReceipt?>(new(
+                command.OperationId, command.ImmutableHash,
+                new SandboxBuildTestApiRequest(command.Checkpoint, request.ExpectedBinding)
+                    .ComputeRequestFingerprint(command),
+                command.Checkpoint, pod.Uid, command.WorkspaceSource!.PreparedRepositoryRelativePath,
+                command.WorkspaceSource.SeedSha256, command.WorkspaceSource.BaselineTreeSha));
+        }
+
+        public Task<SandboxBuildTestWorkspaceCaptureReference?> CaptureWorkspaceAsync(
+            SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod,
+            SandboxBuildTestWorkspacePreparationReceipt preparation, CancellationToken cancellationToken)
+        {
+            Assert.Equal(_collector!.Uid, pod.Uid);
+            Assert.True(Preparations > 0);
+            Captures++;
+            return Task.FromResult<SandboxBuildTestWorkspaceCaptureReference?>(
+                SandboxBuildTestWorkspaceCaptureTests.Verification(request.AcceptedCommand,
+                    new(request.AcceptedCommand.Checkpoint, request.ExpectedBinding), pod).Reference);
+        }
+
+        public Task<ImmutableArray<byte>> ReadWorkspaceCaptureAsync(
+            SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod,
+            SandboxBuildTestWorkspacePreparationReceipt preparation,
+            SandboxBuildTestWorkspaceCaptureReference reference, CancellationToken cancellationToken)
+        {
+            Exports++;
+            throw new InvalidOperationException("Acknowledgment retries must not export native bytes.");
+        }
 
         public Task StopAsync(
             SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("The successful command must not be stopped.");
 
-        public Task DeleteAsync(
-            SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("These paths must retain their Pod evidence.");
+        public async Task DeleteAsync(
+            SandboxBuildTestProviderRequest request, SandboxBuildTestPodReference pod, CancellationToken cancellationToken)
+        {
+            Assert.NotNull(request.AcceptedCommand.WorkspaceSource);
+            Assert.True(pod.Uid == _pod?.Uid || pod.Uid == _collector?.Uid);
+            DeleteAttempts++;
+            if (BeforeDelete is not null)
+                await BeforeDelete(pod);
+            if (DeleteAttempts == FailDeleteNumber)
+                throw new SandboxProviderException("controlled_cleanup_failure", "Controlled cleanup failure.", true);
+            DeletedPodUids.Add(pod.Uid);
+            AfterDelete?.Invoke();
+        }
     }
 
     private async Task<Fixture> CreateDurableFixtureAsync(Guid? operationId = null)
