@@ -9,6 +9,7 @@ using Agentweaver.Environment;
 using Agentweaver.EventsAndSessions;
 using Agentweaver.Knowledge;
 using Agentweaver.Orchestrator;
+using Agentweaver.P1PostgresInitializer;
 using Agentweaver.Projects.Config;
 using Azure.Core;
 using Microsoft.EntityFrameworkCore;
@@ -102,11 +103,14 @@ try
         SELECT current_database() = 'postgres' AND current_user = @operator
           AND EXISTS (
             SELECT 1 FROM pg_catalog.pgaadauth_list_principals(false)
-            WHERE rolname::text = current_user AND objectid = @object AND principaltype = 'user')
+              AS p(role_name, principal_type, object_id, tenant_id, is_mfa, is_admin)
+            WHERE p.role_name::text = current_user AND p.object_id = @object
+              AND p.principal_type = 'user' AND p.tenant_id = @tenant)
         """, principalConnection))
     {
         identity.Parameters.AddWithValue("operator", plan.Target.OperatorName);
         identity.Parameters.AddWithValue("object", plan.Target.OperatorObjectId);
+        identity.Parameters.AddWithValue("tenant", plan.Target.TenantId);
         if (await identity.ExecuteScalarAsync(cancellationToken) is not true)
             throw new InvalidOperationException("The connection is not the exact existing operator on postgres.");
     }
@@ -124,28 +128,42 @@ try
         if (await fresh.ExecuteScalarAsync(cancellationToken) is not true)
             throw new InvalidOperationException("The target contains existing, partial, or unapproved state. Refusing to adopt, reset, or retry it.");
     }
-    var existingBoundary = await ReadExistingBoundaryAsync(connection, plan, cancellationToken);
+    var existingBoundary = await ReadExistingBoundaryAsync(connection, null, plan, cancellationToken);
+    var operatorOid = await ReadJsonAsync<uint>(connection, null,
+        "SELECT to_jsonb(oid)::text FROM pg_catalog.pg_roles WHERE rolname = current_user", cancellationToken);
+    RuntimePrincipal[] principals = [];
     await RecordAsync("fresh_target_checked");
 
     await using (var transaction = await principalConnection.BeginTransactionAsync(cancellationToken))
     {
-        foreach (var service in plan.Services)
-        {
-            await using var create = new NpgsqlCommand(
-                "SELECT pg_catalog.pgaadauth_create_principal_with_oid(@role, @object, 'service', false, false)",
-                principalConnection, transaction);
-            create.Parameters.AddWithValue("role", service.Role);
-            create.Parameters.AddWithValue("object", service.PrincipalObjectId);
-            await create.ExecuteNonQueryAsync(cancellationToken);
-            await ExecuteAsync(principalConnection, transaction,
-                $"ALTER ROLE {Quote(service.Role)} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS", cancellationToken);
-            await ExecuteAsync(principalConnection, transaction,
-                $"GRANT {Quote(service.Role)} TO {Quote(plan.Target.OperatorName)} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE", cancellationToken);
-        }
-        await transaction.CommitAsync(cancellationToken);
+        await InitializerChecks.RunStageAsync(
+            () => AssertPreflightAsync(connection, plan, existingBoundary, operatorOid, cancellationToken),
+            async () =>
+            {
+                foreach (var service in plan.Services)
+                {
+                    await using var create = new NpgsqlCommand(
+                        "SELECT pg_catalog.pgaadauth_create_principal_with_oid(@role, @object, 'service', false, false)",
+                        principalConnection, transaction);
+                    create.Parameters.AddWithValue("role", service.Role);
+                    create.Parameters.AddWithValue("object", service.PrincipalObjectId);
+                    await create.ExecuteNonQueryAsync(cancellationToken);
+                    await ExecuteAsync(principalConnection, transaction,
+                        $"ALTER ROLE {Quote(service.Role)} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS", cancellationToken);
+                    await ExecuteAsync(principalConnection, transaction,
+                        $"GRANT {Quote(service.Role)} TO {Quote(plan.Target.OperatorName)} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE", cancellationToken);
+                }
+            },
+            async () =>
+            {
+                principals = await ReadPrincipalsAsync(principalConnection, transaction, plan, cancellationToken);
+                InitializerChecks.AssertPrincipals(plan.Services, principals, operatorOid, plan.Target.TenantId);
+            },
+            () => transaction.CommitAsync(cancellationToken),
+            () => RecordAsync("five_runtime_roles_created_and_exact_mappings_checked"));
     }
-    await RecordAsync("five_runtime_roles_created");
 
+    List<uint> connectedRoles = [];
     foreach (var service in plan.Services)
     {
         await ExecuteAsync(connection, null, $"CREATE SCHEMA {Quote(service.Schema)} AUTHORIZATION {Quote(plan.Target.OperatorName)}", cancellationToken);
@@ -198,10 +216,14 @@ try
             if (function.Execute)
                 await ExecuteAsync(connection, grants, $"GRANT EXECUTE ON FUNCTION {signature} TO {Quote(service.Role)}", cancellationToken);
         }
-        if (await ReadExistingBoundaryAsync(connection, plan, cancellationToken) != existingBoundary)
-            throw new InvalidOperationException("Existing database, schema, owner, or default privileges changed. The current grant stage is not committed.");
+        var runtimeOid = principals.Single(item => item.Role == service.Role).Oid;
+        InitializerChecks.AssertBoundary(existingBoundary,
+            await ReadExistingBoundaryAsync(connection, grants, plan, cancellationToken),
+            [.. connectedRoles, runtimeOid]);
+        await AssertFunctionGrantsAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
         await transactionCheckAsync(connection, grants, service, cancellationToken);
         await grants.CommitAsync(cancellationToken);
+        connectedRoles.Add(runtimeOid);
         await RecordAsync($"{service.Service}:exact_grants_checked_and_committed");
     }
     await RecordAsync("operator_initialization_finished_runtime_identity_checks_still_required");
@@ -210,10 +232,8 @@ try
 }
 catch (Exception error)
 {
-    await RecordAsync("failed_requires_explicit_reconciliation");
-    Console.Error.WriteLine($"P1 PostgreSQL initialization stopped: {error.GetType().Name}. Committed stages remain in {receiptPath}; do not retry or reset partial state.");
-    if (error is PostgresException postgres)
-        Console.Error.WriteLine($"PostgreSQL SQLSTATE: {postgres.SqlState}");
+    await InitializerChecks.ReportFailureAsync(error, receiptPath, RecordAsync, Console.Error,
+        error is PostgresException postgres ? postgres.SqlState : null);
     return 1;
 }
 
@@ -237,22 +257,97 @@ static async Task<string> RunLocalAsync(string name, string[] arguments)
     return (await output).Trim();
 }
 
-static async Task<string> ReadExistingBoundaryAsync(NpgsqlConnection connection, PostgresPlan plan, CancellationToken cancellationToken)
+static Task<ExistingBoundary> ReadExistingBoundaryAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction,
+    PostgresPlan plan, CancellationToken cancellationToken)
 {
-    await using var query = new NpgsqlCommand("""
+    return ReadJsonAsync<ExistingBoundary>(connection, transaction, """
+        WITH database AS (
+          SELECT d.*, r.oid AS operator_oid, r.rolsuper
+          FROM pg_catalog.pg_database d CROSS JOIN pg_catalog.pg_roles r
+          WHERE d.datname = 'agentweaver' AND r.rolname = current_user)
         SELECT jsonb_build_object(
-          'database', (SELECT jsonb_build_array(datdba, datacl) FROM pg_catalog.pg_database WHERE datname = 'agentweaver'),
+          'databaseOid', database.oid, 'ownerOid', datdba,
+          'connectGrantorOid', CASE WHEN rolsuper OR datdba = operator_oid THEN datdba ELSE operator_oid END,
+          'grants', (SELECT coalesce(jsonb_agg(jsonb_build_object(
+                     'grantor', a.grantor, 'grantee', a.grantee,
+                     'privilege', a.privilege_type, 'grantable', a.is_grantable)
+                     ORDER BY a.grantor, a.grantee, a.privilege_type, a.is_grantable), '[]'::jsonb)
+                     FROM pg_catalog.aclexplode(coalesce(datacl, pg_catalog.acldefault('d', datdba))) a),
+          'protectedState', jsonb_build_object(
           'schemas', (SELECT jsonb_agg(jsonb_build_array(nspname, nspowner, nspacl) ORDER BY nspname)
                      FROM pg_catalog.pg_namespace WHERE nspname <> ALL(@schemas)),
           'defaults', (SELECT jsonb_agg(to_jsonb(d) ORDER BY d.oid) FROM pg_catalog.pg_default_acl d),
           'objects', (SELECT jsonb_agg(jsonb_build_array(n.nspname, c.relname, c.relowner, c.relacl) ORDER BY n.nspname, c.relname)
                       FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                      WHERE n.nspname IN ('public', 'identity_broker', 'foundation_probe')))::text
-        """, connection);
-    query.Parameters.AddWithValue("schemas", plan.Services.Select(item => item.Schema).ToArray());
-    return (string?)await query.ExecuteScalarAsync(cancellationToken)
-        ?? throw new InvalidOperationException("The existing ownership and privilege boundary could not be read.");
+                      WHERE n.nspname IN ('public', 'identity_broker', 'foundation_probe')),
+          'functions', (SELECT jsonb_agg(jsonb_build_array(p.oid, p.pronamespace, p.proowner,
+                        coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) ORDER BY p.oid)
+                        FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname <> ALL(@schemas)))::text)::text FROM database
+        """, cancellationToken, new NpgsqlParameter("schemas", plan.Services.Select(item => item.Schema).ToArray()));
 }
+
+static async Task AssertPreflightAsync(NpgsqlConnection connection, PostgresPlan plan,
+    ExistingBoundary baseline, uint operatorOid, CancellationToken cancellationToken)
+{
+    var state = await ReadJsonAsync<PreflightSnapshot>(connection, null, """
+        SELECT jsonb_build_object(
+          'operatorOid', r.oid,
+          'operatorCanGrantConnect', r.rolsuper OR d.datdba = r.oid OR EXISTS (
+            SELECT 1 FROM pg_catalog.aclexplode(coalesce(d.datacl, pg_catalog.acldefault('d', d.datdba))) a
+            WHERE a.grantee = r.oid AND a.privilege_type = 'CONNECT' AND a.is_grantable),
+          'foreignPublicAuthority',
+            EXISTS (SELECT 1 FROM pg_catalog.pg_namespace n,
+              LATERAL pg_catalog.aclexplode(coalesce(n.nspacl, pg_catalog.acldefault('n', n.nspowner))) a
+              WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+                AND a.grantee = 0 AND a.privilege_type = 'CREATE')
+            OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c
+              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace,
+              LATERAL pg_catalog.aclexplode(coalesce(c.relacl,
+                pg_catalog.acldefault(CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END, c.relowner))) a
+              WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+                AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND a.grantee = 0)
+            OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p
+              JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace,
+              LATERAL pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) a
+              WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND a.grantee = 0),
+          'incompatibleDefaults', EXISTS (
+            SELECT 1 FROM pg_catalog.pg_default_acl defaults,
+              LATERAL pg_catalog.aclexplode(defaults.defaclacl) a
+            WHERE defaults.defaclrole = r.oid AND defaults.defaclnamespace = 0
+              AND a.grantee <> r.oid AND NOT (defaults.defaclobjtype = 'f'
+                AND a.grantee = 0 AND a.privilege_type = 'EXECUTE' AND NOT a.is_grantable)))
+        ::text FROM pg_catalog.pg_database d CROSS JOIN pg_catalog.pg_roles r
+        WHERE d.datname = 'agentweaver' AND r.rolname = current_user
+        """, cancellationToken);
+    var current = await ReadExistingBoundaryAsync(connection, null, plan, cancellationToken);
+    if (state.OperatorOid != operatorOid)
+        throw new InvalidOperationException("The operator role changed before initialization. No writes are permitted.");
+    InitializerChecks.AssertBoundary(baseline, current, []);
+    InitializerChecks.AssertPreflight(state with { Boundary = current });
+}
+
+static Task<RuntimePrincipal[]> ReadPrincipalsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+    PostgresPlan plan, CancellationToken cancellationToken) =>
+    ReadJsonAsync<RuntimePrincipal[]>(connection, transaction, """
+        SELECT coalesce(jsonb_agg(jsonb_build_object(
+          'oid', r.oid, 'role', r.rolname, 'objectId', p.object_id, 'type', p.principal_type,
+          'tenantId', p.tenant_id, 'mfa', coalesce(p.is_mfa <> 0, true),
+          'admin', coalesce(p.is_admin <> 0, true), 'canLogin', r.rolcanlogin, 'superuser', r.rolsuper,
+          'createDatabase', r.rolcreatedb, 'createRole', r.rolcreaterole, 'replication', r.rolreplication,
+          'inherit', r.rolinherit, 'bypassRls', r.rolbypassrls,
+          'memberships', (SELECT coalesce(jsonb_agg(jsonb_build_object(
+            'roleOid', m.roleid, 'memberOid', m.member, 'grantorOid', m.grantor,
+            'admin', m.admin_option, 'inherit', m.inherit_option, 'set', m.set_option)
+            ORDER BY m.roleid, m.member, m.grantor), '[]'::jsonb)
+            FROM pg_catalog.pg_auth_members m WHERE m.roleid = r.oid OR m.member = r.oid))
+          ORDER BY r.rolname), '[]'::jsonb)::text
+        FROM pg_catalog.pg_roles r
+        LEFT JOIN pg_catalog.pgaadauth_list_principals(false)
+          AS p(role_name, principal_type, object_id, tenant_id, is_mfa, is_admin)
+          ON p.role_name::text = r.rolname
+        WHERE r.rolname = ANY(@roles)
+        """, cancellationToken, new NpgsqlParameter("roles", plan.Services.Select(item => item.Role).ToArray()));
 
 static async Task AssertOwnedObjectsAsync(NpgsqlConnection connection, ServicePlan service, string owner, CancellationToken cancellationToken)
 {
@@ -263,6 +358,8 @@ static async Task AssertOwnedObjectsAsync(NpgsqlConnection connection, ServicePl
           AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
                WHERE c.relnamespace = n.oid AND c.relowner <> n.nspowner)
           AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.pronamespace = n.oid) = cardinality(@functions)
+          AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_proc p
+                          WHERE p.pronamespace = n.oid AND p.proowner <> n.nspowner)
           AND NOT EXISTS (SELECT 1 FROM unnest(@functions) AS required(signature)
                           WHERE pg_catalog.to_regprocedure(required.signature) IS NULL)
         FROM pg_catalog.pg_namespace n WHERE n.nspname = @schema
@@ -273,6 +370,38 @@ static async Task AssertOwnedObjectsAsync(NpgsqlConnection connection, ServicePl
     query.Parameters.AddWithValue("functions", service.Functions.Select(item => $"{service.Schema}.{item.Signature}").ToArray());
     if (await query.ExecuteScalarAsync(cancellationToken) is not true)
         throw new InvalidOperationException($"The {service.Service} schema contains unexpected or foreign-owned objects. No grants were applied.");
+}
+
+static async Task AssertFunctionGrantsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+    ServicePlan service, uint ownerOid, uint runtimeOid, CancellationToken cancellationToken)
+{
+    var functions = await ReadJsonAsync<FunctionState[]>(connection, transaction, """
+        SELECT coalesce(jsonb_agg(jsonb_build_object(
+          'oid', p.oid, 'signature', required.signature, 'ownerOid', p.proowner,
+          'runtimeCanExecute', pg_catalog.has_function_privilege(@role, p.oid, 'EXECUTE'),
+          'grants', (SELECT coalesce(jsonb_agg(jsonb_build_object(
+            'grantor', a.grantor, 'grantee', a.grantee,
+            'privilege', a.privilege_type, 'grantable', a.is_grantable)
+            ORDER BY a.grantor, a.grantee, a.privilege_type, a.is_grantable), '[]'::jsonb)
+            FROM pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) a))
+          ORDER BY required.signature), '[]'::jsonb)::text
+        FROM unnest(@signatures) AS required(signature)
+        JOIN pg_catalog.pg_proc p ON p.oid = pg_catalog.to_regprocedure(@schema || '.' || required.signature)
+        """, cancellationToken, new NpgsqlParameter("role", service.Role),
+        new NpgsqlParameter("schema", service.Schema),
+        new NpgsqlParameter("signatures", service.Functions.Select(item => item.Signature).ToArray()));
+    InitializerChecks.AssertFunctions(service, functions, ownerOid, runtimeOid);
+}
+
+static async Task<T> ReadJsonAsync<T>(NpgsqlConnection connection, NpgsqlTransaction? transaction,
+    string sql, CancellationToken cancellationToken, params NpgsqlParameter[] parameters)
+{
+    await using var query = new NpgsqlCommand(sql, connection, transaction);
+    query.Parameters.AddRange(parameters);
+    var json = await query.ExecuteScalarAsync(cancellationToken) as string
+        ?? throw new InvalidOperationException("The required ownership and privilege facts could not be read.");
+    return JsonSerializer.Deserialize<T>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+        ?? throw new InvalidOperationException("The required ownership and privilege facts are missing.");
 }
 
 static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, ServicePlan service, CancellationToken cancellationToken)
@@ -308,10 +437,3 @@ static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTrans
             throw new InvalidOperationException("One-column row-lock grants still require reviewed mutation-denial source and restricted-role proof. Initialization is not yet permitted.");
     }
 }
-
-internal sealed record PostgresPlan(int FormatVersion, TargetPlan Target, ServicePlan[] Services, int[] CoreVersions);
-internal sealed record TargetPlan(string TenantId, string PostgresHost, string Database, string OperatorName,
-    string OperatorObjectId, string ConnectionHost, int ConnectionPort);
-internal sealed record ServicePlan(string Service, string Schema, string Role, string PrincipalObjectId, TablePlan[] Tables, FunctionPlan[] Functions);
-internal sealed record TablePlan(string Table, string[] Privileges, string? LockColumn, bool MutationDenialRequired);
-internal sealed record FunctionPlan(string Signature, bool Execute);

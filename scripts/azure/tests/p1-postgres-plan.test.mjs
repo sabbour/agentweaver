@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { buildP1PostgresPlan, p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
 
@@ -75,4 +76,17 @@ test('Plans and hashes are deterministic and independent copies', () => {
   assert.equal(p1PostgresPlanHash(), hash);
   assert.notEqual(p1PostgresPlanHash(other), hash);
   assert.match(hash, /^[0-9a-f]{64}$/);
+});
+
+test('Initializer source corrections preserve both execution blocks and the separate catalog review', () => {
+  const source = readFileSync(new URL('../../../tools/P1PostgresInitializer/Program.cs', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const credentialBlock = source.indexOf('if (plan.Services.Any(service => service.Tables.Any(table => table.MutationDenialRequired)))');
+  assert.ok(credentialBlock > 0);
+  assert.ok(source.indexOf('No credential or database connection was used.', credentialBlock) >
+    credentialBlock);
+  assert.ok(credentialBlock < source.indexOf('new AzureCliCredential('));
+  assert.ok(source.includes('if (table.LockColumn is not null)\n            throw new InvalidOperationException("One-column row-lock grants still require reviewed mutation-denial source and restricted-role proof. Initialization is not yet permitted.");'));
+  assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20\\]\\)'));
+  assert.ok(!source.includes('021') && !source.includes('008'));
 });
