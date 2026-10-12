@@ -372,7 +372,7 @@ internal sealed class RuntimeRegistrationStore
         read.Parameters.AddWithValue("revision", NpgsqlDbType.Bigint, revision);
         await using var reader = await read.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
-            throw new InvalidOperationException("A runtime registration head has no current revision.");
+            return null;
         return (ReadRegistration(reader), reader.GetString(2), reader.GetString(3));
     }
 
