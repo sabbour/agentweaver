@@ -15,3 +15,5 @@ Read full current gateway bindings from active-handler state and exact accepted 
 Keep the Cilium-only L7 rejection intact and refuse dispatch without a real forced-network proof producer.
 Carry the original actor context and full owner-built proof through the reviewed-call transport handoff.
 Keep native transport registration and the SDK remote-tool hook unavailable.
+Select the current Identity access-token reference for the fixed reviewed tools-call purpose.
+Recheck OAuth row bindings after waits without reading or delivering a credential.
