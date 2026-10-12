@@ -37,12 +37,12 @@ public sealed class RemoteMcpNativeCallEndpointTests
 
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
         Assert.Equal("no-store", context.Response.Headers.CacheControl);
-        Assert.Equal("remote_mcp_native_call_route_unavailable", await ReadCodeAsync(response));
+        Assert.Equal("remote_mcp_reviewed_tool_recipient_unavailable", await ReadCodeAsync(response));
         Assert.Equal(0, verifierResolutions);
     }
 
     [Fact]
-    public async Task WrongOrchestratorListenerDeniesBeforeCertificateOrVerifierResolution()
+    public async Task OutboundOrchestratorClientProfileDoesNotAuthorizeRecipientRequests()
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddAuthorization();
@@ -56,6 +56,51 @@ public sealed class RemoteMcpNativeCallEndpointTests
         var certificateResolutions = 0;
         builder.Services.AddKeyedSingleton<RuntimeServiceTlsIdentity>(
             RemoteMcpTrustedServiceTlsComposition.OrchestratorTlsKey,
+            (_, _) =>
+            {
+                certificateResolutions++;
+                throw new InvalidOperationException("Outbound TLS must not authorize recipient requests.");
+            });
+        var verifierResolutions = 0;
+        builder.Services.AddSingleton<RemoteMcpCurrentCallVerificationService>(_ =>
+        {
+            verifierResolutions++;
+            throw new InvalidOperationException("A denied request must not create the verifier.");
+        });
+        await using var app = builder.Build();
+        app.MapRemoteMcpNativeCallDispatch();
+        var endpoint = SingleEndpoint(app);
+        var context = Context(app.Services, 9448, "{");
+        var body = new CountingReadStream(System.Text.Encoding.UTF8.GetBytes("{"));
+        context.Request.Body = body;
+        context.Request.ContentLength = null;
+        await using var response = new MemoryStream();
+        context.Response.Body = response;
+
+        await endpoint.RequestDelegate!(context);
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, context.Response.StatusCode);
+        Assert.Equal("remote_mcp_reviewed_tool_recipient_unavailable", await ReadCodeAsync(response));
+        Assert.Equal(0, body.BytesRead);
+        Assert.Equal(0, certificateResolutions);
+        Assert.Equal(0, verifierResolutions);
+    }
+
+    [Fact]
+    public async Task WrongOrchestratorListenerDeniesBeforeCertificateOrVerifierResolution()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddAuthorization();
+        builder.Services.AddKeyedSingleton(RemoteMcpTrustedServiceTlsComposition.OrchestratorRecipientTlsKey,
+            new RuntimeServiceTlsOptions
+            {
+                LocalServiceName = "Environment",
+                PeerServiceName = "Orchestrator",
+                ListenerPort = 9448
+            });
+        var certificateResolutions = 0;
+        builder.Services.AddKeyedSingleton<RuntimeServiceTlsIdentity>(
+            RemoteMcpTrustedServiceTlsComposition.OrchestratorRecipientTlsKey,
             (_, _) =>
             {
                 certificateResolutions++;
@@ -86,10 +131,11 @@ public sealed class RemoteMcpNativeCallEndpointTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task UnknownLengthBodyReadsAtMostOneBytePastLimit(bool readOnlyFeature)
+    public async Task UnknownLengthBodyReadsAtMostOneBytePastMaximumEnvelope(bool readOnlyFeature)
     {
         var context = new DefaultHttpContext();
-        var input = Enumerable.Range(0, 9).Select(value => (byte)value).ToArray();
+        var maximumBytes = Agentweaver.Abstractions.RemoteMcpNativeCallContract.MaximumEnvelopeBytes;
+        var input = new byte[maximumBytes + 1];
         var body = new CountingReadStream(input);
         context.Request.Body = body;
         Assert.Null(context.Request.ContentLength);
@@ -97,20 +143,24 @@ public sealed class RemoteMcpNativeCallEndpointTests
             context.Features.Set<IHttpMaxRequestBodySizeFeature>(new ReadOnlyRequestBodySizeFeature());
 
         var result = await RemoteMcpNativeCallEndpoints.ReadBoundedBodyAsync(
-            context, 8, CancellationToken.None);
+            context, maximumBytes, CancellationToken.None);
 
-        Assert.Equal(9, result.Length);
-        Assert.Equal(9, body.BytesRead);
+        Assert.Equal(maximumBytes + 1, result.Length);
+        Assert.Equal(maximumBytes + 1, body.BytesRead);
     }
 
-    [Fact]
-    public async Task UnknownLengthBodyAtTheLimitIsFullyReturned()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnknownLengthBodyAtMaximumEnvelopeIsFullyReturned(bool readOnlyFeature)
     {
         var context = new DefaultHttpContext();
-        byte[] input = [0, 1, 2, 3, 4, 5, 6, 7];
+        var input = new byte[Agentweaver.Abstractions.RemoteMcpNativeCallContract.MaximumEnvelopeBytes];
         var body = new CountingReadStream(input);
         context.Request.Body = body;
         Assert.Null(context.Request.ContentLength);
+        if (readOnlyFeature)
+            context.Features.Set<IHttpMaxRequestBodySizeFeature>(new ReadOnlyRequestBodySizeFeature());
 
         var result = await RemoteMcpNativeCallEndpoints.ReadBoundedBodyAsync(
             context, input.Length, CancellationToken.None);

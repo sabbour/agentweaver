@@ -59,6 +59,7 @@ public static class RemoteMcpNativeCallEndpoints
                 var status = failure.Code is
                     "remote_mcp_forced_network_enforcement_unavailable" or
                     "remote_mcp_current_verification_route_unavailable" or
+                    "remote_mcp_reviewed_tool_recipient_unavailable" or
                     "remote_mcp_native_call_route_unavailable" or
                     "remote_mcp_native_transport_unavailable" or
                     "runtime_owner_unavailable" or
