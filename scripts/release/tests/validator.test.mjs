@@ -152,12 +152,12 @@ test('the Orchestrator host is registered as a baseline service with all project
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
     .map(({ dependency, versions }) => [dependency, versions]), [
-    ['Agentweaver.Identity', ['0.0.0', '0.1.0']],
-    ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0']],
-    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0']],
-    ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0']],
-    ['Agentweaver.Providers', ['0.0.0', '0.1.0']],
-    ['Agentweaver.SourceControl', ['0.0.0', '0.1.0']],
+    ['Agentweaver.Identity', ['0.0.0', '0.1.0', '1.0.0']],
+    ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0', '1.0.0']],
+    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0']],
+    ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0', '1.0.0']],
+    ['Agentweaver.Providers', ['0.0.0', '0.1.0', '1.0.0']],
+    ['Agentweaver.SourceControl', ['0.0.0', '0.1.0', '1.0.0']],
   ]);
   assert.equal(check(fixture).stage, 'draft');
 });
