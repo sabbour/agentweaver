@@ -23,7 +23,8 @@ export function addAgentHostSource(root, version = '0.1.0') {
   writeFileSync(path.join(root, runtimePath), readFileSync(new URL(`../../../${runtimePath}`, import.meta.url)));
 }
 
-export function agentHostDockerFixture(root, { calls = [], change, inspectChange, runtimeChange, buildCheck, version = '0.1.0' } = {}) {
+export function agentHostDockerFixture(root, { calls = [], change, inspectChange, runtimeChange, buildCheck, version = '0.1.0',
+  idMode = 'config' } = {}) {
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
   const runtime = JSON.parse(readFileSync(path.join(root, runtimePath), 'utf8'));
   let image;
@@ -57,6 +58,7 @@ export function agentHostDockerFixture(root, { calls = [], change, inspectChange
         schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json', config: configBlob, layers: [layer],
       })), 'application/vnd.oci.image.manifest.v1+json');
       writeFileSync(path.join(entries, 'index.json'), JSON.stringify({ schemaVersion: 2, manifests: [descriptor] }));
+      if (idMode === 'manifest') image.Id = descriptor.digest;
       const archive = args[args.indexOf('--output') + 1].slice('type=oci,dest='.length);
       if (change !== 'missing-oci')
         execFileSync('tar', ['-cf', archive, '-C', entries, 'index.json', 'blobs']);

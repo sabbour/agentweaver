@@ -73,6 +73,33 @@ test('AgentHost preparation binds two archive hashes and one measured image-conf
     '/tmp:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=700']) assert.ok(native.includes(argument));
 });
 
+test('AgentHost preparation accepts the containerd manifest-digest image ID and keeps config provenance distinct', t => {
+  const f = fixture(t);
+  const provenance = f.prepare({ idMode: 'manifest' });
+  const artifact = provenance.artifacts[0];
+  const { measurement, runtime } = provenance.components[0].build;
+  assert.notEqual(measurement.image.digest, measurement.image.configDigest);
+  assert.equal(artifact.imageId, measurement.image.configDigest);
+  assert.equal(provenance.components[0].build.archives.docker.configDigest, measurement.image.configDigest);
+  assert.ok(runtime.sdkVersion);
+  const native = f.calls.find(({ args }) => args[0] === 'run').args;
+  assert.equal(native.at(-2), measurement.image.digest);
+  assert.equal(f.calls.some(({ args }) => args[0] === 'pull'), false);
+});
+
+test('AgentHost preparation still runs the config-digest image ID in the classic store', t => {
+  const f = fixture(t);
+  const { measurement } = f.prepare({ idMode: 'config' }).components[0].build;
+  assert.equal(f.calls.find(({ args }) => args[0] === 'run').args.at(-2), measurement.image.configDigest);
+});
+
+test('AgentHost preparation rejects a loaded ID that is neither measured digest, before any run', t => {
+  const f = fixture(t);
+  assert.throws(() => f.prepare({ idMode: 'manifest', inspectChange: image => ({ ...image, Id: `sha256:${'a'.repeat(64)}` }) }),
+    /loaded archive image identity/);
+  assert.equal(f.calls.some(({ args }) => ['run', 'pull'].includes(args[0])), false);
+});
+
 for (const change of ['source', 'tree', 'version', 'platform', 'size', 'missing-oci', 'missing-docker']) {
   test(`AgentHost preparation rejects ${change} evidence without complete provenance`, t => {
     const f = fixture(t);

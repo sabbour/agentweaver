@@ -442,7 +442,7 @@ export function packComponents(manifest, {
           oci: { ...ociArchive, configDigest: measured.image.configDigest },
         };
         runDocker(['load', '--input', path.join(resolvedOutDir, dockerPath)]);
-        const runtime = verifyLoadedAgentHostImage(artifact.imageReference, measured, source, component.version, runDocker);
+        const { runtime } = verifyLoadedAgentHostImage(artifact.imageReference, measured, source, component.version, runDocker);
         verifyAgentHostArchives(archives, resolvedOutDir);
         artifact.imageId = measured.image.configDigest;
         artifact.ociArchive = archives.oci;
