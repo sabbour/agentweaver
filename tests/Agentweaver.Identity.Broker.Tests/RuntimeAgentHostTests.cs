@@ -194,7 +194,7 @@ public sealed class RuntimeAgentHostTests
         Assert.NotNull(readiness.ResumeCache?.JournalRebuild);
         Assert.Equal(request.Resume.SourceManifest.CacheAcknowledgment!.EventId,
             Assert.Single(target.ResumeCacheReads));
-        Assert.NotEmpty(target.ResumeEventRequests);
+        AssertResumeEventsUseSourceSession(target, request);
         Assert.Single(target.Sdk.Requests, item => item.Method == "session.create");
         Assert.DoesNotContain(target.Sdk.Requests, item => item.Method == "session.resume");
         Assert.DoesNotContain(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
@@ -271,7 +271,7 @@ public sealed class RuntimeAgentHostTests
 
         var cache = request.Resume.SourceManifest.CacheAcknowledgment!;
         Assert.Equal(cache.EventId, Assert.Single(target.ResumeCacheReads));
-        Assert.NotEmpty(target.ResumeEventRequests);
+        AssertResumeEventsUseSourceSession(target, request);
         Assert.DoesNotContain(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
         Assert.DoesNotContain(target.Sdk.Requests,
             item => item.Method is "session.create" or "session.resume" or "session.send");
@@ -308,6 +308,17 @@ public sealed class RuntimeAgentHostTests
         target.ImportResumeSourceFrom(source, cache.EventId);
         target.SessionEventPageSize = 2;
         return request;
+    }
+
+    private static void AssertResumeEventsUseSourceSession(
+        HostFixture target, RuntimeResumeBootstrapRequest request)
+    {
+        var expectedPrefix =
+            $"/internal/sessions/{Uri.EscapeDataString(request.Resume.SourceManifest.Identity.SessionId)}/events";
+        Assert.NotEmpty(target.ResumeEventRequests);
+        Assert.All(target.ResumeEventRequests, path =>
+            Assert.True(path.StartsWith(expectedPrefix, StringComparison.Ordinal),
+                "Journal fallback must stay bound to the saved source session."));
     }
 
     [Fact]
