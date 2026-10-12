@@ -1,3 +1,4 @@
+using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Http.Features;
@@ -18,6 +19,9 @@ public static class RemoteMcpTrustedServiceTlsComposition
         "Environment:RemoteMcpCallVerification:EnableReviewedToolRecipient";
     public const string OrchestratorRecipientTlsKey = "remote-mcp-reviewed-tool-orchestrator-recipient";
     public const string OrchestratorRecipientListenerName = "RemoteMcpReviewedToolTransport";
+    public const string CurrentCallVerifierEnabledSetting =
+        "Environment:RemoteMcpCallVerification:EnableCurrentCallVerifier";
+    public const string ManagedGatewaySectionName = "Environment:NetworkPolicy:RemoteMcpManagedGateway";
 
     public static void AddRemoteMcpTrustedServiceTls(this WebApplicationBuilder builder)
     {
@@ -61,6 +65,32 @@ public static class RemoteMcpTrustedServiceTlsComposition
         RequirePeer(context, IdentityTlsKey, "IdentityBroker",
             "remote_mcp_current_verification_route_unavailable",
             "remote_mcp_current_verification_peer_profile_invalid");
+
+    public static bool AddRemoteMcpCurrentCallVerification(this WebApplicationBuilder builder, string actorIssuer)
+    {
+        if (!builder.Configuration.GetValue<bool>(CurrentCallVerifierEnabledSetting))
+            return false;
+        if (!builder.Services.Any(service => service.ServiceType == typeof(RuntimeServiceTlsOptions) &&
+                Equals(service.ServiceKey, IdentityTlsKey)) ||
+            !builder.Services.Any(service => service.ServiceType == typeof(RuntimeServiceTlsOptions) &&
+                Equals(service.ServiceKey, OrchestratorTlsKey)))
+            throw new InvalidOperationException("Current-call verification requires both trusted owner TLS profiles.");
+        var verification = new RemoteMcpCurrentCallVerificationOptions(actorIssuer).Validate();
+        var gateway = (builder.Configuration.GetSection(ManagedGatewaySectionName)
+            .Get<RemoteMcpManagedGatewayProviderOptions>()
+            ?? throw new InvalidOperationException("Current-call verification requires explicit managed gateway options."))
+            .Validate();
+        builder.Services.AddSingleton(verification);
+        builder.Services.AddSingleton(gateway);
+        builder.Services.AddSingleton<RemoteMcpManagedGatewayPolicy>();
+        builder.Services.AddSingleton<IRemoteMcpManagedGatewayPolicy>(services =>
+            services.GetRequiredService<RemoteMcpManagedGatewayPolicy>());
+        builder.Services.AddSingleton<IRemoteMcpManagedGatewayStateReader>(services =>
+            services.GetRequiredService<RemoteMcpManagedGatewayPolicy>());
+        builder.Services.AddScoped<RemoteMcpCurrentGatewayPolicyReader>();
+        builder.Services.AddScoped<RemoteMcpCurrentCallVerificationService>();
+        return true;
+    }
 
     public static void RequireOrchestratorPeer(HttpContext context) =>
         RequirePeer(context, OrchestratorRecipientTlsKey, "Orchestrator",
@@ -141,6 +171,10 @@ public static class RemoteMcpTrustedServiceTlsComposition
             client.BaseAddress = new Uri(options.PeerOwnerAddress!);
             client.Timeout = TimeSpan.FromSeconds(15);
         }).ConfigurePrimaryHttpMessageHandler(services =>
-            services.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(key).CreateHandler());
+        {
+            var handler = services.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(key).CreateHandler();
+            handler.UseCookies = false;
+            return handler;
+        });
     }
 }

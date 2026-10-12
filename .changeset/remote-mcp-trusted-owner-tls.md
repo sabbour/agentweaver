@@ -20,3 +20,7 @@ Recheck OAuth row bindings after waits without reading or delivering a credentia
 Add a separate, default-off Environment listener for its existing Orchestrator peer.
 Reject wrong-service, shared-port, and non-native-TLS requests before proof reads.
 Keep the recipient source separate from route, actor, and network authorization.
+Wire the separately default-off current-call verifier to both existing trusted owner profiles and explicit managed gateway options.
+Share one managed gate instance across policy operations and active-state reads.
+Keep acknowledgments unavailable without real forced-network proof, and disable cookies on trusted owner HTTP clients.
+Check the Identity peer before reading the current-call body, and cap actual bytes before parsing or verifier creation.

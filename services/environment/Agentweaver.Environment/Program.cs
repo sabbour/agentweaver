@@ -88,6 +88,8 @@ builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
 builder.Services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
 builder.Services.AddScoped<RemoteMcpConnectionStore>();
 builder.AddRemoteMcpTrustedServiceTls();
+var remoteMcpCurrentCallVerificationEnabled =
+    builder.AddRemoteMcpCurrentCallVerification(authorityUri.AbsoluteUri);
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
 builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
@@ -211,6 +213,8 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
 });
 app.MapEnvironmentEndpoints();
 app.MapRemoteMcpConnectionEndpoints();
+if (remoteMcpCurrentCallVerificationEnabled)
+    app.MapRemoteMcpCurrentCallVerification();
 app.MapProviderLifecycleReportEndpoints();
 app.Run();
 

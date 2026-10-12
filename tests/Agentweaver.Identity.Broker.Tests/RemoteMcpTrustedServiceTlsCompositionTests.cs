@@ -2,6 +2,7 @@ extern alias EnvironmentService;
 extern alias OrchestratorHost;
 
 using System.Security.Authentication;
+using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Connections.Features;
@@ -13,6 +14,7 @@ using Microsoft.Extensions.Options;
 using Xunit;
 using EnvironmentTls = EnvironmentService::Agentweaver.Environment.RemoteMcpTrustedServiceTlsComposition;
 using OrchestratorTls = OrchestratorHost::Agentweaver.Orchestrator.RemoteMcpCallVerificationComposition;
+using EnvironmentOwner = EnvironmentService::Agentweaver.Environment;
 
 namespace Agentweaver.Identity.Broker.Tests;
 
@@ -32,6 +34,84 @@ public sealed class RemoteMcpTrustedServiceTlsCompositionTests
             service.ServiceType == typeof(RuntimeServiceTlsIdentity));
         using var services = builder.Services.BuildServiceProvider();
         Assert.Same(existing, services.GetRequiredService<RuntimeServiceTlsOptions>());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CurrentCallVerifierIsNotRegisteredWithoutExplicitOptIn(bool profiles)
+    {
+        var builder = Builder(profiles ? EnvironmentProfiles() : null);
+        EnvironmentTls.AddRemoteMcpTrustedServiceTls(builder);
+
+        Assert.False(EnvironmentTls.AddRemoteMcpCurrentCallVerification(builder, "https://identity.example/"));
+        Assert.DoesNotContain(builder.Services, service =>
+            service.ServiceType == typeof(EnvironmentOwner.RemoteMcpCurrentCallVerificationService) ||
+            service.ServiceType == typeof(IRemoteMcpManagedGatewayPolicy));
+    }
+
+    [Fact]
+    public void CurrentCallVerifierSharesOneActiveHandlerWithItsStateReader()
+    {
+        var builder = Builder(CurrentCallProfiles());
+        EnvironmentTls.AddRemoteMcpTrustedServiceTls(builder);
+
+        Assert.True(EnvironmentTls.AddRemoteMcpCurrentCallVerification(builder, "https://identity.example/"));
+        using var services = builder.Services.BuildServiceProvider();
+        var handler = services.GetRequiredService<EnvironmentOwner.RemoteMcpManagedGatewayPolicy>();
+        Assert.Same(handler, services.GetRequiredService<IRemoteMcpManagedGatewayPolicy>());
+        using var scope = services.CreateScope();
+        Assert.Same(handler, scope.ServiceProvider.GetRequiredService<EnvironmentOwner.IRemoteMcpManagedGatewayStateReader>());
+        Assert.Equal("https://identity.example/",
+            services.GetRequiredService<EnvironmentOwner.RemoteMcpCurrentCallVerificationOptions>().ActorIssuer);
+        Assert.Equal("managed-gateway",
+            services.GetRequiredService<EnvironmentOwner.RemoteMcpManagedGatewayProviderOptions>().ProviderId);
+        Assert.All(builder.Services.Where(service =>
+            service.ServiceType == typeof(EnvironmentOwner.RemoteMcpCurrentGatewayPolicyReader) ||
+            service.ServiceType == typeof(EnvironmentOwner.RemoteMcpCurrentCallVerificationService)),
+            service => Assert.Equal(ServiceLifetime.Scoped, service.Lifetime));
+        Assert.Equal(2, builder.Services.Count(service =>
+            service.ServiceType == typeof(EnvironmentOwner.RemoteMcpCurrentGatewayPolicyReader) ||
+            service.ServiceType == typeof(EnvironmentOwner.RemoteMcpCurrentCallVerificationService)));
+    }
+
+    [Theory]
+    [InlineData("identity", true)]
+    [InlineData("orchestrator", true)]
+    [InlineData("gateway", true)]
+    [InlineData("gateway-http", false)]
+    [InlineData("gateway-version", false)]
+    [InlineData("issuer", false)]
+    public void IncompleteCurrentCallVerifierFailsBeforeRegistrationOrCertificateLoading(
+        string failure, bool missingConfiguration)
+    {
+        var values = CurrentCallProfiles();
+        var section = failure switch
+        {
+            "identity" => EnvironmentTls.IdentitySectionName,
+            "orchestrator" => EnvironmentTls.OrchestratorSectionName,
+            "gateway" => EnvironmentTls.ManagedGatewaySectionName,
+            _ => null
+        };
+        if (section is not null)
+            foreach (var key in values.Keys.Where(key =>
+                         key.StartsWith(section + ":", StringComparison.Ordinal)).ToArray())
+                values.Remove(key);
+        if (failure == "gateway-http")
+            values[EnvironmentTls.ManagedGatewaySectionName + ":GatewayEndpoint"] = "http://gateway.example/";
+        if (failure == "gateway-version")
+            values[EnvironmentTls.ManagedGatewaySectionName + ":OptionsSchemaVersion"] = "0";
+        var builder = Builder(values);
+        EnvironmentTls.AddRemoteMcpTrustedServiceTls(builder);
+        var issuer = failure == "issuer" ? "http://identity.example/" : "https://identity.example/";
+
+        if (missingConfiguration)
+            Assert.Throws<InvalidOperationException>(() => EnvironmentTls.AddRemoteMcpCurrentCallVerification(builder, issuer));
+        else
+            Assert.Throws<ArgumentException>(() => EnvironmentTls.AddRemoteMcpCurrentCallVerification(builder, issuer));
+        Assert.DoesNotContain(builder.Services, service =>
+            service.ServiceType == typeof(EnvironmentOwner.RemoteMcpCurrentCallVerificationService) ||
+            service.ServiceType == typeof(IRemoteMcpManagedGatewayPolicy));
     }
 
     [Fact]
@@ -295,6 +375,18 @@ public sealed class RemoteMcpTrustedServiceTlsCompositionTests
         values[EnvironmentTls.OrchestratorSectionName + ":ListenerPort"] = "9448";
         values["Kestrel:Endpoints:" + EnvironmentTls.OrchestratorRecipientListenerName + ":Url"] =
             "https://environment.example:9448/";
+        return values;
+    }
+
+    private static Dictionary<string, string?> CurrentCallProfiles()
+    {
+        var values = EnvironmentProfiles();
+        values[EnvironmentTls.CurrentCallVerifierEnabledSetting] = "true";
+        values[EnvironmentTls.ManagedGatewaySectionName + ":ProviderId"] = "managed-gateway";
+        values[EnvironmentTls.ManagedGatewaySectionName + ":AdapterVersion"] = "1.0.0";
+        values[EnvironmentTls.ManagedGatewaySectionName + ":OptionsSchemaVersion"] = "1";
+        values[EnvironmentTls.ManagedGatewaySectionName + ":OptionsRevision"] = "options-1";
+        values[EnvironmentTls.ManagedGatewaySectionName + ":GatewayEndpoint"] = "https://gateway.example/";
         return values;
     }
 
