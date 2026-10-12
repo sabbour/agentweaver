@@ -138,6 +138,21 @@ delivery. Current exact-call, journal, Identity revision, and applied-network
 checks remain required before that route can be connected. The existing
 Orchestrator and Events result profiles are unchanged.
 
+Environment's inverse profile is
+`Environment:RemoteMcpCredentialUse:IdentityTls`, with local service
+`Environment` and peer `IdentityBroker`. It requires its own
+`Kestrel:Endpoints:RemoteMcpCredentialUse:Url` port and uses key
+`remote-mcp-credential-use-identity`. Client `RemoteMcpCredentialUseIdentity`
+pins Identity's owner address and has a 15-second timeout. The same native
+peer gate can protect a future read-only Environment verification route for
+Identity; this source does not map that route.
+
+Only Environment has the separately configured Orchestrator verifier client.
+Identity has no Orchestrator client. Current call and applied-network
+verification before and after credential reads remain required from the
+trusted Environment owner. These profile registrations do not establish that
+verification or enable credential use.
+
 No deployed OAuth consent or remote MCP credential use is established. The
 following flow describes the implemented management and callback boundary:
 
@@ -190,6 +205,7 @@ sequenceDiagram
         Broker-->>Human: Redacted status; credential use unavailable
     end
     Note over Broker,Environment: Optional separate TLS listener pins Environment as the recipient
+    Note over Broker,Environment: Inverse owner client pins Identity; only Environment has the separate Core verifier client
     Note over Broker,Environment: Credential-use route, provider revocation, and deployed behavior remain unavailable
 ```
 

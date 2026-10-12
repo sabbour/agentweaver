@@ -201,6 +201,7 @@ if (runtimeRegistrationEnabled)
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
     builder.Services.AddScoped<ReviewedRemoteToolResultVerifier>();
 }
+builder.AddRemoteMcpCallVerificationTls(runtimeRegistrationEnabled);
 var runtimeUsageEnabled = builder.Services.AddRuntimeUsageSource(builder.Configuration);
 if (remoteToolTlsSection.Exists() && !runtimeUsageEnabled)
     throw new InvalidOperationException("Remote tool result TLS requires the current native SDK source owner.");
