@@ -93,6 +93,24 @@ and a matching `tools/call` binding. It has no caller-defined wire digest or RPC
 identity. The native handler must read and check the actual bounded request bytes.
 The reviewed `NativeCallId` remains separate from the transport's RPC ID.
 
+`RemoteMcpCurrentCallContract.ValidateToolCallBytes` checks an actual request
+against that existing proof and binding. It requires the exact HTTP method,
+target, `tools/call` operation, tool name, and canonical arguments digest.
+The body limit is 1 MiB; canonical arguments retain the existing 256-KiB limit.
+It rejects batches, notifications, responses, malformed JSON, duplicate keys
+at any depth, and unsupported request fields.
+Object ordering, whitespace, and equivalent string escapes do not change the argument match.
+Array ordering and numeric spelling retain the existing reviewed digest rules.
+Omitted arguments match only the reviewed empty object.
+A string or number JSON-RPC request ID remains independent of `NativeCallId`.
+Optional MCP metadata and progress tokens retain their protocol types.
+Metadata is not actor or approval authority.
+
+This pure helper is not connected to a receiving route or native transport.
+It does not authenticate a caller, verify current owner state, prove network
+enforcement, return an acknowledgment, or permit credential use.
+Those separate checks remain required before any protected effect.
+
 The Orchestrator's `IReviewedRemoteToolTransport.SendAsync` receives the original
 `HttpContext`, full owner-built proof, selected snapshot, and copied request bytes.
 The caller repeats current authority checks after serialization and before this handoff.
@@ -204,4 +222,5 @@ sequenceDiagram
     Note over Environment: A native handoff retains the original actor context and full proof; network proof remains required
     Note over Environment: The Orchestrator recipient has a separate, default-off TLS listener and peer check
     Note over Environment: The optional Identity current-call route checks owners and active gate state but returns no acknowledgment without network proof
+    Note over Environment: The shared byte checker matches the reviewed call but supplies no actor or network authority
 ```
