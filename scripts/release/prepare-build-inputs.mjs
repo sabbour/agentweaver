@@ -59,8 +59,14 @@ export function requireSharedImageStore(run) {
   if (!buildxVersion || (Number(buildxVersion[1]) === 0 && Number(buildxVersion[2]) < 13)) {
     throw new Error('Release input preparation requires an existing Buildx 0.13 or later');
   }
-  if (run('docker', ['buildx', 'inspect', 'default', '--format', '{{.Driver}}']).trim() !== 'docker' ||
-      run('docker', ['buildx', 'inspect', 'default', '--format', '{{range .Nodes}}{{.Endpoint}}{{end}}']).trim() !== 'default') {
+  const inspection = run('docker', ['buildx', 'inspect', 'default']);
+  const fields = [...inspection.matchAll(/^[ \t]*(Driver|Endpoint):[ \t]*(.*?)[ \t]*$/gm)];
+  const drivers = fields.filter(([, field]) => field === 'Driver').map(([, , value]) => value.trim());
+  const endpoints = fields.filter(([, field]) => field === 'Endpoint').map(([, , value]) => value.trim());
+  if (drivers.length !== 1 || !drivers[0] || endpoints.length !== 1 || !endpoints[0]) {
+    throw new Error('Release Buildx inspection output must contain one non-empty Driver and Endpoint field');
+  }
+  if (drivers[0] !== 'docker' || endpoints[0] !== 'default') {
     throw new Error('Release Buildx must use the default Docker builder and its shared image store');
   }
 }

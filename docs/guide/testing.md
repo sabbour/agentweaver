@@ -14,6 +14,7 @@ They execute the destination guard locally with accepted and rejected values.
 They do not authenticate a token, publish a package or prove registry access.
 Release build-input checks bind the three image references and all 467 dependencies to the approved source.
 They reject source drift, wrong image digests, an isolated builder, and dependency integrity failures before packing.
+A builder fixture uses standard `docker buildx inspect default` text output and rejects missing, duplicate, or unexpected driver and endpoint fields.
 A workflow source check requires the pinned Docker setup action on the `platform_only` path.
 It also requires `set-host: true`, which makes the action export its local socket through `DOCKER_HOST` before input preparation. The check rejects attempts to update the reserved `default` context.
 These source checks do not start Docker or prove runner storage behavior.

@@ -436,6 +436,7 @@ The action is pinned to commit `2bf61fb9464cc67f0cbdeabed6aa0380accd1c70`.
 The action enables `containerd-snapshotter` in its temporary Docker daemon.
 The action exports that daemon's Unix socket through `DOCKER_HOST`, so Docker commands use the temporary engine without changing context metadata.
 The pack job then uses the default Docker Buildx builder.
+Preparation reads the standard `docker buildx inspect default` output and requires exactly one `Driver: docker` and one `Endpoint: default` entry.
 Image pulls, the Buildx build, and the Web build use the same Docker Engine.
 Preparation still rejects another builder, a missing shared image store, or a wrong local image digest.
 The action stops its daemon at the end of the job and does not change the runner's preinstalled daemon.

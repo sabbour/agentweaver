@@ -9,6 +9,18 @@ import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 import { approvedBaseImages, approvedWebLockSha256, prepareBuildInputs, readApprovedBuildInputs } from '../prepare-build-inputs.mjs';
 
+const defaultBuilderInspection = `Name:          default
+Driver:        docker
+Last Activity: 2026-10-12 12:10:00 +0000 UTC
+
+Nodes:
+Name:          default
+Endpoint:      default
+Status:        running
+BuildKit:      v0.20.2
+Platforms:     linux/amd64
+`;
+
 function sourceFixture(t) {
   const parent = path.resolve('artifacts', 'release-tests');
   mkdirSync(parent, { recursive: true });
@@ -29,11 +41,11 @@ function sourceFixture(t) {
     if (bin === 'git') return args[0] === 'rev-parse' ? sourceSha : '';
     if (bin === 'npm' || args[0] === 'pull') return '';
     if (args[0] === 'context') return 'default';
+    if (args[0] === 'buildx' && args[1] === 'inspect') return defaultBuilderInspection;
     if (args[0] === 'info') return JSON.stringify({
       ServerVersion: '28.0.0', DriverStatus: [['driver-type', 'io.containerd.snapshotter.v1']],
     });
     if (args[0] === 'buildx' && args[1] === 'version') return 'github.com/docker/buildx v0.31.1';
-    if (args[0] === 'buildx') return args.at(-1) === '{{.Driver}}' ? 'docker' : 'default';
     if (args[0] === 'image') return JSON.stringify({
       Os: 'linux', Architecture: 'amd64', Id: `sha256:${'b'.repeat(64)}`,
       RepoDigests: [args.at(-1).replace(/:[^/:]+(?=@)/, '')],
@@ -63,6 +75,8 @@ test('preparation pulls only approved digests and fills the same-runner cache wi
   assert.equal('cachedDependencyCount' in result, false);
   assert.deepEqual(f.calls.filter(call => call.args[0] === 'pull').map(call => call.args), approvedBaseImages.map(image =>
     ['pull', '--platform', 'linux/amd64', image]));
+  assert.deepEqual(f.calls.filter(call => call.args[0] === 'buildx' && call.args[1] === 'inspect')
+    .map(call => call.args), [['buildx', 'inspect', 'default']]);
   const npm = f.calls.filter(call => call.bin === 'npm');
   assert.deepEqual(npm, [{
     bin: 'npm', cwd: path.join(f.root, 'apps', 'web'), args: [
@@ -88,8 +102,8 @@ test('source, lock, image-pin and cache isolation failures cause no input downlo
   }
 });
 
-test('missing shared store, old engine, remote context and isolated builder fail before image pulls without changing the daemon', t => {
-  for (const kind of ['store', 'engine', 'context', 'buildx', 'driver', 'endpoint']) {
+test('missing shared store, old engine, remote context and invalid builder metadata fail before image pulls without changing the daemon', t => {
+  for (const kind of ['store', 'engine', 'context', 'buildx', 'driver', 'endpoint', 'missing-driver', 'missing-endpoint', 'duplicate-endpoint']) {
     const f = sourceFixture(t);
     const run = (bin, args, cwd) => {
       if (kind === 'context' && args[0] === 'context') return 'remote';
@@ -97,12 +111,17 @@ test('missing shared store, old engine, remote context and isolated builder fail
         ServerVersion: kind === 'engine' ? '26.0.0' : '28.0.0',
         DriverStatus: kind === 'store' ? [] : [['driver-type', 'io.containerd.snapshotter.v1']],
       });
-      if (args[0] === 'buildx' && kind === 'driver' && args.at(-1) === '{{.Driver}}') return 'docker-container';
       if (args[0] === 'buildx' && kind === 'buildx' && args[1] === 'version') return 'github.com/docker/buildx v0.12.1';
-      if (args[0] === 'buildx' && args[1] === 'inspect' && kind === 'endpoint' && args.at(-1) !== '{{.Driver}}') return 'remote';
+      if (args[0] === 'buildx' && args[1] === 'inspect') {
+        if (kind === 'driver') return defaultBuilderInspection.replace('Driver:        docker', 'Driver:        docker-container');
+        if (kind === 'endpoint') return defaultBuilderInspection.replace('Endpoint:      default', 'Endpoint:      tcp://builder.example');
+        if (kind === 'missing-driver') return defaultBuilderInspection.replace('Driver:        docker\n', '');
+        if (kind === 'missing-endpoint') return defaultBuilderInspection.replace('Endpoint:      default\n', '');
+        if (kind === 'duplicate-endpoint') return `${defaultBuilderInspection}Endpoint:      default\n`;
+      }
       return f.run(bin, args, cwd);
     };
-    assert.throws(() => prepareBuildInputs({ ...f, run }), /context|containerd|shared image store|Buildx 0.13/);
+    assert.throws(() => prepareBuildInputs({ ...f, run }), /context|containerd|shared image store|Buildx 0.13|inspection output/);
     assert.equal(f.calls.some(call => call.args[0] === 'pull' || call.bin === 'npm'), false, kind);
     assert.equal(f.calls.some(call => ['sudo', 'systemctl'].includes(call.bin)), false, kind);
   }

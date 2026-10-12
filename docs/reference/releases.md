@@ -115,7 +115,8 @@ For `platform_only: true`, the workflow starts Docker Engine `v29.9.0` with the 
 The action enables `containerd-snapshotter` in its temporary Docker daemon.
 The action exports that daemon's Unix socket through `DOCKER_HOST`, so Docker commands use the temporary engine without changing context metadata.
 The default Buildx builder then uses the same local Docker Engine as the image pulls.
-Preparation still checks the builder, shared store, image digests, and clean source before packing.
+Preparation reads the standard `docker buildx inspect default` output and requires exactly one `Driver: docker` and one `Endpoint: default` entry.
+It also checks the shared store, image digests, and clean source before packing.
 The action stops its daemon at the end of the job and does not change the runner's preinstalled daemon.
 The runner still requires Buildx `0.13` or later. The workflow does not install Buildx or fetch a builder image.
 The existing offline Web install and image checks remain unchanged.
