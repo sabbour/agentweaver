@@ -30,9 +30,12 @@ internal interface IReviewedRemoteToolTransport
 {
     byte[] SerializeCall(ReviewedRemoteToolSnapshot snapshot, ReviewedRemoteToolCall call);
 
-    // Implementations must enforce the snapshot's HTTPS endpoint, transport profile, authentication,
-    // and any server identity pin before sending these serialized bytes.
+    // The receiving host authenticates this original context and repeats current-owner checks.
+    // Neither serialized MCP metadata nor the proof alone establishes actor or network authority.
+    // Implementations also enforce the snapshot's HTTPS endpoint, transport, and server identity pin.
     Task<ReviewedRemoteToolTransportResult> SendAsync(
+        HttpContext context,
+        RemoteToolResultProof proof,
         ReviewedRemoteToolSnapshot snapshot,
         ReadOnlyMemory<byte> serializedCall,
         CancellationToken cancellationToken);
@@ -191,7 +194,7 @@ internal sealed class ReviewedRemoteToolAgent(
             context, registration, snapshot, invocation, admission, request, cancellationToken)
             .ConfigureAwait(false);
         var transportResult = await transport.SendAsync(
-            snapshot, outboundBytes, cancellationToken).ConfigureAwait(false);
+            context, proofTemplate, snapshot, outboundBytes, cancellationToken).ConfigureAwait(false);
         var resultBytes = transportResult.Content.ToArray();
         if (resultBytes.Length is <= 0 or > SessionMaterialValidation.MaximumBytes ||
             !Enum.IsDefined(transportResult.ContentClass))

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -77,6 +78,63 @@ public sealed class ReviewedRemoteToolAgentTests
         Assert.Equal(write.Proof.CallInputHash, rig.Authority.AuthorizedRequest?.InputHash);
         Assert.Equal(1, rig.Results.WriteCount);
         Assert.True(rig.Authority.VerifyCount >= 2);
+    }
+
+    [Fact]
+    public async Task TransportReceivesOriginalContextAndExactFullProof()
+    {
+        var rig = CreateRig();
+        var context = new DefaultHttpContext();
+        context.Request.Headers.Authorization = "Bearer original-actor";
+        var invoke = rig.Agent.InvokeAsync(context, Invocation(), CancellationToken.None);
+        var write = await rig.Results.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Same(context, rig.Transport.Context);
+        Assert.Equal(write.Proof, rig.Transport.Proof);
+        SessionMaterialValidation.ValidateRemoteToolResultProof(rig.Transport.Proof!);
+        Assert.Equal(ReviewedRemoteToolAgent.SnapshotBinding(rig.Transport.Snapshot!), write.Proof.SnapshotBinding);
+        Assert.Equal(rig.Transport.SerializedCall, rig.Transport.SentBytes.ToArray());
+        Assert.True(MemoryMarshal.TryGetArray(rig.Transport.SentBytes, out var sent));
+        Assert.NotSame(rig.Transport.SerializedCall, sent.Array);
+        Assert.Equal("native-call-7", rig.Transport.Proof!.NativeCallId);
+        Assert.Equal("actor-1", rig.Transport.Proof.ActorId);
+        Assert.Equal("""{"query":"x"}""", rig.Transport.Proof.CanonicalArgumentsJson);
+
+        rig.Results.Acknowledgment.TrySetResult(CreateAcknowledgment(write.Proof, write.Bytes));
+        await invoke.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task AuthorityChangeDuringSerializationDeniesTransportHandoff()
+    {
+        var rig = CreateRig();
+        rig.Transport.OnSerialize = () => rig.Authority.RegistrationChanged = true;
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None));
+
+        Assert.Equal("runtime_remote_tool_registration_changed", failure.Code);
+        Assert.Equal(1, rig.Transport.SerializeCount);
+        Assert.Equal(0, rig.Transport.SendCount);
+        Assert.Null(rig.Transport.Proof);
+        Assert.Equal(0, rig.Results.WriteCount);
+    }
+
+    [Fact]
+    public async Task MissingForcedNetworkProofDoesNotRetryOrStoreAResult()
+    {
+        var rig = CreateRig();
+        rig.Transport.SendFailure = new RuntimeAuthorizationException(
+            "remote_mcp_forced_network_enforcement_unavailable");
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None));
+
+        Assert.Equal("remote_mcp_forced_network_enforcement_unavailable", failure.Code);
+        Assert.Equal(1, rig.Transport.SerializeCount);
+        Assert.Equal(1, rig.Transport.SendCount);
+        Assert.Equal(0, rig.Results.WriteCount);
+        Assert.False(rig.Results.WriteStarted.Task.IsCompleted);
     }
 
     [Fact]
@@ -444,19 +502,34 @@ public sealed class ReviewedRemoteToolAgentTests
         public byte[] SerializedCall { get; set; } = [1, 2, 3];
         public int SerializeCount { get; private set; }
         public int SendCount { get; private set; }
+        public HttpContext? Context { get; private set; }
+        public RemoteToolResultProof? Proof { get; private set; }
+        public ReviewedRemoteToolSnapshot? Snapshot { get; private set; }
+        public ReadOnlyMemory<byte> SentBytes { get; private set; }
+        public Action? OnSerialize { get; set; }
+        public RuntimeAuthorizationException? SendFailure { get; set; }
 
         public byte[] SerializeCall(ReviewedRemoteToolSnapshot snapshot, ReviewedRemoteToolCall call)
         {
             SerializeCount++;
+            OnSerialize?.Invoke();
             return SerializedCall;
         }
 
         public Task<ReviewedRemoteToolTransportResult> SendAsync(
+            HttpContext context,
+            RemoteToolResultProof proof,
             ReviewedRemoteToolSnapshot snapshot,
             ReadOnlyMemory<byte> serializedCall,
             CancellationToken cancellationToken)
         {
             SendCount++;
+            Context = context;
+            Proof = proof;
+            Snapshot = snapshot;
+            SentBytes = serializedCall;
+            if (SendFailure is { } failure)
+                return Task.FromException<ReviewedRemoteToolTransportResult>(failure);
             return Task.FromResult(new ReviewedRemoteToolTransportResult(
                 "result"u8.ToArray(),
                 SessionMaterialResultContentClass.TextOnly));

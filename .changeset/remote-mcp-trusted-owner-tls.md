@@ -13,3 +13,5 @@ Add exact current-call and gate contracts, an authenticated owner client, and a 
 An in-process gate receipt is not proof of forced network enforcement.
 Read full current gateway bindings from active-handler state and exact accepted run options, with repeat checks after waits.
 Keep the Cilium-only L7 rejection intact and refuse dispatch without a real forced-network proof producer.
+Carry the original actor context and full owner-built proof through the reviewed-call transport handoff.
+Keep native transport registration and the SDK remote-tool hook unavailable.
