@@ -106,7 +106,12 @@ A string or number JSON-RPC request ID remains independent of `NativeCallId`.
 Optional MCP metadata and progress tokens retain their protocol types.
 Metadata is not actor or approval authority.
 
-This pure helper is not connected to a receiving route or native transport.
+The Orchestrator caller checks its private copy with this helper before its
+late authority check and transport handoff.
+It supplies the reviewed HTTP method and target, not an actual emitted request.
+The receiving native transport must still check its built upstream method,
+target, and exact body bytes before a send.
+This helper is not connected to an Environment receiving route or native transport.
 It does not authenticate a caller, verify current owner state, prove network
 enforcement, return an acknowledgment, or permit credential use.
 Those separate checks remain required before any protected effect.
@@ -222,5 +227,5 @@ sequenceDiagram
     Note over Environment: A native handoff retains the original actor context and full proof; network proof remains required
     Note over Environment: The Orchestrator recipient has a separate, default-off TLS listener and peer check
     Note over Environment: The optional Identity current-call route checks owners and active gate state but returns no acknowledgment without network proof
-    Note over Environment: The shared byte checker matches the reviewed call but supplies no actor or network authority
+    Note over Environment: The caller checks its copied bytes; the receiver must still check its actual upstream request
 ```
